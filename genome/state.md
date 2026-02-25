@@ -1,6 +1,6 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-25 (Phase 86 — JWT Auth)
+> Last updated: 2026-02-25 (Phase 86 — JWT Auth + Dead Code Cleanup + 5-Node E2E Testing)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
 
 ## Health
@@ -22,7 +22,20 @@ Replaced MongoDB session-based auth with self-verifying JWT tokens signed by eac
 - **JWT session tokens**: Signed by issuing node's Ed25519 key, contain userId/peerId/issuer/expiry. Verified by extracting public key from peerId embedded in token.
 - **Stateless challenge tokens**: Challenge-response auth uses JWT challenges instead of in-memory nonce map. No server state needed.
 - **11/11 cross-node auth tests passing**: Full test coverage including cross-node JWT verification via `peerIdFromString()`.
-- **Dead code identified**: `auth_sessions` table, `validateSession()`, `refreshSession()`, `cleanupExpiredSessions()` — all dead code to be removed in follow-up cleanup.
+- **Dead code cleanup DONE**: Removed 267 lines of legacy session auth code — `auth_sessions` table, `validateSession()`, `refreshSession()`, `cleanupExpiredSessions()`, `startCleanup()`/`stopCleanup()`, `generateToken()`, `getProfile()`, `logout()`, old `claim()`. `user-accounts.ts` went from 865 to ~600 lines. All callers updated.
+
+**5-Node E2E Test Results (2026-02-25):**
+| # | Test | Result | Notes |
+|---|------|--------|-------|
+| 1 | Dead code cleanup | PASS | 267 lines removed, deployed to all 5 nodes, all build+restart OK |
+| 2 | Chat via untrusted nodes | PASS | LS-1/LS-2 proxy to EC2 via P2P, cross-node thread reads work |
+| 3 | Node failover | PASS | Kill EC2-1 → LS-1 survived (had EC2-2), LS-2 degraded (single peer). Auto-reconnect ~30s |
+| 4 | Governance proposal P2P | PASS | Proposal created on Windows, propagated to 5/5 nodes, voted from EC2-1, decision propagated to 5/5 |
+| 5 | Cross-node JWT (gateway) | PASS | Guest created via Vercel gateway (EC2-2), JWT verified on EC2-1 and LS-1 |
+| 6 | Gateway UI | PASS | Home, Governance (90 proposals), Marketplace, Wallet all render correctly |
+| 7 | Deploy (Tier 1 S3) | BLOCKED | Deploy endpoint requires CloudInstanceManager-tracked EC2 instances. Persistent EC2 nodes not registered. |
+
+**Architecture gap found: persistent EC2 nodes not in CloudInstanceManager.** The `/projects/:id/deploy` endpoint uses `cloudManager.getInstances()` which only knows about EC2 instances launched via `POST /instances/launch`. Persistent nodes (EC2-1, EC2-2) are not registered. Fix needed: either self-register persistent compute nodes, or add a way to register existing instances.
 
 **Phase 83: Network Hardening — P2PStorageBackend + Two-Tier Trust — COMPLETE (2026-02-25).**
 Transformed the network from "dev mode where everybody has everything" to the real two-tier trust architecture. Untrusted nodes (no MongoDB, no master key) proxy all storage operations via P2P to compute nodes with MongoDB. Every node gets a StorageBackend — no more 503s.
@@ -501,6 +514,8 @@ All gaps listed here referenced files deleted in Phase 27-C (communication-agent
 | No project-level governance scope | MEDIUM | governance | Open — all proposals go to all nodes. No mechanism to restrict voting to project stakeholders only. Phase 33.6. |
 | Reviewer independence on same node | LOW | governance | Accepted — reviewer agent on same node uses same Claude Code model as proposer. True independence requires reviewers on different physical nodes. By design, not a bug. |
 | Capability detector Claude Code check | LOW | capability-detector | `detectClaudeCode()` now requires both binary AND auth (`hasClaudeCodeAuth()`). Nodes with binary but no auth correctly report no `claude-code` capability. |
+| EC2-2 / LS-2 single-peer connectivity | MEDIUM | p2p | EC2-2 and LS-2 only connect to 1 peer each. If that peer dies, they lose all network access (storage proxy, governance sync). Need better peer discovery or mesh connectivity. Found during failover test 2026-02-25. |
+| Persistent EC2 not in CloudInstanceManager | MEDIUM | deploy | `POST /projects/:id/deploy` uses `cloudManager.getInstances()` which only tracks dynamically launched instances. Persistent EC2 nodes (EC2-1, EC2-2) aren't registered, so deploy endpoint returns 503. Fix: self-register persistent compute nodes or add manual registration. |
 | ~~Thread list empty for chat users~~ | ~~HIGH~~ | ~~api-server~~ | **RESOLVED** — `POST /chat/message` created threads without userId → `GET /chat/threads` (which filters by userId) always returned empty. Fixed: resolve `chatUserId` from auth token in `/chat/message`, pass to all `createThread()` calls. Also upgraded thread list to async (reads from MongoDB for cross-node consistency). |
 
 ## Versions
@@ -516,11 +531,11 @@ All gaps listed here referenced files deleted in Phase 27-C (communication-agent
 
 | Metric | Value |
 |---|---|
-| Total nodes | 3 (Lightsail + Windows + Mac) |
-| Total Lux minted | ~7,320+ |
-| Total transactions | ~2,120+ |
+| Total nodes | 5 (2 EC2 + 2 Lightsail + 1 Windows) |
+| Total Lux minted | ~23,500+ |
+| Total accounts | ~169 |
 | Tests passing | 137 PASS + 5 PARTIAL / 153 total (97.3%) |
-| Multi-node tested | Windows ↔ Lightsail (real P2P, different machines, ledger fully synced) |
+| Multi-node tested | 5-node real P2P: EC2-1 ↔ EC2-2 ↔ LS-1 ↔ LS-2 ↔ Windows. Governance, chat, failover, JWT all E2E verified. |
 
 ## Recent Decisions
 
