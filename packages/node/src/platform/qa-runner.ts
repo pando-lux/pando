@@ -358,9 +358,9 @@ export class QaRunner {
     const pages: PageResult[] = [];
 
     const endpoints = [
-      { path: '/status', fields: ['totalSupply', 'totalAccounts'] },
-      { path: '/tasks', fields: [] },
-      { path: '/governance/proposals', fields: [] },
+      { path: '/v1/status', fields: ['totalSupply', 'totalAccounts'] },
+      { path: '/v1/tasks', fields: [] },
+      { path: '/v1/governance/proposals', fields: [] },
     ];
 
     for (const ep of endpoints) {
@@ -442,19 +442,19 @@ export class QaRunner {
    */
   getDefaultApiTests(): ApiTestCase[] {
     return [
-      { method: 'GET', path: '/status', expectedStatus: 200, expectedFields: ['peerId', 'uptime', 'peers'], description: 'Node status endpoint' },
-      { method: 'GET', path: '/health', expectedStatus: 200, expectedFields: ['status'], description: 'Health check endpoint' },
-      { method: 'GET', path: '/peers', expectedStatus: 200, expectedFields: ['peers'], description: 'Peer list endpoint' },
-      { method: 'GET', path: '/tasks', expectedStatus: 200, description: 'Task list endpoint' },
-      { method: 'GET', path: '/governance/proposals', expectedStatus: 200, description: 'Governance proposals' },
-      { method: 'GET', path: '/monitor/status', expectedStatus: 200, description: 'Monitor status' },
-      { method: 'GET', path: '/wallet', expectedStatus: 200, expectedFields: ['peerId', 'balance'], description: 'Wallet info' },
-      { method: 'GET', path: '/emissions/stats', expectedStatus: 200, description: 'Emission statistics' },
-      { method: 'GET', path: '/security/stats', expectedStatus: 200, description: 'Security statistics' },
+      { method: 'GET', path: '/v1/status', expectedStatus: 200, expectedFields: ['peerId', 'uptime', 'peers'], description: 'Node status endpoint' },
+      { method: 'GET', path: '/v1/health', expectedStatus: 200, expectedFields: ['status'], description: 'Health check endpoint' },
+      { method: 'GET', path: '/v1/peers', expectedStatus: 200, expectedFields: ['peers'], description: 'Peer list endpoint' },
+      { method: 'GET', path: '/v1/tasks', expectedStatus: 200, description: 'Task list endpoint' },
+      { method: 'GET', path: '/v1/governance/proposals', expectedStatus: 200, description: 'Governance proposals' },
+      { method: 'GET', path: '/v1/monitor/status', expectedStatus: 200, description: 'Monitor status' },
+      { method: 'GET', path: '/v1/wallet', expectedStatus: 200, expectedFields: ['peerId', 'balance'], description: 'Wallet info' },
+      { method: 'GET', path: '/v1/emissions/stats', expectedStatus: 200, description: 'Emission statistics' },
+      { method: 'GET', path: '/v1/security/stats', expectedStatus: 200, description: 'Security statistics' },
       // Auth-required endpoints — should return 401 without token
-      { method: 'POST', path: '/tasks', expectedStatus: 401, authRequired: false, description: 'Task creation requires auth' },
-      { method: 'POST', path: '/transfer', expectedStatus: 401, authRequired: false, description: 'Transfer requires auth' },
-      { method: 'POST', path: '/upgrade', expectedStatus: 401, authRequired: false, description: 'Upgrade requires auth' },
+      { method: 'POST', path: '/v1/tasks', expectedStatus: 401, authRequired: false, description: 'Task creation requires auth' },
+      { method: 'POST', path: '/v1/transfer', expectedStatus: 401, authRequired: false, description: 'Transfer requires auth' },
+      { method: 'POST', path: '/v1/upgrade', expectedStatus: 401, authRequired: false, description: 'Upgrade requires auth' },
     ];
   }
 

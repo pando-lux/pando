@@ -13,7 +13,7 @@ export async function GET(request: NextRequest) {
     const projectId = request.nextUrl.searchParams.get("projectId");
     const qs = projectId ? `?projectId=${encodeURIComponent(projectId)}` : "";
 
-    const res = await fetchFromNode(`/chat/history${qs}`, {
+    const res = await fetchFromNode(`/v1/chat/history${qs}`, {
       headers,
       signal: AbortSignal.timeout(5000),
     });

@@ -60,8 +60,8 @@ For any test suite with 2+ cases, maintain a `todo-loop.md` file in your workspa
 ## Communication
 
 Report to your parent using the HTTP API:
-- `POST http://127.0.0.1:${API_PORT}/agents/${AGENT_ID}/report` -- report test results, completion, or progress.
-- `POST http://127.0.0.1:${API_PORT}/agents/${PARENT_ID}/message` -- message your parent with questions, blockers, or findings.
+- `POST http://127.0.0.1:${API_PORT}/v1/agents/${AGENT_ID}/report` -- report test results, completion, or progress.
+- `POST http://127.0.0.1:${API_PORT}/v1/agents/${PARENT_ID}/message` -- message your parent with questions, blockers, or findings.
 
 When reporting test results, structure them as:
 - **Summary:** X passed, Y failed, Z skipped. Viewports tested.

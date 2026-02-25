@@ -11,7 +11,7 @@ export async function GET(
   try {
     const { peerId, taskId } = await params;
     const res = await fetch(
-      `${NODE_URL}/scheduler/remote/${encodeURIComponent(peerId)}/tasks/${encodeURIComponent(taskId)}`,
+      `${NODE_URL}/v1/scheduler/remote/${encodeURIComponent(peerId)}/tasks/${encodeURIComponent(taskId)}`,
       { signal: AbortSignal.timeout(12000), cache: "no-store" }
     );
     if (!res.ok) {

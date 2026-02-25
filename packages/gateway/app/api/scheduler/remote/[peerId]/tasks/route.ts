@@ -13,7 +13,7 @@ export async function GET(
     const { searchParams } = new URL(request.url);
     const limit = searchParams.get("limit") || "50";
     const res = await fetch(
-      `${NODE_URL}/scheduler/remote/${encodeURIComponent(peerId)}/tasks?limit=${limit}`,
+      `${NODE_URL}/v1/scheduler/remote/${encodeURIComponent(peerId)}/tasks?limit=${limit}`,
       { signal: AbortSignal.timeout(12000), cache: "no-store" }
     );
     if (!res.ok) {

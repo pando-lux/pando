@@ -25,6 +25,7 @@ import {
   type CapabilityDeclaration,
   type CapabilityProfile,
   MessageType,
+  MESSAGE_VERSION,
   signMessage,
   verifySignature,
 } from '@pando/shared';
@@ -442,6 +443,11 @@ export class PandoNetwork {
       try {
         const decoded = uint8ArrayToString(evt.detail.data);
         const message: PandoMessage = JSON.parse(decoded);
+        // v2.2: Log forward-compat warning for future protocol versions.
+        // Old nodes (version=0/undefined) are still processed — backward compat.
+        if (message.version !== undefined && message.version > MESSAGE_VERSION) {
+          console.warn(`[gossip] Received message with future version ${message.version} on ${topic} — processing anyway`);
+        }
         handler(message);
       } catch (err) {
         console.error('Failed to decode GossipSub message:', err);
@@ -455,11 +461,15 @@ export class PandoNetwork {
 
   /**
    * Publish a signed message to a GossipSub topic.
+   * v2.2: Stamps version = MESSAGE_VERSION on every outgoing envelope.
    */
   async publishToTopic(topic: string, message: PandoMessage): Promise<void> {
     if (!this.node) throw new Error('Node not started');
     const pubsub = (this.node.services as any).pubsub;
     if (!pubsub) throw new Error('GossipSub not available');
+
+    // Stamp protocol version on outgoing envelope
+    message.version = MESSAGE_VERSION;
 
     // Sign the message
     const sig = await signMessage(message, this.identity.privateKey);

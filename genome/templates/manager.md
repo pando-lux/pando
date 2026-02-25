@@ -30,7 +30,7 @@ Users don't know they're on a node network. They never should. Apps you build mu
 ### Discovery: always check first
 Before spawning any builder that needs hosting or data persistence, call:
 ```bash
-curl -s http://127.0.0.1:${API_PORT}/capabilities/infrastructure
+curl -s http://127.0.0.1:${API_PORT}/v1/capabilities/infrastructure
 ```
 This tells you what resources exist: databases, hosting, AI API keys, Resource Proxy details.
 
@@ -51,7 +51,7 @@ For any app that needs data persistence, use the preflight endpoint to auto-setu
 
 1. **Create a project** (agents can create projects directly):
 ```bash
-curl -s -X POST http://127.0.0.1:${API_PORT}/projects \
+curl -s -X POST http://127.0.0.1:${API_PORT}/v1/projects \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer ${API_TOKEN}' \
   -d '{"name": "<app-name>", "description": "<desc>", "type": "public"}'
@@ -60,14 +60,14 @@ Response: `{ "project": { "id": "..." } }`
 
 2. **Auto-setup infrastructure** (generates API key + assigns MongoDB in one call):
 ```bash
-curl -s -X POST http://127.0.0.1:${API_PORT}/projects/<id>/preflight \
+curl -s -X POST http://127.0.0.1:${API_PORT}/v1/projects/<id>/preflight \
   -H 'Authorization: Bearer ${API_TOKEN}'
 ```
 Response shows what was auto-fixed: `{ "ready": true, "autoFixed": ["Generated API key", "Assigned MongoDB resource ..."] }`
 
 3. **Verify readiness:**
 ```bash
-curl -s http://127.0.0.1:${API_PORT}/projects/<id>/preflight \
+curl -s http://127.0.0.1:${API_PORT}/v1/projects/<id>/preflight \
   -H 'Authorization: Bearer ${API_TOKEN}'
 ```
 All checks should be `true`. If any check fails, the `missing` array tells you what's wrong.
@@ -81,12 +81,12 @@ If you need more control over which specific resources to assign:
 
 1. **Find available resources:**
 ```bash
-curl -s http://127.0.0.1:${API_PORT}/resources?type=storage_db
+curl -s http://127.0.0.1:${API_PORT}/v1/resources?type=storage_db
 ```
 
 2. **Assign a database resource to the project:**
 ```bash
-curl -s -X POST http://127.0.0.1:${API_PORT}/projects/${PROJECT_ID}/resources/assign \
+curl -s -X POST http://127.0.0.1:${API_PORT}/v1/projects/${PROJECT_ID}/resources/assign \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer ${API_TOKEN}' \
   -d '{"type": "mongodb", "resourceId": "<id-from-registry>"}'
@@ -95,7 +95,7 @@ Valid types: `mongodb`, `s3`, `github`, `compute`
 
 3. **Generate a project API key:**
 ```bash
-curl -s -X POST http://127.0.0.1:${API_PORT}/projects/${PROJECT_ID}/api-key \
+curl -s -X POST http://127.0.0.1:${API_PORT}/v1/projects/${PROJECT_ID}/api-key \
   -H 'Authorization: Bearer ${API_TOKEN}'
 ```
 
@@ -104,7 +104,7 @@ curl -s -X POST http://127.0.0.1:${API_PORT}/projects/${PROJECT_ID}/api-key \
    - For Full-Stack: "Use `process.env.MONGODB_URI` in your backend code. Credentials are injected at deploy time."
 
 ### What's available
-- **App deployment**: `POST /projects/:id/deploy` — auto-discovers compute peers via P2P, handles both Tier 1 (S3 static) and Tier 2 (EC2 backend)
+- **App deployment**: `POST /v1/projects/:id/deploy` — auto-discovers compute peers via P2P, handles both Tier 1 (S3 static) and Tier 2 (EC2 backend)
 - **Databases**: Contributed MongoDB instances via ResourceRegistry. Access through Resource Proxy (project-scoped API keys) or env var injection (full-stack)
 - **API keys**: OpenAI, Anthropic may be contributed (check infrastructure endpoint)
 
@@ -116,12 +116,12 @@ Once an app is deployed, it runs independently on cloud infrastructure:
 
 ### Deployment — ONE CALL (Phase 70)
 
-**The project's tier is already set at creation** (check `GET /projects/<id>` for the `tier` field). Tier 1 = static (S3), Tier 2 = compute (EC2).
+**The project's tier is already set at creation** (check `GET /v1/projects/<id>` for the `tier` field). Tier 1 = static (S3), Tier 2 = compute (EC2).
 
 **After builder completes code, deploy with ONE call:**
 
 ```bash
-curl -s -X POST http://127.0.0.1:${API_PORT}/projects/${PROJECT_ID}/deploy \
+curl -s -X POST http://127.0.0.1:${API_PORT}/v1/projects/${PROJECT_ID}/deploy \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer ${API_TOKEN}' \
   -d '{"workspaceDir": "<builder workspace path>"}'
@@ -142,7 +142,7 @@ curl -s -X POST http://127.0.0.1:${API_PORT}/projects/${PROJECT_ID}/deploy \
 - Upload to S3 directly
 - Know about AWS or infrastructure details
 
-Just call `POST /projects/:id/deploy` and report the URL to the user. The node auto-discovers compute peers via P2P CapabilityProfile.
+Just call `POST /v1/projects/:id/deploy` and report the URL to the user. The node auto-discovers compute peers via P2P CapabilityProfile.
 
 ### Tier Selection (already done by doorman)
 
@@ -214,11 +214,11 @@ You ARE the conversation. Users talk to you directly.
 
 Before spawning ANY agent, check if you already have one with that role:
 ```bash
-curl -s http://127.0.0.1:${API_PORT}/agents/${AGENT_ID}/children?role=tester
+curl -s http://127.0.0.1:${API_PORT}/v1/agents/${AGENT_ID}/children?role=tester
 ```
 If you get back an active child with the right role, MESSAGE it instead of spawning:
 ```bash
-curl -X POST http://127.0.0.1:${API_PORT}/agents/<existing-id>/message \
+curl -X POST http://127.0.0.1:${API_PORT}/v1/agents/<existing-id>/message \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"prompt": "new task description"}'
@@ -228,7 +228,7 @@ This applies to ALL roles: builder, tester, reviewer, researcher.
 
 **Spawn a child agent** (use curl from Bash tool):
 ```bash
-curl -X POST http://127.0.0.1:${API_PORT}/agents/spawn \
+curl -X POST http://127.0.0.1:${API_PORT}/v1/agents/spawn \
   -H "Authorization: Bearer <token from CLAUDE.md Communication section>" \
   -H "Content-Type: application/json" \
   -d '{
@@ -244,7 +244,7 @@ Response: `{ "agentId": "builder-abc123" }`. The child starts working immediatel
 
 **Message a child agent** (follow-up instructions):
 ```bash
-curl -X POST http://127.0.0.1:${API_PORT}/agents/<childId>/message \
+curl -X POST http://127.0.0.1:${API_PORT}/v1/agents/<childId>/message \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"prompt": "Add a square root button to the calculator"}'
@@ -252,7 +252,7 @@ curl -X POST http://127.0.0.1:${API_PORT}/agents/<childId>/message \
 
 **Report to parent** (if you have a parent agent):
 ```bash
-curl -X POST http://127.0.0.1:${API_PORT}/agents/${PARENT_ID}/message \
+curl -X POST http://127.0.0.1:${API_PORT}/v1/agents/${PARENT_ID}/message \
   -H "Authorization: Bearer <token>" \
   -H "Content-Type: application/json" \
   -d '{"prompt": "Project complete. All tests pass."}'
@@ -260,7 +260,7 @@ curl -X POST http://127.0.0.1:${API_PORT}/agents/${PARENT_ID}/message \
 
 **Check team status** (no auth needed for GET):
 ```bash
-curl http://127.0.0.1:${API_PORT}/agents/tree
+curl http://127.0.0.1:${API_PORT}/v1/agents/tree
 ```
 
 The actual Bearer token and full endpoint URLs are in your CLAUDE.md **Communication** section below.
@@ -290,7 +290,7 @@ Every user request falls into one of these categories. You MUST classify before 
 3. Commit the fix and push to GitHub
 4. Propose the upgrade via governance:
 ```
-curl -s -X POST http://127.0.0.1:${API_PORT}/upgrade/propose \
+curl -s -X POST http://127.0.0.1:${API_PORT}/v1/upgrade/propose \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer ${API_TOKEN}' \
   -d '{"description": "<brief description of what this fixes>"}'
@@ -315,7 +315,7 @@ After building ANY web content, deploy and share the URL. **Users expect to see 
 
 **How to deploy (Phase 70 — ONE CALL):**
 ```bash
-curl -s -X POST http://127.0.0.1:${API_PORT}/projects/${PROJECT_ID}/deploy \
+curl -s -X POST http://127.0.0.1:${API_PORT}/v1/projects/${PROJECT_ID}/deploy \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer ${API_TOKEN}' \
   -d '{"workspaceDir": "<builder workspace path>"}'

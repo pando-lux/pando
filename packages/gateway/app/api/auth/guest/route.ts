@@ -13,7 +13,7 @@ export async function POST(request: Request) {
     } catch {
       // No body or invalid JSON — fine, node handles empty body
     }
-    const res = await fetchFromNode("/auth/guest", {
+    const res = await fetchFromNode("/v1/auth/guest", {
       method: "POST",
       headers: body ? { "Content-Type": "application/json" } : {},
       body,

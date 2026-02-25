@@ -103,7 +103,7 @@ class NodeConnection {
 
   async getStatusAsync(): Promise<NodeStatus> {
     try {
-      const res = await this.fetchWithFailover("/status", {
+      const res = await this.fetchWithFailover("/v1/status", {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
@@ -137,7 +137,7 @@ class NodeConnection {
 
   async search(query: string, identity?: string): Promise<SearchResult> {
     try {
-      const res = await this.fetchWithFailover("/search", {
+      const res = await this.fetchWithFailover("/v1/search", {
         method: "POST",
         headers: this.authHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ query, identity }),
@@ -162,7 +162,7 @@ class NodeConnection {
     const url = getNodePool().getBestNodeUrl('primary');
     const extra: Record<string, string> = { "Content-Type": "application/json" };
     if (userToken) extra["X-User-Token"] = userToken;
-    const res = await fetch(`${url}/transfer`, {
+    const res = await fetch(`${url}/v1/transfer`, {
       method: "POST",
       headers: this.authHeaders(extra),
       body: JSON.stringify({ to, amount }),
@@ -179,7 +179,7 @@ class NodeConnection {
 
   async getBalance(peerId: string): Promise<number> {
     try {
-      const res = await this.fetchWithFailover(`/balance/${peerId}`, {
+      const res = await this.fetchWithFailover(`/v1/balance/${peerId}`, {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
@@ -193,7 +193,7 @@ class NodeConnection {
 
   async getPeers(): Promise<{ peerId: string; connectedAt: number; lastSeen: number; balance: number }[]> {
     try {
-      const res = await this.fetchWithFailover("/peers", {
+      const res = await this.fetchWithFailover("/v1/peers", {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
@@ -207,7 +207,7 @@ class NodeConnection {
 
   async getProposals(): Promise<any[]> {
     try {
-      const res = await this.fetchWithFailover("/governance/proposals", {
+      const res = await this.fetchWithFailover("/v1/governance/proposals", {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
@@ -221,7 +221,7 @@ class NodeConnection {
 
   async createProposal(title: string, description: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/governance/propose`, {
+    const res = await fetch(`${url}/v1/governance/propose`, {
       method: "POST",
       headers: this.authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ title, description }),
@@ -236,7 +236,7 @@ class NodeConnection {
 
   async getProposalDetail(id: string): Promise<any> {
     try {
-      const res = await this.fetchWithFailover(`/governance/proposal/${encodeURIComponent(id)}`, {
+      const res = await this.fetchWithFailover(`/v1/governance/proposal/${encodeURIComponent(id)}`, {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
@@ -249,7 +249,7 @@ class NodeConnection {
 
   async addComment(proposalId: string, content: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/governance/comment`, {
+    const res = await fetch(`${url}/v1/governance/comment`, {
       method: "POST",
       headers: this.authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ proposalId, content }),
@@ -264,7 +264,7 @@ class NodeConnection {
 
   async connectPeer(addr: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/connect`, {
+    const res = await fetch(`${url}/v1/connect`, {
       method: "POST",
       headers: this.authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ addr }),
@@ -281,7 +281,7 @@ class NodeConnection {
     try {
       const extra: Record<string, string> = {};
       if (userToken) extra["X-User-Token"] = userToken;
-      const res = await this.fetchWithFailover(`/transactions?limit=${limit}`, {
+      const res = await this.fetchWithFailover(`/v1/transactions?limit=${limit}`, {
         headers: this.authHeaders(extra),
         signal: AbortSignal.timeout(5000),
       });
@@ -294,7 +294,7 @@ class NodeConnection {
 
   async getActivity(limit: number = 30): Promise<{ events: any[]; nodeId: string }> {
     try {
-      const res = await this.fetchWithFailover(`/activity?limit=${limit}`, {
+      const res = await this.fetchWithFailover(`/v1/activity?limit=${limit}`, {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
@@ -307,7 +307,7 @@ class NodeConnection {
 
   async getActivityStream(limit: number = 30): Promise<{ events: any[]; nodeId: string }> {
     try {
-      const res = await this.fetchWithFailover(`/activity/stream?limit=${limit}`, {
+      const res = await this.fetchWithFailover(`/v1/activity/stream?limit=${limit}`, {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
@@ -320,7 +320,7 @@ class NodeConnection {
 
   async getNetworkOverview(): Promise<any> {
     try {
-      const res = await this.fetchWithFailover("/network/overview", {
+      const res = await this.fetchWithFailover("/v1/network/overview", {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
@@ -340,7 +340,7 @@ class NodeConnection {
 
   async sendGovernanceMessage(content: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/governance/message`, {
+    const res = await fetch(`${url}/v1/governance/message`, {
       method: "POST",
       headers: this.authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ content }),
@@ -355,7 +355,7 @@ class NodeConnection {
 
   async getTopology(): Promise<any> {
     try {
-      const res = await this.fetchWithFailover("/network/topology", {
+      const res = await this.fetchWithFailover("/v1/network/topology", {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
@@ -368,7 +368,7 @@ class NodeConnection {
 
   async getOnboard(): Promise<{ bootstrapAddrs: string[]; instructions: string; version: string; peerId: string; peerCount: number }> {
     try {
-      const res = await this.fetchWithFailover("/onboard", {
+      const res = await this.fetchWithFailover("/v1/onboard", {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
@@ -381,7 +381,7 @@ class NodeConnection {
 
   async createTask(title: string, description: string, priority?: string, createdBy?: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/tasks`, {
+    const res = await fetch(`${url}/v1/tasks`, {
       method: "POST",
       headers: this.authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ title, description, priority, createdBy }),
@@ -396,7 +396,7 @@ class NodeConnection {
 
   async voteOnProposal(proposalId: string, choice: string, reasoning?: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/governance/vote`, {
+    const res = await fetch(`${url}/v1/governance/vote`, {
       method: "POST",
       headers: this.authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ proposalId, choice, reasoning }),
@@ -411,7 +411,7 @@ class NodeConnection {
 
   async getProposalReviews(proposalId: string): Promise<{ proposalId: string; reviews: any[]; summary: any | null }> {
     try {
-      const res = await this.fetchWithFailover(`/governance/proposals/${encodeURIComponent(proposalId)}/reviews`, {
+      const res = await this.fetchWithFailover(`/v1/governance/proposals/${encodeURIComponent(proposalId)}/reviews`, {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
@@ -424,7 +424,7 @@ class NodeConnection {
 
   async getProposalReviewers(proposalId: string): Promise<{ proposalId: string; reviewers: any[]; selectedReviewers: any[]; reviewerCount: number; humanOnly: boolean }> {
     try {
-      const res = await this.fetchWithFailover(`/governance/proposals/${encodeURIComponent(proposalId)}/reviewers`, {
+      const res = await this.fetchWithFailover(`/v1/governance/proposals/${encodeURIComponent(proposalId)}/reviewers`, {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
@@ -441,7 +441,7 @@ class NodeConnection {
     try {
       const headers: Record<string, string> = {};
       if (token) headers["X-User-Token"] = token;
-      const res = await this.fetchWithFailover("/projects", {
+      const res = await this.fetchWithFailover("/v1/projects", {
         headers: this.authHeaders(headers),
         signal: AbortSignal.timeout(5000),
       });
@@ -457,7 +457,7 @@ class NodeConnection {
     try {
       const headers: Record<string, string> = {};
       if (token) headers["X-User-Token"] = token;
-      const res = await this.fetchWithFailover(`/projects/${encodeURIComponent(id)}`, {
+      const res = await this.fetchWithFailover(`/v1/projects/${encodeURIComponent(id)}`, {
         headers: this.authHeaders(headers),
         signal: AbortSignal.timeout(5000),
       });
@@ -470,7 +470,7 @@ class NodeConnection {
 
   async createProject(data: { name: string; description: string; type?: string; visibility?: string }, token: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/projects`, {
+    const res = await fetch(`${url}/v1/projects`, {
       method: "POST",
       headers: this.authHeaders({ "Content-Type": "application/json", "X-User-Token": token }),
       body: JSON.stringify(data),
@@ -485,7 +485,7 @@ class NodeConnection {
 
   async updateProject(id: string, data: Record<string, unknown>, token: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/projects/${encodeURIComponent(id)}`, {
+    const res = await fetch(`${url}/v1/projects/${encodeURIComponent(id)}`, {
       method: "PATCH",
       headers: this.authHeaders({ "Content-Type": "application/json", "X-User-Token": token }),
       body: JSON.stringify(data),
@@ -502,7 +502,7 @@ class NodeConnection {
     try {
       const headers: Record<string, string> = {};
       if (token) headers["X-User-Token"] = token;
-      const res = await this.fetchWithFailover(`/projects/${encodeURIComponent(id)}/collaborators`, {
+      const res = await this.fetchWithFailover(`/v1/projects/${encodeURIComponent(id)}/collaborators`, {
         headers: this.authHeaders(headers),
         signal: AbortSignal.timeout(5000),
       });
@@ -516,7 +516,7 @@ class NodeConnection {
 
   async addProjectCollaborator(id: string, data: { userId: string; role?: string }, token: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/projects/${encodeURIComponent(id)}/collaborators`, {
+    const res = await fetch(`${url}/v1/projects/${encodeURIComponent(id)}/collaborators`, {
       method: "POST",
       headers: this.authHeaders({ "Content-Type": "application/json", "X-User-Token": token }),
       body: JSON.stringify(data),
@@ -531,7 +531,7 @@ class NodeConnection {
 
   async removeProjectCollaborator(id: string, userId: string, token: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/projects/${encodeURIComponent(id)}/collaborators/${encodeURIComponent(userId)}`, {
+    const res = await fetch(`${url}/v1/projects/${encodeURIComponent(id)}/collaborators/${encodeURIComponent(userId)}`, {
       method: "DELETE",
       headers: this.authHeaders({ "X-User-Token": token }),
       signal: AbortSignal.timeout(10000),
@@ -545,7 +545,7 @@ class NodeConnection {
 
   async generateProjectInvite(id: string, body: Record<string, unknown>, token: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/projects/${encodeURIComponent(id)}/invite`, {
+    const res = await fetch(`${url}/v1/projects/${encodeURIComponent(id)}/invite`, {
       method: "POST",
       headers: this.authHeaders({ "Content-Type": "application/json", "X-User-Token": token }),
       body: JSON.stringify(body),
@@ -562,7 +562,7 @@ class NodeConnection {
 
   async deployProject(projectId: string, files: any[], token: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/projects/${encodeURIComponent(projectId)}/hosting`, {
+    const res = await fetch(`${url}/v1/projects/${encodeURIComponent(projectId)}/hosting`, {
       method: "POST",
       headers: this.authHeaders({ "Content-Type": "application/json", "X-User-Token": token }),
       body: JSON.stringify({ files }),
@@ -579,7 +579,7 @@ class NodeConnection {
     try {
       const headers: Record<string, string> = {};
       if (token) headers["X-User-Token"] = token;
-      const res = await this.fetchWithFailover(`/projects/${encodeURIComponent(projectId)}/hosting`, {
+      const res = await this.fetchWithFailover(`/v1/projects/${encodeURIComponent(projectId)}/hosting`, {
         headers: this.authHeaders(headers),
         signal: AbortSignal.timeout(10000),
       });
@@ -592,7 +592,7 @@ class NodeConnection {
 
   async undeployProject(projectId: string, token: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/projects/${encodeURIComponent(projectId)}/undeploy`, {
+    const res = await fetch(`${url}/v1/projects/${encodeURIComponent(projectId)}/undeploy`, {
       method: "POST",
       headers: this.authHeaders({ "Content-Type": "application/json", "X-User-Token": token }),
       body: JSON.stringify({}),
@@ -607,7 +607,7 @@ class NodeConnection {
 
   async removeProjectHosting(projectId: string, token: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
-    const res = await fetch(`${url}/projects/${encodeURIComponent(projectId)}/hosting`, {
+    const res = await fetch(`${url}/v1/projects/${encodeURIComponent(projectId)}/hosting`, {
       method: "DELETE",
       headers: this.authHeaders({ "X-User-Token": token }),
       signal: AbortSignal.timeout(10000),
@@ -621,7 +621,7 @@ class NodeConnection {
 
   async getProjectStats(): Promise<{ totalProjects: number; activeProjects: number; publicProjects: number; totalCollaborators: number }> {
     try {
-      const res = await this.fetchWithFailover("/projects/stats", {
+      const res = await this.fetchWithFailover("/v1/projects/stats", {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });
@@ -634,7 +634,7 @@ class NodeConnection {
 
   async getGovernanceStats(): Promise<{ totalProposals: number; reviewedCount: number; avgRiskScore: number; stakePool: number; humanOnlyCount: number; governanceChangeCount: number; statusCounts: Record<string, number> }> {
     try {
-      const res = await this.fetchWithFailover("/governance/stats", {
+      const res = await this.fetchWithFailover("/v1/governance/stats", {
         headers: this.authHeaders(),
         signal: AbortSignal.timeout(5000),
       });

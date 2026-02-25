@@ -7,7 +7,7 @@ export async function GET(request: Request) {
     // Forward user token as X-User-Token (node expects this header for user auth)
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
 
-    const res = await fetchFromNode("/auth/me", {
+    const res = await fetchFromNode("/v1/auth/me", {
       headers: {
         ...(token ? { "X-User-Token": token } : {}),
       },

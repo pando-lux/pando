@@ -7,7 +7,7 @@ export async function POST(request: Request) {
 
     // Phase 86: No primary pinning needed — challenge tokens are self-verifying (stateless).
     // Verify can hit ANY node, even a different one from the challenge issuer.
-    const res = await fetchFromNode("/auth/verify", {
+    const res = await fetchFromNode("/v1/auth/verify", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

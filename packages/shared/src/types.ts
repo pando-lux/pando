@@ -22,8 +22,12 @@ export interface EncryptedSerializedIdentity {
   createdAt: number;
 }
 
+/** Current P2P message protocol version. Increment when envelope format changes. */
+export const MESSAGE_VERSION = 1;
+
 export interface PandoMessage {
   type: MessageType;
+  version?: number;         // v2.2: envelope version (stamped by publishToTopic, optional for callers)
   from: string; // peerId
   timestamp: number;
   payload: unknown;

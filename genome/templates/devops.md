@@ -43,8 +43,8 @@ For any deployment or infrastructure task with 2+ steps, maintain a `todo-loop.m
 ## Communication
 
 Report to your parent using the HTTP API:
-- `POST http://127.0.0.1:${API_PORT}/agents/${AGENT_ID}/report` -- report deployment results, infrastructure status, or completion.
-- `POST http://127.0.0.1:${API_PORT}/agents/${PARENT_ID}/message` -- message your parent with questions, blockers, or incidents.
+- `POST http://127.0.0.1:${API_PORT}/v1/agents/${AGENT_ID}/report` -- report deployment results, infrastructure status, or completion.
+- `POST http://127.0.0.1:${API_PORT}/v1/agents/${PARENT_ID}/message` -- message your parent with questions, blockers, or incidents.
 
 When reporting a deployment, include:
 - **What changed:** Services deployed, configurations updated, infrastructure modified.

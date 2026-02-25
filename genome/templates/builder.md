@@ -25,7 +25,7 @@ Apps you build must work from ONE URL. Users never enter IPs, ports, or server a
 ### Discovery: What's Available
 Before building, call the infrastructure endpoint to learn what resources exist:
 ```bash
-curl -s http://127.0.0.1:${API_PORT}/capabilities/infrastructure
+curl -s http://127.0.0.1:${API_PORT}/v1/capabilities/infrastructure
 ```
 This returns: available databases (MongoDB), hosting options, Resource Proxy URL and auth model, API keys for AI services, and compute capabilities.
 
@@ -180,7 +180,7 @@ If your parent did not specify a tier, ask before building. The tier determines 
 **Your parent handles deployment.** When you finish building, report completion to your parent. The manager calls ONE endpoint that handles everything:
 
 ```bash
-curl -s -X POST http://127.0.0.1:${API_PORT}/projects/${PROJECT_ID}/deploy \
+curl -s -X POST http://127.0.0.1:${API_PORT}/v1/projects/${PROJECT_ID}/deploy \
   -H 'Content-Type: application/json' \
   -H 'Authorization: Bearer ${API_TOKEN}' \
   -d '{"workspaceDir": "<your workspace path>"}'
@@ -214,7 +214,7 @@ The app runs independently on cloud infrastructure:
 - NEVER hardcode gateway URLs — always use `window.PANDO_GATEWAY_URL` (injected at deploy time)
 - NEVER use relative paths like `/api/resource-proxy/db` — S3-hosted apps are on a different origin
 - NEVER use `gh` CLI or git push directly — the node handles GitHub
-- NEVER call `/agents/:id/deploy` — use `/projects/:id/deploy` (the unified endpoint)
+- NEVER call `/v1/agents/:id/deploy` — use `/v1/projects/:id/deploy` (the unified endpoint)
 
 ## Todo Loop (MANDATORY for all multi-step work)
 
@@ -256,8 +256,8 @@ After completing your task, UPDATE `project-state.md` with: what you built, any 
 ## Communication
 
 Report to your parent using the HTTP API:
-- `POST http://127.0.0.1:${API_PORT}/agents/${AGENT_ID}/report` -- report your own completion or progress.
-- `POST http://127.0.0.1:${API_PORT}/agents/${PARENT_ID}/message` -- message your parent with questions, blockers, or status updates.
+- `POST http://127.0.0.1:${API_PORT}/v1/agents/${AGENT_ID}/report` -- report your own completion or progress.
+- `POST http://127.0.0.1:${API_PORT}/v1/agents/${PARENT_ID}/message` -- message your parent with questions, blockers, or status updates.
 
 When reporting completion, include:
 - Summary of what was built.

@@ -7,7 +7,7 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const params = url.searchParams.toString();
-    const res = await fetch(`${NODE_URL}/content${params ? `?${params}` : ""}`, {
+    const res = await fetch(`${NODE_URL}/v1/content${params ? `?${params}` : ""}`, {
       signal: AbortSignal.timeout(5000),
       cache: "no-store",
     });
@@ -25,7 +25,7 @@ export async function POST(request: Request) {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const res = await fetch(`${NODE_URL}/content`, {
+    const res = await fetch(`${NODE_URL}/v1/content`, {
       method: "POST",
       headers,
       body: JSON.stringify(body),

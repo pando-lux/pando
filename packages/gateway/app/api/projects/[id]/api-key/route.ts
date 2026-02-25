@@ -25,8 +25,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     }
 
     const endpoint = regenerate
-      ? `${getNodeUrl('primary')}/projects/${encodeURIComponent(id)}/api-key/regenerate`
-      : `${getNodeUrl('primary')}/projects/${encodeURIComponent(id)}/api-key`;
+      ? `${getNodeUrl('primary')}/v1/projects/${encodeURIComponent(id)}/api-key/regenerate`
+      : `${getNodeUrl('primary')}/v1/projects/${encodeURIComponent(id)}/api-key`;
 
     const res = await fetch(endpoint, {
       method: "POST",

@@ -8,7 +8,7 @@ export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);
     const limit = searchParams.get("limit") || "50";
-    const res = await fetch(`${NODE_URL}/scheduler/network/tasks?limit=${limit}`, {
+    const res = await fetch(`${NODE_URL}/v1/scheduler/network/tasks?limit=${limit}`, {
       signal: AbortSignal.timeout(15000),
       cache: "no-store",
     });

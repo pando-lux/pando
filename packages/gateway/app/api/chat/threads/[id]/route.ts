@@ -12,7 +12,7 @@ function nodeHeaders(): Record<string, string> {
 export async function GET(_req: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    const res = await fetchFromNode(`/chat/threads/${encodeURIComponent(id)}`, {
+    const res = await fetchFromNode(`/v1/chat/threads/${encodeURIComponent(id)}`, {
       headers: nodeHeaders(),
       signal: AbortSignal.timeout(10000),
     });
@@ -31,7 +31,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
   try {
     const { id } = await params;
     const body = await req.json();
-    const res = await fetchFromNode(`/chat/threads/${encodeURIComponent(id)}`, {
+    const res = await fetchFromNode(`/v1/chat/threads/${encodeURIComponent(id)}`, {
       method: 'PATCH',
       headers: nodeHeaders(),
       body: JSON.stringify(body),

@@ -9,7 +9,7 @@ export async function GET(
 ) {
   const { id } = await params;
   try {
-    const res = await fetch(`${NODE_URL}/content/${encodeURIComponent(id)}`, {
+    const res = await fetch(`${NODE_URL}/v1/content/${encodeURIComponent(id)}`, {
       signal: AbortSignal.timeout(5000),
       cache: "no-store",
     });
@@ -33,7 +33,7 @@ export async function PUT(
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const res = await fetch(`${NODE_URL}/content/${encodeURIComponent(id)}`, {
+    const res = await fetch(`${NODE_URL}/v1/content/${encodeURIComponent(id)}`, {
       method: "PUT",
       headers,
       body: JSON.stringify(body),
@@ -59,7 +59,7 @@ export async function DELETE(
     const headers: Record<string, string> = {};
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const res = await fetch(`${NODE_URL}/content/${encodeURIComponent(id)}`, {
+    const res = await fetch(`${NODE_URL}/v1/content/${encodeURIComponent(id)}`, {
       method: "DELETE",
       headers,
       signal: AbortSignal.timeout(10000),

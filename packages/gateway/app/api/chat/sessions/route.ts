@@ -9,7 +9,7 @@ export async function GET() {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
-    const res = await fetchFromNode("/chat/sessions", {
+    const res = await fetchFromNode("/v1/chat/sessions", {
       headers,
       signal: AbortSignal.timeout(5000),
     });

@@ -9,7 +9,7 @@ export async function GET(
 ) {
   const { id } = await params;
   try {
-    const res = await fetch(`${NODE_URL}/tasks/${encodeURIComponent(id)}/thread`, {
+    const res = await fetch(`${NODE_URL}/v1/tasks/${encodeURIComponent(id)}/thread`, {
       signal: AbortSignal.timeout(5000),
       cache: 'no-store',
     });
@@ -30,7 +30,7 @@ export async function POST(
   const { id } = await params;
   try {
     const body = await request.json();
-    const res = await fetch(`${NODE_URL}/tasks/${encodeURIComponent(id)}/thread`, {
+    const res = await fetch(`${NODE_URL}/v1/tasks/${encodeURIComponent(id)}/thread`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

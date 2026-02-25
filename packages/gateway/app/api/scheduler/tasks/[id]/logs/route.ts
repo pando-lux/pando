@@ -10,7 +10,7 @@ export async function GET(
   const { id } = await params;
   try {
     const res = await fetch(
-      `${NODE_URL}/scheduler/tasks/${encodeURIComponent(id)}/logs`,
+      `${NODE_URL}/v1/scheduler/tasks/${encodeURIComponent(id)}/logs`,
       {
         signal: AbortSignal.timeout(10000),
         cache: "no-store",

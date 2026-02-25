@@ -37,7 +37,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
     // Phase 41.5: Per-request thread key delivery (stateless node)
     if (body.encryptedThreadKey) forwardBody.encryptedThreadKey = body.encryptedThreadKey;
 
-    const res = await fetchFromNode(`/chat/threads/${encodeURIComponent(id)}/message`, {
+    const res = await fetchFromNode(`/v1/chat/threads/${encodeURIComponent(id)}/message`, {
       method: "POST",
       headers: nodeHeaders(request),
       body: JSON.stringify(forwardBody),

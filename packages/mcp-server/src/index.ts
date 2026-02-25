@@ -123,7 +123,7 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
 // --- Tool implementations ---
 
 async function handleStatus() {
-  const res = await fetch(`${PANDO_NODE_URL}/status`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
+  const res = await fetch(`${PANDO_NODE_URL}/v1/status`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
   const data = await res.json() as any;
 
   const text = [
@@ -141,7 +141,7 @@ async function handleStatus() {
 }
 
 async function handlePeers() {
-  const res = await fetch(`${PANDO_NODE_URL}/peers`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
+  const res = await fetch(`${PANDO_NODE_URL}/v1/peers`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
   const data = await res.json() as any;
 
   if (!data.peers || data.peers.length === 0) {
@@ -158,18 +158,18 @@ async function handlePeers() {
 async function handleBalance(args: { peerId?: string }) {
   // If no peerId given, get own balance from status
   if (!args.peerId) {
-    const res = await fetch(`${PANDO_NODE_URL}/status`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
+    const res = await fetch(`${PANDO_NODE_URL}/v1/status`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
     const data = await res.json() as any;
     return { content: [{ type: 'text' as const, text: `Your balance: ${data.balance} Lux` }] };
   }
 
-  const res = await fetch(`${PANDO_NODE_URL}/balance/${args.peerId}`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
+  const res = await fetch(`${PANDO_NODE_URL}/v1/balance/${args.peerId}`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
   const data = await res.json() as any;
   return { content: [{ type: 'text' as const, text: `Balance for ${args.peerId}: ${data.balance} Lux` }] };
 }
 
 async function handleTransfer(args: { to: string; amount: number }) {
-  const res = await fetch(`${PANDO_NODE_URL}/transfer`, {
+  const res = await fetch(`${PANDO_NODE_URL}/v1/transfer`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(args),
@@ -191,7 +191,7 @@ async function handleTransfer(args: { to: string; amount: number }) {
 }
 
 async function handleSearch(args: { query: string }) {
-  const res = await fetch(`${PANDO_NODE_URL}/search`, {
+  const res = await fetch(`${PANDO_NODE_URL}/v1/search`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify(args),
@@ -212,7 +212,7 @@ async function handleSearch(args: { query: string }) {
 }
 
 async function handleWallet() {
-  const res = await fetch(`${PANDO_NODE_URL}/wallet`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
+  const res = await fetch(`${PANDO_NODE_URL}/v1/wallet`, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
   const data = await res.json() as any;
 
   const text = [

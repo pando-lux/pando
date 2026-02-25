@@ -6,7 +6,7 @@ const NODE_URL = getNodeUrl();
 
 export async function GET() {
   try {
-    const res = await fetch(`${NODE_URL}/status`, {
+    const res = await fetch(`${NODE_URL}/v1/status`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) throw new Error("Node not responding");

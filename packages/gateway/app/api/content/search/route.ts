@@ -7,7 +7,7 @@ export async function GET(request: Request) {
   try {
     const url = new URL(request.url);
     const params = url.searchParams.toString();
-    const res = await fetch(`${NODE_URL}/content/search${params ? `?${params}` : ""}`, {
+    const res = await fetch(`${NODE_URL}/v1/content/search${params ? `?${params}` : ""}`, {
       signal: AbortSignal.timeout(5000),
       cache: "no-store",
     });

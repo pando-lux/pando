@@ -16,7 +16,7 @@ function nodeHeaders(request?: Request): Record<string, string> {
 // GET /api/chat/threads — list threads for the authenticated user
 export async function GET(request: Request) {
   try {
-    const res = await fetchFromNode("/chat/threads", {
+    const res = await fetchFromNode("/v1/chat/threads", {
       headers: nodeHeaders(request),
       signal: AbortSignal.timeout(10000),
     });
@@ -34,7 +34,7 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const res = await fetchFromNode("/chat/threads", {
+    const res = await fetchFromNode("/v1/chat/threads", {
       method: "POST",
       headers: nodeHeaders(request),
       body: JSON.stringify(body),

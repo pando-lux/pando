@@ -32,7 +32,7 @@ export async function POST(request: Request) {
     // Complex tier uses Claude Code which can take up to 2 minutes
     const timeout = tier === "complex" ? 150000 : 30000;
 
-    const res = await fetchFromNode("/chat/message", {
+    const res = await fetchFromNode("/v1/chat/message", {
       method: "POST",
       headers,
       body: JSON.stringify({ message, tier, sessionId, projectId }),

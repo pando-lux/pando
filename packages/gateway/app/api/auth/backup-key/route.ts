@@ -7,7 +7,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const authHeader = request.headers.get("Authorization") || "";
 
-    const res = await fetchFromNode("/auth/backup-key", {
+    const res = await fetchFromNode("/v1/auth/backup-key", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -31,7 +31,7 @@ export async function GET(request: Request) {
   try {
     const authHeader = request.headers.get("Authorization") || "";
 
-    const res = await fetchFromNode("/auth/backup-key", {
+    const res = await fetchFromNode("/v1/auth/backup-key", {
       method: "GET",
       headers: {
         ...(authHeader ? { Authorization: authHeader } : {}),

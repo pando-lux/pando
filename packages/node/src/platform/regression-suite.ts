@@ -64,76 +64,76 @@ export class RegressionSuite {
       {
         description: 'Node status returns 200 with peerId and uptime',
         category: 'api',
-        test: { method: 'GET', path: '/status', expectedStatus: 200, expectedFields: ['peerId', 'uptime', 'peers'] },
+        test: { method: 'GET', path: '/v1/status', expectedStatus: 200, expectedFields: ['peerId', 'uptime', 'peers'] },
       },
       {
         description: 'Health endpoint returns 200',
         category: 'api',
-        test: { method: 'GET', path: '/health', expectedStatus: 200, expectedFields: ['status'] },
+        test: { method: 'GET', path: '/v1/health', expectedStatus: 200, expectedFields: ['status'] },
       },
       {
         description: 'Peer list returns 200',
         category: 'api',
-        test: { method: 'GET', path: '/peers', expectedStatus: 200, expectedFields: ['peers'] },
+        test: { method: 'GET', path: '/v1/peers', expectedStatus: 200, expectedFields: ['peers'] },
       },
       {
         description: 'Wallet info returns peerId and balance',
         category: 'api',
-        test: { method: 'GET', path: '/wallet', expectedStatus: 200, expectedFields: ['peerId', 'balance'] },
+        test: { method: 'GET', path: '/v1/wallet', expectedStatus: 200, expectedFields: ['peerId', 'balance'] },
       },
       {
         description: 'Task list returns 200',
         category: 'api',
-        test: { method: 'GET', path: '/tasks', expectedStatus: 200 },
+        test: { method: 'GET', path: '/v1/tasks', expectedStatus: 200 },
       },
       {
         description: 'Monitor status returns 200',
         category: 'api',
-        test: { method: 'GET', path: '/monitor/status', expectedStatus: 200 },
+        test: { method: 'GET', path: '/v1/monitor/status', expectedStatus: 200 },
       },
       // Governance
       {
         description: 'Governance proposals returns 200',
         category: 'governance',
-        test: { method: 'GET', path: '/governance/proposals', expectedStatus: 200 },
+        test: { method: 'GET', path: '/v1/governance/proposals', expectedStatus: 200 },
       },
       {
         description: 'Active proposals returns 200',
         category: 'governance',
-        test: { method: 'GET', path: '/governance/proposals/active', expectedStatus: 200 },
+        test: { method: 'GET', path: '/v1/governance/proposals/active', expectedStatus: 200 },
       },
       // Auth gating — writes require auth
       {
         description: 'Task creation requires auth (401 without token)',
         category: 'api',
-        test: { method: 'POST', path: '/tasks', expectedStatus: 401, authRequired: false },
+        test: { method: 'POST', path: '/v1/tasks', expectedStatus: 401, authRequired: false },
       },
       {
         description: 'Transfer requires auth (401 without token)',
         category: 'api',
-        test: { method: 'POST', path: '/transfer', expectedStatus: 401, authRequired: false },
+        test: { method: 'POST', path: '/v1/transfer', expectedStatus: 401, authRequired: false },
       },
       {
         description: 'Upgrade requires auth (401 without token)',
         category: 'api',
-        test: { method: 'POST', path: '/upgrade', expectedStatus: 401, authRequired: false },
+        test: { method: 'POST', path: '/v1/upgrade', expectedStatus: 401, authRequired: false },
       },
       // Ledger
       {
         description: 'Transactions returns 200',
         category: 'ledger',
-        test: { method: 'GET', path: '/transactions', expectedStatus: 200 },
+        test: { method: 'GET', path: '/v1/transactions', expectedStatus: 200 },
       },
       // Emissions & Security
       {
         description: 'Emission stats returns 200',
         category: 'api',
-        test: { method: 'GET', path: '/emissions/stats', expectedStatus: 200 },
+        test: { method: 'GET', path: '/v1/emissions/stats', expectedStatus: 200 },
       },
       {
         description: 'Security stats returns 200',
         category: 'api',
-        test: { method: 'GET', path: '/security/stats', expectedStatus: 200 },
+        test: { method: 'GET', path: '/v1/security/stats', expectedStatus: 200 },
       },
     ];
 

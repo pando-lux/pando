@@ -14,7 +14,7 @@ function nodeHeaders(request: Request): Record<string, string> {
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    const res = await fetch(`${getNodeUrl()}/projects/${encodeURIComponent(id)}/resources`, {
+    const res = await fetch(`${getNodeUrl()}/v1/projects/${encodeURIComponent(id)}/resources`, {
       method: "GET",
       headers: nodeHeaders(request),
       signal: AbortSignal.timeout(10000),
@@ -48,7 +48,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       );
     }
 
-    const res = await fetch(`${getNodeUrl('primary')}/projects/${encodeURIComponent(id)}/resources/assign`, {
+    const res = await fetch(`${getNodeUrl('primary')}/v1/projects/${encodeURIComponent(id)}/resources/assign`, {
       method: "POST",
       headers: nodeHeaders(request),
       body: JSON.stringify({ type: body.type, resourceId: body.resourceId }),

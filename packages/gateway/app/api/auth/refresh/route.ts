@@ -5,7 +5,7 @@ export async function POST(request: Request) {
   try {
     const authHeader = request.headers.get("Authorization") || "";
 
-    const res = await fetchFromNode("/auth/refresh", {
+    const res = await fetchFromNode("/v1/auth/refresh", {
       method: "POST",
       headers: {
         ...(authHeader ? { Authorization: authHeader } : {}),

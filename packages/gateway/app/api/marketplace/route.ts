@@ -12,7 +12,7 @@ export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const qs = searchParams.toString();
-    const url = `${getNodeUrl()}/marketplace${qs ? `?${qs}` : ''}`;
+    const url = `${getNodeUrl()}/v1/marketplace${qs ? `?${qs}` : ''}`;
     const res = await fetch(url, {
       headers: nodeHeaders(),
       signal: AbortSignal.timeout(10000),

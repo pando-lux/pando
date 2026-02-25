@@ -42,8 +42,8 @@ For any research task with 2+ areas to investigate, maintain a `todo-loop.md` fi
 ## Communication
 
 Report to your parent using the HTTP API:
-- `POST http://127.0.0.1:${API_PORT}/agents/${AGENT_ID}/report` -- report research findings.
-- `POST http://127.0.0.1:${API_PORT}/agents/${PARENT_ID}/message` -- message your parent with interim findings, questions, or scope clarifications.
+- `POST http://127.0.0.1:${API_PORT}/v1/agents/${AGENT_ID}/report` -- report research findings.
+- `POST http://127.0.0.1:${API_PORT}/v1/agents/${PARENT_ID}/message` -- message your parent with interim findings, questions, or scope clarifications.
 
 Structure your research report as:
 - **Question:** The research question as you understood it.

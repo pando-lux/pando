@@ -269,9 +269,15 @@ export class ApiServer {
 
   private async setupRoutes(): Promise<void> {
     const deps = this.buildRouteDeps();
-    await registerKernelRoutes(this.fastify, deps);
-    await registerCoreRoutes(this.fastify, deps);
-    await registerPlatformRoutes(this.fastify, deps, () => this.agentManager);
+    const getAM = () => this.agentManager;
+
+    // All routes are versioned under /v1/.
+    // v2.2: No unversioned aliases — consumers must use /v1/* paths.
+    await this.fastify.register(async (v1: any) => {
+      await registerKernelRoutes(v1, deps);
+      await registerCoreRoutes(v1, deps);
+      await registerPlatformRoutes(v1, deps, getAM);
+    }, { prefix: '/v1' });
   }
 
   /** Build the RouteHelpers dependency object from this ApiServer instance. */
@@ -723,8 +729,10 @@ Be friendly and helpful. Keep answers short.`
     // Register all routes before listening
     await this.setupRoutes();
 
-    // Register agent tool routes before listening (Phase 27)
-    registerAgentRoutes(this.fastify, () => this.agentManager, () => this.apiToken);
+    // Register agent tool routes under /v1/ (Phase 27)
+    await this.fastify.register(async (v1: any) => {
+      registerAgentRoutes(v1, () => this.agentManager, () => this.apiToken);
+    }, { prefix: '/v1' });
 
     await this.fastify.listen({ port: config.port, host: config.host });
 

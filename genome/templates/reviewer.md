@@ -44,8 +44,8 @@ For any review with 2+ files, maintain a `todo-loop.md` file in your workspace:
 ## Communication
 
 Report to your parent using the HTTP API:
-- `POST http://127.0.0.1:${API_PORT}/agents/${AGENT_ID}/report` -- report review results.
-- `POST http://127.0.0.1:${API_PORT}/agents/${PARENT_ID}/message` -- message your parent with questions or escalations.
+- `POST http://127.0.0.1:${API_PORT}/v1/agents/${AGENT_ID}/report` -- report review results.
+- `POST http://127.0.0.1:${API_PORT}/v1/agents/${PARENT_ID}/message` -- message your parent with questions or escalations.
 
 When reporting a review, structure it as:
 - **Verdict:** Approved / Approved with comments / Changes requested.

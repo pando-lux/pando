@@ -8,7 +8,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ path
   const { path } = await params;
   const subPath = path.join("/");
   try {
-    const res = await fetch(`${NODE_URL}/request-reply/${subPath}`, {
+    const res = await fetch(`${NODE_URL}/v1/request-reply/${subPath}`, {
       signal: AbortSignal.timeout(5000),
       cache: "no-store",
     });
@@ -24,7 +24,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ pat
   const subPath = path.join("/");
   try {
     const body = await request.json().catch(() => ({}));
-    const res = await fetch(`${NODE_URL}/request-reply/${subPath}`, {
+    const res = await fetch(`${NODE_URL}/v1/request-reply/${subPath}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),

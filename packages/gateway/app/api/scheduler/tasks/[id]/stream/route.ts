@@ -14,7 +14,7 @@ export async function GET(
   const { id } = await params;
   try {
     const res = await fetch(
-      `${NODE_URL}/scheduler/tasks/${encodeURIComponent(id)}/stream`,
+      `${NODE_URL}/v1/scheduler/tasks/${encodeURIComponent(id)}/stream`,
       {
         headers: { Accept: "text/event-stream" },
         cache: "no-store",

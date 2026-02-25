@@ -8,7 +8,7 @@ export async function GET(request: Request) {
   const { searchParams } = new URL(request.url);
   const window = searchParams.get("window") || "24h";
   try {
-    const res = await fetch(`${NODE_URL}/activity/stats?window=${encodeURIComponent(window)}`, {
+    const res = await fetch(`${NODE_URL}/v1/activity/stats?window=${encodeURIComponent(window)}`, {
       signal: AbortSignal.timeout(5000),
     });
     if (!res.ok) return NextResponse.json({ total: 0, byAction: {}, byAgent: {} });

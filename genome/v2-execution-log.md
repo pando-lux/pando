@@ -52,7 +52,7 @@ BRANCH: All work on v2-architecture branch.
 | v2.1: AgentTemplate capabilities | ✅ DONE | Already in shared/types.ts with AgentCapabilityDeclaration |
 | v2.1: Import boundary lint | ✅ DONE | scripts/check-imports.mjs passes clean |
 | v2.1: Full build pass | ✅ DONE | Zero TypeScript errors across all packages |
-| v2.1: Split api-server.ts | ⏳ DEFERRED | 7296 lines; partial split in api/ dir; full split in v2.2 |
+| v2.1: Split api-server.ts | ✅ DONE | 7292→887 lines; kernel-api.ts (2249L), core-api.ts (370L), platform-api.ts (3882L), middleware/auth.ts |
 | v2.1: Deploy + smoke test all 5 nodes | ⏳ QUEUED | Ready for deployment |
 | E2E test scenarios | ✅ DONE | genome/flows/e2e-test-scenarios.md — 42 scenarios written by parallel agent |
 | v2.2: API versioning | ⏳ QUEUED | After v2.1 deploys |
@@ -93,10 +93,18 @@ BRANCH: All work on v2-architecture branch.
 - `childPid` field kept for backward-compatible `getChildPid()` API (always null now)
 - startSession() no longer checks for Claude CLI directly — that's the backend's job
 
-### v2.1 API Split (2026-02-26)
-- api-server.ts is 7296 lines — too large to split safely in one session
-- Decision: defer to v2.2 — create stub files in api/ dir but keep implementation in api-server.ts
-- Import from api/ barrel will be future work
+### v2.1 API Split (2026-02-26 — COMPLETED)
+- api-server.ts was 7292 lines — split into 5 files:
+  - `api/middleware/auth.ts` — RouteHelpers interface + createAuthHelpers factory
+  - `api/kernel-api.ts` — Layer 0 routes (2249L): /health, /status, /peers, /balance, /transfer, /governance/*, /monitor/*, /network/*, /scheduler/*, /upgrade, /security/*, etc.
+  - `api/core-api.ts` — Layer 1 routes (370L): /upgrade (main), /emissions/*, /security/*
+  - `api/platform-api.ts` — Layer 2 routes (3882L): /chat/*, /auth/*, /projects/*, /instances/*, /apps/*, /resources/*, /content/*, etc.
+  - `api/api-server.ts` — ApiServer class (887L): Fastify setup, auth hooks, rate limiting, SSE, private helpers, buildRouteDeps()
+- Pattern: ApiServer builds a RouteHelpers deps object and passes it to each registerRoutes function
+- AgentManager passed as `getAgentManager()` closure to platform-api to support late binding
+- SSE client management: addSSEClient/removeSSEClient exposed via RouteHelpers
+- Build passes clean. Smoke test: /health returns 200 with correct JSON
+- NODE_STARTED_AT constant lives in kernel-api.ts (closest to usage)
 
 ---
 

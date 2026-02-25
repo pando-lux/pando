@@ -7,7 +7,7 @@ const NODE_URL = getNodeUrl();
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   try {
-    const res = await fetch(`${NODE_URL}/governance/proposal/${encodeURIComponent(id)}/models`, {
+    const res = await fetch(`${NODE_URL}/v1/governance/proposal/${encodeURIComponent(id)}/models`, {
       signal: AbortSignal.timeout(5000),
       cache: "no-store",
     });

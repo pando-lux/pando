@@ -12,7 +12,7 @@ export async function GET(
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
     const res = await fetch(
-      `${getNodeUrl()}/network/capabilities/user/${encodeURIComponent(username)}`,
+      `${getNodeUrl()}/v1/network/capabilities/user/${encodeURIComponent(username)}`,
       { headers, cache: "no-store" },
     );
     const data = await res.json();

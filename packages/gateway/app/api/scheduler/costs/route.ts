@@ -6,7 +6,7 @@ const NODE_URL = getNodeUrl();
 
 export async function GET() {
   try {
-    const res = await fetch(`${NODE_URL}/scheduler/costs`, {
+    const res = await fetch(`${NODE_URL}/v1/scheduler/costs`, {
       signal: AbortSignal.timeout(5000),
       cache: "no-store",
     });

@@ -13,7 +13,7 @@ export async function POST(
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const res = await fetch(`${NODE_URL}/content/${encodeURIComponent(id)}/publish`, {
+    const res = await fetch(`${NODE_URL}/v1/content/${encodeURIComponent(id)}/publish`, {
       method: "POST",
       headers,
       signal: AbortSignal.timeout(10000),

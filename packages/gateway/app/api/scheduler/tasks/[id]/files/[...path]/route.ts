@@ -11,7 +11,7 @@ export async function GET(
   const { id, path } = await params;
   const filePath = path.join("/");
   try {
-    const res = await fetch(`${NODE_URL}/scheduler/tasks/${encodeURIComponent(id)}/files/${filePath}`, {
+    const res = await fetch(`${NODE_URL}/v1/scheduler/tasks/${encodeURIComponent(id)}/files/${filePath}`, {
       signal: AbortSignal.timeout(10000),
       cache: "no-store",
     });

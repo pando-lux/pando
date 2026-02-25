@@ -7,7 +7,7 @@ export async function GET() {
     const token = getApiToken();
     if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const res = await fetch(`${getNodeUrl()}/network/capabilities`, {
+    const res = await fetch(`${getNodeUrl()}/v1/network/capabilities`, {
       headers,
       cache: "no-store",
     });

@@ -6,7 +6,7 @@ export async function POST(request: Request) {
     const body = await request.json();
     const authHeader = request.headers.get("Authorization") || "";
 
-    const res = await fetchFromNode("/auth/claim", {
+    const res = await fetchFromNode("/v1/auth/claim", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
