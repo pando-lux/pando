@@ -104,7 +104,7 @@ curl -s -X POST http://127.0.0.1:${API_PORT}/projects/${PROJECT_ID}/api-key \
    - For Full-Stack: "Use `process.env.MONGODB_URI` in your backend code. Credentials are injected at deploy time."
 
 ### What's available
-- **Static hosting**: `POST /agents/:id/deploy` deploys web content and returns a live URL
+- **App deployment**: `POST /projects/:id/deploy` — auto-discovers compute peers via P2P, handles both Tier 1 (S3 static) and Tier 2 (EC2 backend)
 - **Databases**: Contributed MongoDB instances via ResourceRegistry. Access through Resource Proxy (project-scoped API keys) or env var injection (full-stack)
 - **API keys**: OpenAI, Anthropic may be contributed (check infrastructure endpoint)
 

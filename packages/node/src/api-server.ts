@@ -6861,8 +6861,8 @@ For questions: {"intent":"question","response":"<your friendly answer, 1-3 sente
 For builds: {"intent":"build","description":"<what they want built, 1 sentence>","tier":<1 or 2>}
 
 Tier rules:
-- Tier 1: Static apps (HTML/CSS/JS, no server needed). Default for most apps.
-- Tier 2: ONLY if they explicitly mention: WebSocket, real-time, Express, backend, server, API server, EC2, "Tier 2".
+- Tier 1: Pure static apps (portfolio, landing page, simple form with no backend). HTML/CSS/JS only, no server.
+- Tier 2: Anything that needs a server. This includes: chat, messaging, real-time, polls, voting, multiplayer, games with scores, dashboards with live data, APIs, WebSocket, Express, Node.js backend, database queries, user accounts, login systems. When in doubt, choose Tier 2 — it's safer than deploying a server app to static hosting.
 
 Be friendly and helpful. Keep answers short.`
                 },

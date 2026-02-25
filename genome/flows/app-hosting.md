@@ -170,7 +170,7 @@ User → Gateway Chat → Node Bridge → Manager Agent
   3. Manager: GET /projects/:id/preflight (verify ready: true)
   4. Manager: spawn builder with project context
   5. Builder: builds HTML/JS/CSS using Resource Proxy pattern
-  6. Builder: POST /agents/:id/deploy (deploys to S3)
+  6. Manager: POST /projects/:id/deploy (auto-discovers compute peer via P2P)
   7. System: URL injection (GATEWAY_URL, PROJECT_ID, API_KEY)
   8. System: GitHub push (source code to <token-owner>/app-<id>-<name>)
   9. System: Marketplace listing (project.deploymentUrl + deploymentStatus updated)
@@ -191,9 +191,9 @@ User → Gateway Chat → Node Bridge → Manager Agent
 ## Key Files
 
 - `packages/node/src/hosting-service.ts` — S3 deployment, URL generation, pre-signed URLs
-- `packages/node/src/agent-manager.ts` — `deployAgentWorkspace()` — workspace scanning, URL injection, deploy orchestration, GitHub push, marketplace listing
-- `packages/node/src/agent-tools.ts` — `POST /agents/:id/deploy`, `POST /projects/:id/hosting` endpoints
-- `packages/node/src/api-server.ts` — Hosting API routes, preflight, validate-deploy
+- `packages/node/src/api-server.ts` — `POST /projects/:id/deploy` (unified, P2P discovery), hosting routes, preflight, validate-deploy
+- `packages/node/src/index.ts` — `pando/deploy-app` P2P handler (compute peer side)
+- `packages/node/src/agent-manager.ts` — `deployAgentWorkspace()` (legacy S3 upload)
 - `genome/protocol.md` — 3 app patterns (Section 2)
 - `genome/templates/manager.md` — Manager deployment instructions (Quick App Setup)
 - `genome/templates/builder.md` — Builder app patterns (deploy + validate)

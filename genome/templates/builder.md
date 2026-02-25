@@ -33,11 +33,11 @@ This returns: available databases (MongoDB), hosting options, Resource Proxy URL
 
 Choose the right pattern based on what the app needs:
 
-#### Pattern 1: Static App (no backend needed)
+#### Pattern 1: Static App (Tier 1 — no backend needed)
 - Examples: portfolio, landing page, calculator, simple game
 - Just HTML/CSS/JS — no database, no credentials, no server
-- Deploy via `POST /agents/:id/deploy`
-- After deploy, the app runs at its own URL with zero dependencies
+- Manager handles deployment via `POST /projects/:id/deploy`
+- After deploy, the app runs at its own S3 URL with zero dependencies
 
 #### Pattern 2: Data App (Resource Proxy)
 - Examples: todo list, blog, polls, leaderboard, any app that stores/retrieves data

@@ -15,10 +15,10 @@
 ## Section 2: How to Build Apps
 There are three patterns. Choose based on complexity:
 
-### Pattern 1: Static App (no backend needed)
+### Pattern 1: Static App (Tier 1 — no backend needed)
 - Examples: portfolio, landing page, simple game, calculator
 - Frontend only (HTML/CSS/JS or React/Vue)
-- Deploy via `POST /agents/:id/deploy` -- gets its own URL
+- Deploy via `POST /projects/:id/deploy` — auto-discovers compute peer, uploads to S3
 - No database, no credentials, no Resource Proxy needed
 
 ### Pattern 2: Data App (uses Resource Proxy)

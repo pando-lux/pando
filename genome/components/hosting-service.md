@@ -65,22 +65,24 @@ The gateway serves deployed content at `/apps/*` by proxying to S3 (`app/apps/[.
 - File paths in the upload body are relative to the project root. The service prepends `public/<projectId>/` or `private/<projectId>/` automatically.
 - Set `GATEWAY_PUBLIC_URL` to get clean deployment URLs (e.g., `https://gateway-one-mu.vercel.app`).
 
-## Agent-Driven Deployment
+## Deployment Flow (Phase 87)
 
-Deployment is **agent-driven, not infrastructure-driven**. The manager agent decides when to deploy and calls `POST /agents/:id/deploy` (which calls `AgentManager.deployAgentWorkspace()`). There is no automatic deployment triggered by infrastructure after agent events.
+Manager agent calls `POST /projects/:id/deploy` (the unified endpoint). The node auto-discovers a compute peer via P2P CapabilityProfile and routes the deploy.
 
 The flow:
 1. Manager agent finishes building a project
-2. Manager decides deployment is appropriate (taught via manager template "## Deployment" section)
-3. Manager calls `POST /agents/:id/deploy` with its own agent ID
-4. AgentManager reads the agent's workspace files, calls `HostingService.deploy()`
-5. Structured JSON response returned to the agent (URL, file count, size)
+2. Manager calls `POST /projects/:id/deploy` with `workspaceDir`
+3. Node pushes code to GitHub, then discovers compute peer (storageBackend=mongodb)
+4. Compute peer handles S3 upload (Tier 1) or PM2+nginx hosting (Tier 2)
+5. URL returned to manager, stored on project record with `deployPeerId`
 6. Manager tells the user the deployment URL
+
+Legacy: `POST /agents/:id/deploy` still exists for direct S3 workspace uploads but is superseded by the unified endpoint.
 
 ## Key Files
 - `packages/node/src/hosting-service.ts` — HostingService class (S3Client, deploy, presign, remove, probe)
-- `packages/node/src/agent-manager.ts` — `deployAgentWorkspace(agentId)` method, calls HostingService
-- `packages/node/src/agent-tools.ts` — `POST /agents/:id/deploy` API endpoint
-- `packages/node/src/api-server.ts` — Hosting API routes (3 project-level endpoints)
-- `packages/node/src/index.ts` — HostingService instantiation in `_start()`, accessible via `getHostingService()`
-- `packages/shared/src/types.ts` — DeploymentInfo type
+- `packages/node/src/api-server.ts` — `POST /projects/:id/deploy` (unified, Phase 87 P2P discovery)
+- `packages/node/src/agent-manager.ts` — `deployAgentWorkspace(agentId)` method (legacy S3 upload)
+- `packages/node/src/agent-tools.ts` — `POST /agents/:id/deploy` API endpoint (legacy)
+- `packages/node/src/index.ts` — `pando/deploy-app` P2P handler (compute peer side)
+- `packages/shared/src/types.ts` — DeploymentInfo type, Project.deployPeerId

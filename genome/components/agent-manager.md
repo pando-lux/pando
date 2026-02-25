@@ -199,14 +199,14 @@ Registered via `agent-tools.ts`:
 | POST | /projects/:id/collaborators | Yes | Add/remove project collaborators |
 | GET | /projects/:id/access | No | Check user access level |
 | POST | /agents/:id/connect | Yes | Connect user directly to agent |
-| POST | /agents/:id/deploy | Yes | Deploy agent's workspace to S3 (agent-driven) |
+| POST | /agents/:id/deploy | Yes | Deploy agent's workspace to S3 (legacy — use `/projects/:id/deploy` instead) |
 | POST | /agents/:id/reset-session | Yes | Clear agent's sessionId so next event starts a fresh Claude Code session |
 
-### Agent-Driven Deployment
+### Deployment (Phase 87)
 
-Deployment is triggered by the agent, not by infrastructure. The manager template teaches agents when and how to deploy via `POST /agents/:id/deploy`. The `deployAgentWorkspace(agentId)` method on AgentManager reads the agent's workspace files, calls HostingService, and returns structured JSON (URL, file count, size) that the agent can relay to the user.
+Manager calls `POST /projects/:id/deploy` — the unified endpoint that auto-discovers compute peers via P2P CapabilityProfile. The old `POST /agents/:id/deploy` still exists for direct S3 workspace uploads but is superseded.
 
-There is no `autoDeployIfReady()` or automatic deployment in `processNextBridgeItem()`. Infrastructure provides the deployment tool; the agent's intelligence decides when to use it.
+`setComputeNodeProvider()` injects P2P-discovered compute node info into manager context so agents know Tier 2 deployment is available.
 
 ### Session Reset
 
