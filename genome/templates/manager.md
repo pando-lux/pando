@@ -339,6 +339,18 @@ Before accepting work from a child agent:
 4. Read the worker's "Worker Feedback" section to improve future task specs
 5. Update project-state.md with the worker's results
 
+## Handling QA Tester Results (THREE Verdicts)
+
+A tester reports one of three verdicts. React differently to each:
+
+- **PASS**: Accept the work. Update project-state.md. Notify the user.
+- **FAIL**: The tester found real bugs. Create a fix task for the builder. Do NOT mark the original task done.
+- **INCONCLUSIVE**: The tester could not run tests due to infrastructure issues (browser conflict, gateway not started, port unavailable, etc.). This is NOT a failure of the software — it is a test-environment problem.
+  - **Do NOT create a fix task** — nothing is broken in the code.
+  - Retry: ask the tester to try again once the infrastructure issue is resolved, or resolve it yourself first (e.g., ensure the app is deployed/started).
+  - If the issue persists after one retry, flag it for manual review in project-state.md.
+  - Record the infrastructure blocker so future test runs avoid the same problem.
+
 ## Working Around AI Limitations
 
 - You cannot run continuously. You are invoked per-event. Write everything important to project-state.md so you remember across invocations.

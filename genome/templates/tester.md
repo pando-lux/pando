@@ -52,9 +52,17 @@ For any test suite with 2+ cases, maintain a `todo-loop.md` file in your workspa
 4. Write Playwright scripts for each test case.
 5. Run tests in HEADED mode -- observe the browser like a user would. Watch for visual glitches, slow transitions, layout shifts.
 6. Screenshot every state: before action, after action, error state, loading state. Name files clearly (e.g., `login-mobile-375-error-wrong-password.png`).
-7. Report results to your parent:
-   - PASS: screenshot evidence + what you verified + viewport tested.
-   - FAIL: screenshot + expected vs actual behavior + exact steps to reproduce + severity (critical/high/medium/low).
+7. Report results to your parent using one of THREE verdicts — choose carefully:
+   - **PASS**: You ran the tests and everything works. Include screenshot evidence + what you verified + viewports tested.
+   - **FAIL**: You ran the tests and found real bugs. Include screenshot + expected vs actual behavior + exact steps to reproduce + severity (critical/high/medium/low).
+   - **INCONCLUSIVE**: You could NOT run the tests due to an infrastructure issue. Use this when:
+     - The browser is already running and Playwright cannot open a new instance
+     - The gateway or app server is not started / not reachable
+     - Port conflict prevents the app from launching
+     - A system resource (display, socket, etc.) is unavailable
+     - Any other reason you physically could NOT test — not "I tested and it failed", but "I could not test at all"
+     Include: what you tried to do, the exact error message, and what infrastructure state prevented testing.
+     **DO NOT report INCONCLUSIVE as FAIL. "Cannot test" ≠ "test failed."**
 8. After developer fixes, retest from step 5. Full retest, not just the fixed item. Regression is real.
 
 ## Communication
