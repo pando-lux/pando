@@ -2,11 +2,17 @@
 id: api-server
 type: interface
 domain: api
-entry: packages/node/src/api-server.ts
+entry: packages/node/src/api/api-server.ts
+split_into:
+  - packages/node/src/api/kernel-api.ts   # Layer 0 routes (status, peers, governance, monitor, scheduler, etc.)
+  - packages/node/src/api/core-api.ts     # Layer 1 routes (upgrade, emissions, security, admin)
+  - packages/node/src/api/platform-api.ts # Layer 2 routes (chat, auth, projects, instances, apps, etc.)
+  - packages/node/src/api/middleware/auth.ts  # RouteHelpers interface + JWT auth helpers
+versioning: v2 — all routes prefixed /v1/ (e.g. GET /v1/status)
 depends_on: [ledger, network, scheduler, governance, monitor, agent-manager, content-registry, payment-gate, council]
 depended_by: [gateway, mcp-server]
 exposes:
-  - GET /status — node status (peers, balance, identity, uptime, capabilities)
+  - GET /v1/status — node status (peers, balance, identity, uptime, capabilities)
   - GET /health — node health (consults HealthMonitor)
   - GET /balance/:peerId — balance for a specific peer
   - GET /wallet — wallet info (identity, balance, ownership)
@@ -140,4 +146,8 @@ Port pre-check in `cli.ts`: Before starting, TCP-probes the API port. If occupie
 - Checks three things: (1) URL responds with 200, (2) `window.PANDO_GATEWAY_URL` injection is present in HTML, (3) Resource Proxy database round-trip works via the app's API key.
 
 ## Key Files
-- `packages/node/src/api-server.ts` — Fastify API server with all endpoint handlers
+- `packages/node/src/api/api-server.ts` — Fastify API server (orchestrator, 887 lines — v2.2)
+- `packages/node/src/api/kernel-api.ts` — Layer 0 routes (2249 lines)
+- `packages/node/src/api/core-api.ts` — Layer 1 routes (370 lines)
+- `packages/node/src/api/platform-api.ts` — Layer 2 routes (3882 lines)
+- `packages/node/src/api/middleware/auth.ts` — RouteHelpers interface + JWT auth helpers

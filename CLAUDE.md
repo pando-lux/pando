@@ -191,34 +191,36 @@ The TUI (`tui.js`) is the primary way to run a Pando node. On first run, it sile
 
 Fastify on API port (default 4000). Bearer token auth on writes. Full endpoint reference: **`genome/components/api-server.md`**
 
+**v2.2+: All routes are prefixed `/v1/`** (e.g. `GET /v1/status`, `POST /v1/tasks`).
+
 Key endpoints for agents and users:
-- `GET /status` — node health, peers, balance, uptime
-- `GET /scheduler/tasks` — all tasks with timeline
-- `GET /monitor/status` — health metrics + active alerts
-- `POST /tasks` — create task `{title, description, priority, createdBy, managerId}`
-- `POST /tasks/:id/approve` — approve task for scheduling
-- `POST /upgrade` — trigger safe upgrade (git pull, build, restart)
-- `POST /agents/spawn` — spawn a new agent `{role, template, context, parentId}`
-- `POST /agents/:id/message` — route message to agent's bridge queue
-- `POST /agents/:id/report` — agent reports completion/status
-- `GET /agents/tree` — full agent hierarchy with status/cost per agent
-- `GET /agents/:id/status` — single agent status
-- `POST /agents/:id/connect` — connect user directly to agent
-- `POST /chat/message` — send message to project Manager via bridge queue `{message}`
-- `GET /chat/history` — get conversation history
-- `GET /capabilities` — local node capability profile
-- `POST /capabilities` — update local capability profile
-- `GET /network/capabilities` — all known node capabilities across network
-- `POST /instances/launch` — launch EC2 compute instance
-- `GET /instances` — list cloud instances
-- `POST /instances/:id/terminate` — terminate instance
-- `POST /apps/:appName/deploy` — deploy static files to local hosting
-- `GET /apps/:appName/*` — serve hosted app with URL injection
-- `GET /resources?type=<type>` — filter resources by type (e.g., `storage_db`, `ai_api_key`)
-- `GET/POST /projects/:id/preflight` — pre-flight check (GET) or auto-fix (POST) for app deployment
-- `POST /projects/:id/deploy` — **unified deploy endpoint (Phase 87)** — GitHub push + P2P CapabilityProfile discovery + compute peer deploy. Stores `deployPeerId`. Tier 2 URLs: `http://<publicAddress>/apps/<projectId>/`
-- `POST /projects/:id/undeploy` — stop and remove deployed app (Phase 87). Uses `deployPeerId` directly. Tier 1: S3 cleanup. Tier 2: PM2+nginx cleanup via P2P
-- `POST /projects/:id/validate-deploy` — post-deploy health check (URL, injection, Resource Proxy)
+- `GET /v1/status` — node health, peers, balance, uptime
+- `GET /v1/scheduler/tasks` — all tasks with timeline
+- `GET /v1/monitor/status` — health metrics + active alerts
+- `POST /v1/tasks` — create task `{title, description, priority, createdBy, managerId}`
+- `POST /v1/tasks/:id/approve` — approve task for scheduling
+- `POST /v1/upgrade` — trigger safe upgrade (git pull, build, restart)
+- `POST /v1/agents/spawn` — spawn a new agent `{role, template, context, parentId}`
+- `POST /v1/agents/:id/message` — route message to agent's bridge queue
+- `POST /v1/agents/:id/report` — agent reports completion/status
+- `GET /v1/agents/tree` — full agent hierarchy with status/cost per agent
+- `GET /v1/agents/:id/status` — single agent status
+- `POST /v1/agents/:id/connect` — connect user directly to agent
+- `POST /v1/chat/message` — send message to project Manager via bridge queue `{message}`
+- `GET /v1/chat/history` — get conversation history
+- `GET /v1/capabilities` — local node capability profile
+- `POST /v1/capabilities` — update local capability profile
+- `GET /v1/network/capabilities` — all known node capabilities across network
+- `POST /v1/instances/launch` — launch EC2 compute instance
+- `GET /v1/instances` — list cloud instances
+- `POST /v1/instances/:id/terminate` — terminate instance
+- `POST /v1/apps/:appName/deploy` — deploy static files to local hosting
+- `GET /v1/apps/:appName/*` — serve hosted app with URL injection
+- `GET /v1/resources?type=<type>` — filter resources by type (e.g., `storage_db`, `ai_api_key`)
+- `GET/POST /v1/projects/:id/preflight` — pre-flight check (GET) or auto-fix (POST) for app deployment
+- `POST /v1/projects/:id/deploy` — **unified deploy endpoint (Phase 87)** — GitHub push + P2P CapabilityProfile discovery + compute peer deploy. Stores `deployPeerId`. Tier 2 URLs: `http://<publicAddress>/apps/<projectId>/`
+- `POST /v1/projects/:id/undeploy` — stop and remove deployed app (Phase 87). Uses `deployPeerId` directly. Tier 1: S3 cleanup. Tier 2: PM2+nginx cleanup via P2P
+- `POST /v1/projects/:id/validate-deploy` — post-deploy health check (URL, injection, Resource Proxy)
 
 ## v2 Architecture Sprint (Active — Branch: v2-architecture)
 

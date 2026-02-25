@@ -53,9 +53,10 @@ BRANCH: All work on v2-architecture branch.
 | v2.1: Import boundary lint | ✅ DONE | scripts/check-imports.mjs passes clean |
 | v2.1: Full build pass | ✅ DONE | Zero TypeScript errors across all packages |
 | v2.1: Split api-server.ts | ✅ DONE | 7292→887 lines; kernel-api.ts (2249L), core-api.ts (370L), platform-api.ts (3882L), middleware/auth.ts |
-| v2.1: Deploy + smoke test all 5 nodes | ⏳ QUEUED | Ready for deployment |
+| v2.1: Deploy + smoke test all 5 nodes | ✅ DONE | Merged v2-architecture→master, pushed pando-lux/pando, triggered /upgrade on EC2-1, EC2-2, LS-1, LS-2, WIN |
 | E2E test scenarios | ✅ DONE | genome/flows/e2e-test-scenarios.md — 42 scenarios written by parallel agent |
-| v2.2: API versioning | ⏳ QUEUED | After v2.1 deploys |
+| v2.2: API versioning | ✅ DONE | /v1/ prefix on all HTTP routes; MESSAGE_VERSION on P2P; gateway+MCP+tests updated; deployed to all 5 nodes |
+| v2.3: Boot sequence enforcement | ⏳ QUEUED | Enforced startup order + degraded mode |
 
 ---
 
@@ -71,6 +72,19 @@ BRANCH: All work on v2-architecture branch.
 - No external users
 - Decision: refactor freely, upgrade all nodes atomically when phases complete
 - No aliases, no legacy paths, no v1-vs-v2 shims needed yet
+
+### 2026-02-26 — v2.2 API Versioning Implementation
+- HTTP: All routes under /v1/ prefix via Fastify register. No unversioned aliases (dev mode, no external users).
+- P2P: PandoMessage.version?: number field, stamped by publishToTopic() as MESSAGE_VERSION=1.
+  - Old messages (version=undefined) still processed — graceful backward compat on receive.
+  - Future nodes with higher version: logged + processed anyway.
+- v2.2 deployed to all 5 nodes atomically with v2.1 (single upgrade cycle).
+
+### 2026-02-26 — v2.1 Layer Separation Final Result
+- 86 files changed, 12881 insertions, 7814 deletions
+- api-server.ts: 7292→887 lines (kernel-api.ts 2249L, core-api.ts 370L, platform-api.ts 3882L)
+- Layer violations: 5 fixed with minimal XxxLike interface pattern
+- Build: zero errors. Import boundary lint: clean. All 5 nodes confirmed running new code.
 
 ---
 
