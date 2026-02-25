@@ -148,6 +148,10 @@ const COMMANDS: CommandDef[] = [
   { name: '/register', args: '<user> <pass>', desc: 'Create account & link to this node' },
   { name: '/login',    args: '<user> <pass>', desc: 'Link your account to this node' },
   { name: '/logout',   desc: 'Clear identity session & unlink account' },
+  { name: '/index',    args: '<directory>', desc: 'Add a directory to the local file index' },
+  { name: '/unindex',  args: '<directory>', desc: 'Remove a directory from the local file index' },
+  { name: '/local',    desc: 'Show indexed directories & file stats (Envelope 1)' },
+  { name: '/memory',   args: '[forget <key>]', desc: 'Show user memory (or forget an entry)' },
   { name: '/help',     alias: 'h', desc: 'Show commands' },
   { name: '/quit',     alias: 'q', desc: 'Shutdown' },
 ];
@@ -815,6 +819,18 @@ class PandoTUI {
       case 'logout':
         await this.doLogout();
         break;
+      case 'index':
+        await this.doLocalIndex(args.join(' '));
+        break;
+      case 'unindex':
+        await this.doLocalUnindex(args.join(' '));
+        break;
+      case 'local':
+        this.showLocalStatus();
+        break;
+      case 'memory':
+        this.showMemory(args);
+        break;
       case 'quit':
       case 'exit':
       case 'q':
@@ -871,6 +887,12 @@ class PandoTUI {
       `  ${c.cyan}/register${c.reset} ${c.dim}<user> <pass>${c.reset}            Create account & link to this node`,
       `  ${c.cyan}/login${c.reset}    ${c.dim}<user> <pass>${c.reset}            Link existing account to this node`,
       `  ${c.cyan}/logout${c.reset}                              Unlink account & clear session`,
+      '',
+      `${c.bold}Local Environment (Envelope 1 — private, never synced):${c.reset}`,
+      `  ${c.cyan}/index${c.reset}    ${c.dim}<directory>${c.reset}              Add directory to file index`,
+      `  ${c.cyan}/unindex${c.reset}  ${c.dim}<directory>${c.reset}              Remove directory from file index`,
+      `  ${c.cyan}/local${c.reset}                               Show indexed dirs & stats`,
+      `  ${c.cyan}/memory${c.reset}   ${c.dim}[forget <key>]${c.reset}           Show user memory`,
       '',
       `  ${c.cyan}/quit${c.reset}     ${c.dim}(/q)${c.reset}                     Shutdown`,
       '',
@@ -2254,6 +2276,91 @@ class PandoTUI {
     this.log('');
     this.log(`${c.green}Logged out.${c.reset} Node rewards -> node address.`);
     this.log(`${c.dim}Restart the node to re-authenticate.${c.reset}`);
+    this.log('');
+  }
+
+  // ── v2.5: Local Environment Commands ────────────────────────────────────────
+
+  private async doLocalIndex(dirPath: string): Promise<void> {
+    const le = this.node.getLocalEnv();
+    if (!le) {
+      this.log(`${c.red}Local environment not initialized.${c.reset}`);
+      return;
+    }
+    if (!dirPath) {
+      this.log(`${c.dim}Usage: /index <directory>${c.reset}`);
+      return;
+    }
+    this.log(`${c.dim}Indexing ${dirPath}...${c.reset}`);
+    try {
+      const result = await le.grantDirectory(dirPath);
+      this.log(`${c.green}Indexed${c.reset} ${dirPath}: ${result.added} files added, ${result.skipped} skipped.`);
+    } catch (err: any) {
+      this.log(`${c.red}Error: ${err.message}${c.reset}`);
+    }
+  }
+
+  private doLocalUnindex(dirPath: string): void {
+    const le = this.node.getLocalEnv();
+    if (!le) {
+      this.log(`${c.red}Local environment not initialized.${c.reset}`);
+      return;
+    }
+    if (!dirPath) {
+      this.log(`${c.dim}Usage: /unindex <directory>${c.reset}`);
+      return;
+    }
+    le.revokeDirectory(dirPath);
+    this.log(`${c.yellow}Unindexed${c.reset} ${dirPath}.`);
+  }
+
+  private showLocalStatus(): void {
+    const le = this.node.getLocalEnv();
+    if (!le) {
+      this.log(`${c.dim}Local environment not initialized.${c.reset}`);
+      return;
+    }
+    const status = le.getStatus();
+    this.log('');
+    this.log(`${c.bold}Local File Index (Envelope 1)${c.reset}`);
+    this.log(`  Total files: ${c.cyan}${status.totalFiles}${c.reset}`);
+    this.log(`  DB: ${c.dim}${status.dbPath}${c.reset}`);
+    this.log(`  Memory: ${c.dim}${status.memoryPath}${c.reset}`);
+    if (status.grantedDirs.length === 0) {
+      this.log(`  ${c.dim}No directories indexed. Use /index <dir> to add one.${c.reset}`);
+    } else {
+      this.log(`  Indexed directories:`);
+      for (const dir of status.grantedDirs) {
+        const ago = Math.round((Date.now() - dir.lastIndexedAt) / 1000 / 60);
+        this.log(`    ${c.cyan}${dir.path}${c.reset}  ${dir.fileCount} files  ${c.dim}(last indexed ${ago}m ago)${c.reset}`);
+      }
+    }
+    this.log('');
+  }
+
+  private showMemory(args: string[]): void {
+    const le = this.node.getLocalEnv();
+    if (!le) {
+      this.log(`${c.dim}Local environment not initialized.${c.reset}`);
+      return;
+    }
+    const memory = le.getMemory();
+    if (!memory) {
+      this.log(`${c.dim}No user memory yet. Agents will write here as they learn about you.${c.reset}`);
+      return;
+    }
+    this.log('');
+    this.log(`${c.bold}User Memory (Envelope 1 — ~/.pando/memory/user-memory.md)${c.reset}`);
+    this.log(c.dim + '─'.repeat(60) + c.reset);
+    // Show last 40 lines max
+    const lines = memory.split('\n');
+    const shown = lines.length > 40 ? lines.slice(-40) : lines;
+    if (lines.length > 40) {
+      this.log(`${c.dim}(showing last 40 of ${lines.length} lines)${c.reset}`);
+    }
+    for (const line of shown) {
+      this.log(line);
+    }
     this.log('');
   }
 

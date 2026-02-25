@@ -2335,6 +2335,11 @@ location /apps/${projectId}/ {
       });
     }
 
+    // v2.5: Wire LocalEnvironment to AgentManager for user memory injection at spawn time
+    if (this.localEnv) {
+      this.agentManager.setLocalEnv(this.localEnv);
+    }
+
     // Phase 30: Wire PaymentGate to Governance for proposal staking
     if (this.paymentGate && this.governance) {
       this.governance.setPaymentGate(this.paymentGate);

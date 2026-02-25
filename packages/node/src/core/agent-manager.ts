@@ -186,6 +186,9 @@ export class AgentManager {
   /** Optional provider for running compute instance info (Phase 67: Tier 2 context injection). */
   private cloudInstanceProvider: (() => Array<Record<string, any>>) | null = null;
 
+  /** v2.5: Optional LocalEnvironment reference for user memory injection at spawn time. */
+  private localEnvRef: any = null;
+
   /** Active user→agent direct connections: userId → agentId. */
   private readonly directConnections: Map<string, string> = new Map();
 
@@ -520,7 +523,17 @@ export class AgentManager {
 
     // Optionally start session with initial task
     if (config.taskContext) {
-      const result = await agent.startSession(config.taskContext);
+      // v2.5: Prepend user memory context if available (Envelope 1 — local only)
+      let taskPrompt = config.taskContext;
+      if (this.localEnvRef) {
+        try {
+          const memory: string | null = this.localEnvRef.getMemory();
+          if (memory) {
+            taskPrompt = `## User Context (from ~/.pando/memory/user-memory.md)\n\n${memory}\n\n---\n\n${taskPrompt}`;
+          }
+        } catch { /* non-fatal — proceed without memory */ }
+      }
+      const result = await agent.startSession(taskPrompt);
       if (!result.success) {
         console.warn(`[agent-manager] Initial session for ${agent.id} failed: ${result.output.slice(0, 200)}`);
       }
@@ -717,6 +730,11 @@ export class AgentManager {
   /** Phase 87: Inject compute node info from P2P CapabilityRegistry so manager knows Tier 2 is available. */
   setComputeNodeProvider(provider: () => Array<{ peerId: string; publicAddress: string; storageBackend: string; credentialAccess: boolean }>): void {
     this.cloudInstanceProvider = provider;
+  }
+
+  /** v2.5: Wire LocalEnvironment for user memory injection at agent spawn time. */
+  setLocalEnv(le: any): void {
+    this.localEnvRef = le;
   }
 
   // ── Accessors ──────────────────────────────────────────────────────────────
