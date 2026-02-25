@@ -208,11 +208,13 @@ console.log("\n=== 7. Network Capabilities ===\n");
 
 await test("EC2-1 /v1/network/capabilities — capability registry", async () => {
   const d = await apiGet(`${NODES["EC2-1"]}/v1/network/capabilities`);
-  const entries = Array.isArray(d) ? d : Object.values(d);
-  if (entries.length === 0) throw new Error("No capabilities registered");
-  const mongoNodes = entries.filter((e) => e.storageBackend === "mongodb").length;
-  const p2pNodes = entries.filter((e) => e.storageBackend === "p2p").length;
-  return `${entries.length} nodes | mongodb=${mongoNodes} p2p=${p2pNodes}`;
+  // Response: { count: N, profiles: [...] }
+  const profiles = d.profiles || (Array.isArray(d) ? d : Object.values(d));
+  if (!profiles || profiles.length === 0) throw new Error("No capabilities registered");
+  const mongoNodes = profiles.filter((e) => e.storageBackend === "mongodb").length;
+  const p2pNodes = profiles.filter((e) => e.storageBackend === "p2p").length;
+  const credAccess = profiles.filter((e) => e.credentialAccess).length;
+  return `${profiles.length} nodes | mongodb=${mongoNodes} p2p=${p2pNodes} credentialAccess=${credAccess}`;
 });
 
 // ─── Section 8: App Directory (new) ─────────────────────────────────────────
