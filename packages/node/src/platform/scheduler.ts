@@ -64,6 +64,23 @@ const DEFAULT_CONFIG: SchedulerConfig = {
   apiPort: 4000,
 };
 
+// ── Dedup helpers ────────────────────────────────────────────────────────────
+
+/**
+ * Compute word-overlap ratio between two strings (case-insensitive).
+ * Returns a value in [0, 1]: 1.0 = identical word sets, 0 = no overlap.
+ */
+function wordOverlapRatio(a: string, b: string): number {
+  const words = (s: string) => new Set(s.toLowerCase().split(/\W+/).filter(Boolean));
+  const setA = words(a);
+  const setB = words(b);
+  if (setA.size === 0 && setB.size === 0) return 1;
+  if (setA.size === 0 || setB.size === 0) return 0;
+  let overlap = 0;
+  for (const w of setA) if (setB.has(w)) overlap++;
+  return overlap / Math.max(setA.size, setB.size);
+}
+
 // ── Scheduler Class ─────────────────────────────────────────────────────────
 
 export class Scheduler extends EventEmitter {
@@ -421,6 +438,25 @@ export class Scheduler extends EventEmitter {
       if (missing.length > 0) {
         this.approvedQueue.shift();
         this.approvedProfiles.delete(taskId);
+        continue;
+      }
+
+      // Pre-execution dedup gate — reject if a similar task was completed in the last 24 hours
+      const cutoff = Date.now() - 24 * 60 * 60 * 1000;
+      const recentDone = this.taskQueue.getTasks({ status: 'done' }).filter(t => t.updatedAt >= cutoff);
+      const dupTask = recentDone.find(t => wordOverlapRatio(task.title, t.title) > 0.8);
+      if (dupTask) {
+        console.log(`[scheduler] Dedup gate: rejecting task ${taskId.slice(0, 8)} — similar to recently completed ${dupTask.id.slice(0, 8)} ("${dupTask.title.slice(0, 60)}")`);
+        this.approvedQueue.shift();
+        this.approvedProfiles.delete(taskId);
+        this.taskQueue.pushTimelineEvent(taskId, {
+          event: 'rejected',
+          detail: `Similar task already completed: ${dupTask.id}`,
+          metadata: { dupTaskId: dupTask.id, dupTaskTitle: dupTask.title },
+        });
+        this.taskQueue.updateStatus(taskId, 'rejected');
+        this.taskQueue.setResultNote(taskId, `Similar task already completed: ${dupTask.id}`);
+        this.emit('task:failed', { taskId, error: `Dedup: similar to ${dupTask.id.slice(0, 8)}` });
         continue;
       }
 
