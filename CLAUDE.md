@@ -411,12 +411,13 @@ Early multiplier: accounts 1-100 get 5x, 101-1000 get 3x, 1001-10000 get 2x, the
 
 **Public gateway:** https://gateway-one-mu.vercel.app
 
-| Machine | IP | Peer ID | P2P Port | API Port | Role |
-|---|---|---|---|---|---|
-| Lightsail (ORC) | 54.145.144.221 (public) | `12D3KooWNSUWHf6tzHPb8uzUkaRfk3VfuMVrjzGgyueR4yioMGDP` | 4001 | 4000 | Relay (untrusted — P2P storage, no MongoDB, PM2) |
-| EC2 (LIVA) | 54.82.241.132 (public) | `12D3KooWDRjGzaUuATiPuhg5D2k1CQTT6nCMpjdsDTVwrGDC4QVP` | 4001 | 4000 | Compute (trusted — MongoDB, master key, systemd) |
-| Mac | 100.69.190.122 (Tailscale) | `12D3KooWCFawRRdpL9w1kehZdAK7JGQqEqUfKKV72f7qEEtmwj7K` | 4001 | 4000 | Private peer |
-| Windows | 100.87.67.78 (Tailscale) | `12D3KooWACe64YzKkwbAt98VVTs652YtvMPrg68hzPxtbYYWhCPR` | 4001 | 4100 | Private peer + dev (still has MongoDB directly) |
+| Machine | IP | P2P Port | API Port | Role |
+|---|---|---|---|---|
+| EC2-1 | 54.82.241.132 (public) | 4001 | 4000 | Compute (trusted — MongoDB, master key, systemd) |
+| EC2-2 | 34.201.82.126 (public) | 4001 | 4000 | Compute (trusted — MongoDB, master key, systemd) |
+| LS-1 (ORC) | 54.145.144.221 (public) | 4001 | 4000 | Relay (untrusted — P2P storage, no MongoDB, PM2) |
+| LS-2 | 3.237.175.38 (public) | 4001 | 4000 | Untrusted (P2P storage, no MongoDB, PM2) |
+| Windows | 100.87.67.78 (Tailscale) | 4001 | 4100 | Dev (has MongoDB directly) |
 
 ## Design Docs
 

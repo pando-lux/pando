@@ -5,11 +5,13 @@
 
 ## Health
 
-| Node | Status | Peers | StorageBackend | CredentialAccess | Supervisor | Uptime |
-|---|---|---|---|---|---|---|
-| Lightsail (relay) | ONLINE | 2+ | **p2p** | false | PM2 | Continuous |
-| Windows (worker) | ONLINE | 2+ | mongodb | false | Manual | Dev sessions |
-| EC2 (compute) | ONLINE | 2+ | **mongodb** | true | **systemd** | Continuous |
+| Node | IP | Status | Peers | StorageBackend | CredentialAccess | Supervisor | Uptime |
+|---|---|---|---|---|---|---|---|
+| EC2-1 (compute) | 54.82.241.132 | ONLINE | 2+ | **mongodb** | true | **systemd** | Continuous |
+| EC2-2 (compute) | 34.201.82.126 | ONLINE | 1+ | **mongodb** | true | **systemd** | Continuous |
+| LS-1 (relay) | 54.145.144.221 | ONLINE | 2+ | **p2p** | false | PM2 | Continuous |
+| LS-2 (untrusted) | 3.237.175.38 | ONLINE | 1+ | **p2p** | false | PM2 | Continuous |
+| Windows (dev) | 100.87.67.78:4100 | ONLINE | 2+ | mongodb | true | Manual | Dev sessions |
 
 ## Current Phase
 

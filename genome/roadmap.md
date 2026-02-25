@@ -1,7 +1,8 @@
 # Pando Roadmap
 
 > Last updated: 2026-02-25
-> All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, **83** COMPLETE except Phase 14 (Universal Onboarding — deferred). Phase 53.7-53.9 remaining.
+> All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, **86** COMPLETE except Phase 14 (Universal Onboarding — deferred). Phase 53.7-53.9 remaining.
+> **Phase 86 DONE:** JWT Auth — Stateless Cross-Node Authentication. Self-verifying JWT tokens signed by Ed25519 keys. Any node verifies any token via `peerIdFromString().publicKey.verify()`. No DB lookup needed. 11/11 cross-node tests. 5-node network (2 EC2 + 2 Lightsail + 1 Windows) all upgraded via `/upgrade` endpoint.
 > **Phase 83 DONE:** Network Hardening — P2PStorageBackend + Two-Tier Trust. Untrusted nodes proxy all storage via P2P. Lightsail runs as untrusted (storageBackend=p2p, no MongoDB). EC2 as trusted compute (systemd, MongoDB, master key). 18/18 E2E tests passing, zero intervention. 5 bugs fixed (peer wait, crash guard, payload limit, cache staleness, deferred loading).
 > **Phase 82 DONE:** Simple Self-Upgrade — replaced complex patch-distribution system with `git pull` + hash verification. Governance approves → commit hash broadcasts via GossipSub → all nodes pull + verify + build + restart. Deleted ~850 lines of canary/rollout/patch code.
 > **Phase 80 DONE:** Production App Hosting — nginx reverse proxy, PM2, persistent port registry, undeploy endpoint. Full E2E verified.
