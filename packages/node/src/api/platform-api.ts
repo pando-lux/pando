@@ -22,8 +22,6 @@ export async function registerPlatformRoutes(
   getAgentManager: () => AgentManager | null
 ): Promise<void> {
   const { node } = deps;
-  let agentManager = getAgentManager();
-  // Refresh agentManager reference each time it is accessed
   const getAM = () => getAgentManager();
     fastify.post('/chat/message', async (request: any, reply: any) => {
       const { message, projectId } = request.body || {};

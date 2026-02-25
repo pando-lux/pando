@@ -12,25 +12,17 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import { toString as uint8ArrayToString, fromString as uint8ArrayFromString } from 'uint8arrays';
-import { publicKeyFromProtobuf } from '@libp2p/crypto/keys';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { execSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { signTransaction } from '@pando/shared';
 import { registerAgentRoutes } from '../platform/agent-tools.js';
-import { hasClaudeCodeAuth } from '../platform/capability-detector.js';
 import type { AgentManager } from '../core/agent-manager.js';
-import type { DeployFile } from '../platform/hosting-service.js';
 import type { PandoNode } from '../index.js';
 import { registerKernelRoutes } from './kernel-api.js';
 import { registerCoreRoutes } from './core-api.js';
 import { registerPlatformRoutes } from './platform-api.js';
 import type { RouteHelpers } from './middleware/auth.js';
-
-/** Unix timestamp (ms) captured at module load — records when this node process started. */
-const NODE_STARTED_AT = Date.now();
 
 // ── Phase 86: JWT-Style Self-Verifying Auth Tokens ───────────────────────
 // Replaces Phase 40 in-memory challenge/token stores.
