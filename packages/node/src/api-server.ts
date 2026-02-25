@@ -4551,29 +4551,19 @@ export class ApiServer {
         return reply.code(401).send({ error: 'Challenge was issued for a different peerId' });
       }
 
-      // Verify challenge token signature (issuing node's public key from ledger)
-      const ledger = this.node.getLedger();
-      if (!ledger) return reply.code(503).send({ error: 'Ledger not available' });
-
-      let issuerPubKeyB64: string | null = null;
-      const identity = this.node.getIdentity();
-      if (identity && identity.peerId === challengePayload.iss) {
-        issuerPubKeyB64 = uint8ArrayToString(identity.publicKey, 'base64');
-      }
-      if (!issuerPubKeyB64) {
-        const issuerAccount = ledger.accounts.get(challengePayload.iss);
-        if (issuerAccount?.publicKey) issuerPubKeyB64 = issuerAccount.publicKey;
-      }
-      if (!issuerPubKeyB64) {
-        return reply.code(401).send({ error: 'Unknown challenge issuer' });
-      }
-
+      // Verify challenge token signature — extract issuer's public key from peerId
+      // (Ed25519 peerIds embed the full public key, no ledger lookup needed)
       try {
-        const { ed25519 } = await import('@noble/curves/ed25519');
-        const issuerPubRaw = uint8ArrayFromString(issuerPubKeyB64, 'base64');
+        const { peerIdFromString } = await import('@libp2p/peer-id');
+        const issuerPeerIdObj = peerIdFromString(challengePayload.iss);
+        const issuerPubKey = issuerPeerIdObj.publicKey;
+        if (!issuerPubKey) {
+          return reply.code(401).send({ error: 'Cannot extract public key from challenge issuer peerId' });
+        }
+
         const cPayloadBytes = new TextEncoder().encode(cPayloadB64);
         const cSigBytes = uint8ArrayFromString(cSigHex, 'base16');
-        const challengeValid = ed25519.verify(cSigBytes, cPayloadBytes, issuerPubRaw);
+        const challengeValid = await issuerPubKey.verify(cPayloadBytes, cSigBytes);
         if (!challengeValid) {
           return reply.code(401).send({ error: 'Challenge token signature invalid' });
         }
@@ -4582,24 +4572,18 @@ export class ApiServer {
       }
 
       // 2. Verify the user's signature over the nonce
-      let userPubKeyB64: string | null = null;
-      if (identity && identity.peerId === peerId) {
-        userPubKeyB64 = uint8ArrayToString(identity.publicKey, 'base64');
-      }
-      if (!userPubKeyB64) {
-        const userAccount = ledger.accounts.get(peerId);
-        if (userAccount?.publicKey) userPubKeyB64 = userAccount.publicKey;
-      }
-      if (!userPubKeyB64) {
-        return reply.code(401).send({ error: 'Unknown peerId — no public key found in ledger' });
-      }
-
+      // Extract user's public key from their peerId (Ed25519 peerIds embed the full public key)
       try {
-        const { ed25519 } = await import('@noble/curves/ed25519');
-        const userPubRaw = uint8ArrayFromString(userPubKeyB64, 'base64');
+        const { peerIdFromString } = await import('@libp2p/peer-id');
+        const userPeerIdObj = peerIdFromString(peerId);
+        const userPubKey = userPeerIdObj.publicKey;
+        if (!userPubKey) {
+          return reply.code(401).send({ error: 'Cannot extract public key from user peerId' });
+        }
+
         const nonceBytes = uint8ArrayFromString(challengePayload.nonce, 'base16');
         const sigBytes = uint8ArrayFromString(signature, 'base16');
-        const userValid = ed25519.verify(sigBytes, nonceBytes, userPubRaw);
+        const userValid = await userPubKey.verify(nonceBytes, sigBytes);
         if (!userValid) {
           return reply.code(401).send({ error: 'Signature verification failed' });
         }
@@ -6767,39 +6751,17 @@ export class ApiServer {
       // Check expiry
       if (payload.exp <= Date.now()) return null;
 
-      // Look up issuer's public key from ledger
-      const ledger = this.node.getLedger();
-      if (!ledger) return null;
-
-      let issuerPubKeyB64: string | null = null;
-
-      // Check if issuer is this node
-      const identity = this.node.getIdentity();
-      if (identity && identity.peerId === payload.iss) {
-        issuerPubKeyB64 = uint8ArrayToString(identity.publicKey, 'base64');
-      }
-
-      // Check ledger
-      if (!issuerPubKeyB64) {
-        const issuerAccount = ledger.accounts.get(payload.iss);
-        if (issuerAccount?.publicKey) {
-          issuerPubKeyB64 = issuerAccount.publicKey;
-        }
-      }
-
-      if (!issuerPubKeyB64) return null;
-
-      // Verify Ed25519 signature using libp2p publicKeyFromProtobuf (ESM-compatible)
-      const issuerPubRaw = uint8ArrayFromString(issuerPubKeyB64, 'base64');
-      const proto = new Uint8Array(4 + issuerPubRaw.length);
-      proto[0] = 0x08; proto[1] = 0x01; proto[2] = 0x12; proto[3] = issuerPubRaw.length;
-      proto.set(issuerPubRaw, 4);
-      const pk = publicKeyFromProtobuf(proto);
+      // Extract issuer's public key from their peerId
+      // (Ed25519 peerIds embed the full public key — no ledger lookup needed)
+      const { peerIdFromString } = await import('@libp2p/peer-id');
+      const issuerPeerIdObj = peerIdFromString(payload.iss);
+      const issuerPubKey = issuerPeerIdObj.publicKey;
+      if (!issuerPubKey) return null;
 
       const payloadBytes = new TextEncoder().encode(payloadB64);
       const sigBytes = uint8ArrayFromString(signatureHex, 'base16');
 
-      const verified = await pk.verify(payloadBytes, sigBytes);
+      const verified = await issuerPubKey.verify(payloadBytes, sigBytes);
       if (!verified) return null;
 
       return payload.sub; // The authenticated user's peerId
