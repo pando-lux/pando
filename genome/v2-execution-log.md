@@ -44,14 +44,16 @@ BRANCH: All work on v2-architecture branch.
 | Phase | Status | Notes |
 |---|---|---|
 | Fix two-sources (move the-stack.md) | ✅ DONE | genome/foundation/the-stack.md |
-| v2.1: Directory structure + file moves | 🔄 IN PROGRESS | |
-| v2.1: Import path updates | ⏳ QUEUED | |
-| v2.1: Split api-server.ts | ⏳ QUEUED | |
-| v2.1: AI Backend interface | ⏳ QUEUED | |
-| v2.1: AgentTemplate capabilities | ⏳ QUEUED | |
-| v2.1: Import boundary lint | ⏳ QUEUED | |
-| v2.1: Full build pass | ⏳ QUEUED | |
-| v2.1: Deploy + smoke test all 5 nodes | ⏳ QUEUED | |
+| v2.1: Directory structure + file moves | ✅ DONE | kernel/, core/, platform/, api/ layers created |
+| v2.1: Import path updates | ✅ DONE | All broken imports fixed across all layers |
+| v2.1: Barrel exports (kernel, core, platform) | ✅ DONE | index.ts created for each layer |
+| v2.1: AI Backend interface | ✅ DONE | ai-backend.ts, ai-backend-registry.ts, ai-backend-claude.ts, ai-backend-ollama.ts |
+| v2.1: agent.ts uses AIBackendRegistry | ✅ DONE | executeSpawn() replaced; ClaudeBackend extracted |
+| v2.1: AgentTemplate capabilities | ✅ DONE | Already in shared/types.ts with AgentCapabilityDeclaration |
+| v2.1: Import boundary lint | ✅ DONE | scripts/check-imports.mjs passes clean |
+| v2.1: Full build pass | ✅ DONE | Zero TypeScript errors across all packages |
+| v2.1: Split api-server.ts | ⏳ DEFERRED | 7296 lines; partial split in api/ dir; full split in v2.2 |
+| v2.1: Deploy + smoke test all 5 nodes | ⏳ QUEUED | Ready for deployment |
 | E2E test scenarios | ✅ DONE | genome/flows/e2e-test-scenarios.md — 42 scenarios written by parallel agent |
 | v2.2: API versioning | ⏳ QUEUED | After v2.1 deploys |
 
@@ -74,7 +76,27 @@ BRANCH: All work on v2-architecture branch.
 
 ## Issues Hit
 
-*(fill as they arise)*
+### v2.1 Import Fix (2026-02-26)
+- Files were git mv'd to kernel/core/platform/api/ dirs but imports were left as flat `./xxx.js`
+- Fixed all imports systematically: index.ts, cli.ts, tui.ts, api/api-server.ts, all kernel/, core/, platform/ files
+- Cross-layer violations auto-detected and fixed: kernel/sync.ts had `./project-registry.js` (platform) → replaced with local `ProjectRegistryLike` interface
+- kernel/reputation.ts had `./request-reply.js` (core) → replaced with `RequestReplyLike` interface
+- kernel/monitor.ts had `./scheduler.js` (platform) → replaced with `SchedulerLike` interface
+- kernel/governance.ts had `./reputation-governance.js` (platform), `./payment-gate.js` (core), `./agent-manager.js` (core) → all replaced with minimal interfaces
+- All interfaces use structurally-compatible minimal types, preserving TypeScript type safety
+
+### v2.1 agent.ts Refactoring (2026-02-26)
+- Extracted all Claude Code spawn logic from agent.ts executeSpawn() into ClaudeBackend.execute()
+- agent.ts now routes via AIBackendRegistry (or falls back to ClaudeBackend directly if no registry)
+- State mutation (sessionId capture, cost tracking, context window) stays in agent.ts
+- Removed unused spawn, execSync, detectClaudePath, buildAugmentedPath, SPAWN_IDLE_TIMEOUT_MS, SPAWN_HARD_CAP_MS from agent.ts
+- `childPid` field kept for backward-compatible `getChildPid()` API (always null now)
+- startSession() no longer checks for Claude CLI directly — that's the backend's job
+
+### v2.1 API Split (2026-02-26)
+- api-server.ts is 7296 lines — too large to split safely in one session
+- Decision: defer to v2.2 — create stub files in api/ dir but keep implementation in api-server.ts
+- Import from api/ barrel will be future work
 
 ---
 

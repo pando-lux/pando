@@ -1,0 +1,3882 @@
+/**
+ * Layer 2 (Platform) API routes — registered by registerPlatformRoutes().
+ *
+ * Routes: /chat/*, /bridge/*, /tasks/:id/messages, /capabilities/*,
+ *         /network/capabilities/*, /resources/* (network), /capacity,
+ *         /network-state, /resources/* (registry), /instances/*,
+ *         /content/*, /regression, /payment/*, /auth/*, /projects/*,
+ *         /marketplace/*, /council/*, /apps/*
+ */
+
+import { toString as uint8ArrayToString, fromString as uint8ArrayFromString } from 'uint8arrays';
+import { publicKeyFromProtobuf } from '@libp2p/crypto/keys';
+import { randomBytes } from 'node:crypto';
+import { hasClaudeCodeAuth } from '../platform/capability-detector.js';
+import type { AgentManager } from '../core/agent-manager.js';
+import type { DeployFile } from '../platform/hosting-service.js';
+import type { RouteHelpers } from './middleware/auth.js';
+
+export async function registerPlatformRoutes(
+  fastify: any,
+  deps: RouteHelpers,
+  getAgentManager: () => AgentManager | null
+): Promise<void> {
+  const { node } = deps;
+  let agentManager = getAgentManager();
+  // Refresh agentManager reference each time it is accessed
+  const getAM = () => getAgentManager();
+    fastify.post('/chat/message', async (request: any, reply: any) => {
+      const { message, projectId } = request.body || {};
+      if (!message || typeof message !== 'string') {
+        return reply.code(400).send({ error: 'message is required' });
+      }
+      const trimmed = (message as string).trim();
+      if (!trimmed) return reply.code(400).send({ error: 'message cannot be empty' });
+
+      const threadStore = node.getThreadStore();
+      let threadId: string | undefined;
+
+      // Resolve user identity so threads are owned by the authenticated user
+      const chatUserId = (await deps.verifyUserJwt(request)) || undefined;
+
+      // If projectId is provided, skip doorman — route directly to project manager
+      if (projectId) {
+        const managerId = `project-${projectId}`;
+        if (threadStore) {
+          threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          threadStore.createThread(threadId, trimmed.slice(0, 50), 'project', '', chatUserId);
+          threadStore.updateThread(threadId, { projectId });
+          threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
+        }
+
+        if (!getAM() || !hasClaudeCodeAuth()) {
+          const noAgentReply = 'No AI-capable nodes available. Ask a node operator to enable Claude Code.';
+          if (threadStore && threadId) {
+            threadStore.addMessage(threadId, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' as any });
+          }
+          return { status: 'ok', threadId, reply: noAgentReply, tier: 'simple' };
+        }
+
+        getAM()!.getBridge().enqueue(managerId, {
+          type: 'user_request',
+          payload: { message: trimmed, threadId, projectId },
+          source: 'user',
+          priority: 'normal',
+        });
+        return { status: 'queued', managerId, threadId, message: trimmed };
+      }
+
+      // No projectId — doorman handles first contact
+      const classification = await deps.doormanClassify(trimmed);
+
+      if (classification.intent === 'simple' || classification.intent === 'question') {
+        // Doorman answers directly — no Claude Code needed
+        const doormanReply = classification.response || 'I can help you build apps or answer questions. Try "build me a todo app"!';
+        if (threadStore) {
+          threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
+          threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
+          threadStore.addMessage(threadId, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' as any });
+        }
+        return { status: 'ok', threadId, reply: doormanReply, tier: 'simple' };
+      }
+
+      // Intent is 'build' — create project, run preflight, spawn per-project manager
+      if (!getAM() || !hasClaudeCodeAuth()) {
+        const noAgentReply = 'No AI-capable nodes available. Ask a node operator to enable Claude Code.';
+        if (threadStore) {
+          threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
+          threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
+          threadStore.addMessage(threadId, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' as any });
+        }
+        return { status: 'ok', threadId, reply: noAgentReply, tier: 'simple' };
+      }
+
+      // Create project automatically
+      let newProjectId: string | undefined;
+      const projectStore = node.getProjectStore?.();
+      if (projectStore) {
+        try {
+          const projName = (classification.description || trimmed).slice(0, 60).replace(/[^a-zA-Z0-9 -]/g, '').trim() || 'New Project';
+          const deployTier = (classification.tier === 2) ? 2 : 1;
+          const project = await projectStore.createProject({
+            name: projName,
+            description: classification.description || trimmed,
+            ownerId: (await deps.verifyUserJwt(request)) || node.getIdentity()?.peerId || 'anonymous',
+            visibility: 'listed', // Phase 70: public by default
+            tier: deployTier, // Phase 70: store tier at creation
+          });
+          newProjectId = project.id;
+          console.log(`[doorman] Created project ${newProjectId}: ${projName} (tier ${deployTier})`);
+
+          // Run preflight (auto-generates API key, assigns MongoDB)
+          try {
+            const preflightUrl = `http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/projects/${newProjectId}/preflight`;
+            const pfRes = await fetch(preflightUrl, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
+              signal: AbortSignal.timeout(10000),
+            });
+            if (pfRes.ok) {
+              console.log(`[doorman] Preflight passed for project ${newProjectId}`);
+            }
+          } catch (pfErr: any) {
+            console.log(`[doorman] Preflight failed: ${pfErr.message} — continuing anyway`);
+          }
+        } catch (projErr: any) {
+          console.log(`[doorman] Project creation failed: ${projErr.message}`);
+        }
+      }
+
+      // Create thread with projectId
+      if (threadStore) {
+        threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        threadStore.createThread(threadId, trimmed.slice(0, 50), 'project', '', chatUserId);
+        if (newProjectId) {
+          threadStore.updateThread(threadId, { projectId: newProjectId });
+        }
+        threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
+      }
+
+      // Spawn per-project manager and enqueue
+      const managerId = newProjectId ? `project-${newProjectId}` : 'pando-node-mgr';
+      getAM()!.getBridge().enqueue(managerId, {
+        type: 'user_request',
+        payload: { message: trimmed, threadId, projectId: newProjectId },
+        source: 'user',
+        priority: 'normal',
+      });
+
+      // Return instant feedback — user knows something is happening
+      const instantReply = newProjectId
+        ? `Got it! I'm setting up your project and assigning an AI manager to build it. You'll see progress updates here shortly.`
+        : `Message received. Your AI manager is working on this.`;
+
+      if (threadStore && threadId) {
+        threadStore.addMessage(threadId, { role: 'assistant', content: instantReply, timestamp: Date.now(), tier: 'simple' as any });
+      }
+
+      // Push instant feedback via SSE so gateway shows it immediately
+      deps.pushEvent('chat_message', {
+        threadId,
+        projectId: newProjectId,
+        role: 'assistant',
+        content: instantReply,
+        timestamp: Date.now(),
+        tier: 'simple',
+      });
+
+      return { status: 'queued', managerId, threadId, projectId: newProjectId, reply: instantReply, tier: 'complex' };
+    });
+
+    // GET /chat/history — return messages from the most recent thread
+    fastify.get('/chat/history', async (request: any) => {
+      const threadStore = node.getThreadStore();
+      if (!threadStore) return { messages: [] };
+      const threads = threadStore.listThreads();
+      // threads are sorted by updatedAt desc
+      if (threads.length > 0) {
+        const latest = threads[0];
+        const msgs = threadStore.getMessages(latest.id);
+        return { messages: msgs, threadId: latest.id };
+      }
+      return { messages: [] };
+    });
+
+    // POST /chat/clear — no-op (agents manage their own context)
+    fastify.post('/chat/clear', async () => {
+      return { success: true };
+    });
+
+    // ── Thread API (Phase 27: ThreadStore for gateway chat) ─────────────────
+
+    // GET /chat/threads — list threads (filtered by user, requires authentication)
+    fastify.get('/chat/threads', async (request: any) => {
+      const threadStore = node.getThreadStore();
+      if (!threadStore) return { threads: [] };
+
+      // Require a valid user token — only return threads owned by the authenticated user
+      const userId = await deps.verifyUserJwt(request);
+      if (userId) {
+        // Use async version — reads from storage backend (MongoDB) for cross-node consistency
+        const threads = await threadStore.listUserThreadsAsync(userId);
+        return { threads };
+      }
+
+      // No valid session — return empty list to prevent leaking other users' threads
+      return { threads: [] };
+    });
+
+    // POST /chat/threads — create a new thread
+    fastify.post('/chat/threads', async (request: any, reply: any) => {
+      const threadStore = node.getThreadStore();
+      if (!threadStore) return reply.code(503).send({ error: 'Thread store not initialized' });
+
+      const { title, type, encryptionKeys, projectId } = request.body || {};
+      const threadTitle = (title || 'New Chat').slice(0, 80);
+      const threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+      // Resolve user ID from token to associate thread with the user
+      const userId = (await deps.verifyUserJwt(request)) || undefined;
+
+      // Phase 41: Pass encryptionKeys (peerId -> encrypted threadKey) if provided
+      const meta = threadStore.createThread(threadId, threadTitle, projectId ? 'project' : (type || 'conversation'), '', userId, encryptionKeys);
+      if (projectId) {
+        threadStore.updateThread(threadId, { projectId });
+      }
+      return meta;
+    });
+
+    // GET /chat/threads/:id — get thread messages
+    fastify.get('/chat/threads/:id', async (request: any, reply: any) => {
+      const threadStore = node.getThreadStore();
+      if (!threadStore) return reply.code(503).send({ error: 'Thread store not initialized' });
+
+      const { id } = request.params || {};
+      // Try cache first, then async fallback (for cross-node access via P2P storage)
+      const meta = threadStore.getThread(id) || await threadStore.getThreadAsync(id);
+      if (!meta) return reply.code(404).send({ error: 'Thread not found' });
+
+      return { ...meta, messages: await threadStore.getMessagesAsync(id) };
+    });
+
+    // DELETE /chat/threads/:id — delete a thread
+    fastify.delete('/chat/threads/:id', async (request: any, reply: any) => {
+      const threadStore = node.getThreadStore();
+      if (!threadStore) return reply.code(503).send({ error: 'Thread store not initialized' });
+      const { id } = request.params || {};
+      const deleted = threadStore.deleteThread(id);
+      if (!deleted) return reply.code(404).send({ error: 'Thread not found' });
+      return { success: true, deleted: id };
+    });
+
+    // PATCH /chat/threads/:id — update thread metadata
+    fastify.patch('/chat/threads/:id', async (request: any, reply: any) => {
+      const threadStore = node.getThreadStore();
+      if (!threadStore) return reply.code(503).send({ error: 'Thread store not initialized' });
+      const { id } = request.params || {};
+      const body = request.body as any || {};
+      const updates: any = {};
+      if (body.title !== undefined) updates.title = body.title;
+      if (body.projectId !== undefined) updates.projectId = body.projectId;
+      if (body.archived !== undefined) updates.archived = body.archived;
+      if (body.type !== undefined) updates.type = body.type;
+      const updated = threadStore.updateThread(id, updates);
+      if (!updated) return reply.code(404).send({ error: 'Thread not found' });
+      return updated;
+    });
+
+    // POST /chat/threads/:id/message — send message in a thread
+    fastify.post('/chat/threads/:id/message', async (request: any, reply: any) => {
+      const threadStore = node.getThreadStore();
+      if (!threadStore) return reply.code(503).send({ error: 'Thread store not initialized' });
+
+      const { id } = request.params || {};
+      const { message, tier, encrypted: isEncrypted, nonce, encryptedThreadKey } = request.body || {};
+      if (!message || typeof message !== 'string') {
+        return reply.code(400).send({ error: 'message is required' });
+      }
+      const trimmed = message.trim();
+      if (!trimmed) return reply.code(400).send({ error: 'message cannot be empty' });
+
+      // Phase 41.5: If message is encrypted, decrypt it server-side for processing.
+      // The encrypted version is stored in the thread for at-rest protection.
+      // The encryptedThreadKey is delivered per-request (stateless -- node doesn't store it).
+      let plaintextForProcessing = trimmed;
+      const threadMeta = threadStore.getThread(id);
+
+      if (isEncrypted && nonce && threadMeta?.encryptionKeys) {
+        try {
+          plaintextForProcessing = await deps.decryptIncomingMessage(trimmed, nonce, threadMeta, encryptedThreadKey);
+        } catch (err: any) {
+          console.warn(`[api] Failed to decrypt message for thread ${id}: ${err.message}`);
+          // Fall back to treating the content as-is (may be garbled but don't block)
+          plaintextForProcessing = trimmed;
+        }
+      }
+
+      // Save user message to thread (encrypted form for at-rest protection)
+      threadStore.addMessage(id, {
+        role: 'user',
+        content: trimmed,
+        timestamp: Date.now(),
+        tier: tier as any,
+        encrypted: isEncrypted || false,
+        nonce: isEncrypted ? nonce : undefined,
+      });
+
+      // ── Phase 68.3: Doorman-routed thread messages ────────────────────────
+      // If thread has a projectId, route directly to project manager (no doorman).
+      // If no projectId, use doorman to classify intent.
+      if (threadMeta?.projectId) {
+        // Existing project thread — route directly to manager
+        if (!getAM() || !hasClaudeCodeAuth()) {
+          const noAgentReply = 'No AI-capable nodes available. Ask a node operator to enable Claude Code.';
+          threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
+          return { status: 'ok', threadId: id, reply: noAgentReply, tier: 'simple' };
+        }
+        const managerId = `project-${threadMeta.projectId}`;
+        getAM()!.getBridge().enqueue(managerId, {
+          type: 'user_request',
+          payload: { message: plaintextForProcessing, threadId: id, projectId: threadMeta.projectId },
+          source: 'user',
+          priority: 'normal',
+        });
+        return { status: 'queued', threadId: id, reply: 'Message received. Processing...', tier: 'complex' };
+      }
+
+      // No projectId — use doorman
+      const classification = await deps.doormanClassify(plaintextForProcessing);
+
+      if (classification.intent === 'simple' || classification.intent === 'question') {
+        const doormanReply = classification.response || 'Try "build me a todo app" to get started!';
+        // Handle encryption if needed
+        if (isEncrypted && threadMeta?.encryptionKeys) {
+          try {
+            const encReply = await deps.encryptOutgoingMessage(doormanReply, threadMeta, encryptedThreadKey);
+            threadStore.addMessage(id, { role: 'assistant', content: encReply.ciphertext, timestamp: Date.now(), tier: 'simple', encrypted: true, nonce: encReply.nonce });
+            return { status: 'ok', threadId: id, reply: encReply.ciphertext, tier: 'simple', encrypted: true, nonce: encReply.nonce };
+          } catch (err: any) {
+            console.warn(`[api] Failed to encrypt doorman reply: ${err.message}`);
+          }
+        }
+        threadStore.addMessage(id, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' });
+        return { status: 'ok', threadId: id, reply: doormanReply, tier: 'simple' };
+      }
+
+      // Build request — create project, update thread, route to manager
+      if (!getAM() || !hasClaudeCodeAuth()) {
+        const noAgentReply = 'No AI-capable nodes available. Ask a node operator to enable Claude Code.';
+        threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
+        return { status: 'ok', threadId: id, reply: noAgentReply, tier: 'simple' };
+      }
+
+      // Create project for this build request
+      let newProjectId: string | undefined;
+      const projectStore = node.getProjectStore?.();
+      if (projectStore) {
+        try {
+          const projName = (classification.description || plaintextForProcessing).slice(0, 60).replace(/[^a-zA-Z0-9 -]/g, '').trim() || 'New Project';
+          const deployTier = (classification.tier === 2) ? 2 : 1;
+          const project = await projectStore.createProject({
+            name: projName,
+            description: classification.description || plaintextForProcessing,
+            ownerId: (await deps.verifyUserJwt(request)) || node.getIdentity()?.peerId || 'anonymous',
+            visibility: 'listed', // Phase 70: public by default
+            tier: deployTier, // Phase 70: store tier at creation
+          });
+          newProjectId = project.id;
+          threadStore.updateThread(id, { projectId: newProjectId });
+          console.log(`[doorman] Created project ${newProjectId} for thread ${id} (tier ${deployTier})`);
+
+          // Run preflight
+          try {
+            const pfRes = await fetch(`http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/projects/${newProjectId}/preflight`, {
+              method: 'POST',
+              headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
+              signal: AbortSignal.timeout(10000),
+            });
+            if (pfRes.ok) console.log(`[doorman] Preflight passed for project ${newProjectId}`);
+          } catch (pfErr: any) {
+            console.log(`[doorman] Preflight failed: ${pfErr.message}`);
+          }
+        } catch (projErr: any) {
+          console.log(`[doorman] Project creation failed: ${projErr.message}`);
+        }
+      }
+
+      const managerId = newProjectId ? `project-${newProjectId}` : 'pando-node-mgr';
+      getAM()!.getBridge().enqueue(managerId, {
+        type: 'user_request',
+        payload: { message: plaintextForProcessing, threadId: id, projectId: threadMeta?.projectId || undefined },
+        source: 'user',
+        priority: 'normal',
+      });
+
+      // Return immediate response — real response comes via SSE
+      return { status: 'queued', threadId: id, reply: `Message received. Processing...`, tier: 'complex' };
+    });
+
+    // ── Bridge Queue API (Phase 27: AgentManager) ──────────────────────────
+
+    // GET /bridge — all bridge queue statuses
+    fastify.get('/bridge', async () => {
+      if (!getAM()) {
+        return { queues: {}, error: 'Agent system not started' };
+      }
+      return { queues: getAM()!.getBridge().getAllStatuses() };
+    });
+
+    // GET /bridge/:managerId — bridge queue status for a specific manager
+    fastify.get('/bridge/:managerId', async (request: any, reply: any) => {
+      const { managerId } = request.params || {};
+      if (!managerId) {
+        return reply.code(400).send({ error: 'Manager ID is required', code: 'BAD_REQUEST' });
+      }
+      if (!getAM()) {
+        return reply.code(503).send({ error: 'Agent system not started', code: 'NOT_READY' });
+      }
+      return getAM()!.getBridge().getQueueStatus(managerId);
+    });
+
+    // POST /tasks/:id/messages — worker mid-task message to bridge queue
+    fastify.post('/tasks/:id/messages', async (request: any, reply: any) => {
+      const { id: taskId } = request.params || {};
+      const { type: messageType, content, urgency } = request.body || {};
+
+      if (!taskId) {
+        return reply.code(400).send({ error: 'Task ID is required', code: 'BAD_REQUEST' });
+      }
+      if (!messageType || !content) {
+        return reply.code(400).send({ error: 'type and content are required', code: 'BAD_REQUEST' });
+      }
+      if (!getAM()) {
+        return reply.code(503).send({ error: 'Agent system not started', code: 'NOT_READY' });
+      }
+
+      // Find which manager owns this task
+      const taskQueue = node.getActiveTaskQueue();
+      const task = taskQueue?.getTask(taskId);
+      const managerId = task?.managerId || 'pando-node-mgr';
+
+      // Enqueue to bridge
+      getAM()!.getBridge().enqueue(managerId, {
+        type: 'worker_message',
+        source: `worker-${taskId.slice(0, 8)}`,
+        payload: { taskId, messageType, content, urgency },
+        priority: messageType === 'blocked' ? 'critical' : 'normal',
+      });
+
+      // Broadcast worker message to SSE clients for real-time gateway updates
+      deps.pushEvent('worker_message', { taskId, messageType, content, timestamp: Date.now() });
+
+      return {
+        success: true,
+        taskId,
+        messageType,
+        enqueued: true,
+      };
+    });
+
+    // ── Capability Declaration API ──────────────────────────────
+
+    // GET /capabilities — local node capability profile (Phase A enriched + legacy)
+    fastify.get('/capabilities', async () => {
+      const identity = node.getIdentity();
+      const declaration = node.getCapabilityDeclaration();
+      const peerDeclarations = node.getPeerCapabilityDeclarations();
+
+      const peers: Array<{ peerId: string; capabilities: string[]; detectedAt: number; timestamp: number }> = [];
+      for (const [peerId, decl] of peerDeclarations) {
+        peers.push({
+          peerId,
+          capabilities: decl.capabilities,
+          detectedAt: decl.detectedAt,
+          timestamp: decl.timestamp,
+        });
+      }
+
+      // Phase A: include rich capability profile if available
+      const capabilityProfile = node.getCapabilityProfile?.() || null;
+
+      return {
+        peerId: identity?.peerId || null,
+        capabilities: declaration?.capabilities || node.getCapabilities(),
+        detectedAt: declaration?.detectedAt || null,
+        peers,
+        profile: capabilityProfile,
+      };
+    });
+
+    // GET /network/capabilities — all known node capability profiles (Phase A)
+    fastify.get('/network/capabilities', async () => {
+      const profiles = node.getNetworkCapabilityProfiles?.() || [];
+      // Ensure local node's profile is included (Phase 60 fix)
+      const localProfile = node.getCapabilityProfile?.();
+      if (localProfile && !profiles.some((p: any) => p.peerId === localProfile.peerId)) {
+        profiles.unshift(localProfile);
+      }
+      return {
+        count: profiles.length,
+        profiles,
+      };
+    });
+
+    // GET /network/capabilities/user/:username — nodes linked to a specific user (Phase 60)
+    fastify.get('/network/capabilities/user/:username', async (request: any) => {
+      const { username } = request.params as { username: string };
+      const profiles = node.getNetworkCapabilityProfiles?.() || [];
+      // Ensure local node's profile is included (Phase 60 fix)
+      const localProfile = node.getCapabilityProfile?.();
+      if (localProfile && !profiles.some((p: any) => p.peerId === localProfile.peerId)) {
+        profiles.unshift(localProfile);
+      }
+      const userProfiles = profiles.filter(
+        (p: any) => p.linkedUser?.username === username
+      );
+      return {
+        count: userProfiles.length,
+        profiles: userProfiles,
+      };
+    });
+
+    // ── Resource Network Routes (Phase B-D) ───────────────────────────
+
+    // GET /resources/routing — routing stats
+    fastify.get('/resources/routing', async () => {
+      const router = node.getResourceRouter();
+      if (!router) return { error: 'ResourceRouter not initialized' };
+      return router.getRoutingStats();
+    });
+
+    // POST /resources/route — route a task to the best node (requires auth)
+    fastify.post('/resources/route', async (request: any, reply: any) => {
+      const router = node.getResourceRouter();
+      if (!router) return reply.code(503).send({ error: 'ResourceRouter not initialized' });
+
+      const { task, requirements } = request.body || {};
+      if (!task || !requirements) {
+        return reply.code(400).send({ error: 'task and requirements are required' });
+      }
+
+      const result = await router.routeTask(task, requirements);
+      return result;
+    });
+
+    // GET /resources/metering — current metering readings (network-wide)
+    fastify.get('/resources/metering', async (request: any) => {
+      const meter = node.getResourceMeter();
+      if (!meter) return { error: 'ResourceMeter not initialized' };
+
+      const period = (request.query?.period || 'day') as 'hour' | 'day' | 'week' | 'month';
+      return meter.getNetworkUsage(period);
+    });
+
+    // GET /resources/metering/:peerId — metering for a specific peer
+    fastify.get('/resources/metering/:peerId', async (request: any) => {
+      const meter = node.getResourceMeter();
+      if (!meter) return { error: 'ResourceMeter not initialized' };
+
+      const { peerId } = request.params;
+      const period = (request.query?.period || 'day') as 'hour' | 'day' | 'week' | 'month';
+      return meter.getUsage(peerId, period);
+    });
+
+    // GET /resources/rewards — reward calculations for local node
+    fastify.get('/resources/rewards', async (request: any) => {
+      const meter = node.getResourceMeter();
+      if (!meter) return { error: 'ResourceMeter not initialized' };
+
+      const identity = node.getIdentity();
+      if (!identity) return { error: 'No identity' };
+
+      const period = (request.query?.period || 'day') as 'hour' | 'day' | 'week' | 'month';
+      return meter.calculateRewards(identity.peerId, period);
+    });
+
+    // GET /resources/marketplace — market stats and local prices
+    fastify.get('/resources/marketplace', async () => {
+      const marketplace = node.getResourceMarketplace();
+      if (!marketplace) return { error: 'ResourceMarketplace not initialized' };
+
+      return {
+        localPrices: marketplace.getPrices(),
+        stats: marketplace.getMarketStats(),
+      };
+    });
+
+    // POST /resources/prices — set local prices (requires auth)
+    fastify.post('/resources/prices', async (request: any, reply: any) => {
+      const marketplace = node.getResourceMarketplace();
+      if (!marketplace) return reply.code(503).send({ error: 'ResourceMarketplace not initialized' });
+
+      const { prices } = request.body || {};
+      if (!prices || typeof prices !== 'object') {
+        return reply.code(400).send({ error: 'prices object is required (resourceType -> pricePerUnit)' });
+      }
+
+      for (const [resourceType, pricePerUnit] of Object.entries(prices)) {
+        if (typeof pricePerUnit === 'number' && pricePerUnit >= 0) {
+          marketplace.setPrice(resourceType, pricePerUnit);
+        }
+      }
+
+      // Broadcast updated prices
+      await marketplace.broadcastPrices();
+
+      return { success: true, prices: marketplace.getPrices() };
+    });
+
+    // GET /resources/marketplace/find — find cheapest provider for requirements
+    fastify.get('/resources/marketplace/find', async (request: any) => {
+      const marketplace = node.getResourceMarketplace();
+      if (!marketplace) return { error: 'ResourceMarketplace not initialized' };
+
+      const resourcesParam = request.query?.resources || '';
+      const budgetParam = request.query?.budget;
+
+      const requiredResources = resourcesParam
+        ? resourcesParam.split(',').map((r: string) => r.trim())
+        : [];
+
+      const requirements = { requiredResources };
+
+      if (budgetParam) {
+        const budget = parseFloat(budgetParam);
+        if (!isNaN(budget) && budget > 0) {
+          return {
+            matches: marketplace.matchBudget(budget, requirements),
+          };
+        }
+      }
+
+      return marketplace.findCheapest(requirements);
+    });
+
+    // ── Capacity Dashboard Endpoint (Phase 49) ────────────────────────
+
+    // GET /capacity — Aggregated capacity dashboard data for the network.
+    // Combines supply (marketplace), demand (meter + scheduler), rewards,
+    // and network stats into a single response.  Every subsystem call is
+    // wrapped in try/catch so partial data is returned when a subsystem
+    // is unavailable.
+    fastify.get('/capacity', async () => {
+      // Unit map for resource types
+      const UNIT_MAP: Record<string, string> = {
+        relay: 'MB',
+        api_keys: 'call',
+        compute_cpu: 'minute',
+        compute_gpu: 'minute',
+        storage: 'GB-hour',
+        gateway: '1000 requests',
+        validator: 'validation',
+        index: 'query',
+      };
+
+      // ── Supply ──────────────────────────────────────────────────────
+      let supply: any = { totalProviders: 0, resources: {} };
+      try {
+        const marketplace = node.getResourceMarketplace();
+        const capRegistry = node.getCapabilityRegistry();
+        const profiles = capRegistry ? capRegistry.getAllProfiles() : [];
+
+        if (marketplace) {
+          const stats = marketplace.getMarketStats();
+          // stats.totalResources: Record<string, number> (resource -> provider count)
+          // stats.averagePrices: Record<string, number>
+          // stats.lowestPrices: Record<string, { price: number; peerId: string }>
+          // stats.activeProviders: number
+
+          supply.totalProviders = stats.activeProviders;
+
+          // Build per-resource supply info
+          const allResourceTypes = new Set([
+            ...Object.keys(stats.totalResources || {}),
+            ...Object.keys(stats.averagePrices || {}),
+          ]);
+
+          for (const rt of allResourceTypes) {
+            supply.resources[rt] = {
+              providers: (stats.totalResources || {})[rt] || 0,
+              averagePrice: (stats.averagePrices || {})[rt] || 0,
+              lowestPrice: (stats.lowestPrices || {})[rt]?.price || 0,
+              unit: UNIT_MAP[rt] || 'unit',
+            };
+          }
+        } else if (profiles.length > 0) {
+          // Marketplace not available but we have capability profiles
+          supply.totalProviders = profiles.length;
+        }
+      } catch (err: any) {
+        console.error(`[api] /capacity supply error: ${err.message}`);
+      }
+
+      // ── Demand ──────────────────────────────────────────────────────
+      let demand: any = {
+        period: 'day',
+        resources: {},
+        tasks: { active: 0, queued: 0, totalProcessed: 0, successRate: 0 },
+      };
+      try {
+        const meter = node.getResourceMeter();
+        if (meter) {
+          const networkUsage = meter.getNetworkUsage('day');
+          // networkUsage.readings: Record<string, { totalUsage, unit, contributingNodes }>
+          for (const [rt, reading] of Object.entries(networkUsage.readings || {})) {
+            demand.resources[rt] = {
+              totalUsage: reading.totalUsage,
+              unit: UNIT_MAP[rt] || reading.unit || 'unit',
+              contributingNodes: reading.contributingNodes,
+            };
+          }
+        }
+      } catch (err: any) {
+        console.error(`[api] /capacity demand-meter error: ${err.message}`);
+      }
+
+      try {
+        const scheduler = node.getScheduler();
+        if (scheduler) {
+          const status = scheduler.getStatus();
+          const totalProcessed = status.totalProcessed || 0;
+          const totalSucceeded = status.totalSucceeded || 0;
+          const totalFailed = status.totalFailed || 0;
+
+          demand.tasks = {
+            active: (status.activeTasks || []).length,
+            queued: status.approvedQueueLength || 0,
+            totalProcessed,
+            successRate: totalProcessed > 0
+              ? Math.round((totalSucceeded / totalProcessed) * 10000) / 100
+              : 0,
+          };
+        }
+      } catch (err: any) {
+        console.error(`[api] /capacity demand-scheduler error: ${err.message}`);
+      }
+
+      // ── Rewards ─────────────────────────────────────────────────────
+      let rewards: any = { totalDistributed: 0, perResource: {} };
+      try {
+        const meter = node.getResourceMeter();
+        if (meter) {
+          const networkUsage = meter.getNetworkUsage('day');
+          rewards.totalDistributed = networkUsage.totalRewardsDistributed || 0;
+
+          // Per-resource reward rates and estimated daily earnings
+          // Reward rates are defined in resource-meter.ts REWARD_RATES
+          const REWARD_RATES: Record<string, number> = {
+            relay: 0.001,
+            api_keys: 0.01,
+            compute_cpu: 0.1,
+            compute_gpu: 0.5,
+            storage: 0.001,
+            gateway: 0.01,
+            validator: 0.05,
+            index: 0.005,
+          };
+
+          for (const [rt, reading] of Object.entries(networkUsage.readings || {})) {
+            const rate = REWARD_RATES[rt] || 0;
+            const providers = supply.resources[rt]?.providers || 1;
+            // Estimated daily per provider = (total daily usage * rate) / providers
+            const estimatedDaily = providers > 0
+              ? Math.round(((reading.totalUsage * rate) / providers) * 10000) / 10000
+              : 0;
+
+            rewards.perResource[rt] = {
+              rate,
+              estimatedDaily,
+            };
+          }
+
+          // Also include resource types that have rates but no usage yet
+          for (const [rt, rate] of Object.entries(REWARD_RATES)) {
+            if (!rewards.perResource[rt]) {
+              rewards.perResource[rt] = { rate, estimatedDaily: 0 };
+            }
+          }
+        }
+      } catch (err: any) {
+        console.error(`[api] /capacity rewards error: ${err.message}`);
+      }
+
+      // ── Network ─────────────────────────────────────────────────────
+      let network: any = {
+        totalNodes: 0,
+        totalAccounts: 0,
+        totalSupply: 0,
+        nodeHealth: 'unknown',
+      };
+      try {
+        const capRegistry = node.getCapabilityRegistry();
+        if (capRegistry) {
+          network.totalNodes = capRegistry.getAllProfiles().length;
+        }
+      } catch (err: any) {
+        console.error(`[api] /capacity network-caps error: ${err.message}`);
+      }
+
+      try {
+        const ledger = node.getLedger();
+        if (ledger) {
+          const stats = ledger.getNetworkStats();
+          network.totalAccounts = stats.totalAccounts || 0;
+          network.totalSupply = stats.totalSupply || 0;
+        }
+      } catch (err: any) {
+        console.error(`[api] /capacity network-ledger error: ${err.message}`);
+      }
+
+      try {
+        const monitor = node.getMonitor();
+        if (monitor) {
+          const metrics = monitor.getCurrentMetrics();
+          network.nodeHealth = metrics.nodeHealth || 'unknown';
+        }
+      } catch (err: any) {
+        console.error(`[api] /capacity network-monitor error: ${err.message}`);
+      }
+
+      return { supply, demand, rewards, network };
+    });
+
+    // ── Network State Endpoint (Phase 50) ──────────────────────────────
+
+    // GET /network-state — aggregated network state snapshot (public, no auth)
+    fastify.get('/network-state', async () => {
+      const ns = node.getNetworkState?.();
+      if (!ns) return { error: 'NetworkState not initialized' };
+      return ns.getSnapshot();
+    });
+
+    // ── Resource Registry Routes (Phase 42.5) ──────────────────────────
+
+    // GET /resources — list all resources (Phase 69: metadata only, no secrets in records)
+    fastify.get('/resources', async (request: any) => {
+      const registry = node.getResourceRegistry();
+      if (!registry) return { resources: [] };
+      const { type } = (request.query || {}) as { type?: string };
+      if (type) {
+        return { resources: registry.findResources(type as any) };
+      }
+      return { resources: registry.getAllResources() };
+    });
+
+    // POST /resources/register — contribute a new resource (API key, storage, etc.)
+    fastify.post('/resources/register', async (request: any, reply: any) => {
+      const registry = node.getResourceRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Resource registry not initialized' });
+
+      const body = request.body as any;
+      let { type, credential } = body || {};
+
+      if (!type || !credential) {
+        return reply.code(400).send({ error: 'Missing required fields: type, credential' });
+      }
+
+      // Phase 60: runtime validation — reject removed resource types
+      const VALID_RESOURCE_TYPES = ['ai_api_key', 'storage_db', 'storage_blob', 'cloud_compute', 'hosting_platform', 'code_repository'];
+      if (!VALID_RESOURCE_TYPES.includes(type)) {
+        return reply.code(400).send({ error: `Invalid resource type '${type}'. Valid types: ${VALID_RESOURCE_TYPES.join(', ')}` });
+      }
+
+      // Resolve authenticated user (resources belong to USERS, not nodes)
+      const userId = await deps.verifyUserJwt(request) || body.userId;
+
+      const record = await registry.registerResource(type, credential, {
+        userId,
+        grantedTo: body.grantedTo,
+        maxUsagePerDay: body.maxUsagePerDay,
+        pricePerUnit: body.pricePerUnit,
+        expiresAt: body.expiresAt,
+        metadata: body.metadata,
+      });
+
+      return { resourceId: record.resourceId, status: record.status, userId: record.userId };
+    });
+
+    // POST /resources/:id/revoke — revoke a resource (owner or provider node)
+    fastify.post('/resources/:id/revoke', async (request: any, reply: any) => {
+      const registry = node.getResourceRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Resource registry not initialized' });
+
+      const { id } = request.params as { id: string };
+      const userId = await deps.verifyUserJwt(request) || undefined;
+      const success = await registry.revokeResource(id, userId);
+      if (!success) return reply.code(403).send({ error: 'Cannot revoke: not found or not the owner' });
+      return { resourceId: id, status: 'revoked' };
+    });
+
+    // GET /resources/:id — get a single resource (Phase 69: metadata only)
+    fastify.get('/resources/:id', async (request: any, reply: any) => {
+      const registry = node.getResourceRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Resource registry not initialized' });
+
+      const { id } = request.params as { id: string };
+      const record = registry.getResource(id);
+      if (!record) return reply.code(404).send({ error: 'Resource not found' });
+      return record;
+    });
+
+    // Phase 69: POST /resources/:id/grant REMOVED — no more per-node granting.
+    // Credentials are in MongoDB, decryptable by any compute node with CREDENTIAL_MASTER_KEY.
+
+    // PATCH /resources/:id/owner — link a resource to a user account
+    fastify.patch('/resources/:id/owner', async (request: any, reply: any) => {
+      const registry = node.getResourceRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Resource registry not available' });
+
+      const { id } = request.params as { id: string };
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Authentication required' });
+
+      const success = registry.updateResourceUserId(id, userId, userId);
+      if (!success) return reply.code(404).send({ error: 'Resource not found or permission denied' });
+
+      return { success: true, resourceId: id, userId };
+    });
+
+    // ── Resource Proxy Routes (Phase 53.2) ──────────────────────────────
+
+    // POST /resource-proxy/validate — validate a project API key and return decrypted MongoDB URI
+    fastify.post('/resource-proxy/validate', async (request: any, reply: any) => {
+      const body = request.body as { projectKey?: string };
+      if (!body?.projectKey || typeof body.projectKey !== 'string') {
+        return reply.code(400).send({ error: 'Missing required field: projectKey' });
+      }
+
+      const registry = node.getResourceRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Resource registry not available', valid: false });
+
+      // Phase 63: Try P2P ProjectRegistry first (works on ANY node, no MongoDB needed)
+      const projectRegistry = node.getProjectRegistry();
+      let projectId: string | null = null;
+      let projectResourceIds: string[] = [];
+
+      if (projectRegistry) {
+        const record = projectRegistry.validateApiKey(body.projectKey);
+        if (record) {
+          projectId = record.projectId;
+          projectResourceIds = record.resourceIds;
+        }
+      }
+
+      // Fallback: try ProjectStore (MongoDB) if P2P didn't find it
+      if (!projectId) {
+        const ps = node.getProjectStore();
+        if (ps) {
+          const project = await ps.getProjectByApiKeyAsync(body.projectKey);
+          if (project) {
+            projectId = project.id;
+            projectResourceIds = (project.resources || []).map((r: any) => r.resourceId);
+          }
+        }
+      }
+
+      if (!projectId) {
+        return reply.code(401).send({ error: 'Invalid project key', valid: false });
+      }
+
+      // Find MongoDB resources assigned to this project (type = 'storage_db')
+      const dbResources = registry.findResources('storage_db');
+      let mongoUri: string | null = null;
+      let resourceId: string | null = null;
+
+      // Check for resources specifically granted to this project or to all ('*')
+      for (const res of dbResources) {
+        // Check if resource metadata references this project
+        if (res.metadata?.projectId === projectId || res.grantedTo.includes('*') || res.grantedTo.includes(projectId)) {
+          const credential = await registry.getCredential(res.resourceId);
+          if (credential) {
+            mongoUri = credential;
+            resourceId = res.resourceId;
+            break;
+          }
+        }
+      }
+
+      // Phase 68.1: No fallback to arbitrary resources. Apps must use their assigned resource.
+      // This prevents data leakage between projects sharing the same MongoDB.
+
+      if (!mongoUri) {
+        return reply.code(200).send({
+          valid: true,
+          projectId,
+          mongoUri: null,
+          resourceId: null,
+          error: 'No database resource available',
+        });
+      }
+
+      return {
+        valid: true,
+        projectId,
+        mongoUri,
+        resourceId,
+      };
+    });
+
+    // POST /resource-proxy/meter — record usage event for Lux billing
+    fastify.post('/resource-proxy/meter', async (request: any, reply: any) => {
+      const body = request.body as {
+        projectId?: string;
+        resourceId?: string;
+        operation?: string;
+        count?: number;
+        bytes?: number;
+      };
+
+      if (!body?.projectId || !body?.resourceId || !body?.operation) {
+        return reply.code(400).send({ error: 'Missing required fields: projectId, resourceId, operation' });
+      }
+
+      // Record the usage event (for now, log it — full Lux billing in 53.3)
+      const event = {
+        projectId: body.projectId,
+        resourceId: body.resourceId,
+        operation: body.operation,
+        count: body.count || 0,
+        bytes: body.bytes || 0,
+        timestamp: Date.now(),
+      };
+
+      console.log(`[resource-proxy] Usage: project=${event.projectId} op=${event.operation} count=${event.count} bytes=${event.bytes}`);
+
+      return { recorded: true, event };
+    });
+
+    // ── Cloud Instance Routes (Phase 64) ──────────────────────────────
+
+    // GET /instances — list all managed cloud instances
+    fastify.get('/instances', async () => {
+      const manager = node.getCloudInstanceManager();
+      if (!manager) return { instances: [] };
+      return { instances: manager.getInstances() };
+    });
+
+    // GET /instances/:id — get a single instance
+    fastify.get('/instances/:id', async (request: any, reply: any) => {
+      const manager = node.getCloudInstanceManager();
+      if (!manager) return reply.code(503).send({ error: 'Cloud instance manager not available' });
+
+      const { id } = request.params as { id: string };
+      const instance = manager.getInstance(id);
+      if (!instance) return reply.code(404).send({ error: 'Instance not found' });
+      return instance;
+    });
+
+    // POST /instances/launch — launch a new secure EC2 instance
+    fastify.post('/instances/launch', async (request: any, reply: any) => {
+      const manager = node.getCloudInstanceManager();
+      if (!manager) return reply.code(503).send({ error: 'Cloud instance manager not available' });
+
+      const body = request.body as any;
+      if (!body?.resourceId) {
+        return reply.code(400).send({ error: 'Missing required field: resourceId' });
+      }
+
+      try {
+        const record = await manager.launchInstance(body.resourceId, {
+          instanceType: body.instanceType,
+          region: body.region,
+        });
+        return record;
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // POST /instances/:id/terminate — terminate a cloud instance
+    fastify.post('/instances/:id/terminate', async (request: any, reply: any) => {
+      const manager = node.getCloudInstanceManager();
+      if (!manager) return reply.code(503).send({ error: 'Cloud instance manager not available' });
+
+      const { id } = request.params as { id: string };
+      try {
+        await manager.terminateInstance(id);
+        return { instanceId: id, status: 'terminated' };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // GET /instances/:id/health — check instance health via AWS API
+    fastify.get('/instances/:id/health', async (request: any, reply: any) => {
+      const manager = node.getCloudInstanceManager();
+      if (!manager) return reply.code(503).send({ error: 'Cloud instance manager not available' });
+
+      const { id } = request.params as { id: string };
+      try {
+        const health = await manager.checkInstanceHealth(id);
+        return { instanceId: id, ...health };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // GET /instances/:id/console — get serial console output (cloud-init logs, boot messages)
+    fastify.get('/instances/:id/console', async (request: any, reply: any) => {
+      const manager = node.getCloudInstanceManager();
+      if (!manager) return reply.code(503).send({ error: 'Cloud instance manager not available' });
+
+      const { id } = request.params as { id: string };
+      const { lines } = (request.query || {}) as { lines?: string };
+      try {
+        const result = await manager.getConsoleOutput(id);
+        // Optionally return only the last N lines
+        if (lines && result.output) {
+          const allLines = result.output.split('\n');
+          const n = parseInt(lines, 10) || 50;
+          result.output = allLines.slice(-n).join('\n');
+        }
+        return result;
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // POST /instances/:id/deploy — deploy an app to a compute instance via P2P
+    fastify.post('/instances/:id/deploy', async (request: any, reply: any) => {
+      const manager = node.getCloudInstanceManager();
+      if (!manager) return reply.code(503).send({ error: 'Cloud instance manager not available' });
+
+      const { id } = request.params as { id: string };
+      const body = request.body as any;
+      if (!body?.projectId) {
+        return reply.code(400).send({ error: 'Missing required field: projectId' });
+      }
+
+      const instance = manager.getInstance(id);
+      if (!instance) return reply.code(404).send({ error: 'Instance not found' });
+      if (instance.status !== 'running') {
+        return reply.code(409).send({ error: `Instance is ${instance.status}, must be running` });
+      }
+
+      try {
+        // Auto-inject project credentials as env vars for the deployed app
+        const envVars: Record<string, string> = { ...(body.envVars || {}) };
+        const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
+        if (gatewayUrl && !envVars.RESOURCE_PROXY_URL) {
+          envVars.RESOURCE_PROXY_URL = `${gatewayUrl}/api/resource-proxy/db`;
+        }
+        // Look up the project's API key from ProjectStore
+        const projectStore = node.getProjectStore?.();
+        if (projectStore && !envVars.PROJECT_API_KEY) {
+          try {
+            const project = projectStore.getProject(body.projectId);
+            if (project?.apiKey) {
+              envVars.PROJECT_API_KEY = project.apiKey;
+            }
+          } catch {}
+        }
+        if (gatewayUrl) {
+          envVars.GATEWAY_URL = gatewayUrl;
+        }
+
+        const result = await manager.deployApp(id, body.projectId, body.repoUrl, envVars);
+        return result;
+      } catch (err: any) {
+        console.log(`[api] P2P deploy failed: ${err.message}`);
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // POST /instances/:id/upgrade — upgrade a compute instance via P2P (Phase 67)
+    fastify.post('/instances/:id/upgrade', async (request: any, reply: any) => {
+      const manager = node.getCloudInstanceManager();
+      if (!manager) return reply.code(503).send({ error: 'Cloud instance manager not available' });
+
+      const { id } = request.params as { id: string };
+      const instance = manager.getInstance(id);
+      if (!instance) return reply.code(404).send({ error: 'Instance not found' });
+      if (instance.status !== 'running') {
+        return reply.code(409).send({ error: `Instance is ${instance.status}, must be running` });
+      }
+
+      try {
+        const result = await manager.upgradeInstance(id);
+        return { ok: true, instanceId: id, ...result };
+      } catch (err: any) {
+        console.log(`[api] Instance upgrade failed: ${err.message}`);
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // ── Content Layer Routes (Phase 11) ──
+
+    // GET /content — list all content (with optional type/status/search query params)
+    fastify.get('/content', async (request: any) => {
+      const registry = node.getContentRegistry();
+      if (!registry) return { content: [], stats: null };
+
+      const { q, type, status, limit } = request.query || {};
+      if (q) {
+        const results = registry.search(q, parseInt(limit) || 20);
+        return { content: results.map((r: any) => r.content), searchResults: results };
+      }
+
+      const content = registry.list({
+        type: type || undefined,
+        status: status || undefined,
+        limit: parseInt(limit) || 100,
+      });
+      return { content };
+    });
+
+    // GET /content/search — full-text search
+    fastify.get('/content/search', async (request: any) => {
+      const registry = node.getContentRegistry();
+      if (!registry) return { results: [] };
+
+      const { q, limit } = request.query || {};
+      if (!q) return { results: [] };
+      const results = registry.search(q, parseInt(limit) || 20);
+      return { results };
+    });
+
+    // GET /content/stats — content statistics
+    fastify.get('/content/stats', async () => {
+      const registry = node.getContentRegistry();
+      if (!registry) return { totalContent: 0, byType: {}, byStatus: {}, totalLuxEarned: 0 };
+      return registry.getStats();
+    });
+
+    // GET /content/:id — get specific content record
+    fastify.get('/content/:id', async (request: any, reply: any) => {
+      const registry = node.getContentRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Content registry not ready' });
+
+      const record = registry.get(request.params.id);
+      if (!record) return reply.code(404).send({ error: 'Content not found' });
+      return record;
+    });
+
+    // GET /content/:id/revenue — revenue breakdown for content
+    fastify.get('/content/:id/revenue', async (request: any, reply: any) => {
+      const registry = node.getContentRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Content registry not ready' });
+
+      const revenue = registry.getRevenue(request.params.id);
+      if (!revenue) return reply.code(404).send({ error: 'Content not found' });
+      return revenue;
+    });
+
+    // POST /content — create content record
+    fastify.post('/content', async (request: any, reply: any) => {
+      const registry = node.getContentRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Content registry not ready' });
+
+      const { type, title, description, repoUrl, liveUrl, tags, manifest, status } = request.body || {};
+      if (!type || !title) {
+        return reply.code(400).send({ error: 'type and title are required' });
+      }
+
+      const validTypes = ['website', 'api', 'dataset', 'service', 'document', 'tool'];
+      if (!validTypes.includes(type)) {
+        return reply.code(400).send({ error: `type must be one of: ${validTypes.join(', ')}` });
+      }
+
+      const identity = node.getIdentity();
+      const record = registry.create({
+        type,
+        title,
+        description,
+        ownerPeerId: identity?.peerId,
+        repoUrl,
+        liveUrl,
+        tags,
+        manifest,
+        status,
+      });
+
+      return { success: true, contentId: record.contentId, record };
+    });
+
+    // PUT /content/:id — update content record (owner check)
+    fastify.put('/content/:id', async (request: any, reply: any) => {
+      const registry = node.getContentRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Content registry not ready' });
+
+      const existing = registry.get(request.params.id);
+      if (!existing) return reply.code(404).send({ error: 'Content not found' });
+
+      const identity = node.getIdentity();
+      if (existing.ownerPeerId !== identity?.peerId) {
+        return reply.code(403).send({ error: 'Only the owner can update this content' });
+      }
+
+      const { title, description, repoUrl, liveUrl, tags, status, manifest } = request.body || {};
+      const updated = registry.update(request.params.id, {
+        title, description, repoUrl, liveUrl, tags, status, manifest,
+      });
+
+      if (!updated) return reply.code(500).send({ error: 'Update failed' });
+      return { success: true, record: updated };
+    });
+
+    // DELETE /content/:id — archive content (owner check)
+    fastify.delete('/content/:id', async (request: any, reply: any) => {
+      const registry = node.getContentRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Content registry not ready' });
+
+      const existing = registry.get(request.params.id);
+      if (!existing) return reply.code(404).send({ error: 'Content not found' });
+
+      const identity = node.getIdentity();
+      if (existing.ownerPeerId !== identity?.peerId) {
+        return reply.code(403).send({ error: 'Only the owner can archive this content' });
+      }
+
+      const archived = registry.archive(request.params.id);
+      if (!archived) return reply.code(500).send({ error: 'Archive failed' });
+      return { success: true, archived: true };
+    });
+
+    // POST /content/:id/publish — trigger publish flow
+    fastify.post('/content/:id/publish', async (request: any, reply: any) => {
+      const registry = node.getContentRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Content registry not ready' });
+
+      const existing = registry.get(request.params.id);
+      if (!existing) return reply.code(404).send({ error: 'Content not found' });
+
+      const identity = node.getIdentity();
+      if (existing.ownerPeerId !== identity?.peerId) {
+        return reply.code(403).send({ error: 'Only the owner can publish this content' });
+      }
+
+      // Set status to live
+      const updated = registry.update(request.params.id, { status: 'live' });
+      if (!updated) return reply.code(500).send({ error: 'Publish failed' });
+      return { success: true, record: updated };
+    });
+
+    // ── Regression Suite API (Phase 17.6) ──────────────────────────
+
+    // GET /regression — Regression suite status and test list
+    fastify.get('/regression', async () => {
+      const suite = node.getRegressionSuite();
+      if (!suite) return { available: false, tests: [], stats: null };
+      return {
+        available: true,
+        stats: suite.getStats(),
+        tests: suite.getTests(),
+        lastResult: suite.getLastResult(),
+      };
+    });
+
+    // POST /regression/run — Run full regression suite (requires auth)
+    fastify.post('/regression/run', async (request: any) => {
+      const suite = node.getRegressionSuite();
+      if (!suite) return { error: 'Regression suite not available' };
+      const { category, apiUrl } = (request.body || {}) as { category?: string; apiUrl?: string };
+      const result = category
+        ? await suite.runCategory(category, apiUrl)
+        : await suite.runAll(apiUrl);
+      return result;
+    });
+
+    // GET /regression/results — Last regression run results
+    fastify.get('/regression/results', async () => {
+      const suite = node.getRegressionSuite();
+      if (!suite) return { available: false, result: null };
+      return { available: true, result: suite.getLastResult() };
+    });
+
+    // ── Payment Gate API (Phase 18.6) ──────────────────────────────
+
+    // POST /payment/estimate — Estimate cost for a task description
+    fastify.post('/payment/estimate', async (request: any, reply: any) => {
+      const gate = node.getPaymentGate();
+      if (!gate) return reply.code(503).send({ error: 'Payment gate not available' });
+      const { complexity, category } = (request.body || {}) as { complexity?: string; category?: string };
+      if (!complexity) {
+        return reply.code(400).send({ error: '"complexity" is required (trivial|simple|moderate|complex|project)' });
+      }
+      const estimate = gate.estimateCost(complexity, category || 'task');
+      return estimate;
+    });
+
+    // POST /payment/hold — Create payment hold for a task (requires auth)
+    fastify.post('/payment/hold', async (request: any, reply: any) => {
+      const gate = node.getPaymentGate();
+      if (!gate) return reply.code(503).send({ error: 'Payment gate not available' });
+      const { peerId, taskId, amount } = (request.body || {}) as { peerId?: string; taskId?: string; amount?: number };
+      if (!peerId || !taskId || amount === undefined) {
+        return reply.code(400).send({ error: '"peerId", "taskId", and "amount" are required' });
+      }
+      const hold = gate.holdPayment(peerId, taskId, amount);
+      if (!hold) {
+        return reply.code(402).send({ error: 'Insufficient balance', code: 'INSUFFICIENT_BALANCE' });
+      }
+      return hold;
+    });
+
+    // GET /payment/history — Payment history (optional peerId filter)
+    fastify.get('/payment/history', async (request: any) => {
+      const gate = node.getPaymentGate();
+      if (!gate) return { history: [] };
+      const peerId = (request.query as any)?.peerId;
+      return { history: gate.getPaymentHistory(peerId) };
+    });
+
+    // GET /payment/stats — Payment statistics
+    fastify.get('/payment/stats', async () => {
+      const gate = node.getPaymentGate();
+      if (!gate) return { stats: null };
+      return { stats: gate.getStats() };
+    });
+
+    // ── Unified Identity Auth API ──────────────────────────────────────
+
+    // POST /auth/guest — Create a guest identity + issue JWT.
+    // Phase 41: Accepts browser-generated { publicKey } so private key never leaves the browser.
+    // Phase 86: Returns a JWT instead of a session token.
+    fastify.post('/auth/guest', async (request: any, reply: any) => {
+      const store = node.getUserAccountStore();
+      if (!store) return reply.code(503).send({ error: 'User accounts not available' });
+
+      const body = (request.body || {}) as { peerId?: string; publicKey?: string };
+
+      let result: any;
+
+      if (body.publicKey) {
+        // Phase 41: Browser-generated keypair — derive peerId from public key, register
+        const { peerIdFromPublicKey } = await import('@libp2p/peer-id');
+        const rawPub = uint8ArrayFromString(body.publicKey, 'base64');
+        const proto = new Uint8Array(4 + rawPub.length);
+        proto[0] = 0x08; proto[1] = 0x01; proto[2] = 0x12; proto[3] = rawPub.length;
+        proto.set(rawPub, 4);
+        const pk = publicKeyFromProtobuf(proto);
+        const derivedPeerId = peerIdFromPublicKey(pk).toString();
+
+        result = await store.createGuestFromBrowserKey({
+          peerId: derivedPeerId,
+          publicKey: body.publicKey,
+        });
+      } else {
+        // Legacy: server-side key generation (no encryption support)
+        result = await store.createGuest();
+      }
+
+      if (!result.success) {
+        return reply.code(500).send({ error: result.error });
+      }
+
+      // Phase 86: Issue JWT instead of returning the session token from UserAccountStore
+      const jwt = await deps.issueJwt(result.peerId);
+      return {
+        success: true,
+        token: jwt.token,
+        expiresAt: jwt.expiresAt,
+        peerId: result.peerId,
+        publicKey: result.publicKey,
+        isClaimed: false,
+        isNewAccount: result.isNewAccount,
+      };
+    });
+
+    // POST /auth/claim — Upgrade a guest account to a claimed account (set password + optional username)
+    // Phase 86: Uses JWT to identify the user, issues a new JWT on success.
+    fastify.post('/auth/claim', async (request: any, reply: any) => {
+      const store = node.getUserAccountStore();
+      if (!store) return reply.code(503).send({ error: 'User accounts not available' });
+
+      // Phase 86: Verify JWT to get the user's peerId
+      const userPeerId = await deps.verifyUserJwt(request);
+      if (!userPeerId) {
+        return reply.code(401).send({ error: 'Invalid or expired token' });
+      }
+
+      const { password, username } = (request.body || {}) as {
+        password?: string;
+        username?: string;
+      };
+
+      if (!password) {
+        return reply.code(400).send({ error: 'password is required' });
+      }
+
+      // Phase 86: claim() now takes peerId directly instead of a session token
+      const result = await store.claimByPeerId(userPeerId, password, username);
+
+      if (!result.success) {
+        return reply.code(400).send({ error: result.error });
+      }
+
+      // Phase 56: ledger account already exists (created during guest creation)
+
+      // Phase 57 FIX: Welcome bonus moved here from POST /auth/guest.
+      // Only mint GUEST_WELCOME when a guest CLAIMS an account (registers).
+      // This is a one-time event — the claim() method already rejects if already claimed.
+      // Extra safety: check ledger balance to avoid double-granting if claim is replayed.
+      const ledger = node.getLedger();
+      if (ledger && result.peerId) {
+        try {
+          const currentBalance = ledger.accounts.getBalance(result.peerId);
+          if (currentBalance <= 0) {
+            const { WorkType } = await import('@pando/shared');
+            const tx = ledger.rewardWork(result.peerId, WorkType.GUEST_WELCOME, 'welcome: account registration');
+            console.log(`[faucet] New user ${result.username || result.peerId.slice(0, 16) + '...'} granted ${tx.amount} Lux (welcome)`);
+            // Broadcast so other nodes see the emission
+            const sync = node.getSync();
+            if (sync) sync.broadcastTransaction(tx).catch(() => {});
+          }
+        } catch (err: any) {
+          // Non-fatal — claim succeeded, just no welcome Lux
+          console.error(`[faucet] Welcome grant on claim failed: ${err.message}`);
+        }
+      }
+
+      // Broadcast account claim with current balance AFTER welcome bonus is minted.
+      if (result.peerId && ledger) {
+        const sync = node.getSync();
+        if (sync) {
+          const authFields = ledger.accounts.getAuthFields(result.peerId);
+          const finalBalance = ledger.accounts.getBalance(result.peerId);
+          sync.broadcastClaim({
+            peerId: result.peerId,
+            username: result.username || null,
+            displayName: null,
+            passwordHash: authFields?.passwordHash || '',
+            claimedAt: Date.now(),
+            balance: finalBalance,
+          }).catch(() => {});
+        }
+      }
+
+      // Phase 86: Issue fresh JWT for the now-claimed account
+      const jwt = await deps.issueJwt(result.peerId!);
+      return { ...result, token: jwt.token, expiresAt: jwt.expiresAt };
+    });
+
+    // POST /auth/login — Login with username or peerId + password
+    // Phase 86: Returns a JWT instead of a session token.
+    fastify.post('/auth/login', async (request: any, reply: any) => {
+      const store = node.getUserAccountStore();
+      if (!store) return reply.code(503).send({ error: 'User accounts not available' });
+
+      const { identifier, password } = (request.body || {}) as {
+        identifier?: string;
+        password?: string;
+      };
+
+      if (!identifier || !password) {
+        return reply.code(400).send({ error: 'identifier and password are required' });
+      }
+
+      try {
+        const result = await store.login(identifier, password);
+
+        if (!result.success) {
+          return reply.code(401).send({ error: result.error });
+        }
+
+        // Phase 86: Issue JWT instead of returning session token from UserAccountStore
+        const jwt = await deps.issueJwt(result.peerId!);
+        return { ...result, token: jwt.token, expiresAt: jwt.expiresAt };
+      } catch (err: any) {
+        console.error('[api] Login error:', err.message);
+        return reply.code(500).send({ error: err.message || 'Login failed' });
+      }
+    });
+
+    // POST /auth/logout — Phase 86: Server-side no-op. JWT is stateless — client discards it.
+    fastify.post('/auth/logout', async () => {
+      return { success: true };
+    });
+
+    // POST /auth/backup-key — Store encrypted private key backup (Phase 41.5: multi-device)
+    fastify.post('/auth/backup-key', async (request: any, reply: any) => {
+      const store = node.getUserAccountStore();
+      if (!store) return reply.code(503).send({ error: 'User accounts not available' });
+
+      const peerId = await deps.verifyUserJwt(request);
+      if (!peerId) {
+        return reply.code(401).send({ error: 'Invalid or expired token' });
+      }
+
+      const { encryptedKey } = (request.body || {}) as { encryptedKey?: string };
+      if (!encryptedKey || typeof encryptedKey !== 'string') {
+        return reply.code(400).send({ error: 'encryptedKey is required' });
+      }
+
+      await store.storeEncryptedKey(peerId, encryptedKey);
+      return { success: true };
+    });
+
+    // GET /auth/backup-key — Retrieve encrypted private key backup (Phase 41.5: multi-device)
+    fastify.get('/auth/backup-key', async (request: any, reply: any) => {
+      const store = node.getUserAccountStore();
+      if (!store) return reply.code(503).send({ error: 'User accounts not available' });
+
+      const peerId = await deps.verifyUserJwt(request);
+      if (!peerId) {
+        return reply.code(401).send({ error: 'Invalid or expired token' });
+      }
+
+      const encryptedKey = await store.getEncryptedKey(peerId);
+      return { encryptedKey: encryptedKey || null };
+    });
+
+    // GET /auth/me — Get current user profile + Lux balance (requires valid JWT)
+    // Phase 86: Simple JWT decode — fully stateless, no DB lookup.
+    fastify.get('/auth/me', async (request: any, reply: any) => {
+      const peerId = await deps.verifyUserJwt(request);
+      if (!peerId) {
+        return reply.code(401).send({ error: 'Invalid or expired token' });
+      }
+
+      const ledger = node.getLedger();
+      let balance = 0;
+      let publicKey = '';
+      let username: string | undefined;
+      let isClaimed = false;
+      if (ledger) {
+        balance = ledger.accounts.getBalance(peerId);
+        const account = ledger.accounts.get(peerId);
+        if (account) publicKey = account.publicKey;
+        const authFields = ledger.accounts.getAuthFields(peerId);
+        if (authFields) {
+          username = authFields.username || undefined;
+          isClaimed = authFields.isClaimed;
+        }
+      }
+      return {
+        user: { peerId, publicKey, username, isClaimed, balance, authMethod: 'jwt' },
+      };
+    });
+
+    // POST /auth/refresh — Phase 86: Issue a fresh JWT if the current one is still valid.
+    fastify.post('/auth/refresh', async (request: any, reply: any) => {
+      const peerId = await deps.verifyUserJwt(request);
+      if (!peerId) {
+        return reply.code(401).send({ error: 'Invalid or expired token' });
+      }
+      const jwt = await deps.issueJwt(peerId);
+      return { success: true, token: jwt.token, expiresAt: jwt.expiresAt, peerId };
+    });
+
+    // GET /auth/stats — Identity statistics (public)
+    fastify.get('/auth/stats', async () => {
+      const store = node.getUserAccountStore();
+      if (!store) return { stats: null };
+      return { stats: store.getStats() };
+    });
+
+    // ── Phase 86: Stateless JWT Auth (Challenge-Response) ──────────────
+
+    // POST /auth/challenge — Issue a signed challenge token (stateless, no in-memory store)
+    fastify.post('/auth/challenge', async (request: any, reply: any) => {
+      const { peerId } = (request.body || {}) as { peerId?: string };
+      if (!peerId || typeof peerId !== 'string') {
+        return reply.code(400).send({ error: 'peerId is required' });
+      }
+
+      const identity = node.getIdentity();
+      if (!identity) {
+        return reply.code(503).send({ error: 'Node identity not available' });
+      }
+
+      const nonce = randomBytes(32).toString('hex');
+      const challengePayload = {
+        nonce,
+        sub: peerId,
+        iss: identity.peerId,
+        exp: Date.now() + 60_000, // 60-second TTL
+        typ: 'challenge',
+      };
+
+      const payloadB64 = Buffer.from(JSON.stringify(challengePayload)).toString('base64url');
+      const payloadBytes = new TextEncoder().encode(payloadB64);
+
+      const { privateKeyFromProtobuf } = await import('@libp2p/crypto/keys');
+      const pk = privateKeyFromProtobuf(identity.privateKey);
+      const sig = await pk.sign(payloadBytes);
+      const signatureHex = uint8ArrayToString(sig, 'base16');
+
+      const challengeToken = payloadB64 + '.' + signatureHex;
+      return { challengeToken, nonce, expiresAt: challengePayload.exp };
+    });
+
+    // POST /auth/verify — Verify a signed challenge + user signature, issue JWT
+    // Fully stateless: challenge token is self-verifying, can hit ANY node
+    fastify.post('/auth/verify', async (request: any, reply: any) => {
+      const { peerId, challengeToken, signature } = (request.body || {}) as {
+        peerId?: string;
+        challengeToken?: string;
+        signature?: string;
+      };
+
+      if (!peerId || !challengeToken || !signature) {
+        return reply.code(400).send({ error: 'peerId, challengeToken, and signature are required' });
+      }
+
+      // 1. Parse and verify the challenge token
+      const dotIdx = challengeToken.indexOf('.');
+      if (dotIdx === -1) return reply.code(400).send({ error: 'Invalid challenge token format' });
+
+      const cPayloadB64 = challengeToken.substring(0, dotIdx);
+      const cSigHex = challengeToken.substring(dotIdx + 1);
+
+      let challengePayload: any;
+      try {
+        challengePayload = JSON.parse(Buffer.from(cPayloadB64, 'base64url').toString('utf8'));
+      } catch {
+        return reply.code(400).send({ error: 'Invalid challenge token payload' });
+      }
+
+      if (!challengePayload.exp || challengePayload.exp <= Date.now()) {
+        return reply.code(401).send({ error: 'Challenge expired' });
+      }
+      if (challengePayload.typ !== 'challenge') {
+        return reply.code(400).send({ error: 'Invalid token type' });
+      }
+      if (challengePayload.sub !== peerId) {
+        return reply.code(401).send({ error: 'Challenge was issued for a different peerId' });
+      }
+
+      // Verify challenge token signature — extract issuer's public key from peerId
+      // (Ed25519 peerIds embed the full public key, no ledger lookup needed)
+      try {
+        const { peerIdFromString } = await import('@libp2p/peer-id');
+        const issuerPeerIdObj = peerIdFromString(challengePayload.iss);
+        const issuerPubKey = issuerPeerIdObj.publicKey;
+        if (!issuerPubKey) {
+          return reply.code(401).send({ error: 'Cannot extract public key from challenge issuer peerId' });
+        }
+
+        const cPayloadBytes = new TextEncoder().encode(cPayloadB64);
+        const cSigBytes = uint8ArrayFromString(cSigHex, 'base16');
+        const challengeValid = await issuerPubKey.verify(cPayloadBytes, cSigBytes);
+        if (!challengeValid) {
+          return reply.code(401).send({ error: 'Challenge token signature invalid' });
+        }
+      } catch (err: any) {
+        return reply.code(401).send({ error: 'Challenge verification error', detail: err?.message });
+      }
+
+      // 2. Verify the user's signature over the nonce
+      // Extract user's public key from their peerId (Ed25519 peerIds embed the full public key)
+      try {
+        const { peerIdFromString } = await import('@libp2p/peer-id');
+        const userPeerIdObj = peerIdFromString(peerId);
+        const userPubKey = userPeerIdObj.publicKey;
+        if (!userPubKey) {
+          return reply.code(401).send({ error: 'Cannot extract public key from user peerId' });
+        }
+
+        const nonceBytes = uint8ArrayFromString(challengePayload.nonce, 'base16');
+        const sigBytes = uint8ArrayFromString(signature, 'base16');
+        const userValid = await userPubKey.verify(nonceBytes, sigBytes);
+        if (!userValid) {
+          return reply.code(401).send({ error: 'Signature verification failed' });
+        }
+      } catch (err: any) {
+        return reply.code(401).send({ error: 'Signature verification error', detail: err?.message });
+      }
+
+      // 3. Issue a JWT signed by THIS node
+      const jwt = await deps.issueJwt(peerId);
+      return jwt;
+    });
+
+    // ── Project Economy (Phase 31.1) ─────────────────────────────────────
+
+    // GET /projects — List user's projects (owned + collaborating)
+    fastify.get('/projects', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (userId) {
+        const owned = await ps.getProjectsByOwnerAsync(userId);
+        const collab = await ps.getProjectsByCollaboratorAsync(userId);
+        return { projects: [...owned, ...collab] };
+      }
+
+      // No valid user token — return listed/featured public projects
+      const query = request.query as any;
+      const projects = await ps.listProjectsAsync({
+        visibility: query.visibility || 'listed',
+        status: 'active',
+        limit: parseInt(query.limit) || 50,
+        offset: parseInt(query.offset) || 0,
+      });
+      return { projects };
+    });
+
+    // GET /projects/stats — Public project statistics
+    fastify.get('/projects/stats', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+      return { stats: await ps.getStatsAsync() };
+    });
+
+    // GET /projects/:id — Get project detail
+    fastify.get('/projects/:id', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      // Check access
+      const userId = await deps.verifyUserJwt(request);
+
+      // Public projects are visible to all; private projects require access
+      if (project.type !== 'public' && project.visibility === 'owner_only') {
+        if (!userId || !(await ps.hasAccessAsync(id, userId))) {
+          return reply.code(403).send({ error: 'Access denied' });
+        }
+      }
+
+      const collaborators = await ps.getCollaboratorsAsync(id);
+      return { project, collaborators };
+    });
+
+    // POST /projects — Create a new project
+    // Auth: user session token OR node Bearer token (Phase 66: agents can create projects)
+    fastify.post('/projects', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      // Phase 66: dual-auth — user session OR node Bearer token (same pattern as /projects/:id/resources/assign)
+      let ownerId = await deps.verifyUserJwt(request);
+      if (!ownerId) {
+        const authHeader = request.headers?.authorization || '';
+        const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+        if (hasBearerToken) {
+          ownerId = node.getIdentity()?.peerId || '';
+        }
+        if (!ownerId) return reply.code(401).send({ error: 'Authentication required (user session or Bearer token)' });
+      }
+
+      const body = (request.body || {}) as {
+        name?: string;
+        description?: string;
+        type?: string;
+        visibility?: string;
+        budgetLimit?: number;
+        tier?: number;
+      };
+
+      if (!body.name || body.name.trim().length === 0) {
+        return reply.code(400).send({ error: 'Project name is required' });
+      }
+
+      const project = await ps.createProject({
+        name: body.name.trim(),
+        description: body.description || '',
+        ownerId,
+        type: (body.type as any) || 'private',
+        visibility: (body.visibility as any) || 'owner_only',
+        budgetLimit: body.budgetLimit || 0,
+        ...(body.tier ? { tier: body.tier as 1 | 2 } : {}),
+      });
+
+      return reply.code(201).send({ project });
+    });
+
+    // PATCH /projects/:id — Update project (owner/admin only)
+    fastify.patch('/projects/:id', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id } = request.params as { id: string };
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (!role || (role !== 'owner' && role !== 'admin')) {
+        return reply.code(403).send({ error: 'Only owner or admin can update project' });
+      }
+
+      const body = (request.body || {}) as {
+        name?: string;
+        description?: string;
+        type?: string;
+        visibility?: string;
+        budgetLimit?: number;
+        tier?: number;
+      };
+
+      const updates: any = {};
+      if (body.name !== undefined) updates.name = body.name;
+      if (body.description !== undefined) updates.description = body.description;
+      if (body.type !== undefined) updates.type = body.type;
+      if (body.visibility !== undefined) updates.visibility = body.visibility;
+      if (body.budgetLimit !== undefined) updates.budgetLimit = body.budgetLimit;
+      if (body.tier !== undefined) updates.tier = body.tier;
+
+      const project = await ps.updateProject(id, updates);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      return { project };
+    });
+
+    // POST /projects/:id/collaborators — Add collaborator (owner/admin only)
+    fastify.post('/projects/:id/collaborators', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id } = request.params as { id: string };
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (!role || (role !== 'owner' && role !== 'admin')) {
+        return reply.code(403).send({ error: 'Only owner or admin can add collaborators' });
+      }
+
+      const body = (request.body || {}) as { userId?: string; role?: string };
+      if (!body.userId) {
+        return reply.code(400).send({ error: 'userId is required' });
+      }
+
+      const collabRole = (body.role || 'collaborator') as any;
+      const validRoles = ['admin', 'collaborator', 'viewer', 'qa_lead'];
+      if (!validRoles.includes(collabRole)) {
+        return reply.code(400).send({ error: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
+      }
+
+      await ps.addCollaborator(id, body.userId, collabRole, userId);
+      return { success: true };
+    });
+
+    // DELETE /projects/:id/collaborators/:userId — Remove collaborator (owner/admin only)
+    fastify.delete('/projects/:id/collaborators/:userId', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const authUserId = await deps.verifyUserJwt(request);
+      if (!authUserId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id, userId: targetUserId } = request.params as { id: string; userId: string };
+      const role = await ps.getUserRoleAsync(id, authUserId);
+      if (!role || (role !== 'owner' && role !== 'admin')) {
+        return reply.code(403).send({ error: 'Only owner or admin can remove collaborators' });
+      }
+
+      // Cannot remove the owner
+      const project = await ps.getProjectAsync(id);
+      if (project && targetUserId === project.ownerId) {
+        return reply.code(400).send({ error: 'Cannot remove the project owner' });
+      }
+
+      await ps.removeCollaborator(id, targetUserId);
+      return { success: true };
+    });
+
+    // GET /projects/:id/collaborators — List collaborators
+    fastify.get('/projects/:id/collaborators', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      const collaborators = await ps.getCollaboratorsAsync(id);
+      return { collaborators };
+    });
+
+    // ── Phase 31.5: Collaboration Enhancement (Invites) ──────────────────
+
+    // POST /projects/:id/invite — Generate an invite link/code (owner/admin only)
+    fastify.post('/projects/:id/invite', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id } = request.params as { id: string };
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (!role || (role !== 'owner' && role !== 'admin')) {
+        return reply.code(403).send({ error: 'Only owner or admin can create invites' });
+      }
+
+      const body = (request.body || {}) as {
+        role?: string;
+        expiresInHours?: number;
+        maxUses?: number;
+      };
+
+      const inviteRole = (body.role || 'collaborator') as any;
+      const validRoles = ['admin', 'collaborator', 'viewer', 'qa_lead'];
+      if (!validRoles.includes(inviteRole)) {
+        return reply.code(400).send({ error: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
+      }
+
+      const invite = await ps.createInvite(id, inviteRole, userId, {
+        expiresInHours: body.expiresInHours,
+        maxUses: body.maxUses,
+      });
+
+      return reply.code(201).send({ invite });
+    });
+
+    // POST /projects/join/:code — Join a project via invite code
+    fastify.post('/projects/join/:code', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { code } = request.params as { code: string };
+      const result = await ps.useInvite(code, userId);
+
+      if (!result.success) {
+        return reply.code(400).send({ error: result.error });
+      }
+
+      return { success: true, projectId: result.projectId, role: result.role };
+    });
+
+    // GET /projects/:id/invites — List active invites (owner/admin only)
+    fastify.get('/projects/:id/invites', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id } = request.params as { id: string };
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (!role || (role !== 'owner' && role !== 'admin')) {
+        return reply.code(403).send({ error: 'Only owner or admin can view invites' });
+      }
+
+      const invites = await ps.getProjectInvitesAsync(id);
+      return { invites };
+    });
+
+    // DELETE /projects/:id/invites/:inviteId — Revoke an invite (owner/admin only)
+    fastify.delete('/projects/:id/invites/:inviteId', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id, inviteId } = request.params as { id: string; inviteId: string };
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (!role || (role !== 'owner' && role !== 'admin')) {
+        return reply.code(403).send({ error: 'Only owner or admin can revoke invites' });
+      }
+
+      const success = await ps.revokeInvite(inviteId);
+      if (!success) return reply.code(404).send({ error: 'Invite not found' });
+
+      return { success: true };
+    });
+
+    // ── Phase 31.6: Ownership Transfer ───────────────────────────────────
+
+    // POST /projects/:id/transfer — Initiate ownership transfer (owner only)
+    fastify.post('/projects/:id/transfer', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id } = request.params as { id: string };
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (role !== 'owner') {
+        return reply.code(403).send({ error: 'Only the project owner can initiate a transfer' });
+      }
+
+      const body = (request.body || {}) as {
+        toUserId?: string;
+        type?: string;
+        salePrice?: number;
+      };
+
+      if (!body.toUserId) {
+        return reply.code(400).send({ error: 'toUserId is required' });
+      }
+
+      const transferType = (body.type || 'direct') as any;
+      const validTypes = ['direct', 'sale', 'network'];
+      if (!validTypes.includes(transferType)) {
+        return reply.code(400).send({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
+      }
+
+      // For direct transfers, validate the target user exists
+      if (transferType === 'direct') {
+        const accountStore = node.getUserAccountStore();
+        const targetUser = accountStore ? await accountStore.getIdentityByPeerId(body.toUserId) : null;
+        if (!targetUser) {
+          return reply.code(404).send({ error: 'Target user not found' });
+        }
+      }
+
+      // For sales, create an escrow hold if PaymentGate is available
+      let escrowHoldId = '';
+      if (transferType === 'sale' && body.salePrice && body.salePrice > 0) {
+        const paymentGate = node.getPaymentGate();
+        if (paymentGate) {
+          const hold = paymentGate.holdPayment(body.toUserId, `transfer-${id}`, body.salePrice);
+          if (!hold) {
+            return reply.code(402).send({ error: 'Buyer has insufficient Lux balance for this sale' });
+          }
+          escrowHoldId = hold.holdId;
+        }
+      }
+
+      const transfer = await ps.initiateTransfer(
+        id,
+        userId,
+        body.toUserId,
+        transferType,
+        body.salePrice,
+        escrowHoldId,
+      );
+
+      return reply.code(201).send({ transfer });
+    });
+
+    // POST /projects/transfers/:id/complete — Complete a transfer (buyer confirms for sales)
+    fastify.post('/projects/transfers/:id/complete', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id: transferId } = request.params as { id: string };
+      const transfer = await ps.getTransferAsync(transferId);
+      if (!transfer) return reply.code(404).send({ error: 'Transfer not found' });
+
+      // For sales, only the buyer (toUser) can complete; for direct, either party
+      if (transfer.transferType === 'sale') {
+        if (userId !== transfer.toUser) {
+          return reply.code(403).send({ error: 'Only the buyer can confirm a sale transfer' });
+        }
+      } else {
+        if (userId !== transfer.fromUser && userId !== transfer.toUser) {
+          return reply.code(403).send({ error: 'Only the sender or recipient can complete this transfer' });
+        }
+      }
+
+      // Release escrow if this was a sale
+      if (transfer.escrowHoldId) {
+        const paymentGate = node.getPaymentGate();
+        if (paymentGate) {
+          paymentGate.releasePayment(transfer.escrowHoldId, transfer.fromUser);
+        }
+      }
+
+      const completed = await ps.completeTransfer(transferId);
+      if (!completed) return reply.code(400).send({ error: 'Transfer cannot be completed (not pending)' });
+
+      return { transfer: completed };
+    });
+
+    // POST /projects/transfers/:id/cancel — Cancel a transfer
+    fastify.post('/projects/transfers/:id/cancel', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id: transferId } = request.params as { id: string };
+      const transfer = await ps.getTransferAsync(transferId);
+      if (!transfer) return reply.code(404).send({ error: 'Transfer not found' });
+
+      // Only the initiator (fromUser) can cancel
+      if (userId !== transfer.fromUser) {
+        return reply.code(403).send({ error: 'Only the transfer initiator can cancel' });
+      }
+
+      // Refund escrow if this was a sale
+      if (transfer.escrowHoldId) {
+        const paymentGate = node.getPaymentGate();
+        if (paymentGate) {
+          paymentGate.refundPayment(transfer.escrowHoldId);
+        }
+      }
+
+      const cancelled = await ps.cancelTransfer(transferId);
+      if (!cancelled) return reply.code(400).send({ error: 'Transfer cannot be cancelled (not pending)' });
+
+      return { transfer: cancelled };
+    });
+
+    // GET /projects/:id/transfers — Transfer history
+    fastify.get('/projects/:id/transfers', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      const transfers = await ps.getProjectTransfersAsync(id);
+      return { transfers };
+    });
+
+    // ── Phase 31.4: Revenue Engine Routes ────────────────────────────────
+
+    // GET /projects/:id/revenue — Revenue summary
+    fastify.get('/projects/:id/revenue', async (request: any, reply: any) => {
+      const engine = node.getRevenueEngine();
+      if (!engine) return reply.code(503).send({ error: 'Revenue engine not available' });
+
+      const { id } = request.params as { id: string };
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      const summary = await engine.getRevenueSummaryAsync(id);
+      return { summary };
+    });
+
+    // GET /projects/:id/revenue/history — Revenue event history
+    fastify.get('/projects/:id/revenue/history', async (request: any, reply: any) => {
+      const engine = node.getRevenueEngine();
+      if (!engine) return reply.code(503).send({ error: 'Revenue engine not available' });
+
+      const { id } = request.params as { id: string };
+      const query = request.query as any;
+
+      const records = await engine.getProjectRevenueAsync(id, {
+        since: query.since ? parseInt(query.since) : undefined,
+        until: query.until ? parseInt(query.until) : undefined,
+      });
+      return { records };
+    });
+
+    // POST /projects/:id/revenue/distribute — Trigger revenue distribution (owner/admin only)
+    fastify.post('/projects/:id/revenue/distribute', async (request: any, reply: any) => {
+      const engine = node.getRevenueEngine();
+      if (!engine) return reply.code(503).send({ error: 'Revenue engine not available' });
+
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id } = request.params as { id: string };
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (!role || (role !== 'owner' && role !== 'admin')) {
+        return reply.code(403).send({ error: 'Only owner or admin can distribute revenue' });
+      }
+
+      const result = await engine.distributeRevenue(id, ps);
+      return { result };
+    });
+
+    // GET /projects/:id/revenue/distributions — Distribution history
+    fastify.get('/projects/:id/revenue/distributions', async (request: any, reply: any) => {
+      const engine = node.getRevenueEngine();
+      if (!engine) return reply.code(503).send({ error: 'Revenue engine not available' });
+
+      const { id } = request.params as { id: string };
+      const distributions = await engine.getDistributionHistoryAsync(id);
+      return { distributions };
+    });
+
+    // ── Phase 31.7: Deployment Automation ─────────────────────────────────
+    // NOTE: POST /projects/:id/deploy moved to Phase 70 unified deploy section (near preflight).
+    // Old endpoint created a deployment record — new endpoint actually deploys.
+
+    // GET /projects/:id/deployments — List deployment history
+    fastify.get('/projects/:id/deployments', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      const deployments = await ps.getDeploymentsAsync(id);
+      return { deployments };
+    });
+
+    // POST /projects/:id/deployments/:deployId/status — Update deployment status (for agents)
+    fastify.post('/projects/:id/deployments/:deployId/status', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id, deployId } = request.params as { id: string; deployId: string };
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (!role || (role !== 'owner' && role !== 'admin')) {
+        return reply.code(403).send({ error: 'Only owner or admin can update deployment status' });
+      }
+
+      const body = (request.body || {}) as {
+        status?: string;
+        url?: string;
+        error?: string;
+      };
+
+      if (!body.status) {
+        return reply.code(400).send({ error: 'status is required' });
+      }
+
+      const validStatuses = ['pending', 'deploying', 'live', 'failed', 'rolled_back'];
+      if (!validStatuses.includes(body.status)) {
+        return reply.code(400).send({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
+      }
+
+      await ps.updateDeploymentStatus(deployId, body.status as any, body.url, body.error);
+      return { success: true };
+    });
+
+    // ── Phase 31.8: Project Marketplace ───────────────────────────────────
+
+    // GET /marketplace — Public marketplace listing
+    fastify.get('/marketplace', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const query = request.query as any;
+      const result = await ps.getMarketplaceAsync({
+        category: query.category || undefined,
+        sortBy: query.sort || undefined,
+        search: query.search || undefined,
+        limit: query.limit ? parseInt(query.limit) : undefined,
+        offset: query.offset ? parseInt(query.offset) : undefined,
+      });
+
+      return result;
+    });
+
+    // GET /marketplace/:id — Public project detail (only if listed/featured)
+    fastify.get('/marketplace/:id', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      if (project.visibility !== 'listed' && project.visibility !== 'featured') {
+        return reply.code(404).send({ error: 'Project not found' });
+      }
+
+      const collaborators = await ps.getCollaboratorsAsync(id);
+      const ratingsSummary = await ps.getProjectRatingsAsync(id);
+      return { project, collaborators, ratings: ratingsSummary };
+    });
+
+    // POST /projects/:id/rate — Rate a project (user token required)
+    fastify.post('/projects/:id/rate', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      const body = (request.body || {}) as { rating?: number; review?: string };
+      if (!body.rating || !Number.isInteger(body.rating) || body.rating < 1 || body.rating > 5) {
+        return reply.code(400).send({ error: 'Rating must be an integer between 1 and 5' });
+      }
+
+      await ps.rateProject(id, userId, body.rating, body.review);
+      return { success: true };
+    });
+
+    // GET /projects/:id/ratings — Get ratings for a project
+    fastify.get('/projects/:id/ratings', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      const ratingsSummary = await ps.getProjectRatingsAsync(id);
+      return ratingsSummary;
+    });
+
+    // ── Phase 31.9: Contribution Tracking ─────────────────────────────────
+
+    // GET /projects/:id/contributions — List contributions
+    fastify.get('/projects/:id/contributions', async (request: any, reply: any) => {
+      const tracker = node.getContributionTracker();
+      if (!tracker) return reply.code(503).send({ error: 'Contribution tracker not available' });
+
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      const query = request.query as any;
+      const contributions = await tracker.getContributionsAsync(id, {
+        userId: query.userId || undefined,
+        verified: query.verified !== undefined ? query.verified === 'true' : undefined,
+      });
+
+      return { contributions };
+    });
+
+    // POST /projects/:id/contributions — Record a contribution (owner/admin/collaborator)
+    fastify.post('/projects/:id/contributions', async (request: any, reply: any) => {
+      const tracker = node.getContributionTracker();
+      if (!tracker) return reply.code(503).send({ error: 'Contribution tracker not available' });
+
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id } = request.params as { id: string };
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (!role) {
+        return reply.code(403).send({ error: 'Must be a project collaborator to record contributions' });
+      }
+
+      const body = (request.body || {}) as {
+        type?: string;
+        description?: string;
+        weight?: number;
+        agentId?: string;
+        userId?: string;
+      };
+
+      if (!body.type) {
+        return reply.code(400).send({ error: 'Contribution type is required' });
+      }
+
+      const validTypes = ['code', 'review', 'test', 'design', 'management', 'documentation'];
+      if (!validTypes.includes(body.type)) {
+        return reply.code(400).send({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
+      }
+
+      // Allow owner/admin to record contributions on behalf of other users
+      const contributorId = (role === 'owner' || role === 'admin') && body.userId ? body.userId : userId;
+
+      const contribution = await tracker.recordContribution(
+        id,
+        contributorId,
+        body.type as any,
+        body.description,
+        body.weight,
+        body.agentId,
+      );
+
+      return reply.code(201).send({ contribution });
+    });
+
+    // POST /projects/:id/contributions/:contribId/verify — Verify (owner/admin only)
+    fastify.post('/projects/:id/contributions/:contribId/verify', async (request: any, reply: any) => {
+      const tracker = node.getContributionTracker();
+      if (!tracker) return reply.code(503).send({ error: 'Contribution tracker not available' });
+
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id, contribId } = request.params as { id: string; contribId: string };
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (!role || (role !== 'owner' && role !== 'admin')) {
+        return reply.code(403).send({ error: 'Only owner or admin can verify contributions' });
+      }
+
+      await tracker.verifyContribution(contribId, userId);
+      return { success: true };
+    });
+
+    // GET /projects/:id/contributions/scores — Get contribution scores
+    fastify.get('/projects/:id/contributions/scores', async (request: any, reply: any) => {
+      const tracker = node.getContributionTracker();
+      if (!tracker) return reply.code(503).send({ error: 'Contribution tracker not available' });
+
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      const query = request.query as any;
+      // Optionally recalculate scores
+      if (query.recalculate === 'true') {
+        await tracker.calculateScores(id);
+      }
+
+      const scores = await tracker.getScoresAsync(id);
+      const shares = await tracker.getRevenueSharesAsync(id);
+      return { scores, shares };
+    });
+
+    // ── Phase 31.10: Content Safety — Reporting ────────────────────────────
+
+    // In-memory rate limiter for reports: max 3 per user per hour
+    const reportRateMap = new Map<string, number[]>();
+
+    const checkReportRateLimit = (userId: string): boolean => {
+      const now = Date.now();
+      const windowMs = 60 * 60 * 1000; // 1 hour
+      const maxReports = 3;
+      const cutoff = now - windowMs;
+
+      let timestamps = reportRateMap.get(userId);
+      if (!timestamps) {
+        timestamps = [];
+        reportRateMap.set(userId, timestamps);
+      }
+      // Prune old entries
+      while (timestamps.length > 0 && timestamps[0] <= cutoff) {
+        timestamps.shift();
+      }
+      if (timestamps.length >= maxReports) {
+        return false;
+      }
+      timestamps.push(now);
+      return true;
+    };
+
+    // Periodic cleanup for report rate limiter (every 10 minutes)
+    setInterval(() => {
+      const cutoff = Date.now() - 60 * 60 * 1000;
+      for (const [key, timestamps] of reportRateMap) {
+        while (timestamps.length > 0 && timestamps[0] <= cutoff) {
+          timestamps.shift();
+        }
+        if (timestamps.length === 0) {
+          reportRateMap.delete(key);
+        }
+      }
+    }, 10 * 60 * 1000);
+
+    // POST /projects/:id/report — Report a project (user token required)
+    fastify.post('/projects/:id/report', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      // Rate limit: max 3 reports per user per hour
+      if (!checkReportRateLimit(userId)) {
+        return reply.code(429).send({ error: 'Rate limit exceeded: max 3 reports per hour' });
+      }
+
+      const body = (request.body || {}) as { reason?: string; description?: string };
+      const validReasons = ['spam', 'malicious', 'inappropriate', 'copyright', 'other'];
+      if (!body.reason || !validReasons.includes(body.reason)) {
+        return reply.code(400).send({ error: `Reason must be one of: ${validReasons.join(', ')}` });
+      }
+
+      const report = await ps.createReport(id, userId, body.reason as any, body.description);
+      return reply.code(201).send({ report });
+    });
+
+    // GET /projects/:id/reports — List reports for a project (owner/admin only)
+    fastify.get('/projects/:id/reports', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id } = request.params as { id: string };
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (!role || (role !== 'owner' && role !== 'admin')) {
+        return reply.code(403).send({ error: 'Only project owner or admin can view reports' });
+      }
+
+      const query = request.query as any;
+      const reports = await ps.getProjectReportsAsync(id, {
+        status: query.status || undefined,
+      });
+      return { reports };
+    });
+
+    // GET /admin/reports — List all pending reports (admin/node token only)
+    fastify.get('/admin/reports', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      // Require node-level API token for admin endpoints
+      const authHeader = request.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
+        return reply.code(403).send({ error: 'Admin access required (node API token)' });
+      }
+
+      const query = request.query as any;
+      const limit = parseInt(query.limit) || 50;
+      const reports = await ps.getPendingReportsAsync(limit);
+      return { reports };
+    });
+
+    // POST /admin/reports/:id/review — Update report status (admin/node token only)
+    fastify.post('/admin/reports/:id/review', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      // Require node-level API token for admin endpoints
+      const authHeader = request.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
+        return reply.code(403).send({ error: 'Admin access required (node API token)' });
+      }
+
+      const { id } = request.params as { id: string };
+      const report = await ps.getReportAsync(id);
+      if (!report) return reply.code(404).send({ error: 'Report not found' });
+
+      const body = (request.body || {}) as { status?: string; action?: string };
+      const validStatuses = ['pending', 'reviewing', 'resolved', 'dismissed'];
+      if (!body.status || !validStatuses.includes(body.status)) {
+        return reply.code(400).send({ error: `Status must be one of: ${validStatuses.join(', ')}` });
+      }
+
+      if (body.status === 'dismissed') {
+        await ps.dismissReport(id, 'admin');
+      } else if (body.status === 'resolved') {
+        const validActions = ['archive', 'delist', 'none'];
+        const action = body.action || 'none';
+        if (!validActions.includes(action)) {
+          return reply.code(400).send({ error: `Action must be one of: ${validActions.join(', ')}` });
+        }
+        await ps.resolveReport(id, 'admin', action as any);
+      } else {
+        await ps.updateReportStatus(id, body.status as any, 'admin');
+      }
+
+      const updated = await ps.getReportAsync(id);
+      return { report: updated };
+    });
+
+    // GET /admin/reports/stats — Report statistics (admin/node token only)
+    fastify.get('/admin/reports/stats', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      // Require node-level API token for admin endpoints
+      const authHeader = request.headers.authorization;
+      if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
+        return reply.code(403).send({ error: 'Admin access required (node API token)' });
+      }
+
+      const stats = await ps.getReportStatsAsync();
+      return { stats };
+    });
+
+    // ── Phase 32: S3 Hosting ──────────────────────────────────────────────
+
+    // POST /projects/:id/hosting — Deploy project files to S3
+    fastify.post('/projects/:id/hosting', async (request: any, reply: any) => {
+      const hosting = node.getHostingService();
+      if (!hosting) return reply.code(503).send({ error: 'Hosting service not available' });
+
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (!role || (role !== 'owner' && role !== 'admin')) {
+        return reply.code(403).send({ error: 'Only owner or admin can deploy' });
+      }
+
+      // Expect JSON body: { files: [{ path, content (base64), contentType }] }
+      const body = (request.body || {}) as {
+        files?: { path: string; content: string; contentType: string }[];
+      };
+
+      if (!body.files || !Array.isArray(body.files) || body.files.length === 0) {
+        return reply.code(400).send({ error: 'files array is required (each entry: { path, content (base64), contentType })' });
+      }
+
+      const deployFiles: DeployFile[] = [];
+      for (const f of body.files) {
+        if (!f.path || !f.content || !f.contentType) {
+          return reply.code(400).send({ error: 'Each file must have path, content (base64), and contentType' });
+        }
+        deployFiles.push({
+          path: f.path,
+          content: Buffer.from(f.content, 'base64'),
+          contentType: f.contentType,
+        });
+      }
+
+      // Phase 65: Inject gateway URL, project ID, and API key into HTML files
+      // Same injection that agent-manager does, but for direct hosting deploys
+      const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
+      let projectApiKey = '';
+      // ProjectRegistry only stores apiKeyHash — get plaintext from ProjectStore (MongoDB)
+      try {
+        const proj = await ps.getProjectAsync(id);
+        if (proj?.apiKey) projectApiKey = proj.apiKey;
+      } catch { /* best-effort */ }
+      const injVars = [
+        `window.PANDO_GATEWAY_URL="${gatewayUrl}"`,
+        `window.PANDO_PROJECT_ID="${id}"`,
+      ];
+      if (projectApiKey) injVars.push(`window.PANDO_PROJECT_API_KEY="${projectApiKey}"`);
+      const injScript = `<script>${injVars.join(';')};</script>`;
+      for (const file of deployFiles) {
+        if (file.path.endsWith('.html')) {
+          let html = file.content.toString('utf-8');
+          if (html.includes('<head>')) {
+            html = html.replace('<head>', '<head>' + injScript);
+          } else if (html.includes('<head ')) {
+            html = html.replace(/<head\s[^>]*>/, (m: string) => m + injScript);
+          } else {
+            html = injScript + html;
+          }
+          file.content = Buffer.from(html, 'utf-8');
+        }
+      }
+
+      try {
+        const info = await hosting.deployProject(id, project.type, deployFiles);
+        // For public projects the URL is immediate; for private we generate a pre-signed URL
+        if (project.type !== 'public') {
+          info.url = await hosting.getHostedUrl(id, project.type);
+        }
+
+        // Auto-publish: set project visibility to 'listed' so it appears in the marketplace
+        try {
+          await ps.updateProject(id, {
+            visibility: 'listed',
+            deploymentUrl: info.url,
+            deploymentStatus: 'deployed',
+          });
+          console.log(`[hosting] Auto-published project ${id} to marketplace after deploy`);
+        } catch (pubErr: any) {
+          console.warn(`[hosting] Failed to auto-publish project ${id}: ${pubErr.message}`);
+        }
+
+        return reply.code(201).send({ deployment: info });
+      } catch (err: any) {
+        console.error(`[hosting] Deploy failed for project ${id}:`, err.message);
+        return reply.code(500).send({ error: 'Deployment failed', detail: err.message });
+      }
+    });
+
+    // GET /projects/:id/hosting — Get deployment info + URL
+    fastify.get('/projects/:id/hosting', async (request: any, reply: any) => {
+      const hosting = node.getHostingService();
+      if (!hosting) return reply.code(503).send({ error: 'Hosting service not available' });
+
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      // Private projects require user auth to view deployment info
+      if (project.type !== 'public') {
+        const userId = await deps.verifyUserJwt(request);
+        if (!userId || !(await ps.hasAccessAsync(id, userId))) {
+          return reply.code(403).send({ error: 'Access denied' });
+        }
+      }
+
+      try {
+        const info = await hosting.getDeploymentInfo(id);
+        if (info.deployed && project.type !== 'public') {
+          info.url = await hosting.getHostedUrl(id, project.type);
+        }
+        return { deployment: info };
+      } catch (err: any) {
+        console.error(`[hosting] Info failed for project ${id}:`, err.message);
+        return reply.code(500).send({ error: 'Failed to get deployment info', detail: err.message });
+      }
+    });
+
+    // DELETE /projects/:id/hosting — Remove deployment
+    fastify.delete('/projects/:id/hosting', async (request: any, reply: any) => {
+      const hosting = node.getHostingService();
+      if (!hosting) return reply.code(503).send({ error: 'Hosting service not available' });
+
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (!role || (role !== 'owner' && role !== 'admin')) {
+        return reply.code(403).send({ error: 'Only owner or admin can remove deployments' });
+      }
+
+      try {
+        await hosting.removeDeployment(id);
+        return { removed: true, projectId: id };
+      } catch (err: any) {
+        console.error(`[hosting] Remove failed for project ${id}:`, err.message);
+        return reply.code(500).send({ error: 'Failed to remove deployment', detail: err.message });
+      }
+    });
+
+    // ── Phase 53: Project Resource Assignment ──────────────────────────────
+
+    // POST /projects/:id/resources/assign — Assign a resource to a project
+    fastify.post('/projects/:id/resources/assign', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      // Allow access if: (1) user session owner/admin, or (2) node Bearer token + project owned by this node
+      const userId = await deps.verifyUserJwt(request);
+      const nodeId = node.getIdentity()?.peerId;
+      const authHeader = request.headers?.authorization || '';
+      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+      const isNodeAdmin = !userId && hasBearerToken && project.ownerId === nodeId;
+
+      if (userId) {
+        const role = await ps.getUserRoleAsync(id, userId);
+        if (!role || (role !== 'owner' && role !== 'admin')) {
+          return reply.code(403).send({ error: 'Only owner or admin can assign resources' });
+        }
+      } else if (!isNodeAdmin) {
+        return reply.code(401).send({ error: 'Authentication required' });
+      }
+
+      const body = (request.body || {}) as { type?: string; resourceId?: string };
+      if (!body.type || !body.resourceId) {
+        return reply.code(400).send({ error: 'Missing required fields: type, resourceId' });
+      }
+
+      const validTypes = ['mongodb', 's3', 'github', 'compute'];
+      if (!validTypes.includes(body.type)) {
+        return reply.code(400).send({ error: `Invalid resource type. Must be one of: ${validTypes.join(', ')}` });
+      }
+
+      // Verify the resource exists in ResourceRegistry and is active
+      const registry = node.getResourceRegistry();
+      if (registry) {
+        const resource = registry.getResource(body.resourceId);
+        if (!resource) return reply.code(404).send({ error: 'Resource not found in ResourceRegistry' });
+        if (resource.status !== 'active') return reply.code(400).send({ error: `Resource is not active (status: ${resource.status})` });
+      }
+
+      try {
+        await ps.assignResource(id, { type: body.type, resourceId: body.resourceId });
+        const resources = ps.getProjectResources(id);
+        return { resources };
+      } catch (err: any) {
+        return reply.code(400).send({ error: err.message });
+      }
+    });
+
+    // DELETE /projects/:id/resources/:resourceId — Remove a resource assignment
+    fastify.delete('/projects/:id/resources/:resourceId', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id, resourceId } = request.params as { id: string; resourceId: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      // Verify user is owner or admin
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (!role || (role !== 'owner' && role !== 'admin')) {
+        return reply.code(403).send({ error: 'Only owner or admin can remove resources' });
+      }
+
+      try {
+        await ps.removeResource(id, resourceId);
+        const resources = ps.getProjectResources(id);
+        return { resources };
+      } catch (err: any) {
+        return reply.code(400).send({ error: err.message });
+      }
+    });
+
+    // GET /projects/:id/resources — Get all resources assigned to a project
+    fastify.get('/projects/:id/resources', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      // Check access — owner, collaborator, or public
+      const userId = await deps.verifyUserJwt(request);
+      let isOwner = false;
+
+      if (userId) {
+        const role = await ps.getUserRoleAsync(id, userId);
+        if (role === 'owner') isOwner = true;
+        if (!role && project.type !== 'public') {
+          return reply.code(403).send({ error: 'Access denied' });
+        }
+      } else if (project.type !== 'public') {
+        return reply.code(403).send({ error: 'Access denied' });
+      }
+
+      const resources = ps.getProjectResources(id);
+      const result: Record<string, any> = { resources };
+
+      // Only include apiKey if user is the owner
+      if (isOwner && project.apiKey) {
+        result.apiKey = project.apiKey;
+      }
+
+      return result;
+    });
+
+    // POST /projects/:id/api-key — Generate a project API key
+    fastify.post('/projects/:id/api-key', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      // Allow access if: (1) user session owner, or (2) node Bearer token + project owned by this node
+      const userId = await deps.verifyUserJwt(request);
+      const nodeId = node.getIdentity()?.peerId;
+      // If Bearer auth passed the onRequest hook and no user token, this is a node-level request
+      const authHeader = request.headers?.authorization || '';
+      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+      const isNodeAdmin = !userId && hasBearerToken && project.ownerId === nodeId;
+
+      if (userId) {
+        const role = await ps.getUserRoleAsync(id, userId);
+        if (role !== 'owner') {
+          return reply.code(403).send({ error: 'Only project owner can generate API keys' });
+        }
+      } else if (!isNodeAdmin) {
+        return reply.code(401).send({ error: 'Authentication required (user session or node API token for node-owned projects)' });
+      }
+
+      // Don't generate if one already exists — use regenerate endpoint instead
+      if (project.apiKey) {
+        return reply.code(409).send({ error: 'API key already exists. Use POST /projects/:id/api-key/regenerate to replace it.' });
+      }
+
+      try {
+        const apiKey = await ps.generateApiKey(id);
+        return { apiKey };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // POST /projects/:id/api-key/regenerate — Regenerate a project API key
+    fastify.post('/projects/:id/api-key/regenerate', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      // Owner only
+      const role = await ps.getUserRoleAsync(id, userId);
+      if (role !== 'owner') {
+        return reply.code(403).send({ error: 'Only project owner can regenerate API keys' });
+      }
+
+      try {
+        const apiKey = await ps.generateApiKey(id);
+        return { apiKey };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // GET /projects/by-api-key/:key — Look up project by API key (node-internal, for Resource Proxy)
+    fastify.get('/projects/by-api-key/:key', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const { key } = request.params as { key: string };
+      if (!key || key.length < 32) {
+        return reply.code(400).send({ error: 'Invalid API key' });
+      }
+
+      const project = ps.getProjectByApiKey(key);
+      if (!project) return reply.code(404).send({ error: 'Project not found for this API key' });
+
+      return { project };
+    });
+
+    // ── Phase 66: Preflight & Deploy Validation ──────────────────────────────
+
+    // GET /projects/:id/preflight — check if project is ready for app deployment
+    // POST /projects/:id/preflight — same check but auto-fixes what it can
+    fastify.route({
+      method: ['GET', 'POST'],
+      url: '/projects/:id/preflight',
+      handler: async (request: any, reply: any) => {
+        const ps = node.getProjectStore();
+        if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+        // Auth: user session OR node Bearer token
+        let userId = await deps.verifyUserJwt(request);
+        const authHeader = request.headers?.authorization || '';
+        const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+        if (!userId && !hasBearerToken) {
+          return reply.code(401).send({ error: 'Authentication required' });
+        }
+
+        const { id } = request.params as { id: string };
+        const autoFix = request.method === 'POST';
+
+        // Check 1: Project exists
+        let project: any = null;
+        try { project = await ps.getProjectAsync(id); } catch (err: any) { console.log(`[preflight] Project lookup failed for ${id}: ${err.message}`); }
+        const projectExists = !!project;
+
+        // Check 2: API key exists
+        let apiKeyExists = !!(project?.apiKey);
+        const autoFixed: string[] = [];
+
+        if (!apiKeyExists && autoFix && project) {
+          // Auto-generate API key
+          try {
+            const { randomBytes: rb } = await import('node:crypto');
+            const apiKey = rb(32).toString('hex');
+            await ps.updateProject(id, { apiKey });
+            project = await ps.getProjectAsync(id);
+            apiKeyExists = true;
+            autoFixed.push('Generated API key');
+
+            // Sync to P2P ProjectRegistry
+            const pr = node.getProjectRegistry?.();
+            if (pr && project) {
+              pr.registerProject(project.id, project.name, apiKey, project.ownerId, project.resources || []);
+            }
+          } catch {}
+        }
+
+        // Check 3: MongoDB assigned
+        const resources = project ? (ps.getProjectResources(id) || []) : [];
+        let mongodbAssigned = resources.some((r: any) => r.type === 'mongodb');
+
+        if (!mongodbAssigned && autoFix && project) {
+          // Auto-assign first available storage_db resource
+          const registry = node.getResourceRegistry();
+          if (registry) {
+            const dbResources = registry.findResources('storage_db' as any);
+            if (dbResources.length > 0) {
+              try {
+                await ps.assignResource(id, { type: 'mongodb', resourceId: dbResources[0].resourceId });
+                mongodbAssigned = true;
+                autoFixed.push(`Assigned MongoDB resource ${dbResources[0].resourceId}`);
+              } catch {}
+            }
+          }
+        }
+
+        // Check 4: GitHub assigned (Phase 70: auto-assign code_repository)
+        const currentResources = project ? (ps.getProjectResources(id) || []) : [];
+        let githubAssigned = currentResources.some((r: any) => r.type === 'github');
+
+        if (!githubAssigned && autoFix && project) {
+          const registry2 = node.getResourceRegistry();
+          if (registry2) {
+            const codeResources = registry2.findResources('code_repository' as any);
+            if (codeResources.length > 0) {
+              try {
+                await ps.assignResource(id, { type: 'github', resourceId: codeResources[0].resourceId });
+                githubAssigned = true;
+                autoFixed.push(`Assigned GitHub resource ${codeResources[0].resourceId}`);
+              } catch {}
+            }
+          }
+        }
+
+        // Check 5: Gateway URL configured
+        const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
+        const gatewayReachable = gatewayUrl.length > 0;
+
+        // Check 6: Resource Proxy available (gateway URL set = proxy available)
+        const resourceProxyAvailable = gatewayReachable;
+
+        const checks = { projectExists, apiKeyExists, mongodbAssigned, githubAssigned, gatewayReachable, resourceProxyAvailable };
+        const ready = Object.values(checks).every(Boolean);
+        const missing: string[] = [];
+        if (!projectExists) missing.push('Project does not exist');
+        if (!apiKeyExists) missing.push('No API key — POST /projects/:id/api-key or use preflight auto-fix');
+        if (!mongodbAssigned) missing.push('No MongoDB resource assigned');
+        if (!githubAssigned) missing.push('No GitHub resource assigned');
+        if (!gatewayReachable) missing.push('GATEWAY_PUBLIC_URL not set on node');
+        if (!resourceProxyAvailable) missing.push('Resource Proxy unavailable (no gateway URL)');
+
+        return { ready, checks, missing, autoFixed };
+      }
+    });
+
+    // ── Phase 70: GitHub Integration & Unified Deploy ──────────────────────
+
+    // POST /projects/:id/github — Create a GitHub repo for the project
+    fastify.post('/projects/:id/github', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const authHeader = request.headers?.authorization || '';
+      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId && !hasBearerToken) return reply.code(401).send({ error: 'Authentication required' });
+
+      const { id } = request.params as { id: string };
+      let project: any;
+      try { project = await ps.getProjectAsync(id); } catch {}
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      // Already has a repo?
+      if (project.githubRepo) {
+        return { repoUrl: `https://github.com/${project.githubRepo}`, cloneUrl: `https://github.com/${project.githubRepo}.git`, existing: true };
+      }
+
+      // Get GitHub token from contributed code_repository resource
+      const registry = node.getResourceRegistry();
+      if (!registry) return reply.code(503).send({ error: 'ResourceRegistry not available' });
+
+      const githubResources = registry.findResources('code_repository' as any);
+      if (!githubResources.length) return reply.code(503).send({ error: 'No code_repository resource contributed' });
+
+      const githubToken = await registry.getCredential(githubResources[0].resourceId);
+      if (!githubToken) return reply.code(503).send({ error: 'Could not decrypt GitHub credential' });
+
+      const ghMeta = (githubResources[0] as any).metadata || {};
+      const explicitOrg = ghMeta.org || 'pando-lux';
+      const accountType = ghMeta.accountType || 'user'; // 'user' or 'org'
+      const safeName = (project.name || id).replace(/[^a-z0-9-]/gi, '-').toLowerCase().slice(0, 40);
+      const repoName = `app-${id.slice(0, 8)}-${safeName}`;
+
+      // Create repo via GitHub API
+      const apiHeaders: Record<string, string> = {
+        'Authorization': `token ${githubToken}`,
+        'Content-Type': 'application/json',
+        'Accept': 'application/vnd.github.v3+json',
+      };
+
+      // App repos are always public — EC2 needs unauthenticated clone access
+      const repoBody = JSON.stringify({
+        name: repoName,
+        description: `Pando app: ${project.name || id}`,
+        private: false,
+        auto_init: true,
+      });
+
+      try {
+        // Use /user/repos for user accounts, /orgs/{org}/repos for org accounts
+        const createUrl = accountType === 'org'
+          ? `https://api.github.com/orgs/${explicitOrg}/repos`
+          : `https://api.github.com/user/repos`;
+        console.log(`[github] Creating repo via ${accountType === 'org' ? 'org' : 'user'} endpoint: ${repoName}`);
+
+        const createResp = await fetch(createUrl, {
+          method: 'POST', headers: apiHeaders, body: repoBody,
+          signal: AbortSignal.timeout(15000),
+        });
+
+        let fullRepoName = `${explicitOrg}/${repoName}`;
+        if (createResp.status === 201) {
+          const data = await createResp.json() as any;
+          fullRepoName = data.full_name || fullRepoName;
+          console.log(`[github] Created repo: ${fullRepoName}`);
+        } else if (createResp.status === 422) {
+          console.log(`[github] Repo already exists: ${fullRepoName}`);
+        } else {
+          const errText = await createResp.text();
+          console.log(`[github] Repo create failed (${createResp.status}): ${errText}`);
+          return reply.code(502).send({ error: `GitHub API error: ${createResp.status}`, details: errText });
+        }
+
+        // Update project record
+        await ps.updateProject(id, { githubRepo: fullRepoName, repoUrl: `https://github.com/${fullRepoName}` });
+
+        return {
+          repoUrl: `https://github.com/${fullRepoName}`,
+          cloneUrl: `https://github.com/${fullRepoName}.git`,
+          githubRepo: fullRepoName,
+        };
+      } catch (err: any) {
+        console.log(`[github] Create repo error: ${err.message}`);
+        return reply.code(502).send({ error: err.message });
+      }
+    });
+
+    // POST /projects/:id/github/push — Push workspace code to GitHub
+    fastify.post('/projects/:id/github/push', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const authHeader = request.headers?.authorization || '';
+      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId && !hasBearerToken) return reply.code(401).send({ error: 'Authentication required' });
+
+      const { id } = request.params as { id: string };
+      const body = (request.body || {}) as { workspaceDir?: string };
+      if (!body.workspaceDir) return reply.code(400).send({ error: 'workspaceDir required' });
+
+      let project: any;
+      try { project = await ps.getProjectAsync(id); } catch {}
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      // Ensure repo exists — create if needed
+      if (!project.githubRepo) {
+        try {
+          const createUrl = `http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/projects/${id}/github`;
+          const createRes = await fetch(createUrl, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
+            signal: AbortSignal.timeout(20000),
+          });
+          if (createRes.ok) {
+            const data = await createRes.json() as any;
+            project.githubRepo = data.githubRepo;
+          } else {
+            return reply.code(502).send({ error: 'Failed to create GitHub repo' });
+          }
+        } catch (err: any) {
+          return reply.code(502).send({ error: `GitHub repo creation failed: ${err.message}` });
+        }
+      }
+
+      // Get GitHub token
+      const registry = node.getResourceRegistry();
+      if (!registry) return reply.code(503).send({ error: 'ResourceRegistry not available' });
+      const githubResources = registry.findResources('code_repository' as any);
+      if (!githubResources.length) return reply.code(503).send({ error: 'No code_repository resource' });
+      const githubToken = await registry.getCredential(githubResources[0].resourceId);
+      if (!githubToken) return reply.code(503).send({ error: 'Could not decrypt GitHub credential' });
+
+      const { execSync } = await import('node:child_process');
+      const { existsSync: fsExists } = await import('node:fs');
+      const workDir = body.workspaceDir;
+
+      if (!fsExists(workDir)) return reply.code(400).send({ error: `Workspace not found: ${workDir}` });
+
+      try {
+        const pushUrl = `https://x-access-token:${githubToken}@github.com/${project.githubRepo}.git`;
+
+        // Init git if needed
+        if (!fsExists(`${workDir}/.git`)) {
+          execSync('git init', { cwd: workDir, stdio: 'pipe' });
+        }
+        execSync('git config user.email "deploy@pando.network"', { cwd: workDir, stdio: 'pipe' });
+        execSync('git config user.name "Pando Deploy"', { cwd: workDir, stdio: 'pipe' });
+        execSync('git add -A', { cwd: workDir, stdio: 'pipe' });
+
+        const commitMsg = `Deploy ${new Date().toISOString().slice(0, 19)}`;
+        try { execSync(`git commit -m "${commitMsg}"`, { cwd: workDir, stdio: 'pipe' }); } catch {}
+
+        try { execSync('git remote remove origin', { cwd: workDir, stdio: 'pipe' }); } catch {}
+        execSync(`git remote add origin ${pushUrl}`, { cwd: workDir, stdio: 'pipe' });
+        execSync('git push -u origin HEAD:main --force', { cwd: workDir, stdio: 'pipe', timeout: 30000 });
+
+        const commitSha = execSync('git rev-parse HEAD', { cwd: workDir, encoding: 'utf-8' }).trim();
+        console.log(`[github] Pushed to ${project.githubRepo} (${commitSha.slice(0, 8)})`);
+
+        return {
+          pushed: true,
+          commitSha,
+          repoUrl: `https://github.com/${project.githubRepo}`,
+          githubRepo: project.githubRepo,
+        };
+      } catch (err: any) {
+        console.log(`[github] Push failed: ${err.message}`);
+        return reply.code(502).send({ error: `GitHub push failed: ${err.message}` });
+      }
+    });
+
+    // POST /projects/:id/deploy — Unified deploy endpoint (Phase 70)
+    // Pushes to GitHub, then P2P deploys to EC2 (both Tier 1 and Tier 2).
+    // Manager calls this ONE endpoint. Node handles everything.
+    fastify.post('/projects/:id/deploy', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      const authHeader = request.headers?.authorization || '';
+      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+      const userId = await deps.verifyUserJwt(request);
+      if (!userId && !hasBearerToken) return reply.code(401).send({ error: 'Authentication required' });
+
+      const { id } = request.params as { id: string };
+      const body = (request.body || {}) as {
+        workspaceDir?: string;
+        type?: string;          // Legacy: 'vercel', 'github', 's3', 'custom'
+        config?: Record<string, any>;
+      };
+
+      let project: any;
+      try { project = await ps.getProjectAsync(id); } catch {}
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      const tier = project.tier || 1;
+
+      // Step 1: Push to GitHub (if workspace provided)
+      let repoUrl = project.repoUrl || '';
+      let githubRepo = project.githubRepo || '';
+      if (body.workspaceDir) {
+        try {
+          const pushUrl = `http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/projects/${id}/github/push`;
+          const pushRes = await fetch(pushUrl, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ workspaceDir: body.workspaceDir }),
+            signal: AbortSignal.timeout(60000),
+          });
+          if (pushRes.ok) {
+            const pushData = await pushRes.json() as any;
+            repoUrl = pushData.repoUrl || repoUrl;
+            githubRepo = pushData.githubRepo || githubRepo;
+            console.log(`[deploy] GitHub push succeeded: ${repoUrl}`);
+          } else {
+            const errData = await pushRes.json().catch(() => ({})) as any;
+            console.log(`[deploy] GitHub push failed: ${errData.error || pushRes.status}`);
+            // Don't block deploy — GitHub push failure is non-fatal for Tier 1 if we have workspace
+          }
+        } catch (err: any) {
+          console.log(`[deploy] GitHub push error: ${err.message}`);
+        }
+      }
+
+      // Step 2: Deploy via P2P discovery (Phase 87 — CapabilityProfile, not CloudInstanceManager)
+      const requestReply = node.getRequestReply?.();
+      if (!requestReply) return reply.code(503).send({ error: 'P2P RequestReply not available' });
+
+      // Find compute peers with MongoDB (persistent EC2 nodes) via CapabilityRegistry
+      // NOTE: Include self — if the local node is a compute node, it can deploy locally
+      const capRegistry = node.getCapabilityRegistry?.();
+      const localPeerId = node.getIdentity()?.peerId || '';
+      const allProfiles = capRegistry?.getAllProfiles?.() || [];
+      const computePeers = allProfiles.filter((p: any) =>
+        p.storageBackend === 'mongodb'
+      );
+      // Sort: prefer remote peers first (avoid self-deploy when others are available)
+      computePeers.sort((a: any, b: any) => {
+        if (a.peerId === localPeerId && b.peerId !== localPeerId) return 1;  // self goes last
+        if (a.peerId !== localPeerId && b.peerId === localPeerId) return -1;
+        return 0;
+      });
+
+      if (computePeers.length === 0 || !repoUrl) {
+        return reply.code(503).send({
+          error: 'No compute peers available for deployment',
+          hint: 'Ensure at least one EC2 node with MongoDB is connected to the network',
+          repoUrl,
+          githubRepo,
+        });
+      }
+
+      // Build env vars for injection
+      const envVars: Record<string, string> = {};
+      if (project.apiKey) {
+        envVars.PROJECT_API_KEY = project.apiKey;
+        const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
+        if (gatewayUrl) envVars.RESOURCE_PROXY_URL = `${gatewayUrl}/api/resource-proxy/db`;
+        envVars.PANDO_GATEWAY_URL = gatewayUrl;
+        envVars.PANDO_PROJECT_ID = id;
+        envVars.PANDO_PROJECT_API_KEY = project.apiKey;
+      }
+
+      const deployPayload = {
+        projectId: id,
+        repoUrl,
+        tier,
+        envVars,
+      };
+
+      // Try up to 3 compute peers (same pattern as P2PStorageBackend)
+      // For self-deploy (local node is compute peer), call the handler directly (no P2P round-trip)
+      let lastError = '';
+      for (const profile of computePeers.slice(0, 3)) {
+        try {
+          let response: any;
+          if (profile.peerId === localPeerId) {
+            // Self-deploy: invoke handler directly (P2P self-routing may not work via GossipSub)
+            console.log(`[deploy] Self-deploy — local compute node, tier ${tier}`);
+            const handler = requestReply.getHandler?.('pando/deploy-app');
+            if (handler) {
+              const result = await handler({ payload: deployPayload } as any);
+              response = { success: true, payload: result };
+            } else {
+              lastError = 'Deploy handler not registered on local node';
+              continue;
+            }
+          } else {
+            console.log(`[deploy] Sending P2P deploy to ${profile.peerId} — tier ${tier}`);
+            response = await requestReply.request(profile.peerId, 'pando/deploy-app', deployPayload, 300_000);
+          }
+
+          if (response?.success && response.payload) {
+            const payload = response.payload as any;
+            if (payload.status === 'failed') {
+              lastError = payload.error || 'Deploy failed on compute node';
+              console.log(`[deploy] Peer ${profile.peerId} deploy failed: ${lastError}`);
+              continue; // Try next peer
+            }
+
+            let liveUrl = '';
+            let deploymentPort: number | undefined;
+            const actualTier = payload.detectedTier || tier; // Phase 88: use detected tier for URL construction
+
+            if (actualTier === 2 && payload.port) {
+              // Tier 2: Use publicAddress from CapabilityProfile for URL
+              const publicAddr = profile.publicAddress || payload.publicAddress;
+              if (publicAddr) {
+                deploymentPort = payload.port;
+                liveUrl = `http://${publicAddr}/apps/${id}/`;
+              } else {
+                deploymentPort = payload.port;
+                liveUrl = payload.url || `http://${profile.peerId}:${payload.port}`;
+              }
+            } else if (payload.url) {
+              liveUrl = payload.url;
+            } else if (payload.s3Url) {
+              liveUrl = payload.s3Url;
+            }
+
+            // Phase 88: Use detected tier from compute node (code is truth)
+            const detectedTier = payload.detectedTier || tier;
+            const tierReason = payload.tierReason || '';
+            if (detectedTier !== tier) {
+              console.log(`[deploy] Tier auto-corrected: project had ${tier}, code detected ${detectedTier} (${tierReason})`);
+            }
+
+            // Update project record — store deployPeerId (not instanceId)
+            const update: Record<string, any> = {
+              deploymentUrl: liveUrl,
+              deploymentStatus: 'deployed',
+              repoUrl,
+              githubRepo,
+              deployPeerId: profile.peerId,
+              tier: detectedTier, // Phase 88: always use detected tier
+              updatedAt: Date.now(),
+            };
+            if (deploymentPort) update.deploymentPort = deploymentPort;
+
+            await ps.updateProject(id, update);
+
+            // Sync to ProjectRegistry
+            const pr = node.getProjectRegistry?.();
+            if (pr) {
+              pr.updateProject(id, {
+                deploymentUrl: liveUrl,
+                liveUrl,
+                tier: detectedTier,
+                deploymentPort,
+                deployPeerId: profile.peerId,
+                lastDeployedAt: Date.now(),
+                githubRepo,
+              } as any);
+            }
+
+            console.log(`[deploy] Project ${id} deployed: ${liveUrl} (tier ${detectedTier}, peer ${profile.peerId})`);
+            return {
+              url: liveUrl,
+              tier: detectedTier,
+              detectedTier,
+              tierReason,
+              status: 'deployed',
+              repoUrl,
+              githubRepo,
+              deployPeerId: profile.peerId,
+              port: deploymentPort,
+            };
+          } else {
+            lastError = response?.payload?.error || 'Deploy failed';
+            console.log(`[deploy] Peer ${profile.peerId} failed: ${lastError}`);
+          }
+        } catch (err: any) {
+          lastError = err.message;
+          console.log(`[deploy] Peer ${profile.peerId} error: ${err.message}`);
+        }
+      }
+
+      return reply.code(502).send({ error: lastError || 'All compute peers failed to deploy' });
+    });
+
+    // Phase 80: POST /projects/:id/undeploy — stop and remove a deployed app
+    fastify.post('/projects/:id/undeploy', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      // Auth: user session OR node Bearer token
+      const userId = await deps.verifyUserJwt(request);
+      const authHeader = request.headers?.authorization || '';
+      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+      if (!userId && !hasBearerToken) {
+        return reply.code(401).send({ error: 'Authentication required' });
+      }
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      // Only owner or bearer token can undeploy
+      if (!hasBearerToken && project.ownerId !== userId) {
+        return reply.code(403).send({ error: 'Only the project owner can undeploy' });
+      }
+
+      const tier = (project as any).tier || 1;
+      const deleteFiles = (request.body as any)?.deleteFiles !== false; // default true
+
+      try {
+        if (tier === 2 && (project as any).deployPeerId) {
+          // Tier 2: Send P2P undeploy to compute node (Phase 87 — uses deployPeerId directly)
+          const requestReply = node.getRequestReply?.();
+          const deployPeerId = (project as any).deployPeerId;
+
+          if (deployPeerId && requestReply) {
+            const response = await requestReply.request(deployPeerId, 'pando/undeploy-app', {
+              projectId: id,
+              deleteFiles,
+            }, 60_000);
+
+            if (!response?.success || response.payload?.status === 'failed') {
+              return reply.code(502).send({ error: response?.payload?.error || 'Undeploy failed on compute node' });
+            }
+          }
+        } else if (tier === 1) {
+          // Tier 1: Remove S3 files — only delete files under public/<projectId>/ prefix
+          try {
+            const resourceRegistry = node.getResourceRegistry?.();
+            if (resourceRegistry) {
+              const s3Resources = resourceRegistry.findResources('storage_blob' as any);
+              if (s3Resources.length > 0) {
+                const s3Cred = await resourceRegistry.getCredential(s3Resources[0].resourceId);
+                if (s3Cred) {
+                  const s3Config = JSON.parse(s3Cred);
+                  const { S3Client, ListObjectsV2Command, DeleteObjectsCommand } = await import('@aws-sdk/client-s3');
+                  const s3 = new S3Client({
+                    region: s3Config.region || 'us-east-1',
+                    credentials: { accessKeyId: s3Config.accessKeyId, secretAccessKey: s3Config.secretAccessKey },
+                  });
+                  const bucket = s3Config.bucket || 'pando-deployments';
+                  const prefix = `public/${id}/`;
+
+                  // List all objects under this project's prefix
+                  const listResp = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }));
+                  if (listResp.Contents && listResp.Contents.length > 0) {
+                    await s3.send(new DeleteObjectsCommand({
+                      Bucket: bucket,
+                      Delete: { Objects: listResp.Contents.map(obj => ({ Key: obj.Key! })) },
+                    }));
+                    console.log(`[undeploy] Deleted ${listResp.Contents.length} S3 objects under ${prefix}`);
+                  }
+                }
+              }
+            }
+          } catch (s3Err: any) {
+            console.log(`[undeploy] S3 cleanup failed: ${s3Err.message}`);
+          }
+
+          // Also remove local hosting if present
+          const hosting = node.getHostingService?.();
+          if (hosting) {
+            try { (hosting as any).removeApp?.(id); } catch {}
+          }
+        }
+
+        // Clear deployment fields in MongoDB
+        await ps.updateProject(id, {
+          deploymentUrl: '',
+          deploymentStatus: 'none',
+          deploymentPort: undefined as any,
+          deployPeerId: undefined as any,
+        });
+
+        // Update P2P ProjectRegistry
+        const pr = node.getProjectRegistry?.();
+        if (pr) {
+          pr.updateProject(id, {
+            deploymentUrl: '',
+            liveUrl: '',
+            deploymentPort: undefined,
+            deployPeerId: undefined,
+          } as any);
+        }
+
+        console.log(`[undeploy] Project ${id} undeployed (tier ${tier})`);
+        return { status: 'undeployed', projectId: id, tier };
+      } catch (err: any) {
+        console.log(`[undeploy] Error: ${err.message}`);
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // POST /projects/:id/validate-deploy — lightweight deploy health check
+    fastify.post('/projects/:id/validate-deploy', async (request: any, reply: any) => {
+      const ps = node.getProjectStore();
+      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+
+      // Auth: user session OR node Bearer token
+      const userId = await deps.verifyUserJwt(request);
+      const authHeader = request.headers?.authorization || '';
+      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+      if (!userId && !hasBearerToken) {
+        return reply.code(401).send({ error: 'Authentication required' });
+      }
+
+      const { id } = request.params as { id: string };
+      const project = await ps.getProjectAsync(id);
+      if (!project) return reply.code(404).send({ error: 'Project not found' });
+
+      const hosting = node.getHostingService?.();
+      const errors: string[] = [];
+
+      // Always use the direct S3 website URL for validation — the stored deploymentUrl
+      // may be a gateway proxy URL. Apps are deployed as 'public' to the S3 website endpoint.
+      const s3Bucket = process.env.PANDO_S3_BUCKET || 'pando-deployments';
+      const s3Region = 'us-east-1';
+      let url = `http://${s3Bucket}.s3-website-${s3Region}.amazonaws.com/public/${id}/index.html`;
+      // Fallback to stored URL if S3 URL doesn't work
+      const fallbackUrl = project.deploymentUrl || '';
+
+      // Check 1: URL responds
+      let urlResponds = false;
+      let htmlContent = '';
+      if (url) {
+        try {
+          const resp = await fetch(url, { signal: AbortSignal.timeout(10000) });
+          urlResponds = resp.ok;
+          if (resp.ok) htmlContent = await resp.text();
+          else errors.push(`URL returned ${resp.status}`);
+        } catch (err: any) {
+          errors.push(`URL fetch failed: ${err.message}`);
+        }
+      } else {
+        errors.push('No deployment URL found');
+      }
+
+      // Check 2: Gateway URL injected
+      const gatewayInjected = htmlContent.includes('PANDO_GATEWAY_URL');
+
+      // Check 3: API key injected
+      const apiKeyInjected = htmlContent.includes('PANDO_PROJECT_API_KEY');
+
+      // Check 4: Resource Proxy responds (test with count on __preflight_test collection)
+      let resourceProxyWorks = false;
+      if (project.apiKey) {
+        const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
+        if (gatewayUrl) {
+          try {
+            const proxyResp = await fetch(`${gatewayUrl}/api/resource-proxy/db`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'X-Project-Key': project.apiKey },
+              body: JSON.stringify({ collection: 'pando_health', operation: 'count', filter: {} }),
+              signal: AbortSignal.timeout(10000),
+            });
+            resourceProxyWorks = proxyResp.ok;
+            if (!proxyResp.ok) errors.push(`Resource Proxy returned ${proxyResp.status}`);
+          } catch (err: any) {
+            errors.push(`Resource Proxy test failed: ${err.message}`);
+          }
+        }
+      }
+
+      if (!gatewayInjected && urlResponds) errors.push('PANDO_GATEWAY_URL not found in HTML');
+      if (!apiKeyInjected && urlResponds) errors.push('PANDO_PROJECT_API_KEY not found in HTML');
+
+      const checks = { urlResponds, gatewayInjected, apiKeyInjected, resourceProxyWorks };
+      const healthy = Object.values(checks).every(Boolean);
+
+      return { healthy, url, checks, errors };
+    });
+
+    // ── Phase 50: Council Endpoints ──────────────────────────────────────────
+
+    // GET /council — returns council state (members, rotation, this node's membership)
+    fastify.get('/council', async (_request: any, reply: any) => {
+      const council = node.getCouncil();
+      if (!council) {
+        return reply.code(503).send({ error: 'Council system not initialized' });
+      }
+      return council.getCouncil();
+    });
+
+    // GET /council/minutes — returns recent council minutes text
+    fastify.get('/council/minutes', async (_request: any, reply: any) => {
+      const council = node.getCouncil();
+      if (!council) {
+        return reply.code(503).send({ error: 'Council system not initialized' });
+      }
+      return { minutes: council.getMinutes() };
+    });
+
+    // ── Phase 51: Infrastructure Awareness ──────────────────────────────────
+
+    // GET /capabilities/infrastructure — what infrastructure agents/apps can use
+    fastify.get('/capabilities/infrastructure', async () => {
+      const network = node.getNetwork();
+      const capabilities = node.getCapabilities();
+
+      // Extract public-facing addresses from P2P listen addresses
+      const listenAddrs = network?.getListenAddresses() || [];
+      const ips = listenAddrs
+        .map((a: string) => {
+          const match = a.match(/\/ip4\/([\d.]+)\/tcp\/(\d+)/);
+          return match ? { ip: match[1], port: match[2] } : null;
+        })
+        .filter((x: any) => x && x.ip !== '127.0.0.1');
+
+      // Determine public URLs for this node and gateway
+      const nodePublicUrl = process.env.PANDO_PUBLIC_URL
+        || (ips.length > 0 ? `http://${ips[0]!.ip}:${node.getApiPort() || 4000}` : null);
+
+      const gatewayPublicUrl = process.env.GATEWAY_PUBLIC_URL
+        || process.env.GATEWAY_URL
+        || null;
+
+      return {
+        hosting: {
+          static: {
+            available: true,
+            type: 's3',
+            deployEndpoint: 'POST /agents/:id/deploy',
+            note: 'Deploy static web content (HTML/CSS/JS). Apps deploy to contributed hosting resources.',
+          },
+        },
+        databases: {
+          mongodb: {
+            available: node.getStorageBackendType() === 'mongodb',
+            note: 'User data storage via StorageBackend. Apps have their own backends with own database schemas.',
+          },
+          sqlite: { available: true, note: 'Local node storage. Used internally.' },
+        },
+        compute: {
+          claudeCode: capabilities.includes('claude-code'),
+          docker: capabilities.includes('docker'),
+          python: capabilities.includes('python'),
+          nodeJs: true,
+        },
+        apiKeys: deps.getAvailableApiKeys(),
+        gateway: {
+          url: process.env.GATEWAY_URL || 'http://127.0.0.1:3222',
+          note: 'Web UI directory. Apps have their own URLs after deployment.',
+        },
+        network: {
+          peers: network?.getPeerCount() ?? 0,
+          relayAvailable: true,
+        },
+        // Phase 53: Resource Proxy — project-scoped database access without credential exposure
+        resourceProxy: {
+          available: true,
+          url: gatewayPublicUrl ? `${gatewayPublicUrl}/api/resource-proxy` : '/api/resource-proxy',
+          auth: 'X-Project-Key header with project API key',
+          operations: ['find', 'findOne', 'insertOne', 'insertMany', 'updateOne', 'updateMany', 'deleteOne', 'deleteMany', 'count'],
+          note: 'Database access without exposing credentials. Get project API key via POST /projects/:id/api-key.',
+        },
+        // Public-facing URLs for zero-config app access
+        nodePublicUrl,
+        gatewayPublicUrl,
+      };
+    });
+
+    // Phase 53.1: Legacy /apps/data routes, gateway mongodb.ts, S3 proxy all deleted. Apps have their own backends.
+
+    // Phase 65: Deploy app to local hosted-apps directory
+    fastify.post('/apps/:appName/deploy', async (request: any, reply: any) => {
+      const authHeader = request.headers.authorization || '';
+      if (!authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
+        return reply.status(401).send({ error: 'Unauthorized' });
+      }
+      const { appName } = request.params;
+      const body = request.body as { files: Array<{ path: string; content: string }>; projectId?: string; apiKey?: string };
+      if (!body?.files?.length) return reply.status(400).send({ error: 'files array required' });
+      const { join } = await import('node:path');
+      const { mkdirSync, writeFileSync } = await import('node:fs');
+      const dataDir = node.getDataDir?.() || join((await import('node:os')).homedir(), '.pando');
+      const appDir = join(dataDir, 'hosted-apps', appName);
+      mkdirSync(appDir, { recursive: true });
+      for (const file of body.files) {
+        const filePath = join(appDir, file.path);
+        mkdirSync(join(filePath, '..'), { recursive: true });
+        writeFileSync(filePath, file.content, 'utf-8');
+      }
+      // Write app config
+      if (body.projectId || body.apiKey) {
+        writeFileSync(join(appDir, '.pando-app.json'), JSON.stringify({
+          projectId: body.projectId || '', apiKey: body.apiKey || '', deployedAt: Date.now()
+        }));
+      }
+      return reply.send({ ok: true, appName, files: body.files.length, url: `/apps/${appName}/index.html` });
+    });
+
+    // Phase 65: Static app serving for compute instances
+    // Serves HTML/JS/CSS from <data-dir>/hosted-apps/<appName>/
+    // Injects PANDO_GATEWAY_URL, PROJECT_ID, PROJECT_API_KEY into HTML files
+    fastify.get('/apps/:appName/*', async (request: any, reply: any) => {
+      const { appName } = request.params;
+      const filePath = (request.params as any)['*'] || 'index.html';
+      const { join } = await import('node:path');
+      const { readFileSync, existsSync } = await import('node:fs');
+      const dataDir = node.getDataDir?.() || join((await import('node:os')).homedir(), '.pando');
+      const fullPath = join(dataDir, 'hosted-apps', appName, filePath);
+
+      // Security: prevent path traversal
+      const hostedRoot = join(dataDir, 'hosted-apps', appName);
+      const { resolve } = await import('node:path');
+      if (!resolve(fullPath).startsWith(resolve(hostedRoot))) {
+        return reply.status(403).send({ error: 'Forbidden' });
+      }
+
+      if (!existsSync(fullPath)) {
+        return reply.status(404).send({ error: 'Not found' });
+      }
+
+      let content = readFileSync(fullPath);
+      const ext = filePath.split('.').pop()?.toLowerCase() || '';
+
+      // Set content type
+      const mimeTypes: Record<string, string> = {
+        html: 'text/html', css: 'text/css', js: 'application/javascript',
+        json: 'application/json', png: 'image/png', jpg: 'image/jpeg',
+        svg: 'image/svg+xml', ico: 'image/x-icon',
+      };
+      reply.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
+      reply.header('Access-Control-Allow-Origin', '*');
+
+      // Inject gateway vars into HTML
+      if (ext === 'html') {
+        let html = content.toString('utf-8');
+        const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
+        // Read app config for project binding
+        const configPath = join(hostedRoot, '.pando-app.json');
+        let projectId = '', apiKey = '';
+        if (existsSync(configPath)) {
+          try {
+            const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
+            projectId = cfg.projectId || '';
+            apiKey = cfg.apiKey || '';
+          } catch { /* ignore */ }
+        }
+        const vars = [`window.PANDO_GATEWAY_URL="${gatewayUrl}"`];
+        if (projectId) vars.push(`window.PANDO_PROJECT_ID="${projectId}"`);
+        if (apiKey) vars.push(`window.PANDO_PROJECT_API_KEY="${apiKey}"`);
+        const script = `<script>${vars.join(';')};</script>`;
+        if (html.includes('<head>')) {
+          html = html.replace('<head>', '<head>' + script);
+        } else {
+          html = script + html;
+        }
+        return reply.send(html);
+      }
+
+      return reply.send(content);
+    });
+
+}

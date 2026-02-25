@@ -362,9 +362,9 @@ Early multiplier: accounts 1-100 get 5x, 101-1000 get 3x, 1001-10000 get 2x, the
 | MongoDB | Threads, messages, user accounts, project metadata (structured data) |
 | AWS S3 | Project files, deployments, large blobs (unstructured data) |
 | SQLite (local cache) | Thread/message cache — hydrated from MongoDB on startup. Source of truth is MongoDB. |
-| `packages/node/src/storage-backend.ts` | StorageBackend interface — 6 CRUD methods + init/close |
-| `packages/node/src/mongo-backend.ts` | MongoStorageBackend — direct MongoDB (compute nodes) |
-| `packages/node/src/p2p-storage-backend.ts` | P2PStorageBackend — proxies to compute nodes via P2P (user nodes) |
+| `packages/node/src/core/storage-backend.ts` | StorageBackend interface — 6 CRUD methods + init/close |
+| `packages/node/src/core/mongo-backend.ts` | MongoStorageBackend — direct MongoDB (compute nodes) |
+| `packages/node/src/core/p2p-storage-backend.ts` | P2PStorageBackend — proxies to compute nodes via P2P (user nodes) |
 | **Genome (architecture)** | |
 | `genome/genome.yaml` | Root registry: 56 components, 11 flows, 11 rules |
 | `genome/state.md` | Current health, tech debt, monitoring thresholds |
@@ -378,61 +378,70 @@ Early multiplier: accounts 1-100 get 5x, 101-1000 get 3x, 1001-10000 get 2x, the
 | `packages/ledger/src/index.ts` | PandoLedger class |
 | `packages/ledger/src/transactions.ts` | Transfer, emit, applyRemoteTransaction |
 | `packages/node/src/index.ts` | PandoNode — main class, wires everything together |
-| `packages/node/src/network.ts` | PandoNetwork — libp2p, message signing, GossipSub, agent events |
-| `packages/node/src/api-server.ts` | Fastify HTTP API (all endpoints) |
-| `packages/node/src/sync.ts` | LedgerSync — GossipSub distributed ledger sync |
+| `packages/node/src/kernel/network.ts` | PandoNetwork — libp2p, message signing, GossipSub, agent events |
+| `packages/node/src/api/api-server.ts` | Fastify HTTP API (all endpoints) |
+| `packages/node/src/kernel/sync.ts` | LedgerSync — GossipSub distributed ledger sync |
 | `packages/node/src/logger.ts` | FileLogger — tees console to log file with rotation |
 | `packages/node/src/cli.ts` | CLI entry point, session-aware for encrypted identities |
 | `packages/node/src/tui.ts` | Interactive terminal — password prompt, all TUI commands |
-| **Agent system (Phase 27)** | |
-| `packages/node/src/agent.ts` | Agent — universal agent primitive (spawn, resume, persist, template injection, hard limits) |
-| `packages/node/src/agent-manager.ts` | AgentManager — agent lifecycle, registry, bridge watcher, project registry, access control |
-| `packages/node/src/agent-tools.ts` | AgentTools — agent HTTP API routes (spawn, message, report, tree, connect) |
+| **v2.1 Layer Map (v2-architecture branch)** | |
+| `packages/node/src/kernel/` | Layer 0 — P2P core: network, sync, governance, monitor, guardrails, security, reputation, emission |
+| `packages/node/src/core/` | Layer 1 — Agents, storage, payment, deploy, credentials, upgrade |
+| `packages/node/src/platform/` | Layer 2 — Scheduler, content, resources, hosting, projects, council |
+| `packages/node/src/api/` | HTTP API layer — Fastify server + all route handlers |
+| **Agent system (Phase 27 + v2.1)** | |
+| `packages/node/src/core/agent.ts` | Agent — universal agent primitive; now uses AIBackendRegistry |
+| `packages/node/src/core/agent-manager.ts` | AgentManager — agent lifecycle, registry, bridge watcher, project registry, access control |
+| `packages/node/src/platform/agent-tools.ts` | AgentTools — agent HTTP API routes (spawn, message, report, tree, connect) |
+| `packages/node/src/core/ai-backend.ts` | AIBackend interface — pluggable AI execution (v2.1) |
+| `packages/node/src/core/ai-backend-registry.ts` | AIBackendRegistry — detects and selects best available backend |
+| `packages/node/src/core/ai-backend-claude.ts` | ClaudeBackend — Claude Code spawn implementation |
+| `packages/node/src/core/ai-backend-ollama.ts` | OllamaBackend — Ollama stub (not yet implemented) |
 | `genome/templates/*.md` | Role-specific agent templates (6 files: manager, builder, tester, reviewer, researcher, devops) |
 | **Scheduler & task system** | |
-| `packages/node/src/scheduler.ts` | Scheduler — pure executor, dequeues tasks, checks capacity (no agent spawning) |
-| `packages/node/src/task-queue.ts` | TaskQueue — JSON-backed task management with parent/child |
-| `packages/node/src/capability-detector.ts` | Auto-detects node capabilities at startup (Phase A) |
-| `packages/node/src/capability-registry.ts` | Network-wide capability map with TTL expiry (Phase A) |
+| `packages/node/src/platform/scheduler.ts` | Scheduler — pure executor, dequeues tasks, checks capacity (no agent spawning) |
+| `packages/node/src/platform/task-queue.ts` | TaskQueue — JSON-backed task management with parent/child |
+| `packages/node/src/platform/capability-detector.ts` | Auto-detects node capabilities at startup (Phase A) |
+| `packages/node/src/platform/capability-registry.ts` | Network-wide capability map with TTL expiry (Phase A) |
 | **Cross-node coordination (Phase 8)** | |
-| `packages/node/src/request-reply.ts` | RequestReplyManager — correlation IDs, timeouts, P2P request/response |
+| `packages/node/src/core/request-reply.ts` | RequestReplyManager — correlation IDs, timeouts, P2P request/response |
 | **Self-healing (Phase 9)** | |
-| `packages/node/src/monitor.ts` | HealthMonitor — rolling metrics, alerts (data-only, no autonomous recovery) |
-| `packages/node/src/guardrails.ts` | Guardrails — protected paths, rate limits, tiered guardrails, immutable kernel |
-| `packages/node/src/security-monitor.ts` | SecurityMonitor — threat detection, peer quarantine, security alerts |
+| `packages/node/src/kernel/monitor.ts` | HealthMonitor — rolling metrics, alerts (data-only, no autonomous recovery) |
+| `packages/node/src/kernel/guardrails.ts` | Guardrails — protected paths, rate limits, tiered guardrails, immutable kernel |
+| `packages/node/src/kernel/security-monitor.ts` | SecurityMonitor — threat detection, peer quarantine, security alerts |
 | **Autonomous code pipeline (Phase 16)** | |
-| `packages/node/src/code-pipeline.ts` | CodePipeline — extract diffs, apply patches, rollback |
-| `packages/node/src/pipeline-runner.ts` | PipelineRunner — orchestrates 7-stage pipeline |
-| `packages/node/src/qa-runner.ts` | QaRunner — page and API tests for pipeline |
-| `packages/node/src/deploy-manager.ts` | DeployManager — backup, build, commit, rollback |
-| `packages/node/src/version-protocol.ts` | VersionProtocol — version compatibility checks |
+| `packages/node/src/platform/code-pipeline.ts` | CodePipeline — extract diffs, apply patches, rollback |
+| `packages/node/src/platform/pipeline-runner.ts` | PipelineRunner — orchestrates 7-stage pipeline |
+| `packages/node/src/platform/qa-runner.ts` | QaRunner — page and API tests for pipeline |
+| `packages/node/src/core/deploy-manager.ts` | DeployManager — backup, build, commit, rollback |
+| `packages/node/src/core/version-protocol.ts` | VersionProtocol — version compatibility checks |
 | **Network intelligence (Phase 10)** | |
-| `packages/node/src/reputation.ts` | ReputationManager — track and broadcast node reputation |
+| `packages/node/src/kernel/reputation.ts` | ReputationManager — track and broadcast node reputation |
 | **Witness-based emission** | |
-| `packages/node/src/emission-witness.ts` | EmissionWitness — witness-based Lux minting |
+| `packages/node/src/kernel/emission-witness.ts` | EmissionWitness — witness-based Lux minting |
 | **Chat & threads** | |
-| `packages/node/src/thread-store.ts` | ThreadStore — persistent chat thread storage, used by agents |
-| `packages/node/src/bridge-queue.ts` | BridgeQueue — per-project sequential FIFO event queue with retry (max 3) |
+| `packages/node/src/platform/thread-store.ts` | ThreadStore — persistent chat thread storage, used by agents |
+| `packages/node/src/core/bridge-queue.ts` | BridgeQueue — per-project sequential FIFO event queue with retry (max 3) |
 | **Content layer (Phase 11)** | |
-| `packages/node/src/content-registry.ts` | ContentRegistry — SQLite content records, GossipSub sync, full-text search |
-| `packages/node/src/content-publish.ts` | ContentPublisher — extract workspace content, register, broadcast |
-| `packages/node/src/content-maintenance.ts` | ContentMaintenance — periodic health checks, staleness detection, maintenance tasks |
+| `packages/node/src/platform/content-registry.ts` | ContentRegistry — SQLite content records, GossipSub sync, full-text search |
+| `packages/node/src/platform/content-publish.ts` | ContentPublisher — extract workspace content, register, broadcast |
+| `packages/node/src/platform/content-maintenance.ts` | ContentMaintenance — periodic health checks, staleness detection, maintenance tasks |
 | **Security (Phase 12)** | |
-| `packages/node/src/resource-proof.ts` | ResourceProofChallenger — storage/compute/bandwidth proof challenges |
-| `packages/node/src/reputation-governance.ts` | ReputationWeightedGovernance — weighted voting, Sybil-resistant |
-| `packages/node/src/content-safety.ts` | ContentSafetyReviewer — 5-category content safety review, 0-1 safety score |
+| `packages/node/src/platform/resource-proof.ts` | ResourceProofChallenger — storage/compute/bandwidth proof challenges |
+| `packages/node/src/platform/reputation-governance.ts` | ReputationWeightedGovernance — weighted voting, Sybil-resistant |
+| `packages/node/src/platform/content-safety.ts` | ContentSafetyReviewer — 5-category content safety review, 0-1 safety score |
 | **Self-evolving network (Phase 13)** | |
-| `packages/node/src/upgrade-protocol.ts` | UpgradeProtocol — propose/approve/pull/build/restart (Phase 82 simple upgrade) |
+| `packages/node/src/core/upgrade-protocol.ts` | UpgradeProtocol — propose/approve/pull/build/restart (Phase 82 simple upgrade) |
 | **QA & Regression (Phase 17)** | |
-| `packages/node/src/regression-suite.ts` | RegressionSuite — 14 built-in tests, persistent storage, run by category |
+| `packages/node/src/platform/regression-suite.ts` | RegressionSuite — 14 built-in tests, persistent storage, run by category |
 | **Payment & Identity (Phase 18)** | |
-| `packages/node/src/payment-gate.ts` | PaymentGate — cost estimation, escrow hold/release/refund, free tier |
+| `packages/node/src/core/payment-gate.ts` | PaymentGate — cost estimation, escrow hold/release/refund, free tier |
 | **Resource network (Phase A-D)** | |
-| `packages/node/src/resource-router.ts` | ResourceRouter — smart task routing, auto-degrade, P2P forwarding |
-| `packages/node/src/resource-meter.ts` | ResourceMeter — per-resource usage tracking, reward calculation |
-| `packages/node/src/resource-marketplace.ts` | ResourceMarketplace — operator pricing, find cheapest, marketplace |
+| `packages/node/src/platform/resource-router.ts` | ResourceRouter — smart task routing, auto-degrade, P2P forwarding |
+| `packages/node/src/platform/resource-meter.ts` | ResourceMeter — per-resource usage tracking, reward calculation |
+| `packages/node/src/platform/resource-marketplace.ts` | ResourceMarketplace — operator pricing, find cheapest, marketplace |
 | **Governance** | |
-| `packages/node/src/governance.ts` | GovernanceSync — proposals, votes, decisions |
+| `packages/node/src/kernel/governance.ts` | GovernanceSync — proposals, votes, decisions |
 | **Interfaces** | |
 | `packages/mcp-server/src/index.ts` | Pando MCP server for Claude Code |
 | `packages/gateway/app/page.tsx` | Gateway home page (9 pages: Home, Chat, Scheduler, Monitor, Wallet, Network, Search, Governance, Content) |

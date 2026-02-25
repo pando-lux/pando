@@ -21,6 +21,8 @@ export interface RouteHelpers {
   pushEvent(event: string, data: any): void;
   getSnapshot(): any;
   getAvailableApiKeys(): Record<string, boolean>;
+  addSSEClient(reply: any): void;
+  removeSSEClient(reply: any): void;
   doormanClassify(message: string): Promise<{
     intent: 'simple' | 'question' | 'build' | 'project';
     response?: string;
