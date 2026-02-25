@@ -170,12 +170,20 @@ function ChatPage() {
   const [nodePeerId, setNodePeerId] = useState<string | null>(null);
   const [encryptionReady, setEncryptionReady] = useState(false);
 
+  // Phase 68.4: User's projects + active project routing
+  const [projects, setProjects] = useState<any[]>([]);
+  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [activeProjectName, setActiveProjectName] = useState<string | null>(null);
+
   const scrollToBottom = useCallback(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
   const searchParams = useSearchParams();
   const projectIdParam = searchParams.get("projectId");
+  // Effective project ID: URL param or user's selection
+  const effectiveProjectId = activeProjectId || projectIdParam;
 
   // Phase 41: Fetch node public key + peerId on mount for E2E encryption
   useEffect(() => {
@@ -375,11 +383,38 @@ function ChatPage() {
       .finally(() => setThreadsLoading(false));
   }, [searchParams, loadThread, token, authLoading]);
 
-  // Create new thread
+  // Phase 68.4: Fetch user's projects for returning user routing
+  useEffect(() => {
+    if (!token || isGuest) return;
+    setProjectsLoading(true);
+    fetch("/api/projects", { headers: { "X-User-Token": token } })
+      .then((r) => r.json())
+      .then((data) => setProjects(data.projects || []))
+      .catch(() => setProjects([]))
+      .finally(() => setProjectsLoading(false));
+  }, [token, isGuest]);
+
+  // Phase 68.4: Open a project — load its main thread and set context
+  const openProject = useCallback((project: any) => {
+    setActiveProjectId(project.id);
+    setActiveProjectName(project.name);
+    // If the project has a main thread, load it
+    if (project.threadId) {
+      loadThread(project.threadId);
+    } else {
+      // No thread yet — clear messages, let user start fresh in project context
+      setActiveThreadId(null);
+      setMessages([]);
+    }
+  }, [loadThread]);
+
+  // Create new thread (also clears project context)
   const createNewThread = useCallback(async () => {
     setActiveThreadId(null);
     setMessages([]);
     setError(null);
+    setActiveProjectId(null);
+    setActiveProjectName(null);
     inputRef.current?.focus();
   }, []);
 
@@ -441,7 +476,7 @@ function ChatPage() {
           title: createBody.title,
           encryptionKeys: createBody.encryptionKeys,
         };
-        if (projectIdParam) createPayload.projectId = projectIdParam;
+        if (effectiveProjectId) createPayload.projectId = effectiveProjectId;
 
         const createRes = await fetch("/api/chat/threads", {
           method: "POST",
@@ -492,7 +527,7 @@ function ChatPage() {
       }
 
       // Include projectId in the message body so new threads get linked to the project
-      if (projectIdParam) body.projectId = projectIdParam;
+      if (effectiveProjectId) body.projectId = effectiveProjectId;
 
       // Send via thread-specific endpoint (saves to ThreadStore + routes to bridge)
       const msgHeaders: Record<string, string> = { "Content-Type": "application/json" };
@@ -567,7 +602,7 @@ function ChatPage() {
       setSending(false);
       inputRef.current?.focus();
     }
-  }, [input, sending, agentMode, activeThreadId, token, encryptionReady, nodePublicKey, nodePeerId, user, projectIdParam]);
+  }, [input, sending, agentMode, activeThreadId, token, encryptionReady, nodePublicKey, nodePeerId, user, effectiveProjectId]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -601,6 +636,53 @@ function ChatPage() {
               </svg>
               New Chat
             </button>
+
+            {/* Phase 68.4: Your Projects — returning user routing */}
+            {!isGuest && projects.length > 0 && (
+              <div className="mb-3">
+                <h3 className="text-[10px] font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-1.5 px-1">
+                  Your Projects
+                </h3>
+                <div className="space-y-1">
+                  {projects.slice(0, 5).map((project) => (
+                    <button
+                      key={project.id}
+                      onClick={() => openProject(project)}
+                      className={`w-full text-left px-3 py-2 rounded-lg text-sm transition ${
+                        activeProjectId === project.id
+                          ? "bg-purple-500/10 border border-purple-500/30"
+                          : "hover:bg-neutral-100 dark:hover:bg-neutral-900 border border-transparent"
+                      }`}
+                    >
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-purple-500 flex-shrink-0">
+                          <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+                          <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+                        </svg>
+                        <span className={`font-medium truncate text-xs ${
+                          activeProjectId === project.id
+                            ? "text-purple-700 dark:text-purple-400"
+                            : "text-neutral-700 dark:text-neutral-300"
+                        }`}>
+                          {project.name}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-neutral-400 flex items-center gap-1.5">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${project.status === 'active' ? 'bg-emerald-500' : 'bg-neutral-400'}`} />
+                        {project.status === 'active' ? 'Active' : 'Archived'}
+                        <span className="ml-auto">{formatRelativeTime(project.updatedAt)}</span>
+                      </div>
+                    </button>
+                  ))}
+                  {projects.length > 5 && (
+                    <p className="text-[10px] text-neutral-400 px-3 py-1">+{projects.length - 5} more — <a href="/projects" className="underline hover:text-amber-500">view all</a></p>
+                  )}
+                </div>
+              </div>
+            )}
+            {projectsLoading && !isGuest && (
+              <p className="text-[10px] text-neutral-400 px-1 mb-2">Loading projects...</p>
+            )}
 
             <h3 className="text-[10px] font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-2 px-1">
               Conversations
@@ -679,19 +761,28 @@ function ChatPage() {
                   <line x1="9" y1="3" x2="9" y2="21" />
                 </svg>
               </button>
-              <div className="w-10 h-10 rounded-xl bg-amber-500/10 border border-amber-500/20 flex items-center justify-center">
-                <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-amber-500 dark:text-amber-400">
-                  <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-                </svg>
+              <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${activeProjectId ? "bg-purple-500/10 border border-purple-500/20" : "bg-amber-500/10 border border-amber-500/20"}`}>
+                {activeProjectId ? (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-purple-500 dark:text-purple-400">
+                    <rect x="2" y="7" width="20" height="14" rx="2" ry="2" />
+                    <path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16" />
+                  </svg>
+                ) : (
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" className="text-amber-500 dark:text-amber-400">
+                    <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+                  </svg>
+                )}
               </div>
               <div>
                 <h1 className="text-lg font-bold text-neutral-900 dark:text-neutral-100">
-                  {activeThread ? getDisplayTitle(activeThread) : "New Chat"}
+                  {activeProjectId && activeProjectName ? activeProjectName : activeThread ? getDisplayTitle(activeThread) : "New Chat"}
                 </h1>
                 <p className="text-xs text-neutral-500 dark:text-neutral-400 flex items-center gap-1.5">
-                  {activeThread
-                    ? `${activeThread.type === "project" ? "Project" : "Chat"} -- ${activeThread.messageCount || 0} messages`
-                    : "Start a new conversation"
+                  {activeProjectId
+                    ? `Project context active${activeThread ? ` · ${activeThread.messageCount || 0} messages` : " · new conversation"}`
+                    : activeThread
+                      ? `${activeThread.type === "project" ? "Project" : "Chat"} -- ${activeThread.messageCount || 0} messages`
+                      : "Start a new conversation"
                   }
                   {/* Phase 41: Encryption indicator */}
                   {activeThread?.encryptionKeys && (
@@ -707,6 +798,16 @@ function ChatPage() {
               </div>
             </div>
             <div className="flex items-center gap-3">
+              {/* Phase 68.4: Clear project context button */}
+              {activeProjectId && (
+                <button
+                  onClick={() => { setActiveProjectId(null); setActiveProjectName(null); setActiveThreadId(null); setMessages([]); }}
+                  className="text-xs px-2.5 py-1.5 rounded-lg border border-purple-200 dark:border-purple-800 text-purple-600 dark:text-purple-400 hover:bg-purple-500/10 transition"
+                  title="Exit project context"
+                >
+                  ✕ Project
+                </button>
+              )}
               <div className="flex flex-col items-end gap-0.5">
                 <select
                   value={agentMode}
@@ -747,10 +848,18 @@ function ChatPage() {
                 </div>
                 <div className="space-y-1">
                   <p className="text-sm font-medium text-neutral-700 dark:text-neutral-300">
-                    {activeThread ? `Continue: ${getDisplayTitle(activeThread)}` : "Start a conversation"}
+                    {activeProjectId && activeProjectName
+                      ? `Continue: ${activeProjectName}`
+                      : activeThread
+                        ? `Continue: ${getDisplayTitle(activeThread)}`
+                        : "Start a conversation"
+                    }
                   </p>
                   <p className="text-xs text-neutral-500 dark:text-neutral-400 max-w-sm">
-                    Ask about your node, transfer Lux, build projects, or search the network. Say &quot;build me...&quot; to start a project.
+                    {activeProjectId
+                      ? "Your project manager will pick up where you left off."
+                      : "Ask about your node, transfer Lux, build projects, or search the network. Say \"build me...\" to start a project."
+                    }
                   </p>
                 </div>
                 <div className="flex gap-3 mt-3">
