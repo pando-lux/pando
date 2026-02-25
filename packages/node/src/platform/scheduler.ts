@@ -441,6 +441,25 @@ export class Scheduler extends EventEmitter {
         continue;
       }
 
+      // Parent-done gate — reject child tasks whose parent is already terminal
+      if (task.parentTask) {
+        const parent = this.taskQueue.getTask(task.parentTask);
+        if (parent && (parent.status === 'done' || parent.status === 'rejected')) {
+          console.log(`[scheduler] Parent-done gate: rejecting task ${taskId.slice(0, 8)} — parent ${task.parentTask.slice(0, 8)} is ${parent.status}`);
+          this.approvedQueue.shift();
+          this.approvedProfiles.delete(taskId);
+          this.taskQueue.pushTimelineEvent(taskId, {
+            event: 'rejected',
+            detail: `Parent task ${parent.status}: ${task.parentTask}`,
+            metadata: { parentTaskId: task.parentTask, parentStatus: parent.status },
+          });
+          this.taskQueue.updateStatus(taskId, 'rejected');
+          this.taskQueue.setResultNote(taskId, `Parent task already ${parent.status}`);
+          this.emit('task:failed', { taskId, error: `Parent task already ${parent.status}` });
+          continue;
+        }
+      }
+
       // Pre-execution dedup gate — reject if a similar task was completed in the last 24 hours
       const cutoff = Date.now() - 24 * 60 * 60 * 1000;
       const recentDone = this.taskQueue.getTasks({ status: 'done' }).filter(t => t.updatedAt >= cutoff);
