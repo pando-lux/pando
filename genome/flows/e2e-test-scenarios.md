@@ -1651,7 +1651,7 @@ Run this after any deployment to verify the network is healthy. Total time: ~15 
 | 1 | Scenario 3: Ledger balance | Layer 0 alive — most basic check |
 | 2 | Scenario 38: Full mesh peers | Network connected — precondition for everything |
 | 3 | Scenario 5: Ledger sync | P2P GossipSub working |
-| 4 | Scenario 16: P2P storage proxy | LS-1 can read/write via EC2-1 |
+| 4 | Scenario 16: P2P storage proxy | LS-2 can read/write via EC2-1 (use LS-2 — LS-1 down) |
 | 5 | Scenario 9: HealthMonitor | Metrics working, no alerts |
 | 6 | Scenario 20: JWT cross-node auth | Auth works across all nodes |
 | 7 | Scenario 17: Deploy Tier 1 | S3 deployment pipeline intact |
@@ -1659,27 +1659,34 @@ Run this after any deployment to verify the network is healthy. Total time: ~15 
 | 9 | Scenario 24: AI search | Credential routing + AI backend working |
 | 10 | Scenario 28: Chat/manager agent | Full agent pipeline end-to-end |
 
-**Quick smoke test commands (copy-paste):**
+**Automated smoke test (preferred — 18 tests):**
+```bash
+# Run from pando/ root — tests all 3 live nodes (EC2-1, EC2-2, LS-2)
+node tests/smoke-test.mjs
+# Expected: 18/18 PASS (LS-1 excluded — machine down)
+```
+
+**Manual quick check (copy-paste, v2 /v1/ prefix required):**
 ```bash
 TOKEN="bd5b00bab232c33c259c2603a9991925287cf43fb1f9519c4f00c04501532127"
-EC21="http://54.82.241.132:4000"
-LS1="http://54.145.144.221:4000"
+EC21="http://54.82.241.132:4000/v1"
+LS2="http://3.237.175.38:4000/v1"   # LS-1 is down, use LS-2
 
 # 1. Layer 0 alive
-curl -s $EC21/balance | python3 -c "import sys,json; d=json.load(sys.stdin); print('Balance OK:', d['balance'])"
+curl -s -H "Authorization: Bearer $TOKEN" $EC21/wallet
 
 # 2. Network connected
-curl -s $EC21/peers | python3 -c "import sys,json; peers=json.load(sys.stdin); print(f'Peers: {len(peers)}')"
+curl -s -H "Authorization: Bearer $TOKEN" $EC21/peers
 
-# 3. LS-1 storage via P2P
+# 3. LS-2 storage via P2P
 curl -s -X POST -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
-  -d '{"title":"Smoke Test Thread"}' $LS1/threads | python3 -c "import sys,json; d=json.load(sys.stdin); print('P2P Storage OK:', d.get('_id','?'))"
+  -d '{"title":"Smoke Test Thread"}' $LS2/chat/threads
 
-# 4. Monitor
-curl -s $EC21/monitor/status | python3 -c "import sys,json; d=json.load(sys.stdin); print('Monitor OK, uptime:', d.get('uptime','?'), 's')"
+# 4. NodeHealth
+curl -s $EC21/status | python3 -c "import sys,json; d=json.load(sys.stdin); print(d.get('health', {}))"
 
 # 5. Network capabilities
-curl -s $EC21/network/capabilities | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'Capabilities: {len(d)} nodes')"
+curl -s $EC21/network/capabilities
 ```
 
 ---
