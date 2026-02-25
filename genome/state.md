@@ -41,7 +41,11 @@ Replaced MongoDB session-based auth with self-verifying JWT tokens signed by eac
 | 4 | Governance proposal P2P | PASS | Proposal created on Windows, propagated to 5/5 nodes, voted from EC2-1, decision propagated to 5/5 |
 | 5 | Cross-node JWT (gateway) | PASS | Guest created via Vercel gateway (EC2-2), JWT verified on EC2-1 and LS-1 |
 | 6 | Gateway UI | PASS | Home, Governance (90 proposals), Marketplace, Wallet all render correctly |
-| 7 | Deploy (Tier 1 S3) | FIXED | Was BLOCKED — deploy used CloudInstanceManager (only tracked dynamic EC2). **Phase 87 fix**: now uses P2P CapabilityProfile discovery. |
+| 7 | Deploy Tier 1 (S3) | **PASS** | Phase 87: LS-1 → P2P discovery → EC2-1 → S3 upload. URL: `s3-website.../c57e2439.../index.html` (200 OK) |
+| 8 | Deploy Tier 2 (EC2) | **PASS** | Phase 87: LS-1 → P2P discovery → EC2-1 → PM2+nginx. URL: `http://54.82.241.132/apps/e58fcfe5.../` (200 OK). publicAddress correct. |
+| 9 | publicAddress in CapabilityProfile | **PASS** | EC2-1: `54.82.241.132`, EC2-2: `34.201.82.126`. LS nodes: NONE (correct). |
+| 10 | Undeploy via deployPeerId | **PASS** | LS-1 → undeploy → returns success. Project record cleared. |
+| 11 | Bootstrap mesh (2 peers) | **PARTIAL** | EC2-1: 3 peers. LS-1: 2 peers. EC2-2/LS-2: 1 peer (still connecting). |
 
 **Phase 83: Network Hardening — P2PStorageBackend + Two-Tier Trust — COMPLETE (2026-02-25).**
 Transformed the network from "dev mode where everybody has everything" to the real two-tier trust architecture. Untrusted nodes (no MongoDB, no master key) proxy all storage operations via P2P to compute nodes with MongoDB. Every node gets a StorageBackend — no more 503s.
