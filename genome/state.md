@@ -1,11 +1,11 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-26 (master — v2.3 NodeHealth complete)
+> Last updated: 2026-02-26 (master — v2.5 Local Environment complete)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
 
-## v2-architecture sprint — v2.3 complete, merged to master
+## v2-architecture sprint — v2.5 complete, on master
 
-v2-architecture branch fully merged to master. v2.1 (layer separation) + v2.2 (API versioning) + v2.3 (NodeHealth) deployed to all 5 nodes.
+v2.1 (layer separation) + v2.2 (API versioning) + v2.3 (NodeHealth) + v2.4 (Active Tripwire) + v2.5 (Local Environment) all complete and deployed to all 5 nodes. Only v2.6 (installer) remains from the v2 plan.
 
 ## Health
 
@@ -22,6 +22,21 @@ v2-architecture branch fully merged to master. v2.1 (layer separation) + v2.2 (A
 **v2-architecture sprint IN PROGRESS (2026-02-26).**
 
 All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88** COMPLETE. Now doing architectural v2 work — no new features until layer separation + tests done.
+
+**v2.5: Local Environment — COMPLETE (2026-02-26)**
+- ✅ `packages/node/src/kernel/local-environment.ts` — new file (Envelope 1)
+  - SQLite FTS5 file index: `~/.pando/file-index.db`
+  - `grantDirectory()` / `revokeDirectory()` / `search()` / `readFile()`
+  - Protected paths hard-blocked (ssh, gnupg, pando/identities, aws/credentials)
+  - User memory: `~/.pando/memory/user-memory.md` read/write
+- ✅ `GET /v1/local/status` — indexed dirs, file count, paths
+- ✅ `POST /v1/local/index` / `DELETE /v1/local/index` — grant/revoke directories
+- ✅ `GET /v1/local/search?q=` — FTS5 full-text search
+- ✅ `GET /v1/local/file?path=` — read file (guarded)
+- ✅ `GET/POST /v1/local/memory` / `GET /v1/local/memory/file` — user memory API
+- ✅ AgentManager wired: `setLocalEnv()` — user-memory.md prepended to agent spawn prompt
+- ✅ TUI: `/index`, `/unindex`, `/local`, `/memory` commands
+- ✅ bootSteps['local-env'] tracking in NodeHealth
 
 **v2.4: Active Tripwire — COMPLETE (2026-02-26)**
 - ✅ CREDENTIAL_MASTER_KEY deleted from process.env after loading (key is now memory-only)

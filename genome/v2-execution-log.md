@@ -58,6 +58,7 @@ BRANCH: All work on v2-architecture branch.
 | v2.2: API versioning | ✅ DONE | /v1/ prefix on all HTTP routes; MESSAGE_VERSION on P2P; gateway+MCP+tests updated; deployed to all 5 nodes |
 | v2.3: Boot sequence enforcement | ✅ DONE | NodeHealth in /v1/status: kernel/core/platform + per-step bootSteps + OperationalMode 1/2/3 |
 | v2.4: Active Tripwire | ✅ DONE | CREDENTIAL_MASTER_KEY deleted from process.env; CredentialStore.wipe(); node_compromised GossipSub; credential routing isolation |
+| v2.5: Local Environment | ✅ DONE | local-environment.ts (SQLite FTS5, grant/revoke, protected paths); /v1/local/* (8 endpoints); user memory; agent injection; TUI /index /unindex /local /memory |
 
 ---
 
@@ -92,6 +93,21 @@ BRANCH: All work on v2-architecture branch.
 - On receiving `node_compromised` from any peer: `capabilityRegistry.credentialAccess = false` for that peer
 - `POST /v1/admin/wipe-credentials` — emergency admin endpoint to manually trigger tripwire
 - EC2 bash-level tripwire (Phase 64) unchanged — still handles filesystem wipe + shutdown at OS level
+
+### 2026-02-26 — v2.5 Local Environment Implementation
+- `packages/node/src/kernel/local-environment.ts` — new file, full implementation
+  - SQLite FTS5 virtual table `files_fts` over `indexed_files` (path, content, dir, size, indexed_at)
+  - `grantDirectory()` — walks recursively, indexes INDEXABLE_EXTENSIONS (md, ts, py, json, etc.), max 512KB/file
+  - `revokeDirectory()` — removes from indexed_files + rebuilds FTS5 index
+  - `search(query, limit)` — FTS5 MATCH with snippet extraction
+  - `readFile()` — PROTECTED_PATH_PREFIXES block + granted-dir check (double guard)
+  - `getMemory()` / `appendMemory()` / `getMemoryFile()` — `~/.pando/memory/user-memory.md` read/write
+  - Privacy invariant: Envelope 1 — file lives in `~/.pando/file-index.db`, never P2P synced
+- `kernel-api.ts` — 8 `/v1/local/*` endpoints: status, index (POST/DELETE), search, file, memory (GET/POST), memory/file
+- `index.ts` — `localEnv` field, init before API server, `getLocalEnv()`, `bootSteps['local-env']`, `close()` in stop()
+- `agent-manager.ts` — `setLocalEnv()`, memory prepended to `taskContext` at spawn time
+- `tui.ts` — `/index`, `/unindex`, `/local`, `/memory` commands
+- Decision: `local-environment.ts` lives in `kernel/` (not `platform/`) because it's a fundamental local-node primitive, not a user-facing platform feature. It's in Envelope 1 — even more restricted than kernel networking code.
 
 ### 2026-02-26 — v2.3 NodeHealth Implementation
 - Added `OperationalMode` (1|2|3) to @pando/shared — distinct from existing `NodeMode` ('full'|'compute'|'relay')
