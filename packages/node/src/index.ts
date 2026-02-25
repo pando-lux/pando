@@ -53,6 +53,7 @@ import type { StorageBackend } from './core/storage-backend.js';
 import { AIBackendRegistry } from './core/ai-backend-registry.js';
 import { ClaudeBackend } from './core/ai-backend-claude.js';
 import { OllamaBackend } from './core/ai-backend-ollama.js';
+import { LocalEnvironment } from './kernel/local-environment.js';
 import { toString as uint8ArrayToString } from 'uint8arrays';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -175,6 +176,9 @@ export class PandoNode {
   private _p2pDataLoaded = false;
   // Phase 55: Linked user account — rewards flow to user, not node
   private linkedUser: { peerId: string; username?: string } | null = null;
+
+  // v2.5: Local Environment — Envelope 1 file indexing + user memory
+  private localEnv: LocalEnvironment | null = null;
 
   // v2.3: Boot health tracking
   private nodeHealth: NodeHealth = {
@@ -1630,6 +1634,14 @@ location /apps/${projectId}/ {
     this.council.start();
     console.log('[council] Council system started');
 
+    // v2.5: Local Environment — Envelope 1 file index + user memory (always on, no network)
+    try {
+      this.localEnv = new LocalEnvironment(dataDir);
+      console.log(`[local-env] Initialized (${this.localEnv.getStatus().grantedDirs.length} dirs indexed)`);
+    } catch (err: any) {
+      console.warn(`[local-env] Init failed (non-fatal): ${err.message}`);
+    }
+
     // Start HTTP API
     this.apiServer = new ApiServer(this);
     await this.apiServer.start({ port: this.config.apiPort, host: '0.0.0.0' });
@@ -2073,6 +2085,7 @@ location /apps/${projectId}/ {
     s['agents']       = this.agentSystemStarted ? 'ok' : 'skipped';
     s['thread-store'] = this.threadStore   ? 'ok' : 'degraded';
     s['content']      = this.contentRegistry ? 'ok' : 'skipped';
+    s['local-env']    = this.localEnv      ? 'ok' : 'degraded';
 
     // Kernel health: any critical kernel step failed → failed
     const kernelFailed = ['ledger', 'network', 'sync', 'governance'].some(k => s[k] === 'failed');
@@ -2111,6 +2124,11 @@ location /apps/${projectId}/ {
     if (this.nodeHealth.degraded.length > 0) {
       console.log(`[boot] Degraded: ${this.nodeHealth.degraded.join(', ')}`);
     }
+  }
+
+  /** v2.5: Get the Local Environment (Envelope 1 file index + user memory). */
+  getLocalEnv(): LocalEnvironment | null {
+    return this.localEnv;
   }
 
   getNetwork(): PandoNetwork | null {
@@ -2998,6 +3016,12 @@ location /apps/${projectId}/ {
     }
     this.contentPublisher = null;
     this.contentRegistry = null;
+
+    // v2.5: Close local environment SQLite DB
+    if (this.localEnv) {
+      this.localEnv.close();
+      this.localEnv = null;
+    }
 
     // Stop resource network components
     this.resourceRegistry?.stop();

@@ -2256,5 +2256,96 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       return record;
     });
 
+  // ── v2.5: Local Environment Routes (Envelope 1 — never P2P synced) ─────────
+
+  // GET /local/status — indexed dirs, file count, paths
+  fastify.get('/local/status', async (_request: any, reply: any) => {
+    const le = node.getLocalEnv();
+    if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
+    return le.getStatus();
+  });
+
+  // POST /local/index — grant a directory for indexing
+  fastify.post('/local/index', async (request: any, reply: any) => {
+    const le = node.getLocalEnv();
+    if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
+    const { path: dirPath } = request.body as { path?: string };
+    if (!dirPath) return reply.code(400).send({ error: 'path required' });
+    try {
+      const result = await le.grantDirectory(dirPath);
+      return { success: true, ...result };
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+
+  // DELETE /local/index — revoke a directory
+  fastify.delete('/local/index', async (request: any, reply: any) => {
+    const le = node.getLocalEnv();
+    if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
+    const { path: dirPath } = request.body as { path?: string };
+    if (!dirPath) return reply.code(400).send({ error: 'path required' });
+    le.revokeDirectory(dirPath);
+    return { success: true };
+  });
+
+  // GET /local/search — full-text search over indexed files
+  fastify.get('/local/search', async (request: any, reply: any) => {
+    const le = node.getLocalEnv();
+    if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
+    const { q, limit } = request.query as { q?: string; limit?: string };
+    if (!q) return reply.code(400).send({ error: 'q required' });
+    const results = le.search(q, limit ? parseInt(limit) : 10);
+    return { results, query: q };
+  });
+
+  // GET /local/file — read file content (protected paths blocked)
+  fastify.get('/local/file', async (request: any, reply: any) => {
+    const le = node.getLocalEnv();
+    if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
+    const { path: filePath } = request.query as { path?: string };
+    if (!filePath) return reply.code(400).send({ error: 'path required' });
+    try {
+      const content = le.readFile(filePath);
+      return { path: filePath, content };
+    } catch (err: any) {
+      return reply.code(403).send({ error: err.message });
+    }
+  });
+
+  // GET /local/memory — get full user memory context
+  fastify.get('/local/memory', async (_request: any, reply: any) => {
+    const le = node.getLocalEnv();
+    if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
+    const memory = le.getMemory();
+    return { memory, hasMemory: memory !== null };
+  });
+
+  // POST /local/memory — append a memory entry
+  fastify.post('/local/memory', async (request: any, reply: any) => {
+    const le = node.getLocalEnv();
+    if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
+    const entry = request.body as any;
+    if (!entry?.key || !entry?.value || !entry?.type) {
+      return reply.code(400).send({ error: 'type, key, value required' });
+    }
+    try {
+      le.appendMemory(entry);
+      return { success: true };
+    } catch (err: any) {
+      return reply.code(500).send({ error: err.message });
+    }
+  });
+
+  // GET /local/memory/file — get specific memory file
+  fastify.get('/local/memory/file', async (request: any, reply: any) => {
+    const le = node.getLocalEnv();
+    if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
+    const { f } = request.query as { f?: string };
+    if (!f) return reply.code(400).send({ error: 'f (filename) required' });
+    const content = le.getMemoryFile(f);
+    if (content === null) return reply.code(404).send({ error: 'Memory file not found' });
+    return { filename: f, content };
+  });
 
 }
