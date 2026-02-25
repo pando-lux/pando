@@ -6183,12 +6183,19 @@ export class ApiServer {
       if (!requestReply) return reply.code(503).send({ error: 'P2P RequestReply not available' });
 
       // Find compute peers with MongoDB (persistent EC2 nodes) via CapabilityRegistry
+      // NOTE: Include self — if the local node is a compute node, it can deploy locally
       const capRegistry = this.node.getCapabilityRegistry?.();
       const localPeerId = this.node.getIdentity()?.peerId || '';
       const allProfiles = capRegistry?.getAllProfiles?.() || [];
       const computePeers = allProfiles.filter((p: any) =>
-        p.storageBackend === 'mongodb' && p.peerId !== localPeerId
+        p.storageBackend === 'mongodb'
       );
+      // Sort: prefer remote peers first (avoid self-deploy when others are available)
+      computePeers.sort((a: any, b: any) => {
+        if (a.peerId === localPeerId && b.peerId !== localPeerId) return 1;  // self goes last
+        if (a.peerId !== localPeerId && b.peerId === localPeerId) return -1;
+        return 0;
+      });
 
       if (computePeers.length === 0 || !repoUrl) {
         return reply.code(503).send({
@@ -6218,11 +6225,26 @@ export class ApiServer {
       };
 
       // Try up to 3 compute peers (same pattern as P2PStorageBackend)
+      // For self-deploy (local node is compute peer), call the handler directly (no P2P round-trip)
       let lastError = '';
       for (const profile of computePeers.slice(0, 3)) {
         try {
-          console.log(`[deploy] Sending P2P deploy to ${profile.peerId} — tier ${tier}`);
-          const response = await requestReply.request(profile.peerId, 'pando/deploy-app', deployPayload, 300_000);
+          let response: any;
+          if (profile.peerId === localPeerId) {
+            // Self-deploy: invoke handler directly (P2P self-routing may not work via GossipSub)
+            console.log(`[deploy] Self-deploy — local compute node, tier ${tier}`);
+            const handler = requestReply.getHandler?.('pando/deploy-app');
+            if (handler) {
+              const result = await handler({ payload: deployPayload } as any);
+              response = { success: true, payload: result };
+            } else {
+              lastError = 'Deploy handler not registered on local node';
+              continue;
+            }
+          } else {
+            console.log(`[deploy] Sending P2P deploy to ${profile.peerId} — tier ${tier}`);
+            response = await requestReply.request(profile.peerId, 'pando/deploy-app', deployPayload, 300_000);
+          }
 
           if (response?.success && response.payload) {
             const payload = response.payload as any;
@@ -6234,8 +6256,9 @@ export class ApiServer {
 
             let liveUrl = '';
             let deploymentPort: number | undefined;
+            const actualTier = payload.detectedTier || tier; // Phase 88: use detected tier for URL construction
 
-            if (tier === 2 && payload.port) {
+            if (actualTier === 2 && payload.port) {
               // Tier 2: Use publicAddress from CapabilityProfile for URL
               const publicAddr = profile.publicAddress || payload.publicAddress;
               if (publicAddr) {
@@ -6251,6 +6274,13 @@ export class ApiServer {
               liveUrl = payload.s3Url;
             }
 
+            // Phase 88: Use detected tier from compute node (code is truth)
+            const detectedTier = payload.detectedTier || tier;
+            const tierReason = payload.tierReason || '';
+            if (detectedTier !== tier) {
+              console.log(`[deploy] Tier auto-corrected: project had ${tier}, code detected ${detectedTier} (${tierReason})`);
+            }
+
             // Update project record — store deployPeerId (not instanceId)
             const update: Record<string, any> = {
               deploymentUrl: liveUrl,
@@ -6258,10 +6288,10 @@ export class ApiServer {
               repoUrl,
               githubRepo,
               deployPeerId: profile.peerId,
+              tier: detectedTier, // Phase 88: always use detected tier
               updatedAt: Date.now(),
             };
             if (deploymentPort) update.deploymentPort = deploymentPort;
-            if (tier) update.tier = tier;
 
             await ps.updateProject(id, update);
 
@@ -6271,7 +6301,7 @@ export class ApiServer {
               pr.updateProject(id, {
                 deploymentUrl: liveUrl,
                 liveUrl,
-                tier,
+                tier: detectedTier,
                 deploymentPort,
                 deployPeerId: profile.peerId,
                 lastDeployedAt: Date.now(),
@@ -6279,10 +6309,12 @@ export class ApiServer {
               } as any);
             }
 
-            console.log(`[deploy] Project ${id} deployed: ${liveUrl} (tier ${tier}, peer ${profile.peerId})`);
+            console.log(`[deploy] Project ${id} deployed: ${liveUrl} (tier ${detectedTier}, peer ${profile.peerId})`);
             return {
               url: liveUrl,
-              tier,
+              tier: detectedTier,
+              detectedTier,
+              tierReason,
               status: 'deployed',
               repoUrl,
               githubRepo,

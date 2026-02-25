@@ -197,7 +197,12 @@ Managers MUST choose the correct deployment tier BEFORE agents start coding:
 
 Tier 1 apps call the Resource Proxy for every DB operation. This is fine for dashboards and forms (a few writes per minute). It is NOT fine for chat apps with 100 concurrent users each sending messages every second.
 
+**IMPORTANT — Tier Auto-Detection (Phase 88):** The manager's tier choice is a **hint**, not the final authority. At deploy time, the compute node inspects the actual code via `detectTierFromCode()` and overrides the tier if needed. package.json with `start` script → Tier 2. Server deps (express, fastify, socket.io, ws) → Tier 2. No package.json → Tier 1. The project record is auto-corrected to match the detected tier. This means misclassification is self-healing and tier transitions work automatically.
+
 ## Changelog
+### v1.2 (2026-02-25)
+- Phase 88: Auto-detect tier from code at deploy time. Compute node inspects package.json, overrides caller's tier if code says different. Project record auto-corrected.
+
 ### v1.1 (2026-02-22)
 - Phase 62: Gateway URL injection at deploy time (`window.PANDO_GATEWAY_URL`, `window.PANDO_PROJECT_ID`)
 - Updated fetch examples to use injected gateway URL (required for S3-hosted apps on different origin)

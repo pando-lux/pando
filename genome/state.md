@@ -15,7 +15,13 @@
 
 ## Current Phase
 
-All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, **87** COMPLETE except Phase 14 (Universal Onboarding — deferred). Phase 53.7-53.9 remaining. Phase 68.4 (Returning User Routing) NOT STARTED.
+All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88** COMPLETE except Phase 14 (Universal Onboarding — deferred). Phase 53.7-53.9 remaining. Phase 68.4 (Returning User Routing) NOT STARTED.
+
+**Phase 88: Auto-Detect Tier from Code — COMPLETE (2026-02-25).**
+Tier is now detected from the actual code at deploy time on the compute node, not guessed by the doorman AI. `detectTierFromCode(appDir)` inspects package.json (start script, server deps, main entry, backend/ dir) after git clone. If detected tier differs from the project's stored tier, the compute node uses the detected tier and the caller auto-corrects the project record. Doorman's tier remains as a hint for agent context.
+- **Detection logic**: No package.json → Tier 1. Start script → Tier 2. Server deps (express, fastify, socket.io, ws) → Tier 2. `main` points to server file → Tier 2. backend/ dir → Tier 2. Default → Tier 1.
+- **Response**: Deploy handler returns `detectedTier` and `tierReason` — caller updates `project.tier` to match.
+- **Tier transitions**: Handled implicitly — PM2 kill on redeploy, S3 overwrites on re-upload.
 
 **Phase 87: P2P Deploy Discovery — COMPLETE (2026-02-25).**
 Deploy endpoint (`POST /projects/:id/deploy`) no longer uses CloudInstanceManager. Instead, it discovers compute peers via CapabilityProfile P2P broadcast — the same pattern P2PStorageBackend uses for storage routing. This fixes the root architecture gap where persistent EC2 nodes couldn't be found for deployment.

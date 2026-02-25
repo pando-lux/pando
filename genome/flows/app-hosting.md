@@ -111,6 +111,24 @@ Managers MUST check this matrix when deciding deployment target:
 4. If available → Tier 2 (EC2)
 5. If not available → Build as Tier 1 with polling fallback (degrade gracefully)
 
+**IMPORTANT: Tier Auto-Detection (Phase 88)**
+
+The manager's tier choice is a **hint**, not the final authority. At deploy time, the compute node inspects the actual cloned code via `detectTierFromCode(appDir)` and overrides the tier if the code says otherwise:
+
+| Code Signal | Detected Tier | Why |
+|---|---|---|
+| No package.json | Tier 1 | Pure static HTML/CSS/JS |
+| package.json with `scripts.start` | Tier 2 | Needs `npm start` → server |
+| Server deps (express, fastify, socket.io, ws, koa) | Tier 2 | Server framework present |
+| `main` points to server.js/app.js | Tier 2 | Entry point is a server file |
+| `backend/` or `server/` directory exists | Tier 2 | Backend code present |
+| package.json, no server signals | Tier 1 | Frontend build tool only |
+
+If the detected tier differs from the project's stored tier, the deploy response includes `detectedTier` and `tierReason`, and the caller auto-corrects the project record. This means:
+- Doorman misclassification is self-healing
+- Tier transitions (Tier 1 app adds a server → Tier 2 on next deploy) work automatically
+- No manual tier override needed
+
 ## URL Strategy
 
 | Tier | URL Pattern | Example |

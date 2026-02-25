@@ -936,6 +936,46 @@ export class PandoNode {
       const appDir = join(dataDir, 'hosted-apps', projectId);
       mkdirSync(appDir, { recursive: true });
 
+      // Phase 88: Auto-detect tier from inspecting the actual code
+      function detectTierFromCode(dir: string): { detectedTier: 1 | 2; reason: string } {
+        const pkgPath = join(dir, 'package.json');
+        if (!existsSync(pkgPath)) {
+          return { detectedTier: 1, reason: 'No package.json — static files only' };
+        }
+
+        let pkg: any;
+        try { pkg = JSON.parse(readFileSync(pkgPath, 'utf-8')); } catch {
+          return { detectedTier: 1, reason: 'package.json unreadable — treating as static' };
+        }
+
+        // Check 1: start script → needs a server → Tier 2
+        if (pkg.scripts?.start) {
+          return { detectedTier: 2, reason: `package.json has start script: "${pkg.scripts.start}"` };
+        }
+
+        // Check 2: server-related dependencies → Tier 2
+        const allDeps = { ...(pkg.dependencies || {}), ...(pkg.devDependencies || {}) };
+        const serverDeps = ['express', 'fastify', 'koa', 'hapi', '@hapi/hapi', '@nestjs/core', 'socket.io', 'ws', 'http-server'];
+        const foundServerDep = serverDeps.find(d => d in allDeps);
+        if (foundServerDep) {
+          return { detectedTier: 2, reason: `Server dependency found: ${foundServerDep}` };
+        }
+
+        // Check 3: package.json "main" points to a server file → Tier 2
+        const serverFileNames = ['server.js', 'server.ts', 'app.js', 'app.ts'];
+        if (pkg.main && serverFileNames.includes(pkg.main)) {
+          return { detectedTier: 2, reason: `package.json main points to server file: ${pkg.main}` };
+        }
+
+        // Check 4: backend/ or server/ directory → Tier 2
+        if (existsSync(join(dir, 'backend')) || existsSync(join(dir, 'server'))) {
+          return { detectedTier: 2, reason: 'backend/ or server/ directory found' };
+        }
+
+        // Default: package.json but no server indicators → frontend build tool or static → Tier 1
+        return { detectedTier: 1, reason: 'package.json present but no server indicators — static app' };
+      }
+
       try {
         // Kill existing process if re-deploying (Tier 2 only) — Phase 80: use PM2
         const portRegistry = loadPortRegistry();
@@ -963,8 +1003,17 @@ export class PandoNode {
           console.log(`[deploy] Cloned ${repoUrl} to ${appDir}`);
         }
 
+        // ── Phase 88: Auto-detect tier from code ────────────────────────────
+        const { detectedTier, reason: tierReason } = detectTierFromCode(appDir);
+        if (detectedTier !== tier) {
+          console.log(`[deploy] Tier override: requested=${tier}, detected=${detectedTier} (${tierReason})`);
+        } else {
+          console.log(`[deploy] Tier confirmed: ${detectedTier} (${tierReason})`);
+        }
+        const effectiveTier = detectedTier;
+
         // ── Tier 1: Upload static files to S3 ──────────────────────────────
-        if (tier === 1) {
+        if (effectiveTier === 1) {
           console.log(`[deploy] Tier 1 — uploading static files to S3 for ${projectId}`);
 
           // Get S3 credentials from ResourceRegistry
@@ -1067,11 +1116,11 @@ export class PandoNode {
           const s3Url = `http://${bucket}.s3-website-${s3Config.region || 'us-east-1'}.amazonaws.com/public/${projectId}/index.html`;
           console.log(`[deploy] Tier 1 complete: ${uploadCount} files uploaded → ${s3Url}`);
 
-          return { status: 'deployed', projectId, type: 'static', s3Url, url: s3Url, fileCount: uploadCount };
+          return { status: 'deployed', projectId, type: 'static', s3Url, url: s3Url, fileCount: uploadCount, detectedTier: effectiveTier, tierReason };
         }
 
         // ── Tier 2: Run as backend app ──────────────────────────────────────
-        if (existsSync(join(appDir, 'package.json'))) {
+        if (effectiveTier === 2) {
           execSync('npm install --production', { cwd: appDir, stdio: 'pipe', timeout: 120_000 });
           console.log(`[deploy] Dependencies installed for ${projectId}`);
 
@@ -1128,11 +1177,11 @@ location /apps/${projectId}/ {
 
           // Phase 87: Include publicAddress so caller can construct the URL
           const publicAddress = process.env.PUBLIC_IP || undefined;
-          return { status: 'deployed', projectId, port, pm2Name, url: `http://localhost:${port}`, publicAddress };
+          return { status: 'deployed', projectId, port, pm2Name, url: `http://localhost:${port}`, publicAddress, detectedTier: effectiveTier, tierReason };
         }
 
-        // Static app without explicit tier — serve locally
-        return { status: 'deployed', projectId, path: appDir, type: 'static' };
+        // Fallback: code didn't match Tier 1 or Tier 2 detection — serve locally
+        return { status: 'deployed', projectId, path: appDir, type: 'static', detectedTier: effectiveTier, tierReason };
       } catch (err: any) {
         console.log(`[deploy] Failed for ${projectId}: ${err.message}`);
         return { status: 'failed', error: err.message };

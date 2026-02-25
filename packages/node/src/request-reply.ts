@@ -106,6 +106,11 @@ export class RequestReplyManager {
     return Array.from(this.handlers.keys());
   }
 
+  /** Get a registered handler by type (for local self-dispatch) */
+  getHandler(type: string): RequestHandler | undefined {
+    return this.handlers.get(type);
+  }
+
   /**
    * Send a request to a specific peer and wait for a reply.
    */

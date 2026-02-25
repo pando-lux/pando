@@ -807,6 +807,21 @@ Replaced the complex Phase 73/81 patch-distribution system with simple `git pull
 - `packages/node/src/agent-manager.ts` — renamed `setCloudInstanceProvider` → `setComputeNodeProvider`
 - `packages/node/src/cli.ts` — EC2-1 added to `DEFAULT_BOOTSTRAPS`
 
+## Phase 88: Auto-Detect Tier from Code — COMPLETE (2026-02-25)
+
+> Tier is now detected from the actual cloned code at deploy time, not guessed by the doorman AI. Code is truth.
+
+- [x] **88.1** Add `detectTierFromCode(appDir)` function to compute node deploy handler (`packages/node/src/index.ts`). Inspects package.json: start script → Tier 2, server deps (express/fastify/socket.io/ws) → Tier 2, main → server file → Tier 2, backend/ dir → Tier 2. Default → Tier 1.
+- [x] **88.2** Use `effectiveTier` (detected) in deploy handler branching — replaces the caller's `tier` value for both S3 upload (Tier 1) and PM2 start (Tier 2) paths.
+- [x] **88.3** Return `detectedTier` and `tierReason` in deploy response — caller (`api-server.ts`) reads these, auto-corrects `project.tier` on the project record and ProjectRegistry.
+- [x] **88.4** URL construction uses detected tier — `actualTier === 2 && payload.port` instead of `tier === 2`.
+
+**Root cause fixed:** Tier was guessed once from user message by doorman (GPT-4o-mini) and locked on the project forever. Misclassification (e.g., "voting app" as Tier 1) caused broken deploys — WebSocket code on S3 fails silently. Now the compute node inspects the code and overrides the tier if needed.
+
+**Files modified:**
+- `packages/node/src/index.ts` — `detectTierFromCode()` function, `effectiveTier` branching, return `detectedTier`/`tierReason`
+- `packages/node/src/api-server.ts` — URL construction uses `actualTier`, project update uses `detectedTier`
+
 ---
 
 ## Future (Not Scheduled)
