@@ -172,12 +172,18 @@ Plus:
 - **Existing resources must be re-contributed** (old wrappedKeys data incompatible)
 - Full protocol: `genome/rules/credential-security.md`
 
-**Phase 68: Launch Readiness — 68.1-68.3 DONE, 68.4 REMAINING.**
-- 68.1: Collection Namespace Isolation — DONE (`scopeCollection()` in gateway Resource Proxy, insecure fallback deleted)
-- 68.2: GitHub Push Identity — DONE (`pushToGitHub()` uses `code_repository` PAT, defaults to `pando-lux` org)
-- 68.3: Doorman / OpenAI Router — DONE (`doormanClassify()` replaces tryQuickTierResponse + forwardChatToPeer)
-- 68.4: Returning User Routing — NOT STARTED (gateway project selector + node routing)
-- Legacy cleanup: DONE (`--storage` flag removed, stale comments cleaned, genome docs updated)
+**Phase 68: Launch Readiness — ALL DONE (2026-02-26).**
+- 68.1: Collection Namespace Isolation — DONE
+- 68.2: GitHub Push Identity — DONE
+- 68.3: Doorman / OpenAI Router — DONE
+- 68.4: Returning User Routing — DONE (2026-02-26)
+  - "Your Projects" sidebar section in chat page (non-guest users)
+  - Fetch from `/api/projects` at auth time
+  - Click project → `openProject()` loads project's thread or starts project-scoped chat
+  - `activeProjectId` state routes messages to project's manager agent
+  - Purple project icon + name in chat header when project active
+  - "✕ Project" button to exit project context
+- Legacy cleanup: DONE
 
 **Phase 67: Self-Upgrading Network + Tier 2 E2E — COMPLETE (2026-02-23).**
 - P2P node upgrade: `pando/upgrade-node` request-reply handler — pull, build, restart via P2P
