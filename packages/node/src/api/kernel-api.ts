@@ -2348,4 +2348,49 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
     return { filename: f, content };
   });
 
+  // ── Ledger Explorer (Phase Ledger-Explorer) ─────────────────────────────
+
+  // GET /ledger/accounts — top N accounts sorted by balance (public)
+  fastify.get('/ledger/accounts', async (request: any, reply: any) => {
+    const ledger = node.getLedger();
+    if (!ledger) return reply.code(503).send({ error: 'Ledger not ready' });
+    const limit = Math.min(parseInt((request.query as any).limit || '50', 10), 200);
+    const accounts = ledger.accounts.getTopAccounts(limit);
+    const stats = ledger.getNetworkStats();
+    return {
+      accounts: accounts.map((a: any) => ({
+        peerId: a.peerId,
+        balance: a.balance,
+        createdAt: a.createdAt,
+        updatedAt: a.updatedAt,
+      })),
+      totalAccounts: stats.totalAccounts,
+      totalSupply: stats.totalSupply,
+    };
+  });
+
+  // GET /ledger/transactions — most recent N transactions (public)
+  fastify.get('/ledger/transactions', async (request: any, reply: any) => {
+    const ledger = node.getLedger();
+    if (!ledger) return reply.code(503).send({ error: 'Ledger not ready' });
+    const limit = Math.min(parseInt((request.query as any).limit || '50', 10), 200);
+    // Use timestamp=0 to get all, then slice to limit (most recent)
+    const txs = ledger.transactions.getTransactionsSince(0, limit * 2);
+    // Sort desc by timestamp and take limit
+    const sorted = txs.sort((a: any, b: any) => b.timestamp - a.timestamp).slice(0, limit);
+    const count = ledger.transactions.getTransactionCount();
+    return {
+      transactions: sorted.map((t: any) => ({
+        id: t.id,
+        from: t.from,
+        to: t.to,
+        amount: t.amount,
+        fee: t.fee,
+        type: t.type,
+        timestamp: t.timestamp,
+      })),
+      total: count,
+    };
+  });
+
 }

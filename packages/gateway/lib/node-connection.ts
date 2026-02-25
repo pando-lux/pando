@@ -644,6 +644,34 @@ class NodeConnection {
       return { totalProposals: 0, reviewedCount: 0, avgRiskScore: 0, stakePool: 0, humanOnlyCount: 0, governanceChangeCount: 0, statusCounts: {} };
     }
   }
+
+  /** Ledger Explorer: top N accounts by balance */
+  async getLedgerAccounts(limit = 50): Promise<{ accounts: any[]; totalAccounts: number; totalSupply: number }> {
+    try {
+      const res = await this.fetchWithFailover(`/v1/ledger/accounts?limit=${limit}`, {
+        headers: this.authHeaders(),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) throw new Error("Failed to get ledger accounts");
+      return await res.json();
+    } catch {
+      return { accounts: [], totalAccounts: 0, totalSupply: 0 };
+    }
+  }
+
+  /** Ledger Explorer: most recent N transactions (global) */
+  async getLedgerTransactions(limit = 50): Promise<{ transactions: any[]; total: number }> {
+    try {
+      const res = await this.fetchWithFailover(`/v1/ledger/transactions?limit=${limit}`, {
+        headers: this.authHeaders(),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) throw new Error("Failed to get ledger transactions");
+      return await res.json();
+    } catch {
+      return { transactions: [], total: 0 };
+    }
+  }
 }
 
 // Singleton
