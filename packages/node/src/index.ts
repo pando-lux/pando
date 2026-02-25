@@ -1404,9 +1404,9 @@ location /apps/${projectId}/ {
     console.log('[payment-gate] Initialized');
 
     // Unified identity system — Ed25519 keypairs, guest auto-creation, claim flow
-    // Phase 56: Auth data lives in P2P-synced ledger, local keys+sessions in auth-local.db
+    // Phase 56: Auth data lives in P2P-synced ledger, local keys in auth-local.db
+    // Phase 86: Sessions removed — auth is stateless JWT issued by api-server
     this.userAccountStore = new UserAccountStore(this.ledger, dataDir);
-    this.userAccountStore.startCleanup();
     // Phase 35: Daily guest Lux reclamation — unclaimed guests older than 30 days
     // get remaining Lux transferred back to NETWORK for reuse
     const ledgerForReclaim = this.ledger;

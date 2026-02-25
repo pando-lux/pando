@@ -1,9 +1,10 @@
 /**
  * UserAccountStore — Phase 56: P2P-synced user accounts via ledger.
+ * Phase 86: Sessions removed — auth is now stateless JWT (issued by api-server).
  *
  * Auth data (username, password_hash, is_claimed) lives in the ledger's accounts table,
- * synced across all nodes via GossipSub. Local-only data (encrypted private keys,
- * auth sessions) lives in auth-local.db on this node.
+ * synced across all nodes via GossipSub. Local-only data (encrypted private keys)
+ * lives in auth-local.db on this node.
  *
  * Every user gets an Ed25519 keypair (same as node identities). The peerId IS the account ID.
  * Guests are auto-created with keys encrypted by a node-level secret.
@@ -49,9 +50,6 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 
 // ── Constants ────────────────────────────────────────────────────────────────
 
-/** Default session TTL: 7 days. */
-const DEFAULT_SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-
 /** Minimum password length. */
 const MIN_PASSWORD_LENGTH = 8;
 
@@ -82,19 +80,6 @@ const LOCAL_SCHEMA = `
     encrypted_backup TEXT,
     created_at INTEGER NOT NULL
   );
-
-  CREATE TABLE IF NOT EXISTS auth_sessions (
-    token TEXT PRIMARY KEY,
-    peer_id TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    expires_at INTEGER NOT NULL,
-    last_active_at INTEGER NOT NULL,
-    ip_address TEXT,
-    user_agent TEXT
-  );
-
-  CREATE INDEX IF NOT EXISTS idx_sessions_peer ON auth_sessions(peer_id);
-  CREATE INDEX IF NOT EXISTS idx_sessions_expires ON auth_sessions(expires_at);
 `;
 
 // ── Encryption helpers (PBKDF2 + AES-256-GCM, compatible with shared/crypto.ts) ──
@@ -156,13 +141,11 @@ function decryptPrivateKey(enc: EncryptedKey, passphrase: string): string {
 export class UserAccountStore {
   private localDb: Database.Database;
   private ledger: PandoLedger;
-  private sessionTtlMs: number;
-  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private dataDir: string;
   private nodeSecret: string | null = null;
   private broadcastClaimFn: ((claim: { peerId: string; username: string | null; displayName: string | null; passwordHash: string; claimedAt: number; balance?: number }) => Promise<void>) | null = null;
 
-  constructor(ledger: PandoLedger, dataDir?: string, sessionTtlMs?: number) {
+  constructor(ledger: PandoLedger, dataDir?: string) {
     this.ledger = ledger;
     this.dataDir = dataDir || join(homedir(), '.pando');
 
@@ -170,14 +153,12 @@ export class UserAccountStore {
       mkdirSync(this.dataDir, { recursive: true });
     }
 
-    // Local-only database for private keys and sessions (NOT synced)
+    // Local-only database for private keys (NOT synced)
     const dbPath = join(this.dataDir, 'auth-local.db');
     this.localDb = new Database(dbPath);
     this.localDb.pragma('journal_mode = WAL');
     this.localDb.pragma('foreign_keys = ON');
     this.localDb.exec(LOCAL_SCHEMA);
-
-    this.sessionTtlMs = sessionTtlMs || DEFAULT_SESSION_TTL_MS;
   }
 
   // ── Broadcast Wiring ──────────────────────────────────────────────────
@@ -240,9 +221,9 @@ export class UserAccountStore {
    * Create a guest identity with an Ed25519 keypair.
    * Private key is encrypted with the node-level secret and stored locally.
    * Account is registered in the P2P-synced ledger.
-   * Returns auth token + peerId + publicKey.
+   * Phase 86: No session created — api-server issues JWT.
    */
-  async createGuest(opts?: { ipAddress?: string; userAgent?: string }): Promise<AuthResult> {
+  async createGuest(): Promise<AuthResult> {
     try {
       // Generate Ed25519 keypair
       const identity = await generateIdentity();
@@ -255,8 +236,6 @@ export class UserAccountStore {
       const privateKeyEncJson = JSON.stringify(encryptedKey);
 
       const now = Date.now();
-      const token = this.generateToken();
-      const expiresAt = now + this.sessionTtlMs;
 
       // Register in P2P ledger (synced across network)
       this.ledger.registerNode(identity.peerId, publicKeyBase64);
@@ -267,17 +246,10 @@ export class UserAccountStore {
         VALUES (?, ?, 'node', ?)
       `).run(identity.peerId, privateKeyEncJson, now);
 
-      // Create local session
-      this.localDb.prepare(`
-        INSERT INTO auth_sessions (token, peer_id, created_at, expires_at, last_active_at, ip_address, user_agent)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(token, identity.peerId, now, expiresAt, now, opts?.ipAddress || null, opts?.userAgent || null);
-
       console.log(`[user-accounts] Created guest identity: ${identity.peerId.slice(0, 16)}...`);
 
       return {
         success: true,
-        token,
         peerId: identity.peerId,
         publicKey: publicKeyBase64,
         isClaimed: false,
@@ -293,27 +265,20 @@ export class UserAccountStore {
    * Phase 41: Create a guest identity from a browser-generated keypair.
    * The private key NEVER leaves the browser. Node only stores the public key.
    * enc_type = 'browser' means the node does not have the private key at all.
+   * Phase 86: No session created — api-server issues JWT.
    */
   async createGuestFromBrowserKey(opts: {
     peerId: string;
     publicKey: string;
-    ipAddress?: string;
-    userAgent?: string;
   }): Promise<AuthResult> {
     try {
       const now = Date.now();
-      const token = this.generateToken();
-      const expiresAt = now + this.sessionTtlMs;
 
       // Check if already registered in ledger
       const existing = this.ledger.accounts.exists(opts.peerId);
       if (existing) {
-        // Already registered — just create a new session (NOT a new account)
-        this.localDb.prepare(`
-          INSERT INTO auth_sessions (token, peer_id, created_at, expires_at, last_active_at, ip_address, user_agent)
-          VALUES (?, ?, ?, ?, ?, ?, ?)
-        `).run(token, opts.peerId, now, expiresAt, now, opts.ipAddress || null, opts.userAgent || null);
-        return { success: true, token, peerId: opts.peerId, publicKey: opts.publicKey, isClaimed: false, isNewAccount: false };
+        // Already registered — return success (no new account)
+        return { success: true, peerId: opts.peerId, publicKey: opts.publicKey, isClaimed: false, isNewAccount: false };
       }
 
       // Register in P2P ledger
@@ -325,14 +290,8 @@ export class UserAccountStore {
         VALUES (?, '', 'browser', ?)
       `).run(opts.peerId, now);
 
-      // Create local session
-      this.localDb.prepare(`
-        INSERT INTO auth_sessions (token, peer_id, created_at, expires_at, last_active_at, ip_address, user_agent)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(token, opts.peerId, now, expiresAt, now, opts.ipAddress || null, opts.userAgent || null);
-
       console.log(`[user-accounts] Created browser-key guest: ${opts.peerId.slice(0, 16)}...`);
-      return { success: true, token, peerId: opts.peerId, publicKey: opts.publicKey, isClaimed: false, isNewAccount: true };
+      return { success: true, peerId: opts.peerId, publicKey: opts.publicKey, isClaimed: false, isNewAccount: true };
     } catch (err: any) {
       console.error('[user-accounts] Browser-key guest creation failed:', err.message);
       return { success: false, error: `Guest creation failed: ${err.message}` };
@@ -342,94 +301,9 @@ export class UserAccountStore {
   // ── Claim (upgrade guest to claimed) ───────────────────────────────────
 
   /**
-   * Claim a guest account by setting a password (and optionally a username).
+   * Phase 86: Claim by peerId directly (JWT already verified by API server).
    * Re-encrypts the private key with the user's password.
    * Writes auth data to ledger (P2P-synced) and broadcasts claim.
-   */
-  async claim(
-    token: string,
-    password: string,
-    username?: string
-  ): Promise<AuthResult> {
-    const peerId = await this.validateSession(token);
-    if (!peerId) {
-      return { success: false, error: 'Invalid or expired session token' };
-    }
-
-    // Check if already claimed in ledger
-    const authFields = this.ledger.accounts.getAuthFields(peerId);
-    if (authFields && authFields.isClaimed) {
-      return { success: false, error: 'Account is already claimed' };
-    }
-
-    // Validate password
-    const passwordError = this.validatePassword(password);
-    if (passwordError) {
-      return { success: false, error: passwordError };
-    }
-
-    // Validate username if provided
-    const usernameVal = (username !== undefined && username !== null && username !== '') ? username : null;
-    if (usernameVal) {
-      const usernameError = this.validateUsername(usernameVal);
-      if (usernameError) {
-        return { success: false, error: usernameError };
-      }
-
-      // Check username uniqueness in ledger
-      if (!this.ledger.accounts.isUsernameAvailable(usernameVal)) {
-        return { success: false, error: 'Username already taken' };
-      }
-    }
-
-    try {
-      // Hash password with scrypt
-      const passwordHash = await this.hashPassword(password);
-      const now = Date.now();
-
-      // Get local key info to handle re-encryption
-      const keyRow = this.localDb.prepare('SELECT * FROM key_store WHERE peer_id = ?').get(peerId) as any;
-
-      if (keyRow && keyRow.enc_type === 'node' && keyRow.private_key_enc) {
-        // Legacy node-key guest: decrypt with node secret, re-encrypt with user password.
-        const nodeSecret = this.getNodeSecret();
-        const encryptedKey: EncryptedKey = JSON.parse(keyRow.private_key_enc);
-        const privateKeyBase64 = decryptPrivateKey(encryptedKey, nodeSecret);
-        const userEncryptedKey = encryptPrivateKey(privateKeyBase64, password);
-        const newPrivateKeyEncJson = JSON.stringify(userEncryptedKey);
-
-        this.localDb.prepare(
-          'UPDATE key_store SET private_key_enc = ?, enc_type = ? WHERE peer_id = ?'
-        ).run(newPrivateKeyEncJson, 'user', peerId);
-      }
-      // For browser-key guests, no re-encryption needed — browser handles its own key backup
-
-      // Write claim to ledger (P2P-synced)
-      this.ledger.accounts.claimAccount(peerId, usernameVal, null, passwordHash);
-
-      // Get public key for response
-      const account = this.ledger.accounts.get(peerId);
-      const publicKey = account?.publicKey || '';
-
-      console.log(`[user-accounts] Account claimed: ${peerId.slice(0, 16)}... ${usernameVal ? `(${usernameVal})` : ''}`);
-
-      return {
-        success: true,
-        token,
-        peerId,
-        publicKey,
-        username: usernameVal || undefined,
-        isClaimed: true,
-      };
-    } catch (err: any) {
-      console.error('[user-accounts] Claim failed:', err.message);
-      return { success: false, error: `Claim failed: ${err.message}` };
-    }
-  }
-
-  /**
-   * Phase 86: Claim by peerId directly (JWT already verified by API server).
-   * Same logic as claim() but skips session token validation.
    */
   async claimByPeerId(
     peerId: string,
@@ -496,11 +370,11 @@ export class UserAccountStore {
   /**
    * Login with username or peerId + password.
    * Only works for claimed accounts. Reads auth data from P2P-synced ledger.
+   * Phase 86: No session created — api-server issues JWT.
    */
   async login(
     identifier: string,
     password: string,
-    opts?: { ipAddress?: string; userAgent?: string }
   ): Promise<AuthResult> {
     if (!identifier || !password) {
       return { success: false, error: 'Identifier and password are required' };
@@ -547,21 +421,10 @@ export class UserAccountStore {
         return { success: false, error: 'Invalid credentials' };
       }
 
-      // Create local session
-      const now = Date.now();
-      const token = this.generateToken();
-      const expiresAt = now + this.sessionTtlMs;
-
-      this.localDb.prepare(`
-        INSERT INTO auth_sessions (token, peer_id, created_at, expires_at, last_active_at, ip_address, user_agent)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-      `).run(token, peerId, now, expiresAt, now, opts?.ipAddress || null, opts?.userAgent || null);
-
       console.log(`[user-accounts] Login: ${username || peerId.slice(0, 16) + '...'} (${Date.now() - loginStart}ms)`);
 
       return {
         success: true,
-        token,
         peerId,
         publicKey,
         username: username || undefined,
@@ -574,18 +437,6 @@ export class UserAccountStore {
   }
 
   // ── Profile ────────────────────────────────────────────────────────────
-
-  /**
-   * Get public profile for a session token.
-   * Does NOT return private key or password hash.
-   * Reads from P2P-synced ledger.
-   */
-  async getProfile(token: string): Promise<UserAccountPublic | null> {
-    const peerId = await this.validateSession(token);
-    if (!peerId) return null;
-
-    return this.getIdentityByPeerId(peerId);
-  }
 
   /**
    * Get public identity info by peerId directly (no session required).
@@ -608,77 +459,7 @@ export class UserAccountStore {
     };
   }
 
-  // ── Logout ─────────────────────────────────────────────────────────────
-
-  /**
-   * Invalidate a session token (logout).
-   */
-  async logout(token: string): Promise<boolean> {
-    const result = this.localDb.prepare(
-      'DELETE FROM auth_sessions WHERE token = ?'
-    ).run(token);
-    return result.changes > 0;
-  }
-
-  // ── Session Validation ─────────────────────────────────────────────────
-
-  /**
-   * Validate a session token. Returns the peerId if valid, null if invalid/expired.
-   * Also updates last_active_at on valid sessions.
-   */
-  async validateSession(token: string): Promise<string | null> {
-    if (!token) return null;
-
-    const session = this.localDb.prepare(
-      'SELECT * FROM auth_sessions WHERE token = ?'
-    ).get(token) as any;
-
-    if (!session) return null;
-
-    if (session.expires_at < Date.now()) {
-      this.localDb.prepare('DELETE FROM auth_sessions WHERE token = ?').run(token);
-      return null;
-    }
-
-    this.localDb.prepare(
-      'UPDATE auth_sessions SET last_active_at = ? WHERE token = ?'
-    ).run(Date.now(), token);
-
-    return session.peer_id;
-  }
-
-  /**
-   * Refresh a session token — extend its TTL.
-   * Returns the new expiry time, or null if token is invalid.
-   */
-  async refreshSession(token: string): Promise<{ expiresAt: number } | null> {
-    const peerId = await this.validateSession(token);
-    if (!peerId) return null;
-
-    const newExpiresAt = Date.now() + this.sessionTtlMs;
-
-    this.localDb.prepare(
-      'UPDATE auth_sessions SET expires_at = ?, last_active_at = ? WHERE token = ?'
-    ).run(newExpiresAt, Date.now(), token);
-
-    return { expiresAt: newExpiresAt };
-  }
-
-  // ── Session Cleanup ────────────────────────────────────────────────────
-
-  /**
-   * Remove all expired sessions from the local database.
-   */
-  cleanupExpiredSessions(): number {
-    const result = this.localDb.prepare(
-      'DELETE FROM auth_sessions WHERE expires_at < ?'
-    ).run(Date.now());
-
-    if (result.changes > 0) {
-      console.log(`[user-accounts] Cleaned up ${result.changes} expired sessions`);
-    }
-    return result.changes;
-  }
+  // ── Guest Reclamation ─────────────────────────────────────────────────
 
   /**
    * Phase 35: Reclaim Lux from expired unclaimed guest accounts.
@@ -691,7 +472,6 @@ export class UserAccountStore {
     const cutoff = Date.now() - GUEST_EXPIRY_MS;
 
     // Find unclaimed guests created more than 30 days ago via ledger
-    // We query the ledger database directly for unclaimed accounts
     const ledgerDb = this.ledger.getDatabase();
     const expiredGuests = ledgerDb.prepare(
       'SELECT peer_id FROM accounts WHERE is_claimed = 0 AND created_at < ?'
@@ -714,8 +494,6 @@ export class UserAccountStore {
           luxRecovered += balance;
         }
 
-        // Clean up local sessions for this guest
-        this.localDb.prepare('DELETE FROM auth_sessions WHERE peer_id = ?').run(guest.peer_id);
         // Clean up local key_store for this guest
         this.localDb.prepare('DELETE FROM key_store WHERE peer_id = ?').run(guest.peer_id);
 
@@ -731,39 +509,17 @@ export class UserAccountStore {
     return { reclaimed, luxRecovered };
   }
 
-  /**
-   * Start periodic session cleanup (every 30 minutes).
-   */
-  startCleanup(): void {
-    if (this.cleanupTimer) return;
-    this.cleanupTimer = setInterval(() => {
-      this.cleanupExpiredSessions();
-    }, 30 * 60 * 1000);
-  }
-
-  /**
-   * Stop periodic cleanup.
-   */
-  stopCleanup(): void {
-    if (this.cleanupTimer) {
-      clearInterval(this.cleanupTimer);
-      this.cleanupTimer = null;
-    }
-  }
-
   // ── Stats ──────────────────────────────────────────────────────────────
 
   /**
-   * Get summary statistics about accounts and sessions.
-   * Account stats from ledger, session stats from local DB.
+   * Get summary statistics about accounts.
+   * Account stats from ledger.
    */
   getStats(): {
     totalAccounts: number;
     claimedAccounts: number;
     guestAccounts: number;
-    activeSessions: number;
   } {
-    const now = Date.now();
     const ledgerDb = this.ledger.getDatabase();
 
     const totalAccounts = (ledgerDb.prepare(
@@ -778,20 +534,15 @@ export class UserAccountStore {
       'SELECT COUNT(*) as cnt FROM accounts WHERE is_claimed = 0'
     ).get() as any)?.cnt || 0;
 
-    const activeSessions = (this.localDb.prepare(
-      'SELECT COUNT(*) as cnt FROM auth_sessions WHERE expires_at > ?'
-    ).get(now) as any)?.cnt || 0;
-
-    return { totalAccounts, claimedAccounts, guestAccounts, activeSessions };
+    return { totalAccounts, claimedAccounts, guestAccounts };
   }
 
   // ── Close ──────────────────────────────────────────────────────────────
 
   /**
-   * Close the database and stop cleanup.
+   * Close the database.
    */
   close(): void {
-    this.stopCleanup();
     this.localDb.close();
   }
 
@@ -856,9 +607,5 @@ export class UserAccountStore {
     if (derivedKey.length !== storedKey.length) return false;
 
     return timingSafeEqual(derivedKey, storedKey);
-  }
-
-  private generateToken(): string {
-    return randomBytes(64).toString('hex');
   }
 }

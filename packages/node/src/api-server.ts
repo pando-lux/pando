@@ -4260,15 +4260,10 @@ export class ApiServer {
         result = await store.createGuestFromBrowserKey({
           peerId: derivedPeerId,
           publicKey: body.publicKey,
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'],
         });
       } else {
         // Legacy: server-side key generation (no encryption support)
-        result = await store.createGuest({
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'],
-        });
+        result = await store.createGuest();
       }
 
       if (!result.success) {
@@ -4378,10 +4373,7 @@ export class ApiServer {
       }
 
       try {
-        const result = await store.login(identifier, password, {
-          ipAddress: request.ip,
-          userAgent: request.headers['user-agent'],
-        });
+        const result = await store.login(identifier, password);
 
         if (!result.success) {
           return reply.code(401).send({ error: result.error });

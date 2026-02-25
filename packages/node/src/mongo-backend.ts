@@ -177,12 +177,6 @@ export class MongoStorageBackend implements StorageBackend {
       await userAccounts.createIndex({ username: 1 });
       await userAccounts.createIndex({ peerId: 1 });
 
-      // auth_sessions: index on userId, expiresAt
-      const authSessions = this.db.collection('auth_sessions');
-      await authSessions.createIndex({ userId: 1 });
-      await authSessions.createIndex({ peer_id: 1 });
-      await authSessions.createIndex({ expiresAt: 1 });
-
       // Phase 44: Project data collections
       const projects = this.db.collection('projects');
       await projects.createIndex({ ownerId: 1 });
