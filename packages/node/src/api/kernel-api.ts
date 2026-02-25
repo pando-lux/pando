@@ -126,6 +126,15 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       });
     });
 
+    // v2.4: POST /admin/wipe-credentials — emergency tripwire trigger (admin token required)
+    // Wipes CREDENTIAL_MASTER_KEY from memory + broadcasts node_compromised to network.
+    fastify.post('/admin/wipe-credentials', async (request: any, reply: any) => {
+      const body = request.body as { reason?: string } | undefined;
+      const reason = body?.reason || 'admin-trigger';
+      await node.triggerLocalCompromise(reason);
+      return { status: 'wiped', reason, timestamp: Date.now() };
+    });
+
     // Phase 80: POST /admin/migrate-apps — redeploy Tier 2 apps from a dead instance to a running one
     fastify.post('/admin/migrate-apps', async (request: any, reply: any) => {
       const body = request.body as { fromInstanceId?: string } | undefined;

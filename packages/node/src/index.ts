@@ -879,11 +879,17 @@ export class PandoNode {
     }
 
     // Phase 69: Wire CredentialStore to ResourceRegistry (after MongoDB is connected)
+    // v2.4: Delete CREDENTIAL_MASTER_KEY from process.env immediately after loading into memory.
     if (this.storageBackend && typeof (this.storageBackend as any).getDb === 'function') {
       try {
         const mongoDb = (this.storageBackend as any).getDb();
         const credentialStore = new CredentialStore(mongoDb, process.env.CREDENTIAL_MASTER_KEY);
         await credentialStore.init();
+        // v2.4: Remove env var from process environment — key now lives ONLY in credentialStore.masterKey
+        if (process.env.CREDENTIAL_MASTER_KEY) {
+          delete process.env.CREDENTIAL_MASTER_KEY;
+          console.log('[security] CREDENTIAL_MASTER_KEY deleted from process.env (key is memory-only now)');
+        }
         this.resourceRegistry.setCredentialStore(credentialStore);
         (this as any)._credentialStore = credentialStore; // Store reference for P2P handlers
       } catch (err) {
@@ -1831,6 +1837,20 @@ location /apps/${projectId}/ {
       }
     });
 
+    // v2.4: Subscribe to node_compromised broadcasts from peers
+    await this.network.subscribeNodeCompromised();
+    this.network.onNodeCompromised((compromisedPeerId, reason, timestamp) => {
+      console.warn(`[security] Peer ${compromisedPeerId.slice(0, 12)} signaled compromise (${reason}) at ${new Date(timestamp).toISOString()}`);
+      // Remove compromised peer from credential routing by marking them non-credentialAccess
+      const profile = this.capabilityRegistry.getPeerProfile(compromisedPeerId);
+      if (profile) {
+        (profile as any).credentialAccess = false;
+        (profile as any).compromisedAt = timestamp;
+        this.capabilityRegistry.updatePeerProfile(profile);
+        console.warn(`[security] Peer ${compromisedPeerId.slice(0, 12)} removed from credential routing`);
+      }
+    });
+
     // v2.3: Compute and log final boot health
     this._computeBootHealth();
 
@@ -2000,6 +2020,24 @@ location /apps/${projectId}/ {
       } catch (err: any) {
         console.error(`[snapshot] Auto-create failed: ${err.message}`);
       }
+    }
+  }
+
+  /**
+   * v2.4: Trigger local compromise response.
+   * Wipes credential key from memory + broadcasts node_compromised to network.
+   * Called by: admin endpoint, future OS-level tripwire detection.
+   */
+  async triggerLocalCompromise(reason: string): Promise<void> {
+    console.warn(`[security] TRIPWIRE TRIGGERED: ${reason}`);
+    // Step 1: Wipe credential key from memory
+    const credStore = (this as any)._credentialStore as CredentialStore | undefined;
+    if (credStore) {
+      credStore.wipe();
+    }
+    // Step 2: Broadcast to network
+    if (this.network) {
+      await this.network.publishNodeCompromised(reason).catch(() => {});
     }
   }
 

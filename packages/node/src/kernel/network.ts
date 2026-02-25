@@ -734,6 +734,50 @@ export class PandoNetwork {
 
   static readonly TOPIC_MANAGERS = 'pando/managers';
 
+  // v2.4: Node compromise notification topic
+  static readonly TOPIC_NODE_COMPROMISED = 'pando/node-compromised';
+  private nodeCompromisedHandlers: Array<(peerId: string, reason: string, timestamp: number) => void> = [];
+
+  /**
+   * v2.4: Broadcast that this node has been compromised.
+   * Other nodes should stop routing credentials to this peerId.
+   */
+  async publishNodeCompromised(reason: string): Promise<void> {
+    const message = {
+      type: 'node_compromised' as any,
+      from: this.identity.peerId,
+      timestamp: Date.now(),
+      payload: { peerId: this.identity.peerId, reason, timestamp: Date.now() },
+    };
+    try {
+      await this.publishToTopic(PandoNetwork.TOPIC_NODE_COMPROMISED, message as any);
+      console.warn(`[security] TRIPWIRE: Broadcast node_compromised to network (reason: ${reason})`);
+    } catch (err: any) {
+      console.error(`[security] Failed to broadcast node_compromised: ${err.message}`);
+    }
+  }
+
+  /**
+   * v2.4: Subscribe to node_compromised broadcasts from peers.
+   */
+  async subscribeNodeCompromised(): Promise<void> {
+    await this.subscribeTopic(PandoNetwork.TOPIC_NODE_COMPROMISED, (message) => {
+      const payload = message.payload as any;
+      if (!payload?.peerId) return;
+      const fromPeerId: string = payload.peerId;
+      const reason: string = payload.reason || 'unknown';
+      const timestamp: number = payload.timestamp || Date.now();
+      for (const handler of this.nodeCompromisedHandlers) {
+        try { handler(fromPeerId, reason, timestamp); } catch {}
+      }
+    });
+    console.log(`[security] Subscribed to node_compromised notifications`);
+  }
+
+  onNodeCompromised(handler: (peerId: string, reason: string, timestamp: number) => void): void {
+    this.nodeCompromisedHandlers.push(handler);
+  }
+
   async stop(): Promise<void> {
     this.stopped = true;
     if (this.reconnectTimer) clearInterval(this.reconnectTimer);

@@ -65,6 +65,21 @@ export class CredentialStore {
     return this.masterKey !== null;
   }
 
+  /**
+   * v2.4: Active tripwire wipe — zero out the master key in memory.
+   * Called when a security compromise is detected. After wipe:
+   * - hasDecryptionCapability() returns false
+   * - All subsequent getCredential() calls return null
+   * - The key cannot be recovered without process restart with the env var
+   */
+  wipe(): void {
+    if (this.masterKey) {
+      (this.masterKey as Buffer).fill(0);
+      this.masterKey = null;
+      console.warn('[credential-store] TRIPWIRE: Master key wiped from memory. Credential decryption disabled.');
+    }
+  }
+
   /** Store an encrypted credential in MongoDB */
   async storeCredential(
     resourceId: string,
