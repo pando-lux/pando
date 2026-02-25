@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.pando.node</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/local/bin/node</string>
+    <string>bin/pando.js</string>
+    <string>--headless</string>
+    <string>--port</string>
+    <string>4001</string>
+    <string>--api-port</string>
+    <string>4000</string>
+    <string>--agent</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/jairangwani/Desktop/pando</string>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+  <key>StandardOutPath</key>
+  <string>/Users/jairangwani/.pando/logs/launchd-stdout.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/jairangwani/.pando/logs/launchd-stderr.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin</string>
+  </dict>
+</dict>
+</plist>

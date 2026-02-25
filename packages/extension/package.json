@@ -1,0 +1,6 @@
+{
+  "name": "@pando/extension",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Pando Browser Extension — Chrome MV3 (coming Week 3)"
+}

@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>LuxRunner - Clicker Game</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!--
+    LuxRunner — Simple Clicker / Incremental Game
+    ================================================
+    Built to exercise Pando's Phase 53 Resource Proxy architecture.
+
+    SETUP:
+    1. Create a project on your Pando node:
+       curl -s http://127.0.0.1:4100/projects -X POST \
+         -H "X-User-Token: YOUR_SESSION_TOKEN" \
+         -H "Content-Type: application/json" \
+         -d '{"name":"luxrunner","description":"Clicker game","visibility":"public"}'
+
+    2. Generate an API key for the project:
+       curl -s http://127.0.0.1:4100/projects/PROJECT_ID/api-key -X POST \
+         -H "X-User-Token: YOUR_SESSION_TOKEN"
+
+    3. Ensure a storage_db resource is registered on the node (MongoDB URI).
+
+    4. Set GATEWAY_URL and PROJECT_KEY below (or use the config panel in the UI).
+
+    5. Open this file in a browser. The gateway must be running at the configured URL.
+
+    COLLECTIONS USED:
+    - luxrunner_scores: { _id, playerName, score, clickPower, multiplier, lastSaved, createdAt }
+
+    RESOURCE PROXY OPERATIONS USED:
+    - find (leaderboard)
+    - findOne (load player save)
+    - insertOne (create new player)
+    - updateOne (save progress)
+  -->
+</head>
+<body class="bg-gray-950 text-gray-100 min-h-screen select-none">
+
+  <div id="app"></div>
+
+  <script>
+    // ── Configuration ──────────────────────────────────────────────────────
+    let GATEWAY_URL = localStorage.getItem('luxrunner_gateway') || 'http://localhost:3222';
+    let PROJECT_KEY = localStorage.getItem('luxrunner_key') || '';
+
+    // ── Game State ─────────────────────────────────────────────────────────
+    let playerName = localStorage.getItem('luxrunner_player') || '';
+    let score = 0;
+    let clickPower = 1;
+    let multiplier = 1;
+    let totalClicks = 0;
+    let leaderboard = [];
+    let saveTimer = null;
+    let gameActive = false;
+    let lastSaveScore = 0;
+
+    // ── Upgrades ───────────────────────────────────────────────────────────
+    const UPGRADES = [
+      { id: 'power2',  name: 'Double Click',     desc: '+1 per click',     cost: 50,    effect: () => { clickPower += 1; } },
+      { id: 'power5',  name: 'Power Surge',      desc: '+3 per click',     cost: 200,   effect: () => { clickPower += 3; } },
+      { id: 'multi2',  name: '2x Multiplier',    desc: 'Double all gains', cost: 500,   effect: () => { multiplier *= 2; } },
+      { id: 'power10', name: 'Mega Click',       desc: '+10 per click',    cost: 1000,  effect: () => { clickPower += 10; } },
+      { id: 'multi3',  name: '3x Multiplier',    desc: 'Triple all gains', cost: 2500,  effect: () => { multiplier *= 3; } },
+      { id: 'power50', name: 'Ultra Click',      desc: '+50 per click',    cost: 5000,  effect: () => { clickPower += 50; } },
+      { id: 'multi5',  name: '5x Multiplier',    desc: '5x all gains',    cost: 10000, effect: () => { multiplier *= 5; } },
+      { id: 'power200', name: 'Quantum Click',    desc: '+200 per click',   cost: 25000, effect: () => { clickPower += 200; } },
+    ];
+    let purchasedUpgrades = new Set();
+
+    // ── Resource Proxy Helper ──────────────────────────────────────────────
+    async function dbOperation(payload) {
+      if (!GATEWAY_URL || !PROJECT_KEY) {
+        throw new Error('Gateway URL and Project Key must be configured.');
+      }
+      const url = GATEWAY_URL.replace(/\/$/, '') + '/api/resource-proxy/db';
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Project-Key': PROJECT_KEY,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `Operation failed (HTTP ${res.status})`);
+      }
+      return data;
+    }
+
+    // ── Database Functions ─────────────────────────────────────────────────
+    async function loadLeaderboard() {
+      try {
+        const data = await dbOperation({
+          operation: 'find',
+          collection: 'luxrunner_scores',
+          filter: {},
+          sort: { score: -1 },
+          limit: 20,
+          projection: { playerName: 1, score: 1, clickPower: 1, multiplier: 1, lastSaved: 1 },
+        });
+        leaderboard = data.data || [];
+      } catch (err) {
+        console.error('[LuxRunner] Leaderboard load failed:', err.message);
+        leaderboard = [];
+      }
+    }
+
+    async function loadPlayerSave() {
+      try {
+        const data = await dbOperation({
+          operation: 'findOne',
+          collection: 'luxrunner_scores',
+          filter: { playerName: playerName },
+        });
+        if (data.data) {
+          score = data.data.score || 0;
+          clickPower = data.data.clickPower || 1;
+          multiplier = data.data.multiplier || 1;
+          totalClicks = data.data.totalClicks || 0;
+          purchasedUpgrades = new Set(data.data.purchasedUpgrades || []);
+          lastSaveScore = score;
+          return true;
+        }
+        return false;
+      } catch (err) {
+        console.error('[LuxRunner] Load save failed:', err.message);
+        return false;
+      }
+    }
+
+    async function saveProgress() {
+      // Only save if score changed
+      if (score === lastSaveScore) return;
+      try {
+        // Try update first; if no match, insert
+        const result = await dbOperation({
+          operation: 'updateOne',
+          collection: 'luxrunner_scores',
+          filter: { playerName: playerName },
+          update: {
+            $set: {
+              score: score,
+              clickPower: clickPower,
+              multiplier: multiplier,
+              totalClicks: totalClicks,
+              purchasedUpgrades: [...purchasedUpgrades],
+              lastSaved: Date.now(),
+            },
+            $setOnInsert: {
+              playerName: playerName,
+              createdAt: Date.now(),
+            },
+          },
+        });
+
+        // If nothing matched, this is a new player — insert instead
+        if (result.data && result.data.matchedCount === 0) {
+          await dbOperation({
+            operation: 'insertOne',
+            collection: 'luxrunner_scores',
+            document: {
+              playerName: playerName,
+              score: score,
+              clickPower: clickPower,
+              multiplier: multiplier,
+              totalClicks: totalClicks,
+              purchasedUpgrades: [...purchasedUpgrades],
+              lastSaved: Date.now(),
+              createdAt: Date.now(),
+            },
+          });
+        }
+        lastSaveScore = score;
+      } catch (err) {
+        console.error('[LuxRunner] Save failed:', err.message);
+      }
+    }
+
+    // ── Game Logic ─────────────────────────────────────────────────────────
+    function doClick() {
+      const earned = clickPower * multiplier;
+      score += earned;
+      totalClicks++;
+      renderScore();
+      showClickEffect(earned);
+    }
+
+    function buyUpgrade(idx) {
+      const upgrade = UPGRADES[idx];
+      if (!upgrade || score < upgrade.cost || purchasedUpgrades.has(upgrade.id)) return;
+      score -= upgrade.cost;
+      purchasedUpgrades.add(upgrade.id);
+      upgrade.effect();
+      render();
+    }
+
+    function showClickEffect(amount) {
+      const btn = document.getElementById('click-target');
+      if (!btn) return;
+      const fx = document.createElement('div');
+      fx.className = 'absolute text-yellow-400 font-bold text-lg pointer-events-none animate-bounce';
+      fx.style.left = (20 + Math.random() * 60) + '%';
+      fx.style.top = '10%';
+      fx.textContent = '+' + formatNumber(amount);
+      btn.parentElement.appendChild(fx);
+      setTimeout(() => fx.remove(), 800);
+    }
+
+    // ── Rendering ──────────────────────────────────────────────────────────
+    function render() {
+      const app = document.getElementById('app');
+      app.innerHTML = '';
+
+      // Header
+      const header = el('div', 'bg-gray-900 border-b border-gray-800 px-6 py-4 flex items-center justify-between');
+      const titleArea = el('div', 'flex items-center gap-3');
+      const title = el('h1', 'text-2xl font-bold text-yellow-400');
+      title.textContent = 'LuxRunner';
+      const subtitle = el('span', 'text-sm text-gray-500');
+      subtitle.textContent = 'Clicker Game on Pando';
+      titleArea.append(title, subtitle);
+
+      const configBtn = el('button', 'text-sm bg-gray-800 hover:bg-gray-700 px-3 py-1 rounded text-gray-400');
+      configBtn.textContent = 'Config';
+      configBtn.onclick = () => showConfigPanel();
+      header.append(titleArea, configBtn);
+      app.appendChild(header);
+
+      // Check if configured
+      if (!PROJECT_KEY) {
+        const notice = el('div', 'max-w-xl mx-auto mt-12 p-6 bg-yellow-900/20 border border-yellow-700/40 rounded-lg text-center');
+        notice.innerHTML = `
+          <h2 class="text-lg font-semibold text-yellow-400 mb-2">Setup Required</h2>
+          <p class="text-gray-300 mb-4">Click <strong>Config</strong> above to set your Gateway URL and Project API Key.</p>
+          <p class="text-sm text-gray-500">See the HTML source comments for full setup instructions.</p>
+        `;
+        app.appendChild(notice);
+        return;
+      }
+
+      // Name entry
+      if (!playerName) {
+        const namePanel = el('div', 'max-w-md mx-auto mt-12 p-6 bg-gray-900 rounded-lg border border-gray-800');
+        namePanel.innerHTML = `
+          <h2 class="text-lg font-semibold mb-4 text-yellow-400">Enter Player Name</h2>
+          <div class="flex gap-2">
+            <input id="name-input" type="text" maxlength="20"
+              class="flex-1 bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white focus:outline-none focus:border-yellow-500"
+              placeholder="Your name..." />
+            <button id="name-btn"
+              class="bg-yellow-600 hover:bg-yellow-700 px-4 py-2 rounded font-medium text-black"
+              onclick="startGame()">Play</button>
+          </div>
+        `;
+        app.appendChild(namePanel);
+        setTimeout(() => document.getElementById('name-input')?.focus(), 50);
+        return;
+      }
+
+      // Main game layout: two columns
+      const main = el('div', 'max-w-5xl mx-auto px-4 py-6 grid grid-cols-1 lg:grid-cols-3 gap-6');
+
+      // Left: game area
+      const gameCol = el('div', 'lg:col-span-2');
+
+      // Player info
+      const playerBar = el('div', 'flex items-center justify-between mb-4');
+      const pInfo = el('div', 'text-sm text-gray-400');
+      pInfo.innerHTML = `Player: <span class="text-yellow-400 font-medium">${esc(playerName)}</span>`;
+      const resetBtn = el('button', 'text-xs text-gray-600 hover:text-gray-400 underline');
+      resetBtn.textContent = 'Switch player';
+      resetBtn.onclick = () => {
+        saveProgress();
+        playerName = '';
+        localStorage.removeItem('luxrunner_player');
+        gameActive = false;
+        score = 0; clickPower = 1; multiplier = 1; totalClicks = 0;
+        purchasedUpgrades.clear();
+        render();
+      };
+      playerBar.append(pInfo, resetBtn);
+      gameCol.appendChild(playerBar);
+
+      // Score display
+      const scorePanel = el('div', 'bg-gray-900 rounded-lg p-6 mb-4 border border-gray-800 text-center');
+      scorePanel.innerHTML = `
+        <div class="text-sm text-gray-500 mb-1">Lux Earned</div>
+        <div id="score-display" class="text-5xl font-bold text-yellow-400 mb-2">${formatNumber(score)}</div>
+        <div class="text-xs text-gray-600">
+          ${formatNumber(clickPower * multiplier)} per click
+          (power: ${formatNumber(clickPower)} x ${formatNumber(multiplier)})
+          | ${formatNumber(totalClicks)} total clicks
+        </div>
+      `;
+      gameCol.appendChild(scorePanel);
+
+      // Click target
+      const clickArea = el('div', 'relative flex justify-center mb-6');
+      const clickBtn = el('button',
+        'w-48 h-48 rounded-full bg-gradient-to-br from-yellow-500 to-orange-600 ' +
+        'shadow-lg shadow-yellow-500/20 hover:shadow-yellow-500/40 ' +
+        'active:scale-95 transition-transform duration-75 ' +
+        'flex items-center justify-center text-4xl font-bold text-black');
+      clickBtn.id = 'click-target';
+      clickBtn.textContent = 'CLICK';
+      clickBtn.onclick = () => doClick();
+      clickArea.appendChild(clickBtn);
+      gameCol.appendChild(clickArea);
+
+      // Upgrades
+      const upgradeSection = el('div', 'bg-gray-900 rounded-lg p-4 border border-gray-800');
+      const upgradeTitle = el('h3', 'text-sm font-semibold text-gray-400 mb-3');
+      upgradeTitle.textContent = 'UPGRADES';
+      upgradeSection.appendChild(upgradeTitle);
+
+      const upgradeGrid = el('div', 'grid grid-cols-1 sm:grid-cols-2 gap-2');
+      for (let i = 0; i < UPGRADES.length; i++) {
+        const u = UPGRADES[i];
+        const owned = purchasedUpgrades.has(u.id);
+        const canAfford = score >= u.cost;
+
+        const card = el('div',
+          `p-3 rounded border ${owned ? 'border-green-700/50 bg-green-900/20' : canAfford ? 'border-yellow-700/50 bg-yellow-900/10 cursor-pointer hover:bg-yellow-900/20' : 'border-gray-800 bg-gray-900/50 opacity-50'}`);
+        card.innerHTML = `
+          <div class="flex justify-between items-center">
+            <span class="font-medium text-sm ${owned ? 'text-green-400' : 'text-gray-200'}">${esc(u.name)}</span>
+            <span class="text-xs ${owned ? 'text-green-500' : canAfford ? 'text-yellow-400' : 'text-gray-600'}">${owned ? 'OWNED' : formatNumber(u.cost) + ' Lux'}</span>
+          </div>
+          <div class="text-xs text-gray-500 mt-1">${esc(u.desc)}</div>
+        `;
+        if (!owned && canAfford) {
+          card.onclick = () => buyUpgrade(i);
+        }
+        upgradeGrid.appendChild(card);
+      }
+      upgradeSection.appendChild(upgradeGrid);
+      gameCol.appendChild(upgradeSection);
+
+      main.appendChild(gameCol);
+
+      // Right: leaderboard
+      const lbCol = el('div', '');
+      const lbPanel = el('div', 'bg-gray-900 rounded-lg p-4 border border-gray-800 sticky top-4');
+      const lbTitle = el('h3', 'text-sm font-semibold text-yellow-400 mb-3 flex items-center justify-between');
+      lbTitle.innerHTML = `
+        <span>LEADERBOARD</span>
+        <button class="text-xs text-gray-500 hover:text-gray-300" onclick="refreshLeaderboard()">Refresh</button>
+      `;
+      lbPanel.appendChild(lbTitle);
+
+      if (leaderboard.length === 0) {
+        const empty = el('div', 'text-sm text-gray-600 text-center py-4');
+        empty.textContent = 'No scores yet';
+        lbPanel.appendChild(empty);
+      } else {
+        for (let i = 0; i < leaderboard.length; i++) {
+          const entry = leaderboard[i];
+          const isMe = entry.playerName === playerName;
+          const row = el('div', `flex items-center justify-between py-2 ${i > 0 ? 'border-t border-gray-800' : ''}`);
+          const left = el('div', 'flex items-center gap-2');
+          const rank = el('span', `text-xs font-mono w-6 ${i < 3 ? 'text-yellow-400' : 'text-gray-600'}`);
+          rank.textContent = '#' + (i + 1);
+          const name = el('span', `text-sm ${isMe ? 'text-yellow-400 font-medium' : 'text-gray-300'}`);
+          name.textContent = entry.playerName || '???';
+          left.append(rank, name);
+          const scoreSpan = el('span', 'text-sm text-gray-400 font-mono');
+          scoreSpan.textContent = formatNumber(entry.score || 0);
+          row.append(left, scoreSpan);
+          lbPanel.appendChild(row);
+        }
+      }
+
+      lbCol.appendChild(lbPanel);
+
+      // Stats panel
+      const statsPanel = el('div', 'bg-gray-900 rounded-lg p-4 border border-gray-800 mt-4');
+      statsPanel.innerHTML = `
+        <h3 class="text-sm font-semibold text-gray-400 mb-2">STATS</h3>
+        <div class="text-xs text-gray-500 space-y-1">
+          <div>Click Power: <span class="text-gray-300">${formatNumber(clickPower)}</span></div>
+          <div>Multiplier: <span class="text-gray-300">${formatNumber(multiplier)}x</span></div>
+          <div>Per Click: <span class="text-yellow-400">${formatNumber(clickPower * multiplier)}</span></div>
+          <div>Total Clicks: <span class="text-gray-300">${formatNumber(totalClicks)}</span></div>
+          <div>Upgrades: <span class="text-gray-300">${purchasedUpgrades.size} / ${UPGRADES.length}</span></div>
+        </div>
+      `;
+      lbCol.appendChild(statsPanel);
+
+      main.appendChild(lbCol);
+      app.appendChild(main);
+    }
+
+    function renderScore() {
+      const el = document.getElementById('score-display');
+      if (el) el.textContent = formatNumber(score);
+    }
+
+    // ── Config Panel ───────────────────────────────────────────────────────
+    function showConfigPanel() {
+      const overlay = el('div', 'fixed inset-0 bg-black/60 flex items-center justify-center z-50');
+      overlay.id = 'config-overlay';
+      const panel = el('div', 'bg-gray-900 rounded-lg p-6 w-full max-w-md border border-gray-700');
+      panel.innerHTML = `
+        <h2 class="text-lg font-semibold mb-4 text-yellow-400">Configuration</h2>
+        <label class="block text-sm text-gray-400 mb-1">Gateway URL</label>
+        <input id="cfg-gateway" type="text" value="${esc(GATEWAY_URL)}"
+          class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white mb-3 focus:outline-none focus:border-yellow-500"
+          placeholder="http://localhost:3222" />
+        <label class="block text-sm text-gray-400 mb-1">Project API Key</label>
+        <input id="cfg-key" type="text" value="${esc(PROJECT_KEY)}"
+          class="w-full bg-gray-800 border border-gray-700 rounded px-3 py-2 text-white mb-4 focus:outline-none focus:border-yellow-500 font-mono text-sm"
+          placeholder="pk_..." />
+        <div class="flex justify-end gap-2">
+          <button class="px-4 py-2 rounded text-gray-400 hover:text-white" onclick="closeConfig()">Cancel</button>
+          <button class="bg-yellow-600 hover:bg-yellow-700 px-4 py-2 rounded font-medium text-black" onclick="saveConfig()">Save</button>
+        </div>
+      `;
+      overlay.appendChild(panel);
+      overlay.onclick = (e) => { if (e.target === overlay) closeConfig(); };
+      document.body.appendChild(overlay);
+    }
+
+    function closeConfig() {
+      const ov = document.getElementById('config-overlay');
+      if (ov) ov.remove();
+    }
+
+    function saveConfig() {
+      GATEWAY_URL = document.getElementById('cfg-gateway').value.trim();
+      PROJECT_KEY = document.getElementById('cfg-key').value.trim();
+      localStorage.setItem('luxrunner_gateway', GATEWAY_URL);
+      localStorage.setItem('luxrunner_key', PROJECT_KEY);
+      closeConfig();
+      render();
+    }
+
+    // ── Game Start / Load ──────────────────────────────────────────────────
+    async function startGame() {
+      const input = document.getElementById('name-input');
+      const name = (input?.value || '').trim();
+      if (!name) return;
+      playerName = name;
+      localStorage.setItem('luxrunner_player', playerName);
+
+      // Try to load existing save
+      await loadPlayerSave();
+      gameActive = true;
+      render();
+      await loadLeaderboard();
+      render();
+
+      // Auto-save every 15 seconds
+      if (saveTimer) clearInterval(saveTimer);
+      saveTimer = setInterval(async () => {
+        if (gameActive) {
+          await saveProgress();
+          await loadLeaderboard();
+          render();
+        }
+      }, 15000);
+    }
+
+    async function refreshLeaderboard() {
+      await saveProgress();
+      await loadLeaderboard();
+      render();
+    }
+
+    // ── Utilities ──────────────────────────────────────────────────────────
+    function el(tag, className) {
+      const e = document.createElement(tag);
+      if (className) e.className = className;
+      return e;
+    }
+
+    function esc(str) {
+      const d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
+    function formatNumber(n) {
+      if (n >= 1_000_000_000) return (n / 1_000_000_000).toFixed(1) + 'B';
+      if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + 'M';
+      if (n >= 1_000) return (n / 1_000).toFixed(1) + 'K';
+      return String(n);
+    }
+
+    // ── Keyboard shortcuts ─────────────────────────────────────────────────
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter' && e.target?.id === 'name-input') {
+        startGame();
+      }
+      // Spacebar to click (when game is active and not in an input)
+      if (e.key === ' ' && gameActive && e.target?.tagName !== 'INPUT' && e.target?.tagName !== 'TEXTAREA') {
+        e.preventDefault();
+        doClick();
+        render();
+      }
+    });
+
+    // ── Save on page unload ────────────────────────────────────────────────
+    window.addEventListener('beforeunload', () => {
+      if (gameActive && score !== lastSaveScore) {
+        // Use sendBeacon for reliable unload save
+        const url = GATEWAY_URL.replace(/\/$/, '') + '/api/resource-proxy/db';
+        const payload = JSON.stringify({
+          operation: 'updateOne',
+          collection: 'luxrunner_scores',
+          filter: { playerName: playerName },
+          update: {
+            $set: {
+              score, clickPower, multiplier, totalClicks,
+              purchasedUpgrades: [...purchasedUpgrades],
+              lastSaved: Date.now(),
+            },
+          },
+        });
+        // sendBeacon doesn't support custom headers, so this is best-effort.
+        // The interval save is the reliable path.
+        navigator.sendBeacon(url, new Blob([payload], { type: 'application/json' }));
+      }
+    });
+
+    // ── Boot ───────────────────────────────────────────────────────────────
+    render();
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,26 @@
+node_modules/
+dist/
+*.tsbuildinfo
+.env*
+.DS_Store
+*.log
+package-lock.json
+
+# QA screenshots (evidence stored in QA reports, not committed separately)
+*.png
+qa-phase*/
+nul
+
+# Temporary files
+tmp-*.json
+
+# Launch scripts with embedded secrets
+start-with-keys.sh
+
+# Deploy backups and temp files
+.deploy-backups/
+claude-manager/
+stderr.tmp
+
+# Private dev testing guide (contains AWS credentials)
+dev-testing/

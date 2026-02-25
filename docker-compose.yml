@@ -1,0 +1,12 @@
+services:
+  pando-node:
+    build: .
+    ports:
+      - "4000:4000"
+      - "4001:4001"
+    volumes:
+      - pando-data:/root/.pando
+    restart: unless-stopped
+
+volumes:
+  pando-data:

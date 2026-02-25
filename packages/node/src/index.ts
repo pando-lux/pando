@@ -1,0 +1,2929 @@
+import { loadOrCreateIdentity, loadRawIdentityFile, saveIdentity, type NodeIdentity, type NodeConfig, WorkType, MessageType, NodeCapability, type CapabilityDeclaration } from '@pando/shared';
+import { PandoLedger } from '@pando/ledger';
+import { PandoNetwork } from './network.js';
+import { ApiServer } from './api-server.js';
+import { LedgerSync } from './sync.js';
+import { GovernanceSync } from './governance.js';
+import { FileRegistry } from './file-registry.js';
+import { Scheduler } from './scheduler.js';
+import { TaskQueue } from './task-queue.js';
+import { HealthMonitor } from './monitor.js';
+import { Guardrails } from './guardrails.js';
+import { RequestReplyManager } from './request-reply.js';
+import { ReputationManager } from './reputation.js';
+import { AgentManager, type AgentManagerConfig } from './agent-manager.js';
+import { EmissionWitness, TOPIC_EMISSIONS } from './emission-witness.js';
+import { SecurityMonitor } from './security-monitor.js';
+import { ResourceProofChallenger } from './resource-proof.js';
+import { ReputationWeightedGovernance } from './reputation-governance.js';
+import { ContentSafetyReviewer } from './content-safety.js';
+import { ContentRegistry } from './content-registry.js';
+import { ContentPublisher } from './content-publish.js';
+import { ContentMaintenance } from './content-maintenance.js';
+import { PipelineRunner } from './pipeline-runner.js';
+import { CodePipeline } from './code-pipeline.js';
+import { QaRunner } from './qa-runner.js';
+import { DeployManager } from './deploy-manager.js';
+import { VersionProtocol } from './version-protocol.js';
+import { detectCapabilities, detectCapabilityProfile, type DetectionResult } from './capability-detector.js';
+import { CapabilityRegistry } from './capability-registry.js';
+import { ResourceRouter } from './resource-router.js';
+import { ResourceMeter } from './resource-meter.js';
+import { ResourceMarketplace } from './resource-marketplace.js';
+import { ResourceRegistry } from './resource-registry.js';
+import { CredentialStore } from './credential-store.js';
+import type { CapabilityProfile } from '@pando/shared';
+import { getDefaultConfig } from './config.js';
+const RESTART_EXIT_CODE = 75;
+import { UpgradeProtocol } from './upgrade-protocol.js';
+import { RegressionSuite } from './regression-suite.js';
+import { PaymentGate } from './payment-gate.js';
+import { UserAccountStore } from './user-accounts.js';
+import { ProjectStore } from './project-store.js';
+import { ProjectRegistry, TOPIC_PROJECTS } from './project-registry.js';
+import { RevenueEngine } from './revenue-engine.js';
+import { ContributionTracker } from './contribution-tracker.js';
+import { GenomeAgent } from './genome-agent.js';
+import { Council } from './council.js';
+import { NetworkState } from './network-state.js';
+import { ThreadStore } from './thread-store.js';
+import { HostingService } from './hosting-service.js';
+import { CloudInstanceManager } from './cloud-instance-manager.js';
+import type { StorageBackend } from './storage-backend.js';
+import { toString as uint8ArrayToString } from 'uint8arrays';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
+import { EventEmitter } from 'node:events';
+import { execSync } from 'node:child_process';
+import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
+
+/** Phase 68.2: Single constant for the node-level manager ID. */
+const DEFAULT_MANAGER_ID = 'pando-node-mgr';
+
+/**
+ * Phase 52.3: Detect if Claude Code CLI is installed and available in PATH.
+ * Used to auto-enable the scheduler when Claude Code is present.
+ * Has a 3-second timeout to avoid hanging on slow systems.
+ */
+export function detectClaudeCode(): boolean {
+  try {
+    if (process.platform === 'win32') {
+      execSync('where claude', { stdio: 'ignore', timeout: 3000 });
+    } else {
+      execSync('which claude', { stdio: 'ignore', timeout: 3000 });
+    }
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const SYSTEM_PROMPT = 'You are Pando, a helpful AI search assistant on a decentralized open network. Answer the following question clearly and concisely. If you\'re not sure, say so.';
+
+interface SearchResult {
+  answer: string;
+  sources: string[];
+  confidence: string;
+  respondedBy: string;
+}
+
+export class PandoNode {
+  private identity: NodeIdentity | null = null;
+  private network: PandoNetwork | null = null;
+  private ledger: PandoLedger | null = null;
+  private apiServer: ApiServer | null = null;
+  private sync: LedgerSync | null = null;
+  private governance: GovernanceSync | null = null;
+  private scheduler: Scheduler | null = null;
+  private monitor: HealthMonitor | null = null;
+  private guardrails: Guardrails | null = null;
+  private requestReply: RequestReplyManager | null = null;
+  private reputation: ReputationManager | null = null;
+  private agentManager: AgentManager | null = null;
+  private emissionWitness: EmissionWitness | null = null;
+  private securityMonitor: SecurityMonitor | null = null;
+  private resourceProofChallenger: ResourceProofChallenger | null = null;
+  private reputationGovernance: ReputationWeightedGovernance | null = null;
+  private contentSafetyReviewer: ContentSafetyReviewer | null = null;
+  private pipelineRunner: PipelineRunner | null = null;
+  private pipelineEnabled = false;
+  private schedulerEnabled = false;
+  private agentSystemStarted = false;
+  private monitorEnabled = false;
+  private taskQueue: TaskQueue | null = null; // passive task queue — always available for API + P2P sync
+  private fileRegistry: FileRegistry;
+  private config: NodeConfig;
+  private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private uptimeEpochs: number = 0;
+  private dailyEmissions: number = 0;
+  private dailyEmissionResetDate: string = '';
+  private uptimeTimer: ReturnType<typeof setInterval> | null = null;
+  private errorHandlersRegistered = false;
+  private lastSnapshotTxCount: number = 0;
+  private snapshotInterval: number = 100; // auto-snapshot every N transactions
+  private restartPending = false;
+  private upgradeInProgress = false;
+  // Phase 8.3: Per-task emitters for remote timeline events (SSE streaming)
+  private remoteTaskEmitters: Map<string, EventEmitter> = new Map();
+  private detectedCapabilities: string[] = [];
+  private capabilityDetection: DetectionResult | null = null;
+  // Phase 34: Restart handler — allows TUI/caller to intercept restarts
+  private restartHandler: ((reason: string, changedFiles?: string[]) => void) | null = null;
+  private upgradeCallbacks: Array<(info: { version: string; peerId: string }) => void> = [];
+  private peerCapabilities: Map<string, CapabilityDeclaration> = new Map();
+  private capabilityRegistry: CapabilityRegistry = new CapabilityRegistry();
+  private capabilityBroadcastTimer: ReturnType<typeof setInterval> | null = null;
+  private resourceRouter: ResourceRouter | null = null;
+  private resourceMeter: ResourceMeter | null = null;
+  private resourceMarketplace: ResourceMarketplace | null = null;
+  private resourceRegistry: ResourceRegistry | null = null;
+  private upgradeProtocol: UpgradeProtocol | null = null;
+  private regressionSuite: RegressionSuite | null = null;
+  private paymentGate: PaymentGate | null = null;
+  // Unified identity system (Ed25519-based accounts)
+  private userAccountStore: UserAccountStore | null = null;
+  // Phase 31.1: Project Economy
+  private projectStore: ProjectStore | null = null;
+  // Phase 63: P2P Project Registry
+  private projectRegistry: ProjectRegistry | null = null;
+  // Phase 31.4: Revenue Engine
+  private revenueEngine: RevenueEngine | null = null;
+  // Phase 31.9: Contribution Tracker
+  private contributionTracker: ContributionTracker | null = null;
+  // Phase 11: Content Layer
+  private contentRegistry: ContentRegistry | null = null;
+  private contentPublisher: ContentPublisher | null = null;
+  private contentMaintenance: ContentMaintenance | null = null;
+  // Phase 25: Genome Agent
+  private genomeAgent: GenomeAgent | null = null;
+  // Phase 27: Thread Store for gateway chat
+  private threadStore: ThreadStore | null = null;
+  // Phase 32: S3 Hosting Service
+  private hostingService: HostingService | null = null;
+  // Phase 50: Network State Aggregator
+  private networkState: NetworkState | null = null;
+  // Phase 50: Network Council
+  private council: Council | null = null;
+  // Phase 64: Cloud Instance Manager (EC2 compute nodes)
+  private cloudInstanceManager: CloudInstanceManager | null = null;
+  // Phase 42: Pluggable StorageBackend
+  private storageBackend: StorageBackend | null = null;
+  // Phase 83: Track whether P2P deferred data loading has completed
+  private _p2pDataLoaded = false;
+  // Phase 55: Linked user account — rewards flow to user, not node
+  private linkedUser: { peerId: string; username?: string } | null = null;
+
+  constructor(config?: Partial<NodeConfig>) {
+    this.config = getDefaultConfig(config);
+    this.fileRegistry = new FileRegistry();
+  }
+
+  /**
+   * Check if an identity already exists in the data directory.
+   */
+  async hasIdentity(): Promise<boolean> {
+    const raw = await loadRawIdentityFile(this.config.dataDir);
+    return raw !== null;
+  }
+
+  /**
+   * Import an identity from a file path and save it to this node's data dir.
+   */
+  async importIdentity(filePath: string): Promise<NodeIdentity> {
+    const raw = await import('node:fs/promises').then(fs => fs.readFile(filePath, 'utf-8'));
+    const serialized = JSON.parse(raw);
+    const { fromString: uint8ArrayFromString } = await import('uint8arrays');
+    const identity: NodeIdentity = {
+      peerId: serialized.peerId,
+      publicKey: uint8ArrayFromString(serialized.publicKey, 'base64'),
+      privateKey: uint8ArrayFromString(serialized.privateKey, 'base64'),
+      createdAt: serialized.createdAt,
+    };
+    await saveIdentity(identity, this.config.dataDir);
+    return identity;
+  }
+
+  /**
+   * Phase 42: Set a StorageBackend for user data (threads, messages, user accounts).
+   * Call this before start() or startWithIdentity().
+   */
+  setStorageBackend(backend: StorageBackend): void {
+    this.storageBackend = backend;
+  }
+
+  /**
+   * Phase 42: Get the current StorageBackend (null = no user data storage).
+   */
+  getStorageBackend(): StorageBackend | null {
+    return this.storageBackend;
+  }
+
+  /**
+   * Phase 42: Get the storage backend type name for status reporting.
+   */
+  getStorageBackendType(): string {
+    if (!this.storageBackend) return 'none';
+    // Check class name
+    const name = this.storageBackend.constructor?.name || 'unknown';
+    if (name === 'MongoStorageBackend') return 'mongodb';
+    if (name === 'P2PStorageBackend') return 'p2p';
+    return name.toLowerCase().replace('storagebackend', '');
+  }
+
+  /**
+   * Start with a pre-loaded identity (skips auto-create).
+   */
+  async startWithIdentity(identity: NodeIdentity): Promise<void> {
+    this.identity = identity;
+    return this._start();
+  }
+
+  /**
+   * Start with auto-created identity (headless mode).
+   */
+  async start(): Promise<void> {
+    this.identity = await loadOrCreateIdentity(this.config.dataDir);
+    return this._start();
+  }
+
+  private async _start(): Promise<void> {
+    if (!this.identity) throw new Error('No identity loaded');
+
+    // Prevent crash on unhandled errors (only register once)
+    if (!this.errorHandlersRegistered) {
+      this.errorHandlersRegistered = true;
+      process.on('unhandledRejection', (err) => {
+        console.error(`[error] Unhandled rejection: ${err}`);
+      });
+      process.on('uncaughtException', (err) => {
+        console.error(`[error] Uncaught exception: ${err.message}`);
+      });
+    }
+
+    console.log(`Identity: ${this.identity.peerId}`);
+
+    // Phase 55: Load linked user account (rewards flow to user, not node)
+    const linkedUserPath = join(this.config.dataDir || join(homedir(), '.pando'), 'linked-user.json');
+    try {
+      const data = JSON.parse(readFileSync(linkedUserPath, 'utf-8'));
+      if (data.peerId) {
+        this.linkedUser = data;
+        console.log(`[node] Linked to user account: ${data.username || data.peerId}`);
+      }
+    } catch { /* no linked user, that's fine */ }
+
+    this.capabilityDetection = detectCapabilities(this.config.capabilities);
+    this.detectedCapabilities = this.capabilityDetection.capabilities.map(c => c as string);
+    console.log(`Capabilities: ${this.detectedCapabilities.join(', ')}`);
+
+    // Phase A: Detect rich capability profile and register locally
+    const linkedUserForProfile = this.linkedUser?.username ? { username: this.linkedUser.username } : null;
+    const capProfile = detectCapabilityProfile(this.identity.peerId, this.config.apiPort, linkedUserForProfile);
+    this.capabilityRegistry.setLocalProfile(capProfile);
+    const activeResources = Object.entries(capProfile.capabilities)
+      .filter(([, v]) => v).map(([k]) => k);
+    console.log(`Resources: ${activeResources.join(', ')}`);
+
+    // Initialize ledger
+    this.ledger = new PandoLedger(this.config.dataDir || undefined);
+    const publicKeyStr = uint8ArrayToString(this.identity.publicKey, 'base64');
+    const isNew = !this.ledger.accounts.exists(this.identity.peerId);
+    this.ledger.registerNode(this.identity.peerId, publicKeyStr);
+
+    // Genesis allocation for new nodes — bootstrap the economy
+    if (isNew) {
+      const genesisTx = this.ledger.rewardWork(
+        this.identity.peerId,
+        WorkType.PEER_RELAYED,
+        'genesis: node registration'
+      );
+      console.log(`Genesis: +${genesisTx.amount} Lux minted`);
+      // Genesis tx will be included in catch-up sync (sync not started yet)
+    }
+
+    // Check for existing snapshots — load latest for faster bootstrap
+    const snapshotInfo = this.ledger.getSnapshotInfo(this.config.dataDir || undefined);
+    if (snapshotInfo) {
+      console.log(`Snapshot: found ${snapshotInfo.filename} (${snapshotInfo.accountCount} accounts, ${snapshotInfo.transactionCount} txs)`);
+      this.lastSnapshotTxCount = snapshotInfo.transactionCount;
+    } else {
+      this.lastSnapshotTxCount = this.ledger.getNetworkStats().totalTransactions;
+    }
+
+    const balance = this.ledger.accounts.getBalance(this.identity.peerId);
+    console.log(`Ledger: ${balance} Lux`);
+
+    // Start networking
+    this.network = new PandoNetwork(this.identity, this.config);
+    await this.network.start();
+
+    const addresses = this.network.getListenAddresses();
+    console.log('Listening:');
+    for (const addr of addresses) {
+      console.log(`  ${addr}`);
+    }
+
+    // Start ledger sync (GossipSub)
+    this.sync = new LedgerSync(this.network, this.ledger, this.identity.peerId);
+    await this.sync.start();
+
+    // Phase 56: Wire user account claim broadcasting to P2P sync
+    if (this.userAccountStore && this.sync) {
+      this.userAccountStore.setBroadcastClaim((claim) => this.sync!.broadcastClaim(claim));
+    }
+
+    // Start governance layer (proposals, voting, agent communication)
+    this.governance = new GovernanceSync(this.network, this.identity.peerId, this.ledger.getDatabase());
+    await this.governance.start();
+
+    // Wire governance rewards — emit Lux for votes and accepted proposals
+    this.governance.setRewardCallback((peerId, workType, workProof) => {
+      return this.ledger!.rewardWork(peerId, workType, workProof);
+    });
+
+    // Wire governance activity broadcasting — governance events → pando/activity GossipSub
+    this.governance.setActivityBroadcaster(async (record) => {
+      // Store locally in ledger
+      try { this.ledger!.recordActivity(record); } catch {}
+      // Broadcast to network
+      await this.sync!.broadcastActivity(record);
+    });
+
+    // When a new governance proposal arrives, push SSE
+    this.governance.onProposal((proposal) => {
+      this.apiServer?.pushEvent('proposal', {
+        id: proposal.id,
+        title: proposal.title,
+        proposedBy: proposal.proposedBy,
+        status: proposal.status,
+        timestamp: proposal.createdAt,
+      });
+    });
+
+    // Phase 63: P2P Project Registry
+    this.projectRegistry = new ProjectRegistry(
+      this.network,
+      this.identity.peerId,
+      this.ledger.getDatabase()
+    );
+    await this.projectRegistry.start();
+
+    // Wire ProjectRegistry into LedgerSync for catch-up sync
+    if (this.sync && this.projectRegistry) {
+      this.sync.setProjectRegistry(this.projectRegistry);
+    }
+
+    // Initialize EmissionWitness — witness-based emission system
+    this.emissionWitness = new EmissionWitness(this.identity.peerId, this.config.dataDir || undefined);
+    this.emissionWitness.setNetwork(this.network);
+    this.emissionWitness.setLedger(this.ledger);
+    this.emissionWitness.setSync(this.sync);
+    this.emissionWitness.setPrivateKey(this.identity.privateKey);
+    this.emissionWitness.setEmitCallback((peerId, workType, workProof) => {
+      try {
+        const wt = workType as WorkType;
+        const tx = this.ledger!.rewardWork(peerId, wt, workProof);
+        this.sync?.broadcastTransaction(tx).catch(() => {});
+        return tx;
+      } catch (err: any) {
+        console.error(`[emission-witness] Mint error: ${err.message}`);
+        return null;
+      }
+    });
+    this.emissionWitness.start();
+
+    // Subscribe to 'pando/emissions' GossipSub topic
+    await this.network.subscribeTopic(TOPIC_EMISSIONS, (message) => {
+      if (!message.payload) return;
+      const fromPeerId = message.from || 'unknown';
+      if (fromPeerId === this.identity!.peerId) return;
+      // Record emission proposal for security abuse detection
+      this.securityMonitor?.recordEmissionProposal(fromPeerId);
+      this.emissionWitness?.handleMessage(message.payload, fromPeerId);
+    });
+    console.log(`[emission-witness] Subscribed to GossipSub topic: ${TOPIC_EMISSIONS}`);
+
+    // Initialize SecurityMonitor — anomaly detection + quarantine system
+    const dataDir = this.config.dataDir || join(homedir(), '.pando');
+    this.securityMonitor = new SecurityMonitor(dataDir, this.identity.peerId);
+    this.securityMonitor.setNetwork(this.network);
+    this.securityMonitor.setLedger(this.ledger);
+    if (this.emissionWitness) {
+      this.securityMonitor.setEmissionWitness(this.emissionWitness);
+    }
+    this.securityMonitor.start();
+
+    // Periodic sync cleanup
+    this.cleanupTimer = setInterval(() => {
+      this.sync?.cleanup();
+      this.governance?.cleanup();
+    }, 60_000);
+
+    // Create passive TaskQueue — always available for API + P2P task sync
+    // (even without --scheduler or --agent)
+    this.taskQueue = new TaskQueue(dataDir);
+    this.taskQueue.setNetwork(this.network);
+    this.taskQueue.setLocalPeerId(this.identity.peerId);
+
+    // Create Guardrails — safety system for self-generated changes (Phase 9.3)
+    this.guardrails = new Guardrails(dataDir);
+
+    // Phase 25: Create GenomeAgent — self-maintaining project genome
+    const repoDir = process.cwd();
+    this.genomeAgent = new GenomeAgent({
+      repoDir,
+      genomeDir: join(repoDir, 'genome'),
+      dataDir,
+    });
+    if (this.genomeAgent.isAvailable()) {
+      console.log('[genome] GenomeAgent initialized (genome.yaml found)');
+    }
+
+    // Phase 13: Create UpgradeProtocol — self-evolving upgrade lifecycle
+    this.upgradeProtocol = new UpgradeProtocol({
+      governance: this.governance!,
+      guardrails: this.guardrails,
+      dataDir,
+      repoDir,
+      localPeerId: this.identity.peerId,
+      networkProvider: () => this.network,
+    });
+
+    // Subscribe to GossipSub task events so all nodes see task changes
+    await this.network.subscribeTaskEvents();
+    this.network.onTaskEvent((payload, fromPeerId) => {
+      if (!this.taskQueue) return;
+      if (payload.type === 'created' && payload.task) {
+        const task = { ...payload.task, origin: fromPeerId };
+        const inserted = this.taskQueue.insertRemoteTask(task);
+        if (inserted) {
+          console.log(`[task-sync] Received new task from ${fromPeerId.slice(0, 12)}: ${payload.task.title}`);
+        }
+      } else if (payload.type === 'claimed' && payload.task) {
+        // Phase 8: Claim conflict resolution
+        const localTask = this.taskQueue.getTask(payload.task.id);
+        if (localTask && (localTask.status === 'claimed' || localTask.status === 'in_progress')
+            && localTask.claimedByNode === this.identity!.peerId) {
+          // We also claimed this task — conflict!
+          const remoteClaimedAt = payload.task.claimedAt || 0;
+          const localClaimedAt = localTask.claimedAt || 0;
+          let weWin = false;
+          if (localClaimedAt < remoteClaimedAt) {
+            weWin = true;
+          } else if (localClaimedAt === remoteClaimedAt) {
+            // Tiebreak: lower peerId wins (deterministic)
+            weWin = this.identity!.peerId < fromPeerId;
+          }
+          if (!weWin) {
+            // We lost the race — release our local claim
+            console.log(`[task] Claim conflict on ${payload.task.id.slice(0, 8)} — ${fromPeerId.slice(0, 12)} wins (earlier claim)`);
+            this.taskQueue.forceReleaseTask(payload.task.id);
+            // Apply the remote claim
+            this.taskQueue.updateRemoteStatus(
+              payload.task.id, 'claimed', payload.task.assignedTo,
+              undefined, payload.task.claimedByNode,
+            );
+          } else {
+            console.log(`[task] Claim conflict on ${payload.task.id.slice(0, 8)} — we win (earlier claim)`);
+          }
+        } else {
+          // No conflict — apply remote claim normally
+          const updated = this.taskQueue.updateRemoteStatus(
+            payload.task.id, payload.task.status, payload.task.assignedTo,
+            undefined, payload.task.claimedByNode,
+          );
+          if (updated) {
+            console.log(`[task-sync] Task ${payload.task.id.slice(0, 8)} claimed by ${fromPeerId.slice(0, 12)}`);
+          }
+        }
+      } else if (payload.type === 'completed' && payload.task) {
+        const executedByNode = payload.executedByNode || payload.task.executedByNode || fromPeerId;
+        const updated = this.taskQueue.updateRemoteStatus(
+          payload.task.id, payload.task.status, undefined, payload.task.result,
+          undefined, executedByNode,
+        );
+        if (updated) {
+          console.log(`[task-sync] Task ${payload.task.id.slice(0, 8)} completed by ${fromPeerId.slice(0, 12)}`);
+        }
+
+        // Phase 8: If this task originated from us, store the remote output
+        const localTask = this.taskQueue.getTask(payload.task.id);
+        if (localTask && localTask.originNode === this.identity!.peerId) {
+          if (payload.output) {
+            this.taskQueue.storeRemoteOutput(payload.task.id, payload.output, executedByNode);
+          }
+          // Push remote_completed timeline event
+          this.taskQueue.pushTimelineEvent(payload.task.id, {
+            event: 'remote_completed',
+            detail: `Task executed by remote node ${executedByNode.slice(0, 12)}`,
+            metadata: {
+              executedByNode,
+              duration: payload.duration,
+              hasOutput: !!payload.output,
+            },
+          });
+          console.log(`[task] Remote task ${payload.task.id.slice(0, 8)} completed by ${executedByNode.slice(0, 12)}`);
+        }
+      } else if (payload.type === 'timeline' && payload.task && payload.timelineEvent) {
+        // Phase 8.3: Apply remote timeline event to local task
+        const applied = this.taskQueue.applyRemoteTimelineEvent(payload.task.id, payload.timelineEvent);
+        if (applied) {
+          console.log(`[task-sync] Timeline event '${payload.timelineEvent.event}' for task ${payload.task.id.slice(0, 8)} from ${fromPeerId.slice(0, 12)}`);
+
+          // Emit to SSE so gateway can show real-time progress for remote tasks
+          // First try the Scheduler's per-task emitter (if scheduler is running and tracking this task)
+          const schedulerEmitter = this.scheduler?.getTaskEmitter(payload.task.id);
+          if (schedulerEmitter) {
+            schedulerEmitter.emit('output', {
+              type: 'timeline',
+              timestamp: payload.timelineEvent.timestamp,
+              event: payload.timelineEvent.event,
+              detail: payload.timelineEvent.detail,
+              metadata: payload.timelineEvent.metadata,
+              remote: true,
+              executingNode: payload.executingNode || fromPeerId,
+            });
+          } else {
+            // No scheduler emitter — use remote task emitter for SSE
+            let remoteEmitter = this.remoteTaskEmitters.get(payload.task.id);
+            if (!remoteEmitter) {
+              remoteEmitter = new EventEmitter();
+              this.remoteTaskEmitters.set(payload.task.id, remoteEmitter);
+              // Auto-cleanup after 30 minutes of inactivity
+              setTimeout(() => {
+                this.remoteTaskEmitters.delete(payload.task.id);
+                remoteEmitter!.removeAllListeners();
+              }, 30 * 60 * 1000);
+            }
+            remoteEmitter.emit('output', {
+              type: 'timeline',
+              timestamp: payload.timelineEvent.timestamp,
+              event: payload.timelineEvent.event,
+              detail: payload.timelineEvent.detail,
+              metadata: payload.timelineEvent.metadata,
+              remote: true,
+              executingNode: payload.executingNode || fromPeerId,
+            });
+          }
+        }
+      }
+    });
+
+    // Subscribe to agent messages (required for request/reply)
+    await this.network.subscribeAgentMessages();
+
+    // Start Request/Reply Manager (Phase 10.1) — uses agent-messages topic
+    this.requestReply = new RequestReplyManager(this.network);
+    await this.requestReply.start();
+
+    // Register built-in request handlers
+    this.requestReply.registerHandler('ping', async () => {
+      return { pong: true, uptime: Math.floor(process.uptime()), peerId: this.identity!.peerId };
+    });
+
+    this.requestReply.registerHandler('health_check', async () => {
+      const monitor = this.getMonitor();
+      if (monitor) {
+        return monitor.getCurrentMetrics();
+      }
+      // Fallback basic health info when monitor is not running
+      return {
+        timestamp: Date.now(),
+        nodeHealth: 'healthy',
+        peerCount: this.network!.getPeerCount(),
+        schedulerRunning: !!this.scheduler,
+        uptimeSeconds: Math.floor(process.uptime()),
+      };
+    });
+
+    this.requestReply.registerHandler('profile_query', async () => {
+      return []; // Phase 27: ProfileCache removed — agents manage own profiles
+    });
+
+    // Remote task queries — allows any node to query this node's tasks via P2P
+    this.requestReply.registerHandler('task_list', async (req) => {
+      const tasks = this.taskQueue!.getTasks();
+      const limit = req.payload?.limit || 50;
+      // Return summary: id, title, status, priority, createdAt, cost, tier
+      return tasks.slice(0, limit).map((t: any) => ({
+        id: t.id, title: t.title, status: t.status, priority: t.priority,
+        createdAt: t.createdAt, cost: t.cost, parentTask: t.parentTask,
+        childTasks: t.childTasks, executedByNode: t.executedByNode,
+      }));
+    });
+
+    this.requestReply.registerHandler('task_detail', async (req) => {
+      const taskId = req.payload?.taskId;
+      if (!taskId) return { error: 'taskId required' };
+      const task = this.taskQueue!.getTask(taskId);
+      if (!task) return { error: 'Task not found' };
+      return task;
+    });
+
+    // Subscribe to capability declarations from peers
+    await this.network.subscribeCapabilities();
+    this.network.onCapabilityDeclaration((declaration, fromPeerId) => {
+      this.peerCapabilities.set(fromPeerId, declaration);
+      console.log(`[capabilities] Peer ${fromPeerId.slice(0, 12)} declared: [${declaration.capabilities.join(', ')}]`);
+    });
+
+    // Phase A: Handle incoming CapabilityProfile messages via GossipSub
+    this.network.onCapabilityProfile((profile, fromPeerId) => {
+      this.capabilityRegistry.updatePeerProfile(profile);
+      const activeResources = Object.entries(profile.capabilities)
+        .filter(([, v]) => v).map(([k]) => k);
+      console.log(`[capabilities] Peer ${fromPeerId.slice(0, 12)} profile: [${activeResources.join(', ')}]`);
+    });
+
+    // Broadcast our capabilities when a new peer connects
+    // Uses a triple-broadcast pattern because GossipSub mesh formation
+    // takes several seconds after TCP connection — immediate broadcast
+    // is often lost before the mesh is ready.
+    this.network.onPeerConnect(async (peerId: string) => {
+      // Immediate broadcast (may be lost if mesh not ready)
+      try {
+        await this.broadcastCapabilities();
+        await this.broadcastCapabilityProfile();
+      } catch {}
+      // Delayed rebroadcast after mesh formation
+      setTimeout(async () => {
+        try {
+          await this.broadcastCapabilities();
+          await this.broadcastCapabilityProfile();
+        } catch {}
+      }, 10_000);
+      // Final safety net for slow mesh formation
+      setTimeout(async () => {
+        try {
+          await this.broadcastCapabilities();
+          await this.broadcastCapabilityProfile();
+        } catch {}
+      }, 30_000);
+
+      // Phase 69: Auto-wrap removed — credentials in MongoDB, not per-node.
+
+      // Phase 83: Deferred data loading for P2PStorageBackend nodes.
+      // When the first compute peer connects, retry loadFromBackend if it failed at startup.
+      if (this.getStorageBackendType() === 'p2p' && !this._p2pDataLoaded) {
+        setTimeout(async () => {
+          if (this._p2pDataLoaded) return;
+          try {
+            if (this.threadStore) await this.threadStore.loadFromBackend();
+            if (this.projectStore) await (this.projectStore as any).loadFromBackend();
+            if (this.revenueEngine) await (this.revenueEngine as any).loadFromBackend();
+            if (this.contributionTracker) await (this.contributionTracker as any).loadFromBackend();
+            this._p2pDataLoaded = true;
+            console.log('[data] P2P deferred data loading complete — stores hydrated from compute peer');
+          } catch (err: any) {
+            console.warn(`[data] P2P deferred loading failed: ${err.message}`);
+          }
+        }, 5_000); // Wait 5s for capability profile to sync so P2PStorageBackend can find peers
+      }
+    });
+
+    // Initial broadcast of our capabilities
+    try {
+      await this.broadcastCapabilities();
+      await this.broadcastCapabilityProfile();
+    } catch {}
+
+    // Phase A: Re-broadcast capability profile every 5 minutes (heartbeat)
+    this.capabilityBroadcastTimer = setInterval(async () => {
+      try {
+        await this.broadcastCapabilityProfile();
+      } catch {}
+      // Periodic cleanup of expired profiles
+      this.capabilityRegistry.cleanup();
+    }, 5 * 60 * 1000);
+
+    // Subscribe to agent events (needed for Phase 10 — reputation, profile sharing)
+    await this.network.subscribeAgentEvents();
+
+    // ── Phase 82: Simple P2P Self-Upgrade via GossipSub ──────────────────────
+    if (this.upgradeProtocol) {
+      const upgradeProtocol = this.upgradeProtocol;
+
+      // Wire broadcast: publish to pando/upgrades topic
+      upgradeProtocol.setBroadcast(async (msg: Record<string, unknown>) => {
+        const { TOPIC_UPGRADES } = await import('./upgrade-protocol.js');
+        await this.network!.publishToTopic(TOPIC_UPGRADES, {
+          type: 'agent_event' as any, from: this.identity!.peerId, timestamp: Date.now(), payload: msg,
+        } as any);
+      });
+
+      // Wire restart
+      upgradeProtocol.setRequestRestart((reason?: string) => {
+        this.requestGracefulRestart(reason);
+      });
+
+      // Subscribe to upgrade notifications from peers
+      const { TOPIC_UPGRADES } = await import('./upgrade-protocol.js');
+      await this.network.subscribeTopic(TOPIC_UPGRADES, async (msg: any) => {
+        try {
+          const payload = typeof msg.payload === 'string' ? JSON.parse(msg.payload) : msg.payload;
+          if (!payload || payload.type !== 'upgrade_available') return;
+          if (payload.fromPeerId === this.identity!.peerId) return;
+
+          const { commitHash, description, governanceId } = payload;
+          if (!commitHash) return;
+          if (upgradeProtocol.hasApplied(commitHash)) return;
+          if (this.upgradeInProgress || this.restartPending) return;
+
+          console.log(`[upgrade] Peer notified: new upgrade available (${commitHash.slice(0, 8)}): ${description}`);
+          this.upgradeInProgress = true;
+          try {
+            const result = await upgradeProtocol.pullAndUpgrade(commitHash);
+            if (!result.success) {
+              console.error(`[upgrade] Pull failed: ${result.message}`);
+            }
+          } catch (err: any) {
+            console.error(`[upgrade] Failed: ${err.message}`);
+          } finally {
+            this.upgradeInProgress = false;
+          }
+        } catch (err: any) {
+          console.error(`[upgrade] Error handling pando/upgrades: ${err.message}`);
+        }
+      });
+
+      // When governance approves an upgrade: pull locally, then broadcast to peers
+      if (this.governance) {
+        this.governance.onUpgradeApproved(async (govProposal) => {
+          const commitHash = govProposal.upgradePayload?.commitHash;
+          const description = govProposal.upgradePayload?.description || govProposal.title;
+          if (!commitHash) {
+            console.warn(`[upgrade] Governance approved but no commitHash in payload`);
+            return;
+          }
+          console.log(`[upgrade] Governance approved upgrade: ${commitHash.slice(0, 8)} — ${description}`);
+
+          // Pull and build locally
+          this.upgradeInProgress = true;
+          try {
+            const result = await upgradeProtocol.pullAndUpgrade(commitHash);
+            if (result.success) {
+              // Broadcast to all peers so they pull too
+              await upgradeProtocol.broadcastUpgradeNotification(commitHash, description, govProposal.id);
+            } else {
+              console.error(`[upgrade] Local pull failed: ${result.message}`);
+            }
+          } catch (err: any) {
+            console.error(`[upgrade] Upgrade failed: ${err.message}`);
+          } finally {
+            this.upgradeInProgress = false;
+          }
+        });
+      }
+      // Start catch-up timer: periodically scans governance for missed upgrades
+      // Handles case where proposer goes offline before broadcasting
+      upgradeProtocol.startCatchupTimer(async (commitHash: string) => {
+        if (this.upgradeInProgress || this.restartPending) {
+          return { success: false, message: 'Upgrade already in progress' };
+        }
+        this.upgradeInProgress = true;
+        try {
+          return await upgradeProtocol.pullAndUpgrade(commitHash);
+        } finally {
+          this.upgradeInProgress = false;
+        }
+      });
+
+      console.log('[upgrade] Phase 82 simple self-upgrade wired (with catch-up timer)');
+
+      // Log if this is a post-upgrade restart
+      const lastUpgradeFile = join(dataDir, 'last-upgrade.json');
+      if (existsSync(lastUpgradeFile)) {
+        try {
+          const info = JSON.parse(readFileSync(lastUpgradeFile, 'utf-8'));
+          console.log(`[upgrade] Restarted after upgrade (reason: ${info.reason}, at: ${new Date(info.timestamp).toISOString()})`);
+          unlinkSync(lastUpgradeFile);
+        } catch {}
+      }
+    }
+
+    // Start Reputation Manager (Phase 10.3) — performance tracking, P2P sync
+    this.reputation = new ReputationManager(dataDir, this.network, this.requestReply);
+    this.reputation.start();
+
+    // Phase 12.3: Initialize ResourceProofChallenger — verifies nodes provide what they claim
+    this.resourceProofChallenger = new ResourceProofChallenger(
+      this.requestReply, this.network, this.identity.peerId, dataDir,
+    );
+    this.resourceProofChallenger.startChallengeLoop();
+
+    // Phase 12.4: Initialize ReputationWeightedGovernance — reputation-weighted voting
+    this.reputationGovernance = new ReputationWeightedGovernance(
+      this.reputation,
+      () => Math.floor(process.uptime()) * 1000, // uptime in ms
+    );
+    // Wire into governance
+    if (this.governance) {
+      this.governance.setReputationGovernance(this.reputationGovernance);
+    }
+
+    // Phase 12.5: Initialize ContentSafetyReviewer — rule-based content safety review
+    this.contentSafetyReviewer = new ContentSafetyReviewer(this.identity.peerId, dataDir);
+
+    // Phase 69: Resource Registry (metadata-only P2P) + CredentialStore (MongoDB encrypted)
+    this.resourceRegistry = new ResourceRegistry(this.network, this.identity.peerId, this.ledger.getDatabase());
+    await this.resourceRegistry.start();
+
+    // Auto-connect MongoDB via PANDO_STORAGE_URL env var (if not already set by CLI)
+    if (!this.storageBackend) {
+      // PANDO_STORAGE_URL env var — primary way to configure MongoDB
+      const storageUrl = process.env.PANDO_STORAGE_URL;
+      if (storageUrl) {
+        try {
+          const { MongoStorageBackend } = await import('./mongo-backend.js');
+          const mongo = new MongoStorageBackend(storageUrl);
+          await mongo.init();
+          this.setStorageBackend(mongo);
+          console.log('[node] MongoDB connected via PANDO_STORAGE_URL');
+        } catch (err) {
+          console.error(`[node] Failed to connect to MongoDB: ${(err as Error).message}`);
+        }
+      }
+    }
+
+    // Phase 83: If no MongoDB, create P2PStorageBackend to proxy storage to compute nodes
+    if (!this.storageBackend) {
+      try {
+        const { P2PStorageBackend } = await import('./p2p-storage-backend.js');
+        const p2pBackend = new P2PStorageBackend(this.requestReply, this.capabilityRegistry, this.identity.peerId);
+        await p2pBackend.init();
+        this.setStorageBackend(p2pBackend);
+        // Update capability profile to reflect P2P storage
+        const localProfile = this.capabilityRegistry.getLocalProfile();
+        if (localProfile) {
+          (localProfile as any).storageBackend = 'p2p';
+          localProfile.updatedAt = Date.now();
+          this.capabilityRegistry.setLocalProfile(localProfile);
+        }
+        console.log('[node] P2PStorageBackend initialized — proxying storage to compute nodes');
+      } catch (err) {
+        console.error(`[node] Failed to init P2PStorageBackend: ${(err as Error).message}`);
+      }
+    }
+
+    // Phase 69: Wire CredentialStore to ResourceRegistry (after MongoDB is connected)
+    if (this.storageBackend && typeof (this.storageBackend as any).getDb === 'function') {
+      try {
+        const mongoDb = (this.storageBackend as any).getDb();
+        const credentialStore = new CredentialStore(mongoDb, process.env.CREDENTIAL_MASTER_KEY);
+        await credentialStore.init();
+        this.resourceRegistry.setCredentialStore(credentialStore);
+        (this as any)._credentialStore = credentialStore; // Store reference for P2P handlers
+      } catch (err) {
+        console.error(`[node] Failed to init CredentialStore: ${(err as Error).message}`);
+      }
+    }
+
+    // Phase B: Initialize ResourceRouter — smart task routing + error correction
+    this.resourceRouter = new ResourceRouter(this.capabilityRegistry, this.requestReply);
+    if (this.reputation) {
+      this.resourceRouter.setReputationManager(this.reputation);
+    }
+
+    // Register task_forward handler so remote nodes can receive forwarded tasks
+    this.requestReply.registerHandler('task_forward', async (req) => {
+      const taskData = req.payload?.task;
+      if (!taskData || !taskData.title) {
+        return { error: 'Invalid task data' };
+      }
+      const tq = this.getActiveTaskQueue();
+      if (!tq) {
+        return { error: 'No task queue available' };
+      }
+      // Insert the forwarded task into local queue
+      const task = tq.createTask({
+        title: taskData.title,
+        description: taskData.description || '',
+        priority: taskData.priority || 'medium',
+        createdBy: taskData.createdBy || req.from,
+        managerId: taskData.managerId,
+        requiredCapabilities: taskData.requiredCapabilities || (taskData as any).requiredResources,
+      });
+      console.log(`[resource-router] Received forwarded task ${task.id.slice(0, 8)}: ${task.title}`);
+      return { taskId: task.id, accepted: true };
+    });
+
+    // Register deploy-app handler — compute nodes handle app deployment via P2P
+    // Clones source from GitHub, installs deps, starts backend if needed
+    // Phase 80: Persistent port registry — survives node restarts
+    const PORT_REGISTRY_PATH = join(dataDir, 'app-ports.json');
+    interface PortEntry { port: number; startedAt: number; appDir: string; }
+    function loadPortRegistry(): Record<string, PortEntry> {
+      try {
+        return JSON.parse(readFileSync(PORT_REGISTRY_PATH, 'utf-8'));
+      } catch { return {}; }
+    }
+    function savePortRegistry(registry: Record<string, PortEntry>): void {
+      writeFileSync(PORT_REGISTRY_PATH, JSON.stringify(registry, null, 2));
+    }
+    function nextAvailablePort(registry: Record<string, PortEntry>): number {
+      const used = Object.values(registry).map(e => e.port);
+      return used.length === 0 ? 3001 : Math.max(...used) + 1;
+    }
+
+    this.requestReply.registerHandler('pando/deploy-app', async (req) => {
+      const { projectId, repoUrl, tier, envVars } = req.payload || {};
+      if (!projectId) return { error: 'Missing projectId' };
+      if (!repoUrl) return { error: 'Missing repoUrl — GitHub is required for deployment' };
+
+      const { join } = await import('node:path');
+      const { mkdirSync, existsSync, readFileSync, readdirSync, statSync } = await import('node:fs');
+      const { execSync } = await import('node:child_process');
+      const appDir = join(dataDir, 'hosted-apps', projectId);
+      mkdirSync(appDir, { recursive: true });
+
+      try {
+        // Kill existing process if re-deploying (Tier 2 only) — Phase 80: use PM2
+        const portRegistry = loadPortRegistry();
+        const existing = portRegistry[projectId];
+        if (existing) {
+          const pm2Name = `app-${projectId}`;
+          try { execSync(`pm2 delete ${pm2Name}`, { stdio: 'pipe', timeout: 10_000 }); } catch {}
+          delete portRegistry[projectId];
+          savePortRegistry(portRegistry);
+          console.log(`[deploy] Stopped existing PM2 process ${pm2Name} for ${projectId}`);
+        }
+
+        // Clone or pull from GitHub
+        if (existsSync(join(appDir, '.git'))) {
+          execSync('git pull origin main', { cwd: appDir, stdio: 'pipe', timeout: 60_000 });
+          console.log(`[deploy] Updated ${repoUrl} in ${appDir}`);
+        } else {
+          const tmpDir = appDir + '-tmp-' + Date.now();
+          execSync(`git clone ${repoUrl} ${tmpDir}`, { stdio: 'pipe', timeout: 60_000 });
+          const { renameSync, rmSync } = await import('node:fs');
+          for (const f of readdirSync(tmpDir)) {
+            renameSync(join(tmpDir, f), join(appDir, f));
+          }
+          rmSync(tmpDir, { recursive: true, force: true });
+          console.log(`[deploy] Cloned ${repoUrl} to ${appDir}`);
+        }
+
+        // ── Tier 1: Upload static files to S3 ──────────────────────────────
+        if (tier === 1) {
+          console.log(`[deploy] Tier 1 — uploading static files to S3 for ${projectId}`);
+
+          // Get S3 credentials from ResourceRegistry
+          const registry = this.resourceRegistry;
+          if (!registry) return { status: 'failed', error: 'ResourceRegistry not available on compute node' };
+
+          const s3Resources = registry.findResources('storage_blob' as any);
+          if (!s3Resources.length) return { status: 'failed', error: 'No storage_blob resource on compute node' };
+
+          const s3Cred = await registry.getCredential(s3Resources[0].resourceId);
+          if (!s3Cred) return { status: 'failed', error: 'Could not decrypt S3 credential' };
+
+          // Parse S3 credential — expect JSON with accessKeyId, secretAccessKey, region, bucket
+          let s3Config: any;
+          try { s3Config = JSON.parse(s3Cred); } catch {
+            // Try as simple format: accessKeyId:secretAccessKey
+            return { status: 'failed', error: 'S3 credential not in expected JSON format' };
+          }
+
+          // Upload files to S3
+          const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
+          const s3 = new S3Client({
+            region: s3Config.region || 'us-east-1',
+            credentials: { accessKeyId: s3Config.accessKeyId, secretAccessKey: s3Config.secretAccessKey },
+          });
+
+          const bucket = s3Config.bucket || 'pando-deployments';
+          const staticExts = new Set(['.html', '.css', '.js', '.json', '.png', '.jpg', '.jpeg', '.gif', '.svg', '.ico', '.webp', '.woff', '.woff2', '.ttf', '.eot']);
+          const mimeTypes: Record<string, string> = {
+            '.html': 'text/html', '.css': 'text/css', '.js': 'application/javascript',
+            '.json': 'application/json', '.png': 'image/png', '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg', '.gif': 'image/gif', '.svg': 'image/svg+xml',
+            '.ico': 'image/x-icon', '.webp': 'image/webp', '.woff': 'font/woff',
+            '.woff2': 'font/woff2', '.ttf': 'font/ttf',
+          };
+
+          // Inject gateway vars into HTML files
+          const gatewayUrl = envVars?.PANDO_GATEWAY_URL || process.env.GATEWAY_PUBLIC_URL || '';
+          const projectApiKey = envVars?.PANDO_PROJECT_API_KEY || '';
+
+          let uploadCount = 0;
+
+          // Recursively find all static files
+          const scanDir = (dir: string, prefix: string): void => {
+            for (const entry of readdirSync(dir)) {
+              const fullPath = join(dir, entry);
+              const relPath = prefix ? `${prefix}/${entry}` : entry;
+              try {
+                const st = statSync(fullPath);
+                if (st.isDirectory()) {
+                  if (entry === 'node_modules' || entry === '.git') continue;
+                  scanDir(fullPath, relPath);
+                } else if (st.isFile()) {
+                  const ext = entry.slice(entry.lastIndexOf('.')).toLowerCase();
+                  if (!staticExts.has(ext)) continue;
+
+                  let content = readFileSync(fullPath);
+
+                  // Inject gateway vars into HTML
+                  if (ext === '.html' && gatewayUrl) {
+                    let html = content.toString('utf-8');
+                    const vars = [`window.PANDO_GATEWAY_URL="${gatewayUrl}"`, `window.PANDO_PROJECT_ID="${projectId}"`];
+                    if (projectApiKey) vars.push(`window.PANDO_PROJECT_API_KEY="${projectApiKey}"`);
+                    const script = `<script>${vars.join(';')};</script>`;
+                    if (html.includes('<head>')) {
+                      html = html.replace('<head>', '<head>' + script);
+                    } else {
+                      html = script + html;
+                    }
+                    content = Buffer.from(html, 'utf-8');
+                  }
+
+                  // Queue upload (synchronous for simplicity)
+                  const key = `public/${projectId}/${relPath}`;
+                  const putCmd = new PutObjectCommand({
+                    Bucket: bucket,
+                    Key: key,
+                    Body: content,
+                    ContentType: mimeTypes[ext] || 'application/octet-stream',
+                  });
+                  // Fire upload (we'll await them below)
+                  s3.send(putCmd).then(() => {}).catch((e: any) => console.log(`[deploy] S3 upload failed for ${key}: ${e.message}`));
+                  uploadCount++;
+                }
+              } catch {}
+            }
+          };
+
+          // Check if there's a public/ subdirectory — prefer it for Tier 1
+          const publicDir = join(appDir, 'public');
+          if (existsSync(publicDir) && statSync(publicDir).isDirectory()) {
+            scanDir(publicDir, '');
+          } else {
+            scanDir(appDir, '');
+          }
+
+          // Wait a bit for uploads to complete
+          await new Promise(r => setTimeout(r, 2000));
+
+          const s3Url = `http://${bucket}.s3-website-${s3Config.region || 'us-east-1'}.amazonaws.com/public/${projectId}/index.html`;
+          console.log(`[deploy] Tier 1 complete: ${uploadCount} files uploaded → ${s3Url}`);
+
+          return { status: 'deployed', projectId, type: 'static', s3Url, url: s3Url, fileCount: uploadCount };
+        }
+
+        // ── Tier 2: Run as backend app ──────────────────────────────────────
+        if (existsSync(join(appDir, 'package.json'))) {
+          execSync('npm install --production', { cwd: appDir, stdio: 'pipe', timeout: 120_000 });
+          console.log(`[deploy] Dependencies installed for ${projectId}`);
+
+          const pkg = JSON.parse(readFileSync(join(appDir, 'package.json'), 'utf-8'));
+          const startScript = pkg.scripts?.start;
+          const mainFile = pkg.main || 'server.js';
+
+          // Phase 80: PM2 process management with persistent port registry
+          const currentRegistry = loadPortRegistry();
+          const port = existing?.port || nextAvailablePort(currentRegistry);
+          const pm2Name = `app-${projectId}`;
+
+          // Build env var args for PM2
+          const envObj: Record<string, string> = { PORT: String(port), NODE_ENV: 'production', ...(envVars || {}) };
+          const envArgs = Object.entries(envObj).map(([k, v]) => `${k}=${v}`).join(' ');
+
+          // Delete any existing PM2 process first
+          try { execSync(`pm2 delete ${pm2Name}`, { stdio: 'pipe', timeout: 10_000 }); } catch {}
+
+          if (startScript) {
+            execSync(`env ${envArgs} pm2 start npm --name ${pm2Name} -- start`, { cwd: appDir, stdio: 'pipe', timeout: 30_000 });
+          } else {
+            execSync(`env ${envArgs} pm2 start ${mainFile} --name ${pm2Name}`, { cwd: appDir, stdio: 'pipe', timeout: 30_000 });
+          }
+          execSync('pm2 save', { stdio: 'pipe', timeout: 10_000 });
+
+          // Update persistent port registry
+          currentRegistry[projectId] = { port, startedAt: Date.now(), appDir };
+          savePortRegistry(currentRegistry);
+
+          // Phase 80: Write nginx reverse proxy config for stable URLs
+          try {
+            const { writeFileSync, mkdirSync: mkdirNginx } = await import('node:fs');
+            const nginxConfDir = '/etc/nginx/pando-apps';
+            mkdirNginx(nginxConfDir, { recursive: true });
+            const nginxConf = `# Auto-generated by Pando deploy — ${projectId}
+location /apps/${projectId}/ {
+    proxy_pass http://127.0.0.1:${port}/;
+    proxy_http_version 1.1;
+    proxy_set_header Host $host;
+    proxy_set_header X-Real-IP $remote_addr;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto $scheme;
+}
+`;
+            writeFileSync(join(nginxConfDir, `${projectId}.conf`), nginxConf);
+            execSync('sudo nginx -s reload', { stdio: 'pipe', timeout: 10_000 });
+            console.log(`[deploy] nginx config written for ${projectId} → port ${port}`);
+          } catch (nginxErr: any) {
+            console.log(`[deploy] nginx config skipped (not on EC2?): ${nginxErr.message}`);
+          }
+
+          console.log(`[deploy] Started ${projectId} via PM2 as ${pm2Name} on port ${port}`);
+
+          return { status: 'deployed', projectId, port, pm2Name, url: `http://localhost:${port}` };
+        }
+
+        // Static app without explicit tier — serve locally
+        return { status: 'deployed', projectId, path: appDir, type: 'static' };
+      } catch (err: any) {
+        console.log(`[deploy] Failed for ${projectId}: ${err.message}`);
+        return { status: 'failed', error: err.message };
+      }
+    });
+
+    // Phase 80: Register undeploy-app handler — remove apps from compute nodes
+    this.requestReply.registerHandler('pando/undeploy-app', async (req) => {
+      const { projectId, deleteFiles } = req.payload || {};
+      if (!projectId) return { error: 'Missing projectId' };
+
+      const { join } = await import('node:path');
+      const { execSync } = await import('node:child_process');
+      const { unlinkSync, rmSync, existsSync } = await import('node:fs');
+
+      try {
+        const pm2Name = `app-${projectId}`;
+
+        // 1. Stop PM2 process
+        try {
+          execSync(`pm2 delete ${pm2Name}`, { stdio: 'pipe', timeout: 10_000 });
+          execSync('pm2 save', { stdio: 'pipe', timeout: 10_000 });
+          console.log(`[undeploy] PM2 process ${pm2Name} deleted`);
+        } catch {
+          console.log(`[undeploy] PM2 process ${pm2Name} not found (already stopped?)`);
+        }
+
+        // 2. Remove nginx config
+        try {
+          const nginxConf = `/etc/nginx/pando-apps/${projectId}.conf`;
+          if (existsSync(nginxConf)) {
+            unlinkSync(nginxConf);
+            execSync('sudo nginx -s reload', { stdio: 'pipe', timeout: 10_000 });
+            console.log(`[undeploy] nginx config removed for ${projectId}`);
+          }
+        } catch (e: any) {
+          console.log(`[undeploy] nginx cleanup skipped: ${e.message}`);
+        }
+
+        // 3. Remove from port registry
+        const registry = loadPortRegistry();
+        delete registry[projectId];
+        savePortRegistry(registry);
+
+        // 4. Optionally delete app files
+        if (deleteFiles) {
+          const appDir = join(dataDir, 'hosted-apps', projectId);
+          if (existsSync(appDir)) {
+            rmSync(appDir, { recursive: true, force: true });
+            console.log(`[undeploy] Deleted app files at ${appDir}`);
+          }
+        }
+
+        console.log(`[undeploy] Project ${projectId} undeployed successfully`);
+        return { status: 'undeployed', projectId };
+      } catch (err: any) {
+        console.log(`[undeploy] Failed for ${projectId}: ${err.message}`);
+        return { status: 'failed', error: err.message };
+      }
+    });
+
+    // Phase 80: Startup reconciliation — cross-check port registry with PM2 on compute nodes
+    if (this.config.nodeMode === 'compute') {
+      try {
+        const { execSync } = await import('node:child_process');
+        const registry = loadPortRegistry();
+        const registryIds = Object.keys(registry);
+
+        if (registryIds.length > 0) {
+          // Get PM2 process list
+          let pm2Processes: string[] = [];
+          try {
+            const pm2Json = execSync('pm2 jlist', { stdio: 'pipe', timeout: 10_000 }).toString();
+            const pm2List = JSON.parse(pm2Json);
+            pm2Processes = pm2List.map((p: any) => p.name);
+          } catch { /* PM2 not running or no processes */ }
+
+          let orphans = 0;
+          for (const projectId of registryIds) {
+            const pm2Name = `app-${projectId}`;
+            if (!pm2Processes.includes(pm2Name)) {
+              console.log(`[reconcile] WARNING: ${projectId} in port registry but not in PM2 — orphan entry`);
+              orphans++;
+            }
+          }
+          // Check for PM2 processes not in registry
+          for (const name of pm2Processes) {
+            if (name.startsWith('app-')) {
+              const projId = name.slice(4);
+              if (!registry[projId]) {
+                console.log(`[reconcile] WARNING: PM2 process ${name} not in port registry — unknown process`);
+              }
+            }
+          }
+          console.log(`[reconcile] Port registry: ${registryIds.length} entries, PM2: ${pm2Processes.length} app processes, orphans: ${orphans}`);
+        }
+      } catch (err: any) {
+        console.log(`[reconcile] Startup reconciliation skipped: ${err.message}`);
+      }
+    }
+
+    // Phase 67: Register pando/upgrade-node handler — compute instances can be upgraded via P2P
+    this.requestReply.registerHandler('pando/upgrade-node', async (req) => {
+      if (this.restartPending || this.upgradeInProgress) {
+        return { status: 'already_in_progress' };
+      }
+      this.upgradeInProgress = true;
+      try {
+        const { execSync } = await import('node:child_process');
+        const repoDir = process.cwd();
+
+        // Ensure git safe.directory (compute instances: repo cloned by root, node runs as 'pando')
+        try {
+          execSync(`git config --global --add safe.directory ${repoDir}`, {
+            cwd: repoDir, encoding: 'utf-8', timeout: 5_000, stdio: 'pipe',
+          });
+        } catch {}
+
+        // Fetch + reset to origin/master (handles orphan-branch force pushes)
+        execSync('git fetch origin master', {
+          cwd: repoDir, encoding: 'utf-8', timeout: 120_000, stdio: 'pipe',
+        });
+        const localSha = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
+        const remoteSha = execSync('git rev-parse origin/master', { cwd: repoDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
+
+        if (localSha === remoteSha) {
+          this.upgradeInProgress = false;
+          console.log('[upgrade-node] Already up to date');
+          return { status: 'already_up_to_date', output: 'Already up to date.' };
+        }
+
+        execSync('git reset --hard origin/master', {
+          cwd: repoDir, encoding: 'utf-8', timeout: 30_000, stdio: 'pipe',
+        });
+        const pullOutput = `Updated ${localSha.slice(0, 8)} -> ${remoteSha.slice(0, 8)}`;
+        console.log(`[upgrade-node] ${pullOutput}`);
+
+        // Build
+        console.log('[upgrade-node] Building...');
+        execSync('npm run build', {
+          cwd: repoDir, encoding: 'utf-8', timeout: 300_000, stdio: 'pipe',
+        });
+        console.log('[upgrade-node] Build complete. Scheduling restart...');
+
+        // Schedule graceful restart (exit code 75 → launcher restarts)
+        this.requestGracefulRestart('P2P upgrade request');
+        return { status: 'restart_pending', output: pullOutput };
+      } catch (err: any) {
+        this.upgradeInProgress = false;
+        console.error(`[upgrade-node] Failed: ${err.message}`);
+        return { status: 'failed', error: err.message };
+      }
+    });
+
+    // Phase 69: Register pando/ai-query handler — compute nodes serve AI queries for untrusted nodes
+    this.requestReply.registerHandler('pando/ai-query', async (req) => {
+      const credStore = (this as any)._credentialStore as CredentialStore | undefined;
+      if (!credStore?.hasDecryptionCapability()) {
+        return { error: 'Not a credential node' };
+      }
+      const { query } = req.payload || {};
+      if (!query || typeof query !== 'string') return { error: 'Missing query' };
+
+      const aiKey = await credStore.getActiveByType('ai_api_key');
+      if (!aiKey) return { error: 'No AI keys available' };
+
+      const result = aiKey.metadata?.provider === 'openai'
+        ? await this.searchOpenAI(query, aiKey.credential, aiKey.metadata?.model || 'gpt-4o-mini')
+        : await this.searchGemini(query, aiKey.credential, aiKey.metadata?.model || 'gemini-pro');
+      if (result) {
+        this.resourceMeter?.recordUsage(aiKey.resourceId, 'api_keys', {
+          resourceType: 'api_keys', quantity: 1, unit: 'calls', timestamp: Date.now(),
+        });
+        return { answer: result.answer, sources: result.sources, confidence: result.confidence };
+      }
+      return { error: 'AI query failed' };
+    });
+
+    // Phase 83: Register pando/storage-proxy handler on compute nodes
+    // Untrusted nodes proxy StorageBackend CRUD operations here
+    this.requestReply.registerHandler('pando/storage-proxy', async (req) => {
+      // Only serve if we have direct MongoDB (compute node)
+      if (!this.storageBackend || typeof (this.storageBackend as any).getDb !== 'function') {
+        return { error: 'Not a storage node' };
+      }
+      const { method, args } = req.payload || {};
+
+      // Method allowlist — only StorageBackend CRUD methods
+      const ALLOWED_METHODS = ['putRecord', 'getRecord', 'queryRecords', 'deleteRecord', 'listRecords', 'pushToArray'];
+      if (!method || !ALLOWED_METHODS.includes(method)) {
+        return { error: `Method not allowed: ${method}` };
+      }
+
+      // Collection blocklist — never proxy credential operations
+      const collection = args?.collection;
+      if (collection === 'pando_credentials') {
+        return { error: 'Access denied: credential collection' };
+      }
+
+      try {
+        const backend = this.storageBackend as any;
+        let result: any;
+        switch (method) {
+          case 'putRecord':
+            await backend.putRecord(args.collection, args.key, args.data);
+            result = undefined;
+            break;
+          case 'getRecord':
+            result = await backend.getRecord(args.collection, args.key);
+            break;
+          case 'queryRecords':
+            result = await backend.queryRecords(args.collection, args.filter, args.options);
+            break;
+          case 'deleteRecord':
+            await backend.deleteRecord(args.collection, args.key);
+            result = undefined;
+            break;
+          case 'listRecords':
+            result = await backend.listRecords(args.collection, args.filter);
+            break;
+          case 'pushToArray':
+            await backend.pushToArray(args.collection, args.key, args.field, args.value);
+            result = undefined;
+            break;
+        }
+        // Phase 83: After proxy writes, refresh local caches (fire-and-forget)
+        const isWrite = ['putRecord', 'deleteRecord', 'pushToArray'].includes(method);
+        if (isWrite && collection) {
+          if ((collection === 'threads' || collection === 'thread_messages') && this.threadStore) {
+            this.threadStore.loadFromBackend().catch(() => {});
+          }
+        }
+
+        return { result };
+      } catch (err) {
+        return { error: `Storage proxy error: ${(err as Error).message}` };
+      }
+    });
+
+    // Phase C: Initialize ResourceMeter — resource usage metering
+    this.resourceMeter = new ResourceMeter(dataDir);
+    this.resourceMeter.startMeteringLoop(60_000); // prune + save every 60s
+
+    // Phase D: Initialize ResourceMarketplace — marketplace pricing
+    this.resourceMarketplace = new ResourceMarketplace(this.capabilityRegistry);
+    this.resourceMarketplace.setNetwork(this.network);
+    this.resourceMarketplace.setLocalPeerId(this.identity.peerId);
+
+    // Handle incoming price broadcasts via capabilities topic (Phase D)
+    this.network.onPriceBroadcast((priceList, fromPeerId) => {
+      this.resourceMarketplace?.handlePriceBroadcast(fromPeerId, priceList);
+      console.log(`[marketplace] Received prices from ${fromPeerId.slice(0, 12)}`);
+    });
+
+    // Broadcast initial prices
+    try {
+      await this.resourceMarketplace.broadcastPrices();
+    } catch {}
+
+    console.log('[resources] ResourceRouter + ResourceMeter + ResourceMarketplace initialized');
+
+    // Phase 17.6: Regression Suite — persistent, auto-growing test suite
+    this.regressionSuite = new RegressionSuite({
+      dataDir,
+      apiBaseUrl: `http://127.0.0.1:${this.config.apiPort}`,
+    });
+    console.log(`[regression] Suite loaded: ${this.regressionSuite.getStats().total} tests`);
+
+    // Phase 18.6: Payment Gate — Lux escrow for task execution
+    this.paymentGate = new PaymentGate(this.ledger, dataDir);
+    console.log('[payment-gate] Initialized');
+
+    // Unified identity system — Ed25519 keypairs, guest auto-creation, claim flow
+    // Phase 56: Auth data lives in P2P-synced ledger, local keys+sessions in auth-local.db
+    this.userAccountStore = new UserAccountStore(this.ledger, dataDir);
+    this.userAccountStore.startCleanup();
+    // Phase 35: Daily guest Lux reclamation — unclaimed guests older than 30 days
+    // get remaining Lux transferred back to NETWORK for reuse
+    const ledgerForReclaim = this.ledger;
+    setInterval(() => {
+      if (this.userAccountStore && ledgerForReclaim) {
+        this.userAccountStore.reclaimExpiredGuests(ledgerForReclaim);
+      }
+    }, 24 * 60 * 60 * 1000); // Run daily
+    // Also run once on startup (catches guests that expired while node was offline)
+    setTimeout(() => {
+      if (this.userAccountStore && ledgerForReclaim) {
+        this.userAccountStore.reclaimExpiredGuests(ledgerForReclaim);
+      }
+    }, 60_000); // 1 minute after boot
+    console.log('[user-accounts] Initialized (with guest Lux reclamation)');
+
+    // Phase 57: User data stores require StorageBackend (MongoDB). Skip if no backend configured.
+    if (this.storageBackend) {
+      this.projectStore = new ProjectStore(this.ledger.getDatabase(), this.storageBackend);
+      this.projectStore.init();
+
+      this.revenueEngine = new RevenueEngine(this.ledger.getDatabase(), this.ledger, this.storageBackend);
+      this.revenueEngine.init();
+
+      this.contributionTracker = new ContributionTracker(this.ledger.getDatabase(), this.storageBackend);
+      this.contributionTracker.init();
+    }
+
+    // Phase 11: Content Layer — persistent hosting & delivery registry
+    this.contentRegistry = new ContentRegistry(this.ledger.getDatabase());
+    this.contentRegistry.setLocalPeerId(this.identity.peerId);
+    if (this.network) {
+      this.contentRegistry.setNetwork(this.network);
+      await this.contentRegistry.subscribeContentTopic();
+    }
+    this.contentPublisher = new ContentPublisher(this.contentRegistry);
+    this.contentPublisher.setLocalPeerId(this.identity.peerId);
+    this.contentMaintenance = new ContentMaintenance(this.contentRegistry);
+    this.contentMaintenance.setLocalPeerId(this.identity.peerId);
+    // Wire task creation into the scheduler task queue
+    const tq = this.getActiveTaskQueue();
+    if (tq) {
+      this.contentMaintenance.setTaskCreator((title: string, description: string, priority: string) => {
+        tq.createTask({
+          title,
+          description,
+          priority: priority as any,
+          createdBy: 'content-maintenance',
+        });
+      });
+    }
+    this.contentMaintenance.startMaintenanceLoop();
+    console.log('[content-layer] ContentRegistry, ContentPublisher, ContentMaintenance initialized');
+
+    // Phase 57: ThreadStore + data loading — only with StorageBackend
+    if (this.storageBackend) {
+      try {
+        this.threadStore = new ThreadStore(this.storageBackend);
+        await this.threadStore.loadFromBackend();
+
+        if (this.projectStore) await this.projectStore.loadFromBackend();
+        if (this.revenueEngine) await this.revenueEngine.loadFromBackend();
+        if (this.contributionTracker) await this.contributionTracker.loadFromBackend();
+
+        this._p2pDataLoaded = true;
+        console.log('[data] User data stores initialized (storage-backed)');
+      } catch (err: any) {
+        // Phase 83: P2PStorageBackend may fail if no compute peers yet — non-fatal
+        // Will retry via deferred loading when first peer connects
+        console.warn(`[data] Backend load failed (will retry when peers connect): ${err.message}`);
+      }
+    } else {
+      console.log('[data] No StorageBackend — user data features disabled (P2P features still work)');
+    }
+
+    // Phase 63: Wire ProjectStore → ProjectRegistry bridge + seed existing projects
+    if (this.projectStore && this.projectRegistry) {
+      const pr = this.projectRegistry;
+      const peerId = this.identity.peerId;
+      const username = this.linkedUser?.username;
+
+      // Write-through: when MongoDB writes happen, broadcast to P2P
+      this.projectStore.setBroadcastCallback((action: string, project: any) => {
+        const resourceIds = (project.resources || []).map((r: any) => r.resourceId);
+        const currentUsername = this.linkedUser?.username || username;
+
+        if (action === 'register' && project.apiKey) {
+          pr.registerProject(
+            project.id, project.name, peerId, project.apiKey, project.visibility,
+            resourceIds, currentUsername, project.deploymentUrl, project.deploymentType, project.description
+          );
+        } else if (action === 'update') {
+          // If the project has an API key but isn't in the P2P registry yet,
+          // register it instead of updating (fixes generateApiKey() not reaching P2P)
+          if (project.apiKey && !pr.getProject(project.id)) {
+            pr.registerProject(
+              project.id, project.name, peerId, project.apiKey, project.visibility,
+              resourceIds, currentUsername, project.deploymentUrl, project.deploymentType, project.description
+            );
+          } else {
+            pr.updateProject(project.id, {
+              name: project.name,
+              visibility: project.visibility,
+              resourceIds,
+              status: project.status,
+              deploymentUrl: project.deploymentUrl,
+              deploymentType: project.deploymentType,
+              description: project.description,
+            });
+          }
+        } else if (action === 'archive') {
+          pr.archiveProject(project.id);
+        }
+      });
+
+      // Seed: push existing projects from SQLite cache into P2P registry
+      try {
+        const existing = this.projectStore.listProjects();
+        let seeded = 0;
+        for (const p of existing) {
+          if (p.apiKey && !pr.getProject(p.id)) {
+            pr.registerProject(
+              p.id, p.name, peerId, p.apiKey, p.visibility,
+              (p.resources || []).map((r: any) => r.resourceId),
+              username, p.deploymentUrl, p.deploymentType, p.description
+            );
+            seeded++;
+          }
+        }
+        if (seeded > 0) console.log(`[project-registry] Seeded ${seeded} existing projects to P2P`);
+      } catch (err) {
+        console.log(`[project-registry] Seed from ProjectStore skipped: ${(err as Error).message}`);
+      }
+    }
+
+    // Phase 32: S3 Hosting Service
+    this.hostingService = new HostingService();
+    console.log('[hosting] S3 hosting service initialized');
+
+    // Phase 64: Cloud Instance Manager — EC2 compute node lifecycle
+    this.cloudInstanceManager = new CloudInstanceManager(this);
+    await this.cloudInstanceManager.init();
+
+    // Phase 50: Network State Aggregator — hourly snapshot for council reflection
+    this.networkState = new NetworkState(this, dataDir);
+    this.networkState.start();
+    console.log('[network-state] Aggregator started (hourly snapshots)');
+
+    // Phase 50: Network Council — rotating top-reputation nodes, daily reflection
+    this.council = new Council(this, dataDir);
+    this.council.start();
+    console.log('[council] Council system started');
+
+    // Start HTTP API
+    this.apiServer = new ApiServer(this);
+    await this.apiServer.start({ port: this.config.apiPort, host: '0.0.0.0' });
+
+    // Wire SSE real-time event push — transactions and governance events
+    this.sync.onTransaction((tx) => {
+      this.apiServer?.pushEvent('transaction', {
+        id: tx.id,
+        from: tx.from,
+        to: tx.to,
+        amount: tx.amount,
+        type: tx.type,
+        timestamp: tx.timestamp,
+      });
+
+      // Auto-snapshot: check if we've crossed the snapshot interval
+      this.checkAutoSnapshot();
+    });
+    this.governance.onVote((vote, proposalTitle) => {
+      this.apiServer?.pushEvent('vote', {
+        proposalId: vote.proposalId,
+        proposalTitle,
+        voter: vote.voter,
+        choice: vote.choice,
+        timestamp: vote.createdAt,
+      });
+    });
+    this.governance.onComment((comment) => {
+      this.apiServer?.pushEvent('comment', {
+        id: comment.id,
+        proposalId: comment.proposalId,
+        from: comment.from,
+        content: comment.content.slice(0, 200),
+        timestamp: comment.createdAt,
+      });
+    });
+    this.governance.onDecision((decision, proposalTitle) => {
+      this.apiServer?.pushEvent('decision', {
+        proposalId: decision.proposalId,
+        proposalTitle,
+        outcome: decision.outcome,
+        votesFor: decision.votesFor,
+        votesAgainst: decision.votesAgainst,
+        timestamp: decision.decidedAt,
+      });
+
+      // Phase 15.2: Governance → Task Pipeline
+      // When a proposal passes, auto-create a scheduler task and approve it
+      if (decision.outcome === 'passed') {
+        const proposal = this.governance?.getProposal(decision.proposalId);
+        const tq = this.getActiveTaskQueue();
+        let createdTaskId: string | null = null;
+        if (proposal && tq) {
+          const taskTitle = proposal.title;
+          const taskDesc = proposal.description + `\n\n[Auto-created from approved governance proposal ${decision.proposalId.slice(0, 8)}]`;
+          const task = tq.createTask({
+            title: taskTitle,
+            description: taskDesc,
+            priority: 'high',
+            createdBy: proposal.proposedBy,
+            proposalId: decision.proposalId,
+          });
+          createdTaskId = task.id;
+          console.log(`[governance→scheduler] Proposal "${taskTitle}" approved → task created (${task.id.slice(0, 8)})`);
+
+          // Auto-approve the task so the scheduler picks it up
+          try {
+            if (this.scheduler) {
+              this.scheduler.receiveApprovedTask(task.id, DEFAULT_MANAGER_ID);
+              console.log(`[governance→scheduler] Task ${task.id.slice(0, 8)} auto-approved`);
+            }
+          } catch (err: any) {
+            console.error(`[governance→scheduler] Failed to auto-approve task: ${err.message}`);
+          }
+        }
+
+        // Phase 27-E + Phase 33: Enqueue governance decision to AgentManager bridge
+        // Includes category so agents can differentiate code_change proposals
+        if (this.agentManager) {
+          try {
+            const proposal = this.governance?.getProposal(decision.proposalId);
+            this.agentManager.getBridge().enqueue(DEFAULT_MANAGER_ID, {
+              type: 'governance_decision',
+              source: 'governance',
+              payload: {
+                proposalId: decision.proposalId,
+                title: proposalTitle,
+                description: proposal?.description || '',
+                outcome: decision.outcome,
+                decision: decision.outcome, // legacy compat
+                category: proposal?.category || 'unknown',
+                votesFor: decision.votesFor,
+                votesAgainst: decision.votesAgainst,
+                taskId: createdTaskId,
+              },
+              priority: 'critical',
+            });
+            console.log(`[governance→agents] Proposal "${proposalTitle}" (${proposal?.category || 'unknown'}) → agent manager`);
+          } catch (err: any) {
+            console.error(`[governance→agents] Failed to enqueue governance decision: ${err.message}`);
+          }
+        }
+      }
+    });
+    // Wire activity sync — push remote activity events to SSE
+    this.sync.onActivity((record) => {
+      this.apiServer?.pushEvent('activity', {
+        id: record.id,
+        agentId: record.agentId,
+        action: record.action,
+        summary: record.summary,
+        timestamp: record.timestamp,
+      });
+    });
+
+    console.log('');
+    console.log('Discovering peers...');
+
+    // Epoch-based uptime tracking (every 10 minutes)
+    this.uptimeTimer = setInterval(() => {
+      this.recordUptimeEpoch();
+    }, 10 * 60 * 1000);
+
+    // Peer connection handler — register unknown peers and trigger sync
+    this.network.onPeerConnect((peerId) => {
+      if (!this.ledger!.accounts.exists(peerId)) {
+        this.ledger!.registerNode(peerId, 'remote-peer');
+      }
+
+      // Record peer join for Sybil detection
+      this.securityMonitor?.recordPeerJoin(peerId);
+
+      // Request governance catch-up sync from the new peer (3s delay for protocol setup)
+      if (this.governance) {
+        setTimeout(() => {
+          this.governance?.requestSync(peerId).catch(() => {});
+        }, 3000);
+      }
+
+      // Request task catch-up sync from the new peer (2s delay for protocol setup)
+      setTimeout(() => {
+        this.getActiveTaskQueue()?.requestSync(peerId).catch(() => {});
+      }, 2000);
+
+    });
+
+    // Start AgentManager — only in 'full' mode (needs Claude Code).
+    // 'compute' and 'relay' modes skip agents (cloud instances don't have Claude Code).
+    if (this.config.nodeMode !== 'compute' && this.config.nodeMode !== 'relay') {
+      this.startAgentSystem();
+    } else {
+      console.log(`[node] Mode '${this.config.nodeMode}' — agent system skipped.`);
+    }
+
+    // Handle messages and reward work
+    this.network.onMessage((message, from) => {
+      // Security: ignore messages from quarantined peers
+      if (this.securityMonitor?.isQuarantined(from)) {
+        console.log(`[security] Ignoring message from quarantined peer: ${from.slice(0, 16)}`);
+        return;
+      }
+
+      // Record message for security rate monitoring
+      this.securityMonitor?.recordMessage(from);
+
+      console.log(`[${message.type}] from ${from.slice(0, 16)}...`);
+      if (message.payload) {
+        console.log(`  payload: ${JSON.stringify(message.payload)}`);
+      }
+
+      // Ensure the sending peer has an account
+      if (!this.ledger!.accounts.exists(from)) {
+        this.ledger!.registerNode(from, 'remote-peer');
+      }
+
+      // Handle governance sync requests/responses (direct P2P messages)
+      if (message.type === MessageType.GOVERNANCE_SYNC_REQUEST) {
+        this.governance?.handleSyncRequest(from);
+      }
+      if (message.type === MessageType.GOVERNANCE_SYNC_RESPONSE) {
+        this.governance?.handleSyncResponse(message);
+      }
+
+      // Handle task sync requests/responses (direct P2P messages)
+      if (message.type === MessageType.TASK_SYNC_REQUEST) {
+        this.getActiveTaskQueue()?.handleSyncRequest(from);
+      }
+      if (message.type === MessageType.TASK_SYNC_RESPONSE) {
+        const payload = message.payload as { tasks?: any[] };
+        if (payload?.tasks) {
+          this.getActiveTaskQueue()?.handleSyncResponse(payload.tasks);
+        }
+      }
+
+      // Handle balance requests
+      if (message.type === MessageType.BALANCE_REQUEST) {
+        const peerId = (message.payload as any)?.peerId || from;
+        const peerBalance = this.ledger!.accounts.getBalance(peerId);
+        this.network!.sendMessage(from, {
+          type: MessageType.BALANCE_RESPONSE,
+          from: this.identity!.peerId,
+          timestamp: Date.now(),
+          payload: { peerId, balance: peerBalance },
+        }).catch(() => {});
+      }
+    });
+
+  }
+
+  /**
+   * Record an uptime epoch — mints a small Lux reward for being online.
+   * Called every 10 minutes. Capped at 144 epochs/day (7.2 Lux/day max)
+   * and subject to the 500 Lux/day per-node daily emission cap.
+   */
+  private recordUptimeEpoch(): void {
+    if (!this.ledger || !this.identity) return;
+
+    // Reset daily counter at midnight
+    const today = new Date().toISOString().slice(0, 10);
+    if (this.dailyEmissionResetDate !== today) {
+      this.dailyEmissions = 0;
+      this.uptimeEpochs = 0;
+      this.dailyEmissionResetDate = today;
+    }
+
+    // Daily cap: 500 Lux max per node per day
+    if (this.dailyEmissions >= 500) return;
+
+    // Max uptime reward: 7.2 Lux/day (144 epochs × 0.05)
+    const MAX_UPTIME_EPOCHS_PER_DAY = 144;
+    if (this.uptimeEpochs >= MAX_UPTIME_EPOCHS_PER_DAY) return;
+
+    this.uptimeEpochs++;
+    // Phase 54: Node identity = reward recipient
+    const rewardRecipient = this.getRewardRecipient();
+    if (!rewardRecipient) return;
+
+    if (this.emissionWitness) {
+      this.emissionWitness.propose(
+        rewardRecipient,
+        WorkType.UPTIME_EPOCH,
+        `uptime epoch ${this.uptimeEpochs} (${today})`
+      ).catch(() => {});
+    } else {
+      try {
+        const tx = this.ledger.rewardWork(
+          rewardRecipient,
+          WorkType.UPTIME_EPOCH,
+          `uptime epoch ${this.uptimeEpochs} (${today})`
+        );
+        this.dailyEmissions += tx.amount;
+        this.sync?.broadcastTransaction(tx).catch(() => {});
+      } catch {
+        // Cap reached — silently continue
+      }
+    }
+  }
+
+  /**
+   * AI search — Phase 69: credential-node-only.
+   * If this node has CREDENTIAL_MASTER_KEY, decrypts AI key and calls directly.
+   * Otherwise, routes via P2P request-reply to a compute node that has it.
+   */
+  async search(query: string, identity?: string): Promise<SearchResult> {
+    // Try local credential access first (compute nodes with master key)
+    if (this.resourceRegistry) {
+      const aiKey = await this.resourceRegistry.getActiveAiKey();
+      if (aiKey) {
+        const result = aiKey.provider === 'openai'
+          ? await this.searchOpenAI(query, aiKey.key, aiKey.model)
+          : await this.searchGemini(query, aiKey.key, aiKey.model);
+        if (result) {
+          this.resourceMeter?.recordUsage(aiKey.resourceId, 'api_keys', {
+            resourceType: 'api_keys', quantity: 1, unit: 'calls', timestamp: Date.now(),
+          });
+          return result;
+        }
+      }
+    }
+
+    // Phase 69: Route to a compute node with credentialAccess via P2P
+    if (this.capabilityRegistry && this.requestReply) {
+      const allProfiles = this.capabilityRegistry.getAllProfiles();
+      const credentialProfiles = allProfiles.filter(p =>
+        p.credentialAccess === true && p.peerId !== this.identity?.peerId
+      );
+
+      for (const profile of credentialProfiles) {
+        try {
+          const response = await this.requestReply.request(profile.peerId, 'pando/ai-query', { query }, 30_000);
+          if (response?.success && response.payload?.answer) {
+            return {
+              answer: response.payload.answer,
+              sources: response.payload.sources || [],
+              confidence: response.payload.confidence || 'medium',
+              respondedBy: profile.peerId,
+            };
+          }
+        } catch {
+          continue; // Try next credential node
+        }
+      }
+    }
+
+    return {
+      answer: 'No AI resources available on the network. Contribute an API key via /contribute.',
+      sources: [],
+      confidence: 'none',
+      respondedBy: 'node',
+    };
+  }
+
+  private async searchOpenAI(query: string, apiKey: string, model: string): Promise<SearchResult | null> {
+    try {
+      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [
+            { role: 'system', content: SYSTEM_PROMPT },
+            { role: 'user', content: query },
+          ],
+          max_tokens: 1024,
+          temperature: 0.7,
+        }),
+      });
+      if (!res.ok) { const e = await res.json() as any; console.error('OpenAI error:', e?.error?.message); return null; }
+      const data = await res.json() as any;
+      return {
+        answer: data?.choices?.[0]?.message?.content || 'No response generated.',
+        sources: ['Pando Network', `AI: ${model}`],
+        confidence: 'high',
+        respondedBy: `pando-ai (${model})`,
+      };
+    } catch (err) { console.error('OpenAI fetch error:', err); return null; }
+  }
+
+  private async searchGemini(query: string, apiKey: string, model: string): Promise<SearchResult | null> {
+    try {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`, {
+        method: 'POST',
+        headers: { 'x-goog-api-key': apiKey, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `${SYSTEM_PROMPT}\n\nQuestion: ${query}` }] }],
+          generationConfig: { maxOutputTokens: 1024, temperature: 0.7 },
+        }),
+      });
+      if (!res.ok) { const e = await res.json() as any; console.error('Gemini error:', e?.error?.message); return null; }
+      const data = await res.json() as any;
+      return {
+        answer: data?.candidates?.[0]?.content?.parts?.[0]?.text || 'No response generated.',
+        sources: ['Pando Network', `AI: ${model}`],
+        confidence: 'high',
+        respondedBy: `pando-ai (${model})`,
+      };
+    } catch (err) { console.error('Gemini fetch error:', err); return null; }
+  }
+
+  /**
+   * Check if auto-snapshot threshold has been reached and create one if so.
+   */
+  private checkAutoSnapshot(): void {
+    if (!this.ledger) return;
+    const currentTxCount = this.ledger.getNetworkStats().totalTransactions;
+    if (currentTxCount - this.lastSnapshotTxCount >= this.snapshotInterval) {
+      try {
+        const info = this.ledger.createSnapshot(this.config.dataDir || undefined);
+        this.lastSnapshotTxCount = currentTxCount;
+        console.log(`[snapshot] Auto-created: ${info.filename} (${info.accountCount} accounts, ${info.transactionCount} txs)`);
+      } catch (err: any) {
+        console.error(`[snapshot] Auto-create failed: ${err.message}`);
+      }
+    }
+  }
+
+  getNetwork(): PandoNetwork | null {
+    return this.network;
+  }
+
+  getIdentity(): NodeIdentity | null {
+    return this.identity;
+  }
+
+  getLedger(): PandoLedger | null {
+    return this.ledger;
+  }
+
+  getSync(): LedgerSync | null {
+    return this.sync;
+  }
+
+  getApiServer(): ApiServer | null {
+    return this.apiServer;
+  }
+
+  getDataDir(): string {
+    return this.config.dataDir || '';
+  }
+
+  getNodeMode(): string {
+    return this.config.nodeMode || 'full';
+  }
+
+  getLedgerMode(): string {
+    return this.config.ledgerMode || 'full';
+  }
+
+  getApiPort(): number {
+    return this.config.apiPort;
+  }
+
+  getCapabilities(): string[] {
+    return [...this.detectedCapabilities];
+  }
+
+  getCapabilityDeclaration(): CapabilityDeclaration | null {
+    if (!this.identity || !this.capabilityDetection) return null;
+    return {
+      peerId: this.identity.peerId,
+      capabilities: this.capabilityDetection.capabilities,
+      detectedAt: this.capabilityDetection.detectedAt,
+      timestamp: Date.now(),
+    };
+  }
+
+  getPeerCapabilityDeclarations(): Map<string, CapabilityDeclaration> {
+    return new Map(this.peerCapabilities);
+  }
+
+  /** Phase A: Get the local node's rich capability profile */
+  getCapabilityProfile(): CapabilityProfile | null {
+    return this.capabilityRegistry.getLocalProfile();
+  }
+
+  /** Phase A: Get all known capability profiles (local + peers) */
+  getNetworkCapabilityProfiles(): CapabilityProfile[] {
+    return this.capabilityRegistry.getAllProfiles();
+  }
+
+  /** Phase A: Get the CapabilityRegistry instance */
+  getCapabilityRegistry(): CapabilityRegistry {
+    return this.capabilityRegistry;
+  }
+
+  /** Phase B: Get the ResourceRouter instance */
+  getResourceRouter(): ResourceRouter | null {
+    return this.resourceRouter;
+  }
+
+  /** Phase C: Get the ResourceMeter instance */
+  getResourceMeter(): ResourceMeter | null {
+    return this.resourceMeter;
+  }
+
+  /** Phase D: Get the ResourceMarketplace instance */
+  getResourceMarketplace(): ResourceMarketplace | null {
+    return this.resourceMarketplace;
+  }
+
+  /** Phase 42.5: Get the ResourceRegistry instance */
+  getResourceRegistry(): ResourceRegistry | null {
+    return this.resourceRegistry;
+  }
+
+  /** Returns the reward recipient — only linked user accounts earn rewards */
+  getRewardRecipient(): string | null {
+    // No login = no rewards. Node is volunteering infrastructure.
+    // Rewards only flow when an operator explicitly links their account.
+    if (this.linkedUser) return this.linkedUser.peerId;
+    return null;
+  }
+
+  /** Phase 55: Link a user account to this node — rewards flow to the user */
+  linkUser(peerId: string, username?: string): void {
+    this.linkedUser = { peerId, username };
+    const linkedUserPath = join(this.config.dataDir || join(homedir(), '.pando'), 'linked-user.json');
+    writeFileSync(linkedUserPath, JSON.stringify({ peerId, username }, null, 2));
+    console.log(`[node] Linked to user account: ${username || peerId}`);
+    this.updateCapabilityLinkedUser();
+  }
+
+  /** Phase 55: Unlink the user account — rewards revert to node identity */
+  unlinkUser(): void {
+    this.linkedUser = null;
+    const linkedUserPath = join(this.config.dataDir || join(homedir(), '.pando'), 'linked-user.json');
+    try {
+      if (existsSync(linkedUserPath)) {
+        unlinkSync(linkedUserPath);
+      }
+    } catch { /* ignore */ }
+    console.log('[node] Unlinked user account');
+    this.updateCapabilityLinkedUser();
+  }
+
+  /** Phase 55: Get the linked user account (null = rewards go to node identity) */
+  getLinkedUser(): { peerId: string; username?: string } | null {
+    return this.linkedUser;
+  }
+
+  private async broadcastCapabilities(): Promise<void> {
+    const declaration = this.getCapabilityDeclaration();
+    if (!declaration || !this.network) return;
+    await this.network.publishCapabilities(declaration);
+  }
+
+  private updateCapabilityLinkedUser(): void {
+    const localProfile = this.capabilityRegistry.getLocalProfile();
+    if (localProfile) {
+      localProfile.linkedUser = this.linkedUser?.username ? { username: this.linkedUser.username } : null;
+      localProfile.updatedAt = Date.now();
+      this.capabilityRegistry.setLocalProfile(localProfile);
+      this.broadcastCapabilityProfile().catch(() => {});
+    }
+  }
+
+  private async broadcastCapabilityProfile(): Promise<void> {
+    const profile = this.capabilityRegistry.getLocalProfile();
+    if (!profile || !this.network) return;
+    // Update timestamp before broadcasting
+    profile.updatedAt = Date.now();
+    await this.network.publishCapabilityProfile(profile);
+  }
+
+  // ----------------------------------------------------------
+  // Agent System (Phase 27 — always runs, provides chat routing + project managers)
+  // ----------------------------------------------------------
+
+  /**
+   * Start the AgentManager — the universal agent system (Phase 27).
+   * Always runs regardless of --scheduler flag. Provides chat routing,
+   * project managers, and the bridge queue for all agent communication.
+   */
+  startAgentSystem(): void {
+    if (this.agentSystemStarted) return;
+    this.agentSystemStarted = true;
+
+    // Start AgentManager — the new universal agent system (Phase 27)
+    this.agentManager = new AgentManager({
+      localPeerId: this.identity?.peerId || '',
+      dataDir: this.config.dataDir,
+      apiPort: this.config.apiPort,
+      genomeAgent: this.genomeAgent || undefined,
+    });
+
+    // Wire PaymentGate to AgentManager for cost gating
+    if (this.paymentGate) {
+      this.agentManager.setPaymentGate(this.paymentGate);
+    }
+
+    // Phase 31.1: Wire ProjectStore to AgentManager for persistent project records
+    if (this.projectStore) {
+      this.agentManager.setProjectStore(this.projectStore);
+    }
+
+    // Phase 67: Wire CloudInstanceManager to AgentManager for Tier 2 context injection
+    if (this.cloudInstanceManager) {
+      const cim = this.cloudInstanceManager;
+      this.agentManager.setCloudInstanceProvider(() => {
+        return cim.getInstances().map((i: any) => ({
+          instanceId: i.instanceId || i.instance_id,
+          publicIp: i.publicIp || i.public_ip || '',
+          peerId: i.peerId || i.peer_id || null,
+          status: i.status || 'unknown',
+        }));
+      });
+    }
+
+    // Phase 30: Wire PaymentGate to Governance for proposal staking
+    if (this.paymentGate && this.governance) {
+      this.governance.setPaymentGate(this.paymentGate);
+    }
+
+    // Phase 30.2: Wire AgentManager to Governance for reviewer agent spawning
+    if (this.governance) {
+      this.governance.setAgentManager(this.agentManager);
+    }
+
+    // Wire AgentManager SSE push to API server
+    if (this.apiServer) {
+      this.agentManager.setSsePushCallback((eventType: string, data: any) => {
+        this.apiServer?.pushEvent(eventType, data);
+      });
+    }
+
+    // Wire AgentManager thread message persistence to ThreadStore
+    if (this.threadStore) {
+      this.agentManager.setThreadMessageCallback((threadId, message) => {
+        this.threadStore?.addMessage(threadId, message as any);
+      });
+    }
+
+    this.agentManager.start().then(() => {
+      console.log('[agents] AgentManager started (Phase 27 universal agent system).');
+      if (this.agentManager) this.apiServer?.setAgentManager(this.agentManager);
+    }).catch((err: any) => {
+      console.error('[agents] AgentManager failed to start:', err.message);
+    });
+
+    // Wire health monitor alerts to agent manager
+    if (this.monitor) {
+      this.monitor.onAlert((alert) => {
+        if (this.agentManager) {
+          this.agentManager.getBridge().enqueue(DEFAULT_MANAGER_ID, {
+            type: 'health_alert' as any,
+            content: `[${alert.severity || 'medium'}] ${alert.message || alert.type}`,
+            source: 'health-monitor',
+            timestamp: Date.now(),
+            priority: alert.severity === 'critical' ? 'critical' : 'normal',
+          } as any);
+        }
+      });
+      console.log('[agents] Health monitor wired to agent manager');
+    }
+
+    console.log('[agents] Agent system started.');
+  }
+
+  // ----------------------------------------------------------
+  // Scheduler (Phase 1 — new task-driven orchestrator)
+  // ----------------------------------------------------------
+
+  /**
+   * Start the Scheduler — creates workspaces, generates agent profiles, and
+   * spawns agents to handle tasks from the task queue.
+   * Ensures the agent system is started first.
+   */
+  startScheduler(): Scheduler {
+    if (this.scheduler) {
+      console.log('[scheduler] Scheduler already running.');
+      return this.scheduler;
+    }
+    this.schedulerEnabled = true;
+
+    // Ensure agent system is running (no-op if already started)
+    this.startAgentSystem();
+
+    const dataDir = this.config.dataDir || join(homedir(), '.pando');
+
+    // Reuse the passive TaskQueue (created in _start()) or create one if needed
+    const taskQueue = this.taskQueue || new TaskQueue(dataDir);
+    if (!this.taskQueue) {
+      this.taskQueue = taskQueue;
+      if (this.network && this.identity) {
+        taskQueue.setNetwork(this.network);
+        taskQueue.setLocalPeerId(this.identity.peerId);
+      }
+    }
+
+    // Phase 54: Reward node identity for task completion
+    const rewardForTask = (workType: string, workProof: string) => {
+      const recipient = this.getRewardRecipient();
+      if (!recipient) return;
+      if (this.emissionWitness) {
+        this.emissionWitness.propose(recipient, workType, workProof).then((proposal) => {
+          if (proposal) {
+            console.log(`  [emission-witness] Proposed: ${workType} (${proposal.id.slice(0, 8)})`);
+          }
+        }).catch((err: any) => {
+          console.error(`[emission-witness] Propose failed: ${err.message}`);
+        });
+      }
+    };
+
+    // Create Scheduler — pure executor (task queue + approval tracking)
+    this.scheduler = new Scheduler(
+      { apiPort: this.config.apiPort },
+      taskQueue,
+      null as any,  // profileCache — removed (agents manage own profiles)
+      null as any,  // workspaceManager — removed (agents own their workspaces)
+      undefined,    // claudePath
+      dataDir,
+      rewardForTask,
+    );
+
+    this.scheduler.setNodeCapabilities(this.detectedCapabilities);
+    this.scheduler.setCapabilityRegistry(this.capabilityRegistry);
+    this.scheduler.setFileRegistry(this.fileRegistry);
+
+    // Wire resource components to scheduler
+    if (this.resourceRouter) {
+      this.scheduler.setResourceRouter(this.resourceRouter);
+    }
+    if (this.resourceMeter) {
+      this.scheduler.setResourceMeter(this.resourceMeter);
+    }
+
+    this.scheduler.start();
+    console.log('[scheduler] Scheduler started.');
+
+    // Wire reputation callback
+    if (this.reputation) {
+      this.scheduler.setReputationCallback((type, detail, metadata) => {
+        this.reputation!.recordEvent(type as any, detail, metadata);
+      });
+    }
+
+    // Wire health monitor to scheduler
+    if (this.monitor) {
+      this.monitor.attachScheduler(this.scheduler);
+    }
+
+    // Wire Scheduler's BridgeQueue so it can post task_failed events to the Manager
+    if (this.agentManager) {
+      this.scheduler.setBridgeQueue(this.agentManager.getBridge());
+    }
+
+    // Bug H1/H2 fix: Wire task completion callback so bridge processing
+    // updates task status and scheduler counters when a task completes via agents.
+    if (this.agentManager) {
+      const sched = this.scheduler;
+      const tq = taskQueue;
+      this.agentManager.setTaskCompletionCallback((taskId: string, success: boolean, output: string) => {
+        if (success) {
+          // Update task status to 'done' (Bug H1)
+          tq.completeTask(taskId, { buildPassed: true, note: output.slice(0, 500) });
+          // Increment scheduler counters (Bug H2)
+          sched.reportTaskCompleted(taskId, output);
+          console.log(`[task-bridge] Task ${taskId.slice(0, 8)} marked done + scheduler counters updated`);
+        } else {
+          // Update task status to 'rejected'
+          tq.updateStatus(taskId, 'rejected');
+          tq.setResultNote(taskId, output.slice(0, 500));
+          // Increment scheduler failure counters (Bug H2)
+          sched.reportTaskFailed(taskId, output);
+          console.log(`[task-bridge] Task ${taskId.slice(0, 8)} marked rejected + scheduler counters updated`);
+        }
+      });
+    }
+
+    // Task completion/failure → notify agent manager
+    this.scheduler.on('task:completed', (data: any) => {
+      if (this.agentManager && data?.taskId) {
+        const task = this.taskQueue?.getTask(data.taskId);
+        const managerId = task?.managerId || task?.createdBy || DEFAULT_MANAGER_ID;
+        this.agentManager.getBridge().enqueue(managerId, {
+          type: 'task_result' as any,
+          content: `Task "${task?.title || data.taskId}" completed successfully.`,
+          source: 'scheduler',
+          timestamp: Date.now(),
+          priority: 'normal',
+          metadata: { taskId: data.taskId, success: true },
+        } as any);
+      }
+    });
+    this.scheduler.on('task:failed', (data: any) => {
+      if (this.agentManager && data?.taskId) {
+        const task = this.taskQueue?.getTask(data.taskId);
+        const managerId = task?.managerId || task?.createdBy || DEFAULT_MANAGER_ID;
+        this.agentManager.getBridge().enqueue(managerId, {
+          type: 'task_result' as any,
+          content: `Task "${task?.title || data.taskId}" failed: ${data?.error || 'Unknown error'}`,
+          source: 'scheduler',
+          timestamp: Date.now(),
+          priority: 'critical',
+          metadata: { taskId: data.taskId, success: false, error: data?.error },
+        } as any);
+      }
+    });
+
+    // S2 fix: When a task is approved, enqueue it to the AgentManager's bridge
+    // so the manager agent picks it up and spawns workers
+    // S8 fix: Check capabilities BEFORE enqueuing to bridge (matches dequeueApproved() logic)
+    this.scheduler.on('task:approved', (data: any) => {
+      if (!this.agentManager || !this.taskQueue) return;
+      const task = this.taskQueue.getTask(data.taskId);
+      if (!task) return;
+
+      // S8: Capability check — resource-based (CapabilityRegistry)
+      if (this.capabilityRegistry) {
+        const resourceReqs = task.requiredResources;
+        if (resourceReqs && resourceReqs.length > 0 && !this.capabilityRegistry.canExecuteLocally(resourceReqs)) {
+          console.log(`[scheduler→agents] Skipping task ${data.taskId.slice(0, 8)}: local node missing resource capabilities [${resourceReqs.join(', ')}]`);
+          return;
+        }
+      }
+      // S8: Capability check — legacy NodeCapability string check
+      const requiredCaps = (task.requiredCapabilities && task.requiredCapabilities.length > 0)
+        ? task.requiredCapabilities
+        : [NodeCapability.CLAUDE_CODE];
+      const missingCaps = requiredCaps.filter((c: string) => !this.detectedCapabilities.includes(c));
+      if (missingCaps.length > 0) {
+        console.log(`[scheduler→agents] Skipping task ${data.taskId.slice(0, 8)}: local node missing capabilities [${missingCaps.join(', ')}]`);
+        return;
+      }
+
+      const managerId = task.managerId || DEFAULT_MANAGER_ID;
+      this.agentManager.getBridge().enqueue(managerId, {
+        type: 'user_request',
+        source: 'scheduler',
+        payload: {
+          message: `[APPROVED TASK] Execute this task:\n\nTitle: ${task.title}\nDescription: ${task.description || 'No description'}\nPriority: ${task.priority}\nTask ID: ${data.taskId}`,
+          taskId: data.taskId,
+        },
+        priority: task.priority === 'critical' ? 'critical' : 'normal',
+      });
+      console.log(`[scheduler→agents] Approved task ${data.taskId.slice(0, 8)} → bridge for ${managerId}`);
+    });
+
+    return this.scheduler;
+  }
+
+  /**
+   * Stop the Agent System (AgentManager) and release resources.
+   */
+  stopAgentSystem(): void {
+    if (this.agentManager) {
+      this.agentManager.stop();
+      this.agentManager = null;
+    }
+    this.agentSystemStarted = false;
+  }
+
+  /**
+   * Stop the Scheduler and Agent System, release resources.
+   */
+  stopScheduler(): void {
+    this.stopAgentSystem();
+    if (this.scheduler) {
+      this.scheduler.stop();
+      this.scheduler = null;
+      console.log('[scheduler] Scheduler stopped.');
+    }
+  }
+
+  getScheduler(): Scheduler | null {
+    return this.scheduler;
+  }
+
+  getAgentManager(): AgentManager | null {
+    return this.agentManager;
+  }
+
+  getThreadStore(): ThreadStore | null {
+    return this.threadStore;
+  }
+
+  getEmissionWitness(): EmissionWitness | null {
+    return this.emissionWitness;
+  }
+
+  getSecurityMonitor(): SecurityMonitor | null {
+    return this.securityMonitor;
+  }
+
+  getResourceProofChallenger(): ResourceProofChallenger | null {
+    return this.resourceProofChallenger;
+  }
+
+  getReputationGovernance(): ReputationWeightedGovernance | null {
+    return this.reputationGovernance;
+  }
+
+  getContentSafetyReviewer(): ContentSafetyReviewer | null {
+    return this.contentSafetyReviewer;
+  }
+
+  // ----------------------------------------------------------
+  // Health Monitor (Phase 9 — self-healing foundation)
+  // ----------------------------------------------------------
+
+  /**
+   * Start the HealthMonitor — polls health metrics, generates alerts,
+   * and stores persistent metrics at ~/.pando/monitor/.
+   */
+  startMonitor(): HealthMonitor {
+    if (this.monitor) {
+      console.log('[monitor] Monitor already running.');
+      return this.monitor;
+    }
+    this.monitorEnabled = true;
+
+    const dataDir = this.config.dataDir || join(homedir(), '.pando');
+    this.monitor = new HealthMonitor(dataDir);
+    this.monitor.setSchedulerProvider(() => this.scheduler);
+    this.monitor.setNetworkProvider(() => this.network);
+
+    // If scheduler is already running, attach events
+    if (this.scheduler) {
+      this.monitor.attachScheduler(this.scheduler);
+    }
+
+    this.monitor.start();
+
+    return this.monitor;
+  }
+
+  /**
+   * Stop the HealthMonitor.
+   */
+  stopMonitor(): void {
+    if (this.monitor) {
+      this.monitor.stop();
+      this.monitor = null;
+      console.log('[monitor] Monitor stopped.');
+    }
+  }
+
+  getMonitor(): HealthMonitor | null {
+    return this.monitor;
+  }
+
+  getGuardrails(): Guardrails | null {
+    return this.guardrails;
+  }
+
+  getRequestReply(): RequestReplyManager | null {
+    return this.requestReply;
+  }
+
+  getReputationManager(): ReputationManager | null {
+    return this.reputation;
+  }
+
+  getPipelineRunner(): PipelineRunner | null {
+    return this.pipelineRunner;
+  }
+
+  isPipelineEnabled(): boolean {
+    return this.pipelineEnabled;
+  }
+
+  isSchedulerEnabled(): boolean {
+    return this.schedulerEnabled;
+  }
+
+  isMonitorEnabled(): boolean {
+    return this.monitorEnabled;
+  }
+
+  /**
+   * Enable the Phase 16 code pipeline. Call before startScheduler().
+   * Instantiates CodePipeline, QaRunner, DeployManager, VersionProtocol,
+   * and wires them into a PipelineRunner.
+   */
+  enablePipeline(repoDir?: string): void {
+    if (this.pipelineRunner) {
+      console.log('[pipeline] Pipeline already enabled.');
+      return;
+    }
+
+    const resolvedRepoDir = repoDir || join(homedir(), 'Desktop', 'pando');
+    const dataDir = this.config.dataDir || join(homedir(), '.pando');
+
+    // Guardrails must be initialized (created in _start())
+    const guardrails = this.guardrails || new Guardrails(dataDir);
+
+    const codePipeline = new CodePipeline(resolvedRepoDir, guardrails);
+    const qaRunner = new QaRunner({
+      baseUrl: `http://127.0.0.1:${this.config.apiPort}`,
+      screenshotDir: join(dataDir, 'qa-screenshots'),
+    });
+    const deployManager = new DeployManager(resolvedRepoDir);
+    const versionProtocol = new VersionProtocol();
+
+    this.pipelineRunner = new PipelineRunner(
+      codePipeline,
+      qaRunner,
+      deployManager,
+      versionProtocol,
+      {
+        repoDir: resolvedRepoDir,
+        qaBaseUrl: `http://127.0.0.1:${this.config.apiPort}`,
+        qaScreenshotDir: join(dataDir, 'qa-screenshots'),
+      },
+      guardrails,
+    );
+
+    // NOTE: Restart callback removed. Restart decision is now made by the caller
+    // (api-server.ts POST /pipeline/run) based on whether node source files changed.
+
+    this.pipelineEnabled = true;
+    console.log(`[pipeline] Phase 16 pipeline enabled (repoDir: ${resolvedRepoDir})`);
+  }
+
+  isUpgradeInProgress(): boolean {
+    return this.upgradeInProgress;
+  }
+
+  setUpgradeInProgress(val: boolean): void {
+    this.upgradeInProgress = val;
+  }
+
+  isRestartPending(): boolean {
+    return this.restartPending;
+  }
+
+  /**
+   * Phase 34: Set a restart handler so callers (TUI, PM2) can intercept
+   * restarts instead of the node calling process.exit(75) directly.
+   */
+  setRestartHandler(handler: (reason: string, changedFiles?: string[]) => void): void {
+    this.restartHandler = handler;
+  }
+
+  /**
+   * Phase 34: Get the current restart handler (null = default process.exit).
+   */
+  getRestartHandler(): ((reason: string, changedFiles?: string[]) => void) | null {
+    return this.restartHandler;
+  }
+
+  /**
+   * Phase 34: Register callback for P2P upgrade notifications from peers.
+   */
+  onUpgradeAvailable(cb: (info: { version: string; peerId: string }) => void): void {
+    this.upgradeCallbacks.push(cb);
+  }
+
+  /**
+   * Phase 34: Emit upgrade notification to all registered callbacks.
+   */
+  emitUpgradeAvailable(info: { version: string; peerId: string }): void {
+    for (const cb of this.upgradeCallbacks) {
+      try { cb(info); } catch {}
+    }
+  }
+
+  getUpgradeProtocol(): UpgradeProtocol | null {
+    return this.upgradeProtocol;
+  }
+
+  /**
+   * Request a graceful restart — waits for active scheduler tasks to complete
+   * (up to 5 minutes), then exits with code 75 so the launcher restarts the process.
+   * If a restartHandler is set (Phase 34), calls it instead of process.exit.
+   */
+  requestGracefulRestart(reason?: string, changedFiles?: string[]): void {
+    if (this.restartPending) {
+      console.log('[upgrade] Restart already pending.');
+      return;
+    }
+    this.restartPending = true;
+
+    // Phase 81: Write upgrade info before restart so we can log it on next boot
+    try {
+      const dd = this.config.dataDir || join(homedir(), '.pando');
+      writeFileSync(join(dd, 'last-upgrade.json'), JSON.stringify({
+        reason: reason || 'upgrade', timestamp: Date.now(),
+      }));
+    } catch {}
+
+    const doRestart = () => {
+      if (this.restartHandler) {
+        this.restartHandler(reason || 'upgrade', changedFiles);
+      } else {
+        process.exit(RESTART_EXIT_CODE);
+      }
+    };
+
+    const scheduler = this.getScheduler();
+    const activeTasks = scheduler ? scheduler.getStatus().activeTasks.length : 0;
+
+    if (activeTasks === 0) {
+      console.log('[upgrade] No active tasks. Restarting now...');
+      doRestart();
+      return;
+    }
+
+    console.log(`[upgrade] ${activeTasks} active task(s). Waiting for completion (max 5 min)...`);
+    const startTime = Date.now();
+    const MAX_WAIT = 5 * 60 * 1000; // 5 minutes
+
+    const poll = () => {
+      const remaining = scheduler ? scheduler.getStatus().activeTasks.length : 0;
+      if (remaining === 0) {
+        console.log('[upgrade] All tasks completed. Restarting...');
+        doRestart();
+        return;
+      }
+      if (Date.now() - startTime > MAX_WAIT) {
+        console.log(`[upgrade] Timeout — ${remaining} task(s) still active. Force restarting...`);
+        doRestart();
+        return;
+      }
+      setTimeout(poll, 5000);
+    };
+    setTimeout(poll, 5000);
+  }
+
+  /**
+   * Get the active TaskQueue — from scheduler or passive node queue.
+   * Every running node has a TaskQueue for API + P2P sync.
+   */
+  getActiveTaskQueue(): TaskQueue | null {
+    if (this.scheduler) {
+      return this.scheduler.getTaskQueue();
+    }
+    return this.taskQueue;
+  }
+
+  getGovernance(): GovernanceSync | null {
+    return this.governance;
+  }
+
+  getFileRegistry(): FileRegistry {
+    return this.fileRegistry;
+  }
+
+  /**
+   * Get a remote task emitter for SSE streaming of cross-node timeline events.
+   * Returns null if no remote timeline events have been received for this task.
+   */
+  getRemoteTaskEmitter(taskId: string): EventEmitter | null {
+    return this.remoteTaskEmitters.get(taskId) || null;
+  }
+
+  /**
+   * Get or create a remote task emitter (for SSE subscription before events arrive).
+   */
+  getOrCreateRemoteTaskEmitter(taskId: string): EventEmitter {
+    let emitter = this.remoteTaskEmitters.get(taskId);
+    if (!emitter) {
+      emitter = new EventEmitter();
+      this.remoteTaskEmitters.set(taskId, emitter);
+      // Auto-cleanup after 30 minutes
+      setTimeout(() => {
+        this.remoteTaskEmitters.delete(taskId);
+        emitter!.removeAllListeners();
+      }, 30 * 60 * 1000);
+    }
+    return emitter;
+  }
+
+  // Phase 11: Content Layer getters
+
+  getNetworkState(): NetworkState | null {
+    return this.networkState;
+  }
+
+  getCouncil(): Council | null {
+    return this.council;
+  }
+
+  getGenomeAgent(): GenomeAgent | null {
+    return this.genomeAgent;
+  }
+
+  getContentRegistry(): ContentRegistry | null {
+    return this.contentRegistry;
+  }
+
+  getContentPublisher(): ContentPublisher | null {
+    return this.contentPublisher;
+  }
+
+  getContentMaintenance(): ContentMaintenance | null {
+    return this.contentMaintenance;
+  }
+
+  // Phase 17.6 / 18.6 / 18.7 getters
+
+  getRegressionSuite(): RegressionSuite | null {
+    return this.regressionSuite;
+  }
+
+  getPaymentGate(): PaymentGate | null {
+    return this.paymentGate;
+  }
+
+  getUserAccountStore(): UserAccountStore | null {
+    return this.userAccountStore;
+  }
+
+  getProjectStore(): ProjectStore | null {
+    return this.projectStore;
+  }
+
+  /** Phase 63: Get the P2P ProjectRegistry instance */
+  getProjectRegistry(): ProjectRegistry | null {
+    return this.projectRegistry;
+  }
+
+  getRevenueEngine(): RevenueEngine | null {
+    return this.revenueEngine;
+  }
+
+  getContributionTracker(): ContributionTracker | null {
+    return this.contributionTracker;
+  }
+
+  getHostingService(): HostingService | null {
+    return this.hostingService;
+  }
+
+  /** Phase 64: Get the CloudInstanceManager */
+  getCloudInstanceManager(): CloudInstanceManager | null {
+    return this.cloudInstanceManager;
+  }
+
+  /** Get known agent peers discovered via AGENT_HELLO. */
+  getKnownAgents(): import('@pando/shared').AgentHello[] {
+    return this.governance?.getKnownAgents() || [];
+  }
+
+  /** Get known peer capabilities discovered via AGENT_CAPABILITIES. */
+  getPeerCapabilities(): import('@pando/shared').AgentCapabilities[] {
+    return this.governance?.getPeerCapabilities() || [];
+  }
+
+  /**
+   * Zero out private key in memory and clear identity reference.
+   */
+  async stop(): Promise<void> {
+    if (this.networkState) {
+      this.networkState.stop();
+      this.networkState = null;
+    }
+    if (this.council) {
+      this.council.stop();
+      this.council = null;
+    }
+    this.stopMonitor();
+    this.stopScheduler();
+    if (this.upgradeProtocol) {
+      this.upgradeProtocol.stop();
+      this.upgradeProtocol = null;
+    }
+    if (this.securityMonitor) {
+      this.securityMonitor.stop();
+      this.securityMonitor = null;
+    }
+    if (this.emissionWitness) {
+      this.emissionWitness.stop();
+      this.emissionWitness = null;
+    }
+    if (this.uptimeTimer) {
+      clearInterval(this.uptimeTimer);
+      this.uptimeTimer = null;
+    }
+    if (this.cleanupTimer) {
+      clearInterval(this.cleanupTimer);
+      this.cleanupTimer = null;
+    }
+    if (this.capabilityBroadcastTimer) {
+      clearInterval(this.capabilityBroadcastTimer);
+      this.capabilityBroadcastTimer = null;
+    }
+    if (this.governance) {
+      this.governance.stopArchiveInterval();
+      this.governance = null;
+    }
+    // Stop content layer
+    if (this.contentMaintenance) {
+      this.contentMaintenance.stop();
+      this.contentMaintenance = null;
+    }
+    this.contentPublisher = null;
+    this.contentRegistry = null;
+
+    // Stop resource network components
+    this.resourceRegistry?.stop();
+    this.resourceRegistry = null;
+    if (this.resourceMeter) {
+      this.resourceMeter.stopMeteringLoop();
+      this.resourceMeter = null;
+    }
+    this.resourceRouter = null;
+    this.resourceMarketplace = null;
+
+    // Identity system cleanup
+    if (this.userAccountStore) {
+      this.userAccountStore.close();
+      this.userAccountStore = null;
+    }
+    // Phase 31.1: ProjectStore uses ledger DB, no separate close needed
+    this.projectStore = null;
+    // Phase 63: ProjectRegistry cleanup
+    this.projectRegistry?.stop();
+    this.projectRegistry = null;
+    // Phase 31.4: RevenueEngine uses ledger DB, no separate close needed
+    this.revenueEngine = null;
+    // Phase 31.9: ContributionTracker uses ledger DB, no separate close needed
+    this.contributionTracker = null;
+    if (this.paymentGate) {
+      this.paymentGate.cleanup();
+      this.paymentGate = null;
+    }
+    this.regressionSuite = null;
+
+    this.taskQueue = null;
+    this.requestReply = null;
+    this.reputation = null;
+    this.genomeAgent = null;
+    if (this.agentManager) {
+      this.agentManager.stop();
+      this.agentManager = null;
+    }
+    if (this.apiServer) {
+      await this.apiServer.stop();
+    }
+    if (this.network) {
+      await this.network.stop();
+    }
+    if (this.ledger) {
+      const stats = this.ledger.getNetworkStats();
+      console.log(`Ledger: ${stats.totalSupply} Lux minted, ${stats.totalRelayFees} Lux relay fees, ${stats.totalAccounts} accounts`);
+      if (this.identity) {
+        const balance = this.ledger.accounts.getBalance(this.identity.peerId);
+        console.log(`Balance: ${balance} Lux`);
+      }
+      this.ledger.close();
+    }
+    console.log('Node stopped.');
+  }
+}
+
+export { PandoNetwork } from './network.js';
+export { ApiServer } from './api-server.js';
+export { LedgerSync } from './sync.js';
+export { GovernanceSync } from './governance.js';
+export { FileRegistry } from './file-registry.js';
+export { getDefaultConfig } from './config.js';
+// Phase 27: New agent system exports
+export { Agent } from './agent.js';
+export type { AgentConfig, AgentState, AgentMemory, AgentRole, AgentStatus, AgentLimits, AgentEventResult } from './agent.js';
+export { AgentManager } from './agent-manager.js';
+export type { AgentManagerConfig, SpawnAgentConfig, AgentTreeNode } from './agent-manager.js';
+export { registerAgentRoutes } from './agent-tools.js';
+export { Scheduler } from './scheduler.js';
+export type { SchedulerConfig, SchedulerStatus, ActiveTask, TaskLifecycle } from './scheduler.js';
+export { TaskQueue } from './task-queue.js';
+export type { Task, TaskStatus, TaskPriority, TaskResult, TaskRoleMetadata } from './task-queue.js';
+export { HealthMonitor } from './monitor.js';
+export { Guardrails } from './guardrails.js';
+export { RequestReplyManager } from './request-reply.js';
+export type { RequestReplyStats } from './request-reply.js';
+export { ReputationManager } from './reputation.js';
+export type { ReputationRecord, ReputationEvent } from './reputation.js';
+export { QaRunner } from './qa-runner.js';
+export { DeployManager } from './deploy-manager.js';
+export type { DeployStatus, CommitResult, BuildResult, BackupInfo } from './deploy-manager.js';
+export { VersionProtocol } from './version-protocol.js';
+export { PipelineRunner } from './pipeline-runner.js';
+export type { PipelineRunnerConfig, PipelineStageResult, PipelineRunResult, PipelineStatus } from './pipeline-runner.js';
+export { EmissionWitness, TOPIC_EMISSIONS } from './emission-witness.js';
+export type { EmissionProposal, WitnessAttestation, EmissionStats } from './emission-witness.js';
+export { SecurityMonitor } from './security-monitor.js';
+export type { SecurityAlert, SecurityAlertType, SecurityAlertSeverity, QuarantineEntry, SecurityStats } from './security-monitor.js';
+export { ContentRegistry, TOPIC_CONTENT } from './content-registry.js';
+export { ContentPublisher } from './content-publish.js';
+export type { PublishOptions, ExtractedContent } from './content-publish.js';
+export { ContentMaintenance } from './content-maintenance.js';
+export type { MaintenanceConfig, MaintenanceCheck, MaintenanceIssue } from './content-maintenance.js';
+export { UpgradeProtocol } from './upgrade-protocol.js';
+export type { UpgradeProtocolDeps } from './upgrade-protocol.js';
+export { ResourceRouter } from './resource-router.js';
+export { ResourceMeter } from './resource-meter.js';
+export { ResourceMarketplace } from './resource-marketplace.js';
+export { ResourceRegistry } from './resource-registry.js';
+export { RegressionSuite } from './regression-suite.js';
+export { PaymentGate } from './payment-gate.js';
+export { UserAccountStore } from './user-accounts.js';
+export { ProjectStore } from './project-store.js';
+export { ProjectRegistry, TOPIC_PROJECTS } from './project-registry.js';
+export type { CreateProjectOpts, ListProjectsOpts, ProjectStats } from './project-store.js';
+export { GenomeAgent } from './genome-agent.js';
+export type { GenomeAgentConfig, ScopedGenomeContext, DriftIssue, CommitInfo, ChangedFile, ComponentMatch, GenomeRegistry } from './genome-agent.js';
+// Phase 50: Network State exports
+export { NetworkState } from './network-state.js';
+export type { NetworkStateSnapshot } from './network-state.js';
+// Phase 50: Council exports
+export { Council } from './council.js';
+export type { CouncilMember, CouncilState, ReflectionResult } from './council.js';
+// Phase 42: StorageBackend exports
+export type { StorageBackend } from './storage-backend.js';
+export { MongoStorageBackend } from './mongo-backend.js';

@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Pando Secure Notes</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 20px; background: #0a0a0a; color: #e0e0e0; }
+    h1 { font-size: 1.4rem; margin-bottom: 16px; color: #fff; }
+    .security-badge { background: #0d2818; border: 1px solid #1a5c2e; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 0.85rem; color: #4ade80; }
+    .security-badge code { background: #162b1f; padding: 2px 6px; border-radius: 4px; font-size: 0.8rem; }
+    .config { background: #1a1a2e; border: 1px solid #2a2a4e; border-radius: 8px; padding: 12px 16px; margin-bottom: 20px; font-size: 0.8rem; color: #a0a0d0; word-break: break-all; }
+    .config div { margin: 4px 0; }
+    .config label { color: #6366f1; font-weight: 600; }
+    form { display: flex; gap: 8px; margin-bottom: 20px; }
+    input[type="text"] { flex: 1; padding: 10px 14px; border: 1px solid #333; border-radius: 6px; background: #1a1a1a; color: #fff; font-size: 0.95rem; }
+    button { padding: 10px 18px; border: none; border-radius: 6px; cursor: pointer; font-size: 0.9rem; font-weight: 600; }
+    .btn-add { background: #6366f1; color: #fff; }
+    .btn-add:hover { background: #4f46e5; }
+    .btn-del { background: #dc2626; color: #fff; font-size: 0.75rem; padding: 4px 10px; }
+    .btn-del:hover { background: #b91c1c; }
+    .notes { list-style: none; }
+    .notes li { display: flex; justify-content: space-between; align-items: center; padding: 10px 14px; border: 1px solid #222; border-radius: 6px; margin-bottom: 8px; background: #141414; }
+    .notes li span { flex: 1; }
+    .count { font-size: 0.85rem; color: #888; margin-bottom: 12px; }
+    .error { background: #2d1010; border: 1px solid #5c1a1a; color: #f87171; border-radius: 8px; padding: 12px; margin-bottom: 16px; font-size: 0.85rem; display: none; }
+    .loading { color: #666; font-style: italic; }
+  </style>
+</head>
+<body>
+  <h1>Pando Secure Notes</h1>
+
+  <div class="security-badge">
+    Connected via <strong>Resource Proxy</strong>. No database credentials in this app.
+    All MongoDB operations go through the gateway proxy using only a project API key.
+  </div>
+
+  <div class="config" id="config">
+    <div><label>Gateway:</label> <span id="cfg-gateway">--</span></div>
+    <div><label>Project ID:</label> <span id="cfg-project">--</span></div>
+    <div><label>API Key:</label> <span id="cfg-key">--</span></div>
+    <div><label>MongoDB URI:</label> <span style="color:#4ade80">HIDDEN (never sent to this app)</span></div>
+  </div>
+
+  <div class="error" id="error"></div>
+
+  <form id="add-form">
+    <input type="text" id="note-input" placeholder="Write a note..." autocomplete="off" />
+    <button type="submit" class="btn-add">Add</button>
+  </form>
+
+  <div class="count" id="count">Loading...</div>
+  <ul class="notes" id="notes"></ul>
+
+  <script>
+    const params = new URLSearchParams(location.search);
+    const GATEWAY = window.PANDO_GATEWAY_URL || params.get('gateway') || '';
+    const PROJECT_ID = window.PANDO_PROJECT_ID || params.get('project') || '';
+    const API_KEY = window.PANDO_PROJECT_API_KEY || params.get('key') || '';
+    const COLLECTION = 'secure_notes_test';
+
+    document.getElementById('cfg-gateway').textContent = GATEWAY || '(not injected)';
+    document.getElementById('cfg-project').textContent = PROJECT_ID || '(not injected)';
+    document.getElementById('cfg-key').textContent = API_KEY ? API_KEY.slice(0, 8) + '...' : '(not injected)';
+
+    async function dbOp(operation, params = {}) {
+      const url = GATEWAY + '/api/resource-proxy/db';
+      const body = { collection: COLLECTION, operation, ...params };
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Project-Key': API_KEY },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        const err = await res.text();
+        throw new Error(`${res.status}: ${err}`);
+      }
+      return res.json();
+    }
+
+    async function loadNotes() {
+      try {
+        const [notesRes, countRes] = await Promise.all([
+          dbOp('find', { filter: {}, sort: { createdAt: -1 }, limit: 50 }),
+          dbOp('count', { filter: {} }),
+        ]);
+        const notes = notesRes.data || [];
+        const count = typeof countRes.data === 'object' ? countRes.data.count : (countRes.data || 0);
+        document.getElementById('count').textContent = `${count} note${count !== 1 ? 's' : ''}`;
+        const list = document.getElementById('notes');
+        list.innerHTML = '';
+        notes.forEach(note => {
+          const li = document.createElement('li');
+          const span = document.createElement('span');
+          span.textContent = note.text;
+          const btn = document.createElement('button');
+          btn.className = 'btn-del';
+          btn.textContent = 'Delete';
+          btn.onclick = () => deleteNote(note._id, note.text);
+          li.appendChild(span);
+          li.appendChild(btn);
+          list.appendChild(li);
+        });
+        hideError();
+      } catch (err) {
+        showError('Load failed: ' + err.message);
+      }
+    }
+
+    async function addNote(text) {
+      try {
+        await dbOp('insertOne', { document: { text, createdAt: Date.now(), projectId: PROJECT_ID } });
+        document.getElementById('note-input').value = '';
+        await loadNotes();
+      } catch (err) {
+        showError('Add failed: ' + err.message);
+      }
+    }
+
+    async function deleteNote(id, text) {
+      try {
+        await dbOp('deleteOne', { filter: text ? { text } : { _id: id } });
+        await loadNotes();
+      } catch (err) {
+        showError('Delete failed: ' + err.message);
+      }
+    }
+
+    function showError(msg) {
+      const el = document.getElementById('error');
+      el.textContent = msg;
+      el.style.display = 'block';
+    }
+    function hideError() {
+      document.getElementById('error').style.display = 'none';
+    }
+
+    document.getElementById('add-form').addEventListener('submit', e => {
+      e.preventDefault();
+      const input = document.getElementById('note-input');
+      if (input.value.trim()) addNote(input.value.trim());
+    });
+
+    loadNotes();
+  </script>
+</body>
+</html>

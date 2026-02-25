@@ -1,0 +1,7 @@
+# Force LF line endings for shell scripts (critical for Linux nodes)
+*.sh text eol=lf
+*.command text eol=lf
+
+# Keep Windows batch files as CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf

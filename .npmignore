@@ -1,0 +1,16 @@
+# Dev / CI files not needed in the published package
+.git/
+.gitignore
+.env
+.env.local
+.DS_Store
+*.tsbuildinfo
+
+# Built files — the launcher auto-builds on first run
+packages/*/dist/
+
+# Large files
+package-lock.json
+
+# Next.js build artifacts
+packages/gateway/.next/

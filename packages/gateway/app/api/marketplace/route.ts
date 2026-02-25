@@ -1,0 +1,28 @@
+import { NextResponse } from "next/server";
+import { getNodeUrl, getApiToken } from "@/lib/node-connection";
+
+function nodeHeaders(): Record<string, string> {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  const token = getApiToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
+}
+
+export async function GET(req: Request) {
+  try {
+    const { searchParams } = new URL(req.url);
+    const qs = searchParams.toString();
+    const url = `${getNodeUrl()}/marketplace${qs ? `?${qs}` : ''}`;
+    const res = await fetch(url, {
+      headers: nodeHeaders(),
+      signal: AbortSignal.timeout(10000),
+    });
+    if (!res.ok) {
+      return NextResponse.json({ projects: [], total: 0 }, { status: res.status });
+    }
+    return NextResponse.json(await res.json());
+  } catch (err: any) {
+    console.error("GET /api/marketplace error:", err?.message);
+    return NextResponse.json({ projects: [], total: 0 }, { status: 500 });
+  }
+}

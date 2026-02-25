@@ -1,0 +1,44 @@
+{
+  "name": "pando-monorepo",
+  "version": "0.1.0",
+  "description": "Pando — The Open Network. A decentralized, AI-managed peer-to-peer network.",
+  "bin": {
+    "pando": "bin/pando.js"
+  },
+  "workspaces": [
+    "packages/shared",
+    "packages/ledger",
+    "packages/node",
+    "packages/gateway",
+    "packages/extension",
+    "packages/mcp-server"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "start": "node bin/pando.js",
+    "start:headless": "node bin/pando.js --headless",
+    "clean": "rm -rf packages/*/dist"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "keywords": [
+    "p2p",
+    "decentralized",
+    "network",
+    "ai",
+    "libp2p",
+    "pando"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/pando-lux/pando.git"
+  },
+  "devDependencies": {
+    "playwright": "^1.58.2"
+  },
+  "dependencies": {
+    "@aws-sdk/client-ssm": "^3.995.0"
+  }
+}

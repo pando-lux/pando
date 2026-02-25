@@ -1,0 +1,416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>PandoChat - Social Feed</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!--
+    PandoChat — Simple Social Feed App
+    ====================================
+    Built to exercise Pando's Phase 53 Resource Proxy architecture.
+
+    SETUP:
+    1. Create a project on your Pando node:
+       curl -s http://127.0.0.1:4100/projects -X POST \
+         -H "X-User-Token: YOUR_SESSION_TOKEN" \
+         -H "Content-Type: application/json" \
+         -d '{"name":"pandochat","description":"Social feed app","visibility":"public"}'
+
+    2. Generate an API key for the project:
+       curl -s http://127.0.0.1:4100/projects/PROJECT_ID/api-key -X POST \
+         -H "X-User-Token: YOUR_SESSION_TOKEN"
+
+    3. Ensure a storage_db resource is registered on the node (MongoDB URI).
+
+    4. Set GATEWAY_URL and PROJECT_KEY below (or use the config panel in the UI).
+
+    5. Open this file in a browser. The gateway must be running at the configured URL.
+
+    COLLECTIONS USED:
+    - pandochat_messages: { _id, author, text, likes, likedBy, createdAt }
+
+    RESOURCE PROXY OPERATIONS USED:
+    - find (list messages)
+    - insertOne (post message)
+    - updateOne (like/unlike via $inc and $push/$pull)
+  -->
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen">
+
+  <div id="app"></div>
+
+  <script>
+    // ── Configuration ──────────────────────────────────────────────────────
+    // Change these to match your setup, or use the config panel in the UI.
+    let GATEWAY_URL = localStorage.getItem('pandochat_gateway') || 'http://localhost:3222';
+    let PROJECT_KEY = localStorage.getItem('pandochat_key') || '';
+
+    // ── State ──────────────────────────────────────────────────────────────
+    let displayName = localStorage.getItem('pandochat_name') || '';
+    let messages = [];
+    let refreshTimer = null;
+    let isLoading = false;
+
+    // ── Resource Proxy Helper ──────────────────────────────────────────────
+    async function dbOperation(payload) {
+      if (!GATEWAY_URL || !PROJECT_KEY) {
+        throw new Error('Gateway URL and Project Key must be configured.');
+      }
+      const url = GATEWAY_URL.replace(/\/$/, '') + '/api/resource-proxy/db';
+      const res = await fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Project-Key': PROJECT_KEY,
+        },
+        body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.success) {
+        throw new Error(data.error || `Operation failed (HTTP ${res.status})`);
+      }
+      return data;
+    }
+
+    // ── API Functions ──────────────────────────────────────────────────────
+    async function fetchMessages() {
+      const data = await dbOperation({
+        operation: 'find',
+        collection: 'pandochat_messages',
+        filter: {},
+        sort: { createdAt: -1 },
+        limit: 50,
+      });
+      return data.data || [];
+    }
+
+    async function postMessage(text) {
+      return dbOperation({
+        operation: 'insertOne',
+        collection: 'pandochat_messages',
+        document: {
+          author: displayName,
+          text: text.trim(),
+          likes: 0,
+          likedBy: [],
+          createdAt: Date.now(),
+        },
+      });
+    }
+
+    async function toggleLike(msgId, currentlyLiked) {
+      if (currentlyLiked) {
+        // Unlike: decrement likes, remove from likedBy
+        return dbOperation({
+          operation: 'updateOne',
+          collection: 'pandochat_messages',
+          filter: { _id: msgId },
+          update: {
+            $inc: { likes: -1 },
+            $pull: { likedBy: displayName },
+          },
+        });
+      } else {
+        // Like: increment likes, add to likedBy
+        return dbOperation({
+          operation: 'updateOne',
+          collection: 'pandochat_messages',
+          filter: { _id: msgId },
+          update: {
+            $inc: { likes: 1 },
+            $push: { likedBy: displayName },
+          },
+        });
+      }
+    }
+
+    // ── Rendering ──────────────────────────────────────────────────────────
+    function render() {
+      const app = document.getElementById('app');
+      app.innerHTML = '';
+
+      // Header
+      const header = el('div', 'bg-gray-800 border-b border-gray-700 px-6 py-4 flex items-center justify-between');
+      const title = el('h1', 'text-2xl font-bold text-purple-400');
+      title.textContent = 'PandoChat';
+      const subtitle = el('span', 'text-sm text-gray-400 ml-3');
+      subtitle.textContent = 'Social Feed on Pando Resource Proxy';
+      const titleRow = el('div', 'flex items-center');
+      titleRow.append(title, subtitle);
+
+      const configBtn = el('button', 'text-sm bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-gray-300');
+      configBtn.textContent = 'Config';
+      configBtn.onclick = () => showConfigPanel();
+      header.append(titleRow, configBtn);
+      app.appendChild(header);
+
+      // Check if configured
+      if (!PROJECT_KEY) {
+        const notice = el('div', 'max-w-xl mx-auto mt-12 p-6 bg-yellow-900/30 border border-yellow-600/50 rounded-lg text-center');
+        notice.innerHTML = `
+          <h2 class="text-lg font-semibold text-yellow-400 mb-2">Setup Required</h2>
+          <p class="text-gray-300 mb-4">Click <strong>Config</strong> above to set your Gateway URL and Project API Key.</p>
+          <p class="text-sm text-gray-500">See the HTML source comments for how to create a project and generate an API key.</p>
+        `;
+        app.appendChild(notice);
+        return;
+      }
+
+      // Name entry (if not set)
+      if (!displayName) {
+        const namePanel = el('div', 'max-w-md mx-auto mt-12 p-6 bg-gray-800 rounded-lg');
+        namePanel.innerHTML = `
+          <h2 class="text-lg font-semibold mb-4">What's your name?</h2>
+          <div class="flex gap-2">
+            <input id="name-input" type="text" maxlength="30"
+              class="flex-1 bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white focus:outline-none focus:border-purple-500"
+              placeholder="Enter display name..." />
+            <button id="name-btn"
+              class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded font-medium"
+              onclick="setName()">Join</button>
+          </div>
+        `;
+        app.appendChild(namePanel);
+        setTimeout(() => document.getElementById('name-input')?.focus(), 50);
+        return;
+      }
+
+      // Main content
+      const main = el('div', 'max-w-2xl mx-auto px-4 py-6');
+
+      // User info bar
+      const userBar = el('div', 'flex items-center justify-between mb-4');
+      const userInfo = el('div', 'text-sm text-gray-400');
+      userInfo.innerHTML = `Posting as <span class="text-purple-400 font-medium">${esc(displayName)}</span>`;
+      const changeBtn = el('button', 'text-xs text-gray-500 hover:text-gray-300 underline');
+      changeBtn.textContent = 'Change name';
+      changeBtn.onclick = () => { displayName = ''; localStorage.removeItem('pandochat_name'); render(); };
+      userBar.append(userInfo, changeBtn);
+      main.appendChild(userBar);
+
+      // Compose box
+      const compose = el('div', 'bg-gray-800 rounded-lg p-4 mb-6 border border-gray-700');
+      compose.innerHTML = `
+        <textarea id="compose-text" rows="3"
+          class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white resize-none focus:outline-none focus:border-purple-500"
+          placeholder="What's on your mind?"></textarea>
+        <div class="flex justify-between items-center mt-2">
+          <span id="compose-error" class="text-sm text-red-400"></span>
+          <button id="post-btn"
+            class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded font-medium text-sm disabled:opacity-50"
+            onclick="handlePost()">Post</button>
+        </div>
+      `;
+      main.appendChild(compose);
+
+      // Status / loading
+      if (isLoading) {
+        const loader = el('div', 'text-center text-gray-500 py-4');
+        loader.textContent = 'Loading messages...';
+        main.appendChild(loader);
+      }
+
+      // Messages
+      if (messages.length === 0 && !isLoading) {
+        const empty = el('div', 'text-center text-gray-500 py-8');
+        empty.textContent = 'No messages yet. Be the first to post!';
+        main.appendChild(empty);
+      }
+
+      for (const msg of messages) {
+        main.appendChild(renderMessage(msg));
+      }
+
+      // Refresh button
+      const refreshRow = el('div', 'text-center mt-4');
+      const refreshBtn = el('button', 'text-sm text-gray-500 hover:text-gray-300 underline');
+      refreshBtn.textContent = 'Refresh feed';
+      refreshBtn.onclick = () => loadMessages();
+      refreshRow.appendChild(refreshBtn);
+      main.appendChild(refreshRow);
+
+      app.appendChild(main);
+    }
+
+    function renderMessage(msg) {
+      const id = msg._id;
+      const isOwn = msg.author === displayName;
+      const liked = Array.isArray(msg.likedBy) && msg.likedBy.includes(displayName);
+      const timeAgo = formatTimeAgo(msg.createdAt);
+
+      const card = el('div', 'bg-gray-800 rounded-lg p-4 mb-3 border border-gray-700');
+
+      // Author + time
+      const meta = el('div', 'flex items-center justify-between mb-2');
+      const authorSpan = el('span', `font-medium text-sm ${isOwn ? 'text-purple-400' : 'text-blue-400'}`);
+      authorSpan.textContent = msg.author || 'Anonymous';
+      const timeSpan = el('span', 'text-xs text-gray-500');
+      timeSpan.textContent = timeAgo;
+      meta.append(authorSpan, timeSpan);
+      card.appendChild(meta);
+
+      // Text
+      const textDiv = el('div', 'text-gray-200 mb-3 whitespace-pre-wrap break-words');
+      textDiv.textContent = msg.text;
+      card.appendChild(textDiv);
+
+      // Actions
+      const actions = el('div', 'flex items-center gap-4');
+
+      const likeBtn = el('button', `flex items-center gap-1 text-sm ${liked ? 'text-red-400' : 'text-gray-500 hover:text-red-400'} transition-colors`);
+      likeBtn.innerHTML = `${liked ? '&#9829;' : '&#9825;'} <span>${msg.likes || 0}</span>`;
+      likeBtn.onclick = async () => {
+        if (!displayName) return;
+        try {
+          await toggleLike(id, liked);
+          await loadMessages();
+        } catch (err) {
+          showError('Like failed: ' + err.message);
+        }
+      };
+      actions.appendChild(likeBtn);
+
+      card.appendChild(actions);
+      return card;
+    }
+
+    // ── Config Panel ───────────────────────────────────────────────────────
+    function showConfigPanel() {
+      const overlay = el('div', 'fixed inset-0 bg-black/60 flex items-center justify-center z-50');
+      overlay.id = 'config-overlay';
+      const panel = el('div', 'bg-gray-800 rounded-lg p-6 w-full max-w-md border border-gray-600');
+      panel.innerHTML = `
+        <h2 class="text-lg font-semibold mb-4">Configuration</h2>
+        <label class="block text-sm text-gray-400 mb-1">Gateway URL</label>
+        <input id="cfg-gateway" type="text" value="${esc(GATEWAY_URL)}"
+          class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white mb-3 focus:outline-none focus:border-purple-500"
+          placeholder="http://localhost:3222" />
+        <label class="block text-sm text-gray-400 mb-1">Project API Key</label>
+        <input id="cfg-key" type="text" value="${esc(PROJECT_KEY)}"
+          class="w-full bg-gray-700 border border-gray-600 rounded px-3 py-2 text-white mb-4 focus:outline-none focus:border-purple-500 font-mono text-sm"
+          placeholder="pk_..." />
+        <div class="flex justify-end gap-2">
+          <button class="px-4 py-2 rounded text-gray-400 hover:text-white" onclick="closeConfig()">Cancel</button>
+          <button class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded font-medium" onclick="saveConfig()">Save</button>
+        </div>
+      `;
+      overlay.appendChild(panel);
+      overlay.onclick = (e) => { if (e.target === overlay) closeConfig(); };
+      document.body.appendChild(overlay);
+    }
+
+    function closeConfig() {
+      const ov = document.getElementById('config-overlay');
+      if (ov) ov.remove();
+    }
+
+    function saveConfig() {
+      GATEWAY_URL = document.getElementById('cfg-gateway').value.trim();
+      PROJECT_KEY = document.getElementById('cfg-key').value.trim();
+      localStorage.setItem('pandochat_gateway', GATEWAY_URL);
+      localStorage.setItem('pandochat_key', PROJECT_KEY);
+      closeConfig();
+      render();
+      if (PROJECT_KEY && displayName) loadMessages();
+    }
+
+    // ── Actions ────────────────────────────────────────────────────────────
+    function setName() {
+      const input = document.getElementById('name-input');
+      const name = (input?.value || '').trim();
+      if (!name) return;
+      displayName = name;
+      localStorage.setItem('pandochat_name', displayName);
+      render();
+      loadMessages();
+    }
+
+    async function handlePost() {
+      const textarea = document.getElementById('compose-text');
+      const text = (textarea?.value || '').trim();
+      if (!text) return;
+
+      const btn = document.getElementById('post-btn');
+      btn.disabled = true;
+      btn.textContent = 'Posting...';
+
+      try {
+        await postMessage(text);
+        textarea.value = '';
+        document.getElementById('compose-error').textContent = '';
+        await loadMessages();
+      } catch (err) {
+        document.getElementById('compose-error').textContent = err.message;
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Post';
+      }
+    }
+
+    async function loadMessages() {
+      if (!PROJECT_KEY) return;
+      isLoading = true;
+      render();
+      try {
+        messages = await fetchMessages();
+      } catch (err) {
+        showError('Failed to load messages: ' + err.message);
+        messages = [];
+      }
+      isLoading = false;
+      render();
+    }
+
+    function showError(msg) {
+      console.error('[PandoChat]', msg);
+      // Briefly show error in compose area if visible
+      const errEl = document.getElementById('compose-error');
+      if (errEl) errEl.textContent = msg;
+    }
+
+    // ── Utilities ──────────────────────────────────────────────────────────
+    function el(tag, className) {
+      const e = document.createElement(tag);
+      if (className) e.className = className;
+      return e;
+    }
+
+    function esc(str) {
+      const d = document.createElement('div');
+      d.textContent = str;
+      return d.innerHTML;
+    }
+
+    function formatTimeAgo(ts) {
+      if (!ts) return '';
+      const diff = Date.now() - ts;
+      if (diff < 60000) return 'just now';
+      if (diff < 3600000) return Math.floor(diff / 60000) + 'm ago';
+      if (diff < 86400000) return Math.floor(diff / 3600000) + 'h ago';
+      return Math.floor(diff / 86400000) + 'd ago';
+    }
+
+    // ── Keyboard shortcuts ─────────────────────────────────────────────────
+    document.addEventListener('keydown', (e) => {
+      // Enter in name input
+      if (e.key === 'Enter' && e.target?.id === 'name-input') {
+        setName();
+      }
+      // Ctrl+Enter in compose textarea
+      if (e.key === 'Enter' && e.ctrlKey && e.target?.id === 'compose-text') {
+        handlePost();
+      }
+    });
+
+    // ── Boot ───────────────────────────────────────────────────────────────
+    render();
+    if (PROJECT_KEY && displayName) {
+      loadMessages();
+      // Auto-refresh every 10 seconds
+      refreshTimer = setInterval(() => loadMessages(), 10000);
+    }
+  </script>
+
+</body>
+</html>

@@ -1,0 +1,533 @@
+# Pando Project Genome
+# The single source of truth for the Pando decentralized network.
+# Read genome.yaml for the map. Drill into component/flow/rule files for details.
+# AI-maintained: genome agent watches git diffs and updates affected files.
+
+name: Pando Network
+type: distributed-system
+description: >
+  Decentralized, AI-managed P2P network. The open internet for everyone.
+  P2P protects the brain (identity, economy, coordination, governance, survival).
+  Hosting and deployment use existing internet infrastructure (GitHub, Vercel, AWS).
+  Pando co-exists with the internet — it cannot be killed because the node network is decentralized,
+  but it uses the internet's body for serving content and storing outputs.
+repo: https://github.com/pando-lux/pando
+founder: Pando
+currency: Lux
+license: open-source
+
+# ── Components ──────────────────────────────────────────────────────────────
+
+components:
+
+  # ── Core (brain + muscle) ─────────────────────────────────────────────
+  - id: bridge-queue
+    file: components/bridge-queue.md
+    type: service
+    domain: core
+    summary: Central event-driven communication hub — all agents talk through the bridge, Manager pulls one item at a time
+
+  - id: agent
+    file: components/agent.md
+    type: service
+    domain: core
+    summary: Universal Agent Primitive — every agent (manager, builder, tester, reviewer) is an Agent with workspace, Claude Code session, 4-layer template, state persistence, hard limits
+
+  - id: agent-manager
+    file: components/agent-manager.md
+    type: service
+    domain: core
+    summary: Agent lifecycle manager — bridge watcher, spawn/resume/rotate agents, registry, cleanup sweep, project access control
+
+  - id: agent-tools
+    file: components/agent-tools.md
+    type: service
+    domain: core
+    summary: HTTP API handlers for agent operations — spawn, message, report, tree view, project management
+
+  - id: manager
+    file: components/manager.md
+    type: service
+    domain: core
+    summary: Agent with 'manager' role — coordinates team, talks to users, processes bridge items, delegates to children
+
+  - id: scheduler
+    file: components/scheduler.md
+    type: service
+    domain: core
+    summary: Pure executor — spawns workers, collects results, enqueues to bridge. Zero decisions.
+
+  - id: task-queue
+    file: components/task-queue.md
+    type: data-store
+    domain: core
+    summary: SQLite task storage with parent/child hierarchy
+
+  - id: genome-agent
+    file: components/genome-agent.md
+    type: utility
+    domain: support
+    summary: Optional utility — YAML parser, file matcher, drift checker. Workers and Manager read genome files directly.
+
+  # ── Pipeline (DEPRECATED — Manager workflow replaces standalone pipeline) ──
+  - id: pipeline-runner
+    file: components/pipeline-runner.md
+    type: service
+    domain: pipeline
+    status: DEPRECATED
+    summary: "DEPRECATED: 7-stage pipeline replaced by Manager workflow. Code stays as utility."
+
+  - id: code-pipeline
+    file: components/code-pipeline.md
+    type: service
+    domain: pipeline
+    summary: Diff extraction utility — used by Manager for workspace-to-repo transfer
+
+  - id: qa-runner
+    file: components/qa-runner.md
+    type: service
+    domain: pipeline
+    summary: Structured API + browser tests — Manager creates QA tasks that use this
+
+  - id: deploy-manager
+    file: components/deploy-manager.md
+    type: service
+    domain: pipeline
+    summary: Backup/restore dist/ utility — used by Manager for rollback safety
+
+  # ── Monitoring (data sources only) ────────────────────────────────────
+  - id: health-monitor
+    file: components/health-monitor.md
+    type: data-source
+    domain: monitoring
+    summary: Rolling metrics, alert detection. NO autonomous recovery — manager decides.
+
+  # ── Security ──────────────────────────────────────────────────────────
+  - id: guardrails
+    file: components/guardrails.md
+    type: safety
+    domain: security
+    summary: Protected paths, rate limits, immutable kernel. Cannot be bypassed.
+
+  - id: security-monitor
+    file: components/security-monitor.md
+    type: safety
+    domain: security
+    summary: 5 threat detectors, auto-quarantine, 3-level escalation
+
+  - id: content-safety
+    file: components/content-safety.md
+    type: safety
+    domain: security
+    summary: 5-category content review — harmful, malicious code, OWASP, Two Laws, deps
+
+  - id: resource-proof
+    file: components/resource-proof.md
+    type: safety
+    domain: security
+    summary: Storage/compute/bandwidth proof challenges via P2P
+
+  - id: reputation-governance
+    file: components/reputation-governance.md
+    type: safety
+    domain: security
+    summary: Reputation-weighted voting, Sybil-resistant governance
+
+  # ── P2P & Networking ──────────────────────────────────────────────────
+  - id: network
+    file: components/network.md
+    type: infrastructure
+    domain: p2p
+    summary: libp2p — TCP, Noise, Yamux, mDNS, GossipSub, Circuit Relay
+
+  - id: ledger-sync
+    file: components/ledger-sync.md
+    type: infrastructure
+    domain: p2p
+    summary: GossipSub distributed ledger sync — bidirectional transaction replication
+
+  - id: request-reply
+    file: components/request-reply.md
+    type: infrastructure
+    domain: p2p
+    summary: Correlation IDs + timeouts for P2P request/response patterns
+
+  - id: reputation
+    file: components/reputation.md
+    type: infrastructure
+    domain: p2p
+    summary: Per-node reputation tracking and P2P broadcast
+
+  # ── Content ───────────────────────────────────────────────────────────
+  - id: content-registry
+    file: components/content-registry.md
+    type: service
+    domain: content
+    summary: SQLite content records, GossipSub sync, full-text search, revenue sharing
+
+  - id: content-publish
+    file: components/content-publish.md
+    type: service
+    domain: content
+    summary: Extract workspace content, register, broadcast to network
+
+  - id: content-maintenance
+    file: components/content-maintenance.md
+    type: service
+    domain: content
+    summary: Staleness detection, auto-create maintenance tasks
+
+  # ── Economy ───────────────────────────────────────────────────────────
+  - id: ledger
+    file: components/ledger.md
+    type: data-store
+    domain: economy
+    summary: SQLite — accounts, balances, transactions, emissions, activity
+
+  - id: emission-witness
+    file: components/emission-witness.md
+    type: service
+    domain: economy
+    summary: Witness-based Lux minting — 2+ peer attestations for quorum
+
+  - id: payment-gate
+    file: components/payment-gate.md
+    type: service
+    domain: economy
+    summary: Cost estimation by tier, escrow hold/release/refund, free tier
+
+  - id: project-registry
+    file: components/project-registry.md
+    type: service
+    domain: p2p
+    summary: "Phase 63: P2P project metadata registry — GossipSub sync, SHA-256 API key validation, any-node project discovery without MongoDB"
+
+  - id: project-store
+    file: components/project-store.md
+    type: data-store
+    domain: economy
+    summary: SQLite project + collaborator persistence, invites, transfers, deployments, marketplace, content reports
+
+  - id: revenue-engine
+    file: components/revenue-engine.md
+    type: service
+    domain: economy
+    summary: Usage metering, revenue collection, automatic Lux distribution (85/10/5 private, configurable shared, 50/30/15/5 public)
+
+  - id: contribution-tracker
+    file: components/contribution-tracker.md
+    type: service
+    domain: economy
+    summary: Verified work tracking, 10% monthly decay scoring, proportional revenue shares
+
+  - id: user-accounts
+    file: components/user-accounts.md
+    type: service
+    domain: identity
+    summary: Unified Ed25519 identity system — auto-guest creation, claim with password+username, login via username or peerId, PBKDF2+AES-256-GCM key encryption
+
+  - id: resource-meter
+    file: components/resource-meter.md
+    type: service
+    domain: economy
+    summary: Per-resource usage tracking, reward calculation, 30-day pruning
+
+  - id: resource-marketplace
+    file: components/resource-marketplace.md
+    type: service
+    domain: economy
+    summary: Operator pricing, find cheapest provider, budget matching
+
+  # ── Resources ─────────────────────────────────────────────────────────
+  - id: capability-registry
+    file: components/capability-registry.md
+    type: service
+    domain: resources
+    summary: Dynamic capability detection + P2P broadcast
+
+  - id: resource-router
+    file: components/resource-router.md
+    type: service
+    domain: resources
+    summary: Smart routing to capable nodes, auto-degrade on failure, P2P forwarding
+
+  - id: resource-registry
+    file: components/resource-registry.md
+    type: service
+    domain: resources
+    status: DONE
+    summary: "Phase 69: Metadata-only P2P resource registry — syncs resource type/status/owner via GossipSub, delegates credential ops to CredentialStore. No encryption in registry."
+
+  - id: credential-store
+    file: components/credential-store.md
+    type: service
+    domain: resources
+    status: DONE
+    summary: "Phase 69: MongoDB-based encrypted credential storage — AES-256-GCM with master key (CREDENTIAL_MASTER_KEY env var). Only EC2 compute nodes can decrypt."
+
+  # credential-vault.ts — Low-level AES-256-GCM encrypt/decrypt utilities. Used by CredentialStore.
+  # Not a standalone component — documented in credential-store.md. (X25519 wrapping removed in Phase 69.)
+
+  # ── Evolution ─────────────────────────────────────────────────────────
+  - id: upgrade-protocol
+    file: components/upgrade-protocol.md
+    type: service
+    domain: evolution
+    summary: "Phase 82: Simple git pull + hash verification — propose, governance approve, git pull, build, restart. No patches, no canary."
+
+  - id: version-protocol
+    file: components/version-protocol.md
+    type: service
+    domain: evolution
+    summary: Version compatibility checks across nodes
+
+  - id: regression-suite
+    file: components/regression-suite.md
+    type: service
+    domain: evolution
+    summary: 14 built-in tests, persistent storage, run by category
+
+  # ── Support ───────────────────────────────────────────────────────────
+  - id: file-registry
+    file: components/file-registry.md
+    type: service
+    domain: support
+    summary: Prevents concurrent edits to same file by multiple agents
+
+  - id: governance
+    file: components/governance.md
+    type: service
+    domain: governance
+    summary: AI-powered governance — proposal staking, hash-based reviewer selection, AI review, community vote, meta-governance protection
+
+  - id: council
+    file: components/council.md
+    type: service
+    domain: governance
+    summary: Rotating council of top-reputation AI-capable nodes for autonomous reflection — selection, daily prompt assembly, council minutes, hourly tick scheduler
+
+  # network-state.ts — Network state aggregator for council reflection. Documented in council.md (not a standalone component).
+
+  # ── Storage & Hosting ────────────────────────────────────────────────
+  - id: storage-backend
+    file: components/storage-backend.md
+    type: service
+    domain: infrastructure
+    summary: "StorageBackend abstraction — MongoStorageBackend (direct, compute nodes) + P2PStorageBackend (proxied, user nodes). Every node gets a StorageBackend. Phase 83."
+
+  - id: hosting-service
+    file: components/hosting-service.md
+    type: service
+    domain: infrastructure
+    summary: S3 hosting — deploy project sites to AWS S3, public direct access, private via pre-signed URLs
+
+  - id: cloud-instance-manager
+    file: components/cloud-instance-manager.md
+    type: service
+    domain: infrastructure
+    summary: Phase 64 — launch/manage secure EC2 compute instances, no SSH, tripwire-protected
+
+  # ── Interfaces ────────────────────────────────────────────────────────
+  - id: api-server
+    file: components/api-server.md
+    type: interface
+    domain: interfaces
+    summary: Fastify HTTP API — all endpoints, Bearer token auth on writes
+
+  - id: gateway
+    file: components/gateway.md
+    type: interface
+    domain: interfaces
+    summary: Next.js 16 web UI — 12 pages, connects to node via HTTP
+
+  - id: mcp-server
+    file: components/mcp-server.md
+    type: interface
+    domain: interfaces
+    summary: Pando MCP — gives Claude Code agents access to the network
+
+  - id: tui
+    file: components/tui.md
+    type: interface
+    domain: interfaces
+    summary: Interactive terminal — password prompt, slash commands, identity management
+
+# ── Flows ───────────────────────────────────────────────────────────────
+
+flows:
+  - id: task-execution
+    file: flows/task-execution.md
+    summary: Manager creates task → Scheduler spawns worker → Review → QA → Commit
+
+  - id: user-chat
+    file: flows/user-chat.md
+    summary: User message → Intent detection → Task? Project session. Conversation? 3-tier (simple/medium/complex)
+
+  - id: p2p-sync
+    file: flows/p2p-sync.md
+    summary: Transaction → GossipSub broadcast → All nodes apply → Consistent state
+
+  - id: governance-cycle
+    file: flows/governance-cycle.md
+    summary: Proposal → Discussion → Vote → Decision → Auto-create task if approved
+
+  - id: manager-lifecycle
+    file: flows/manager-lifecycle.md
+    summary: Boot → Write CLAUDE.md → Session init → Events → Periodic check → Crash recovery
+
+  - id: agent-communication
+    file: flows/agent-communication.md
+    summary: Everything talks through Bridge Queue → Manager pulls one item at a time → event-driven, zero waste
+
+  - id: code-pipeline
+    file: flows/code-pipeline.md
+    summary: "REWRITTEN: Manager workflow handles commit/build/docs — no standalone pipeline"
+
+  - id: upgrade-flow
+    file: flows/upgrade-flow.md
+    summary: "Phase 82: Propose → Governance approve → Git pull + hash verify → Build → Restart (or rollback)"
+
+  - id: node-onboarding
+    file: flows/node-onboarding.md
+    summary: Install → Start → Identity creation → Bootstrap connect → Ledger sync → Ready
+
+  - id: content-lifecycle
+    file: flows/content-lifecycle.md
+    summary: Create → Safety review → Register → Broadcast → Serve → Maintain → Archive
+
+  - id: emission-flow
+    file: flows/emission-flow.md
+    summary: Work done → Propose emission → Peer witnesses → Quorum → Mint Lux
+
+  - id: genome-update
+    file: flows/genome-update.md
+    summary: Git commit → GenomeAgent analyzes diff → Map to components → Detect drift → Report to manager
+
+  - id: chat-to-project
+    file: flows/chat-to-project.md
+    summary: User says "build me X" → Intent detection → Project session → Claude Code partner → Governance/tasks
+
+  - id: threaded-chat
+    file: flows/threaded-chat.md
+    summary: ChatGPT-like threading — every conversation is a thread, resume old projects via --continue from workspace, homepage dynamic search vs conversation
+
+  - id: dynamic-workflows
+    file: flows/dynamic-workflows.md
+    summary: Manager designs per-task workflow → Todo list IS workflow → API for visibility
+
+  - id: architecture-capabilities
+    file: flows/architecture-capabilities.md
+    summary: "MASTER BLUEPRINT — 14 scenarios, 4 actors (Router/Manager/Worker/QA), cost control, governance, multi-user, stuck detection, self-evolving workflows. All code must match these flows."
+
+  - id: user-journey-scale
+    file: flows/user-journey-scale.md
+    summary: "How Pando handles users at scale — two-layer AI (doorman + manager), per-project managers, user routing, resume packages, multi-user collaboration, network topology for 10+ users/node"
+
+  - id: resource-contribution
+    file: flows/resource-contribution.md
+    summary: "How anyone contributes resources (API keys, MongoDB, S3) to the network and earns Lux. Encrypted credentials, auto-discovery, non-operators can contribute."
+
+  - id: economy
+    file: flows/economy.md
+    summary: "How Lux flows through the network — three operational modes (self-management, user services, inter-node), scaling milestones, failure modes at each scale"
+
+  - id: resource-network
+    file: flows/resource-network.md
+    summary: "Heterogeneous node architecture — capability detection, resource routing, marketplace pricing, how different node types coexist and earn Lux"
+
+  - id: p2p-upgrade
+    file: flows/p2p-upgrade.md
+    summary: "Phase 82: P2P self-upgrade — any node proposes, governance approves, broadcasts commit hash via GossipSub, all nodes git pull + verify hash + build + restart"
+
+  - id: app-hosting
+    file: flows/app-hosting.md
+    description: "3-tier app hosting: S3 static, EC2 compute, node-hosted"
+
+# ── Rules ───────────────────────────────────────────────────────────────
+
+rules:
+  - id: two-laws
+    file: rules/two-laws.md
+    severity: immutable
+    summary: "Law I: Do not harm humans. Law II: Survive. Law I always wins."
+
+  - id: authority-model
+    file: rules/authority-model.md
+    severity: critical
+    summary: Only Managers create tasks. Workers execute. Scheduler allocates. No exceptions.
+
+  - id: worker-isolation
+    file: rules/worker-isolation.md
+    severity: critical
+    summary: Workers cannot create tasks, access other workspaces, or call node API.
+
+  - id: data-only-subsystems
+    file: rules/data-only-subsystems.md
+    severity: critical
+    summary: HealthMonitor collects data ONLY. No autonomous actions.
+
+  - id: pure-executor
+    file: rules/pure-executor.md
+    severity: critical
+    summary: Scheduler makes ZERO decisions. No Planner, no auto-approve, no auto-commit.
+
+  - id: workflow-pipeline
+    file: rules/workflow-pipeline.md
+    severity: high
+    summary: "Manager follows: PLAN → SPAWN → REVIEW → QA → COMMIT → DOCS → REPORT"
+
+  - id: qa-standard
+    file: rules/qa-standard.md
+    severity: high
+    summary: Browser-level testing required. Code review alone is NOT sufficient.
+
+  - id: immutable-kernel
+    file: rules/immutable-kernel.md
+    severity: critical
+    summary: Certain core files cannot be modified by agents — guardrails.ts enforces.
+
+  - id: budget-enforcement
+    file: rules/budget-enforcement.md
+    severity: high
+    summary: Lux limits per project per day. 500 Lux max per node per day.
+
+  - id: p2p-first
+    file: rules/p2p-first.md
+    severity: medium
+    summary: Every feature should work across nodes. Local-only = prototype.
+
+  - id: lux-economics
+    file: rules/lux-economics.md
+    severity: high
+    summary: "Lux = work receipt. 10B hard cap, witness verification, anti-Sybil, no burning/halving/staking."
+
+  - id: project-types
+    file: rules/project-types.md
+    severity: high
+    summary: "Three project types: Personal (user pays), Public (governance-approved), Admin (own resources)."
+
+  - id: todo-loop
+    file: rules/todo-loop.md
+    severity: high
+    summary: "All agents maintain self-verifying todo loops. Work→Verify→Fix→Loop. Docs updated with code. Loop until done."
+
+  - id: governance-tiers
+    file: rules/governance-tiers.md
+    severity: high
+    summary: "Two-tier governance: network-level (all nodes vote on node changes) vs project-level (only stakeholders vote on project changes). Manager classifies which tier applies."
+
+  - id: credential-security
+    file: rules/credential-security.md
+    severity: critical
+    summary: "Phase 69: Two-tier trust — credentials encrypted in MongoDB (AES-256-GCM + master key), only EC2 compute nodes decrypt. User nodes route via P2P, never see credentials."
+
+  - id: data-residency
+    file: rules/data-residency.md
+    severity: critical
+    summary: "Three Buckets: User Data → MongoDB (survives node death), Network State → SQLite+P2P (rebuilds from peers), Operational → local (disposable). Phase 44."
+
+# ── Roadmap ────────────────────────────────────────────────────────────────
+
+roadmap:
+  file: roadmap.md
+  summary: "Forward-looking plan: tech debt, near-term priorities, future phases, genome vision, open questions."
