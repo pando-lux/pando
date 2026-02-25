@@ -23,8 +23,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join, resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { homedir, platform } from 'node:os';
-import { spawn, execSync } from 'node:child_process';
+import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { AIBackendRegistry } from './ai-backend-registry.js';
 import { ClaudeBackend } from './ai-backend-claude.js';
@@ -36,12 +35,6 @@ const __dirname = dirname(__filename);
 
 /** Default Claude model for agent sessions. Matches @pando/shared. */
 const DEFAULT_MODEL = 'claude-sonnet-4-6';
-
-/** Idle timeout: kill agent if no stdout activity for this long. */
-const SPAWN_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 minutes of no output
-
-/** Absolute hard cap: kill agent after this regardless of activity. */
-const SPAWN_HARD_CAP_MS = 2 * 60 * 60 * 1000; // 2 hours absolute max
 
 /** Rolling context window size (characters). Older context is trimmed. */
 const MAX_CONTEXT_LENGTH = 5000;
@@ -162,61 +155,6 @@ export interface AgentLimits {
   budgetSpent: number;
 }
 
-// ── Path Augmentation ──────────────────────────────────────────────────────────
-
-/**
- * Build an augmented PATH that includes common locations for the `claude` CLI
- * on Mac/Linux. On Windows, the system PATH is returned unchanged.
- */
-function buildAugmentedPath(): string {
-  const extra = platform() === 'win32'
-    ? []
-    : [
-        `${process.env.HOME || homedir()}/.local/bin`,
-        '/usr/local/bin',
-        '/opt/homebrew/bin',
-      ];
-  const current = process.env.PATH || '';
-  return extra.length > 0 ? `${extra.join(':')}:${current}` : current;
-}
-
-const AUGMENTED_PATH = buildAugmentedPath();
-
-// ── Claude CLI Detection ───────────────────────────────────────────────────────
-
-/**
- * Locate the `claude` CLI binary. Tries `which`/`where` first, then falls back
- * to common installation paths on Mac/Linux. Returns null if not found.
- */
-function detectClaudePath(): string | null {
-  try {
-    if (platform() === 'win32') {
-      return execSync('where claude', { encoding: 'utf-8', timeout: 5000, windowsHide: true })
-        .trim()
-        .split('\n')[0]
-        .trim();
-    }
-    return execSync('which claude', {
-      encoding: 'utf-8',
-      env: { ...process.env, PATH: AUGMENTED_PATH },
-      timeout: 5000,
-      windowsHide: true,
-    }).trim();
-  } catch {
-    // Fallback to known paths
-    const home = process.env.HOME || homedir();
-    const candidates = [
-      `${home}/.local/bin/claude`,
-      '/usr/local/bin/claude',
-      '/opt/homebrew/bin/claude',
-    ];
-    for (const candidate of candidates) {
-      if (existsSync(candidate)) return candidate;
-    }
-    return null;
-  }
-}
-
 // ── Agent Class ────────────────────────────────────────────────────────────────
 
 export class Agent {
@@ -310,13 +248,6 @@ export class Agent {
    * @param initialTask  Optional initial task description to include as Layer 4.
    */
   async startSession(initialTask?: string): Promise<AgentEventResult> {
-    const claudePath = detectClaudePath();
-    if (!claudePath) {
-      const msg = `Claude CLI not found -- cannot start session for agent ${this.id}`;
-      console.error(`[agent] ${msg}`);
-      return { success: false, output: msg, costUsd: 0, durationMs: 0 };
-    }
-
     // Write CLAUDE.md (4-layer template) to workspace
     this.buildClaudeMd(initialTask);
 
@@ -975,252 +906,102 @@ export class Agent {
   // ── Internal: Spawn Execution ──────────────────────────────────────────────
 
   /**
-   * Execute a single Claude Code spawn for the given prompt. Captures the
-   * session ID from stream-json output and collects all assistant text output.
+   * Execute a single AI backend spawn for the given prompt.
+   *
+   * Uses AIBackendRegistry to select the best available backend (Claude Code,
+   * Ollama, etc.). Falls back to ClaudeBackend directly if no registry is set.
+   * Captures session ID and cost from AIResult, updates agent state.
    */
-  private executeSpawn(prompt: string): Promise<AgentEventResult> {
-    return new Promise((resolveSpawn, rejectSpawn) => {
-      const startTime = Date.now();
+  private async executeSpawn(prompt: string): Promise<AgentEventResult> {
+    const startTime = Date.now();
 
-      // Ensure CLAUDE.md exists before first spawn (4-layer template injection)
-      const claudeMdPath = join(this.workspaceDir, 'CLAUDE.md');
-      if (!existsSync(claudeMdPath)) {
-        this.buildClaudeMd();
+    // Ensure CLAUDE.md exists before first spawn (4-layer template injection)
+    const claudeMdPath = join(this.workspaceDir, 'CLAUDE.md');
+    if (!existsSync(claudeMdPath)) {
+      this.buildClaudeMd();
+    }
+
+    console.log(`[agent] === SPAWN ${this.id} ===`);
+    console.log(`[agent]   Role: ${this.role}`);
+    console.log(`[agent]   Session: ${this.state.sessionId ? this.state.sessionId.slice(0, 8) + '...' : 'NEW'}`);
+    console.log(`[agent]   Prompt: ${prompt.slice(0, 120)}${prompt.length > 120 ? '...' : ''}`);
+
+    // Select backend: use registry if available, else fall back to ClaudeBackend directly
+    let backend = this.backendRegistry?.getBest('code-execution') ?? null;
+    if (!backend) {
+      // No registry or no available backend in registry — try ClaudeBackend directly
+      const claude = new ClaudeBackend();
+      claude.available = await claude.detect();
+      if (!claude.available) {
+        const msg = `No AI backend available for code-execution (agent ${this.id})`;
+        console.error(`[agent] ${msg}`);
+        return { success: false, output: msg, costUsd: 0, durationMs: Date.now() - startTime };
       }
+      backend = claude;
+    }
 
-      console.log(`[agent] === SPAWN ${this.id} ===`);
-      console.log(`[agent]   Role: ${this.role}`);
-      console.log(`[agent]   Session: ${this.state.sessionId ? this.state.sessionId.slice(0, 8) + '...' : 'NEW'}`);
-      console.log(`[agent]   Prompt: ${prompt.slice(0, 120)}${prompt.length > 120 ? '...' : ''}`);
+    // Wire progress callback
+    if (this.onProgress && 'onProgress' in backend) {
+      (backend as any).onProgress = this.onProgress;
+    }
 
-      const claudePath = detectClaudePath();
-      if (!claudePath) {
-        rejectSpawn(new Error('Claude CLI not found'));
-        return;
-      }
+    if (this.state.sessionId) {
+      console.log(`[agent]   Resuming: --continue --resume ${this.state.sessionId}`);
+    }
 
-      // Build argument list
-      const args = [
-        '-p', prompt,
-        '--output-format', 'stream-json',
-        '--verbose',
-        '--dangerously-skip-permissions',
-        '--model', this.model,
-      ];
-
-      // Resume existing session if we have a sessionId
-      if (this.state.sessionId) {
-        args.unshift('--continue', '--resume', this.state.sessionId);
-        console.log(`[agent]   Resuming: --continue --resume ${this.state.sessionId}`);
-      }
-
-      // Build clean environment — strip sensitive vars from agent child processes
-      const env: Record<string, string> = { ...(process.env as Record<string, string>) };
-      env.PATH = AUGMENTED_PATH;
-      delete env.CLAUDECODE; // CRITICAL: prevents "nested session" error
-      delete env.CREDENTIAL_MASTER_KEY; // Phase 70: agents must NOT see the master key
-      delete env.PANDO_STORAGE_URL; // Phase 70: agents must NOT see MongoDB connection URL
-
-      const child = spawn(claudePath, args, {
+    const aiResult = await backend.execute({
+      type: 'code',
+      prompt,
+      sessionId: this.state.sessionId ?? undefined,
+      options: {
+        model: this.model,
         cwd: this.workspaceDir,
-        env,
-        stdio: ['ignore', 'pipe', 'pipe'], // stdin MUST be 'ignore'
-        windowsHide: true,
-      });
-
-      // Track child PID for graceful shutdown cleanup
-      this.childPid = child.pid ?? null;
-
-      let stdoutBuffer = '';
-      let stderrBuffer = '';
-      let lineBuffer = ''; // Buffer for incomplete lines in stream-json
-
-      // Idle-based timeout: resets every time stdout produces output
-      let idleTimer = setTimeout(() => {
-        console.warn(`[agent] ${this.id} idle timeout — no output for ${SPAWN_IDLE_TIMEOUT_MS / 60000} min`);
-        child.kill();
-        rejectSpawn(new Error(`Spawn idle timeout — no output for ${SPAWN_IDLE_TIMEOUT_MS / 60000} minutes`));
-      }, SPAWN_IDLE_TIMEOUT_MS);
-
-      // Hard safety cap: absolute maximum regardless of activity
-      const hardCapTimer = setTimeout(() => {
-        console.warn(`[agent] ${this.id} hard cap reached (${SPAWN_HARD_CAP_MS / 3600000}h)`);
-        child.kill();
-        rejectSpawn(new Error(`Spawn hard cap reached after ${SPAWN_HARD_CAP_MS / 3600000} hours`));
-      }, SPAWN_HARD_CAP_MS);
-
-      /** Reset the idle timer — called on every stdout/stderr chunk. */
-      const resetIdleTimer = () => {
-        clearTimeout(idleTimer);
-        idleTimer = setTimeout(() => {
-          console.warn(`[agent] ${this.id} idle timeout — no output for ${SPAWN_IDLE_TIMEOUT_MS / 60000} min`);
-          child.kill();
-          rejectSpawn(new Error(`Spawn idle timeout — no output for ${SPAWN_IDLE_TIMEOUT_MS / 60000} minutes`));
-        }, SPAWN_IDLE_TIMEOUT_MS);
-      };
-
-      child.stdout.on('data', (chunk: Buffer) => {
-        const text = chunk.toString();
-        stdoutBuffer += text;
-        resetIdleTimer();
-
-        // Real-time stream-json parsing for progress updates
-        if (this.onProgress) {
-          // Debug: log when stdout data arrives to diagnose buffering
-          console.log(`[agent] ${this.id} stdout chunk: ${text.length} bytes`);
-          lineBuffer += text;
-          const lines = lineBuffer.split('\n');
-          lineBuffer = lines.pop() || ''; // Keep incomplete last line in buffer
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed) continue;
-            try {
-              const event = JSON.parse(trimmed);
-              // Extract meaningful activity from assistant events
-              if (event.type === 'assistant' && event.message?.content) {
-                for (const block of event.message.content) {
-                  if (block.type === 'tool_use' && block.name) {
-                    // Show what tool the agent is using
-                    const input = block.input || {};
-                    let detail = '';
-                    if (block.name === 'Write' || block.name === 'Edit' || block.name === 'Read') {
-                      detail = input.file_path ? `: ${input.file_path as string}` : '';
-                    } else if (block.name === 'Bash') {
-                      detail = input.command ? `: ${input.command as string}` : '';
-                    } else if (block.name === 'Glob' || block.name === 'Grep') {
-                      detail = input.pattern ? `: ${input.pattern}` : '';
-                    } else if (block.name === 'WebFetch') {
-                      detail = input.url ? `: ${input.url as string}` : '';
-                    }
-                    this.onProgress!(`Tool: ${block.name}${detail}`);
-                  } else if (block.type === 'text' && block.text) {
-                    // Show first line of agent's response text
-                    const firstLine = block.text.split('\n')[0];
-                    if (firstLine.length > 10) this.onProgress!(firstLine);
-                  }
-                }
-              } else if (event.type === 'result') {
-                this.onProgress!('Completed');
-              } else if (event.type === 'system') {
-                this.onProgress!('Agent initialized');
-              }
-            } catch { /* incomplete JSON or non-JSON line — skip */ }
-          }
-        }
-      });
-
-      child.stderr?.on('data', (chunk: Buffer) => {
-        const text = chunk.toString().trim();
-        if (text) {
-          stderrBuffer += text + '\n';
-          resetIdleTimer();
-          // Log stderr but keep it concise
-          if (text.length <= 500) {
-            console.log(`[agent] ${this.id} stderr: ${text}`);
-          }
-          // Forward stderr activity to onProgress for real-time SSE updates
-          // Stderr contains tool use, thinking indicators, and status info
-          if (this.onProgress && text.length > 0 && text.length <= 500) {
-            // Strip ANSI color codes for clean display
-            const clean = text.replace(/\x1b\[[0-9;]*m/g, '').trim();
-            if (clean) this.onProgress(clean);
-          }
-        }
-      });
-
-      child.on('close', (code) => {
-        this.childPid = null;
-        clearTimeout(idleTimer);
-        clearTimeout(hardCapTimer);
-        const durationMs = Date.now() - startTime;
-
-        // Parse stream-json output line by line
-        const lines = stdoutBuffer.split('\n').filter(l => l.trim());
-        const outputParts: string[] = [];
-        let costUsd = 0;
-        let sessionCaptured = false;
-
-        for (const line of lines) {
-          try {
-            const event = JSON.parse(line);
-
-            // Capture session ID from the system init event
-            if (event.type === 'system' && event.session_id) {
-              this.state.sessionId = event.session_id;
-              sessionCaptured = true;
-              console.log(`[agent]   Session ID: ${this.state.sessionId}`);
-            }
-
-            // Collect assistant text output
-            if (event.type === 'assistant' && event.message?.content) {
-              for (const block of event.message.content) {
-                if (block.type === 'text' && block.text) {
-                  outputParts.push(block.text);
-                }
-              }
-            }
-
-            // Capture cost from result event
-            if (event.type === 'result') {
-              if (event.cost_usd && typeof event.cost_usd === 'number') {
-                costUsd = event.cost_usd;
-              }
-            }
-          } catch {
-            // Not valid JSON -- skip
-          }
-        }
-
-        const outputText = outputParts.join('\n');
-
-        // Update agent state
-        this.state.lastActive = Date.now();
-        this.state.taskCount++;
-        if (costUsd > 0) {
-          this.state.totalCost += costUsd;
-          this.state.budgetSpent += costUsd;
-        }
-
-        // Update rolling context window
-        if (outputText) {
-          const timestamp = new Date().toISOString();
-          const contextEntry = `[${timestamp}] ${outputText.slice(0, 1000)}`;
-          this.state.memory.context = (this.state.memory.context + '\n' + contextEntry)
-            .slice(-MAX_CONTEXT_LENGTH);
-        }
-
-        // Handle non-zero exit codes
-        if (code !== 0 && this.state.sessionId) {
-          // Session resume likely failed (stale session). Clear it so next
-          // spawn starts fresh.
-          console.warn(`[agent] ${this.id} exited with code ${code} -- clearing stale sessionId`);
-          this.state.sessionId = null;
-        } else if (code !== 0) {
-          console.warn(`[agent] ${this.id} exited with code ${code}`);
-        }
-
-        // Persist state after every event
-        this.persistState();
-
-        const success = code === 0;
-        const costInfo = costUsd > 0 ? ` ($${costUsd.toFixed(3)})` : '';
-        console.log(`[agent] === SPAWN COMPLETE ${this.id} (${durationMs}ms, code=${code}${costInfo}) ===`);
-
-        resolveSpawn({
-          success,
-          output: outputText || stderrBuffer || `Process exited with code ${code}`,
-          costUsd,
-          durationMs,
-        });
-      });
-
-      child.on('error', (err) => {
-        this.childPid = null;
-        clearTimeout(idleTimer);
-        clearTimeout(hardCapTimer);
-        rejectSpawn(err);
-      });
+      },
     });
+
+    const durationMs = Date.now() - startTime;
+    const costUsd = aiResult.cost ?? 0;
+
+    // Capture session ID returned by backend
+    if (aiResult.sessionId) {
+      this.state.sessionId = aiResult.sessionId;
+      console.log(`[agent]   Session ID: ${this.state.sessionId}`);
+    }
+
+    // Update agent state
+    this.state.lastActive = Date.now();
+    this.state.taskCount++;
+    if (costUsd > 0) {
+      this.state.totalCost += costUsd;
+      this.state.budgetSpent += costUsd;
+    }
+
+    // Update rolling context window
+    if (aiResult.output) {
+      const timestamp = new Date().toISOString();
+      const contextEntry = `[${timestamp}] ${aiResult.output.slice(0, 1000)}`;
+      this.state.memory.context = (this.state.memory.context + '\n' + contextEntry)
+        .slice(-MAX_CONTEXT_LENGTH);
+    }
+
+    // Handle non-success: clear stale session so next spawn starts fresh
+    if (!aiResult.success && this.state.sessionId) {
+      console.warn(`[agent] ${this.id} backend failed — clearing stale sessionId`);
+      this.state.sessionId = null;
+    }
+
+    // Persist state after every event
+    this.persistState();
+
+    const costInfo = costUsd > 0 ? ` ($${costUsd.toFixed(3)})` : '';
+    console.log(`[agent] === SPAWN COMPLETE ${this.id} (${durationMs}ms${costInfo}) ===`);
+
+    return {
+      success: aiResult.success,
+      output: aiResult.output || aiResult.error || 'No output',
+      costUsd,
+      durationMs,
+    };
   }
 
   /**
