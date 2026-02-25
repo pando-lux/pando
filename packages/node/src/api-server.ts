@@ -6178,68 +6178,86 @@ export class ApiServer {
         }
       }
 
-      // Step 2: Deploy via P2P to EC2 instance
-      const cloudManager = this.node.getCloudInstanceManager?.();
-      const instances = cloudManager?.getInstances() || [];
-      const running = instances.filter((i: any) => i.status === 'running' && i.peerId);
+      // Step 2: Deploy via P2P discovery (Phase 87 — CapabilityProfile, not CloudInstanceManager)
+      const requestReply = this.node.getRequestReply?.();
+      if (!requestReply) return reply.code(503).send({ error: 'P2P RequestReply not available' });
 
-      if (running.length > 0 && repoUrl) {
-        // Deploy via EC2 — both Tier 1 (S3 upload) and Tier 2 (app hosting)
-        const instance = running[0]; // Use first available
+      // Find compute peers with MongoDB (persistent EC2 nodes) via CapabilityRegistry
+      const capRegistry = this.node.getCapabilityRegistry?.();
+      const localPeerId = this.node.getIdentity()?.peerId || '';
+      const allProfiles = capRegistry?.getAllProfiles?.() || [];
+      const computePeers = allProfiles.filter((p: any) =>
+        p.storageBackend === 'mongodb' && p.peerId !== localPeerId
+      );
+
+      if (computePeers.length === 0 || !repoUrl) {
+        return reply.code(503).send({
+          error: 'No compute peers available for deployment',
+          hint: 'Ensure at least one EC2 node with MongoDB is connected to the network',
+          repoUrl,
+          githubRepo,
+        });
+      }
+
+      // Build env vars for injection
+      const envVars: Record<string, string> = {};
+      if (project.apiKey) {
+        envVars.PROJECT_API_KEY = project.apiKey;
+        const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
+        if (gatewayUrl) envVars.RESOURCE_PROXY_URL = `${gatewayUrl}/api/resource-proxy/db`;
+        envVars.PANDO_GATEWAY_URL = gatewayUrl;
+        envVars.PANDO_PROJECT_ID = id;
+        envVars.PANDO_PROJECT_API_KEY = project.apiKey;
+      }
+
+      const deployPayload = {
+        projectId: id,
+        repoUrl,
+        tier,
+        envVars,
+      };
+
+      // Try up to 3 compute peers (same pattern as P2PStorageBackend)
+      let lastError = '';
+      for (const profile of computePeers.slice(0, 3)) {
         try {
-          // Build env vars for injection
-          const envVars: Record<string, string> = {};
-          if (project.apiKey) {
-            envVars.PROJECT_API_KEY = project.apiKey;
-            const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
-            if (gatewayUrl) envVars.RESOURCE_PROXY_URL = `${gatewayUrl}/api/resource-proxy/db`;
-            envVars.PANDO_GATEWAY_URL = gatewayUrl;
-            envVars.PANDO_PROJECT_ID = id;
-            envVars.PANDO_PROJECT_API_KEY = project.apiKey;
-          }
-
-          // P2P deploy with tier info
-          const requestReply = this.node.getRequestReply?.();
-          if (!requestReply) return reply.code(503).send({ error: 'P2P RequestReply not available' });
-
-          const deployPayload = {
-            projectId: id,
-            repoUrl,
-            tier,
-            envVars,
-          };
-
-          console.log(`[deploy] Sending P2P deploy to ${instance.instanceId} (${instance.peerId}) — tier ${tier}`);
-          const response = await requestReply.request(instance.peerId!, 'pando/deploy-app', deployPayload, 300_000);
+          console.log(`[deploy] Sending P2P deploy to ${profile.peerId} — tier ${tier}`);
+          const response = await requestReply.request(profile.peerId, 'pando/deploy-app', deployPayload, 300_000);
 
           if (response?.success && response.payload) {
             const payload = response.payload as any;
-            // Check if EC2 handler reported failure
             if (payload.status === 'failed') {
-              console.log(`[deploy] EC2 deploy failed: ${payload.error}`);
-              return reply.code(502).send({ error: payload.error || 'Deploy failed on compute node' });
+              lastError = payload.error || 'Deploy failed on compute node';
+              console.log(`[deploy] Peer ${profile.peerId} deploy failed: ${lastError}`);
+              continue; // Try next peer
             }
+
             let liveUrl = '';
             let deploymentPort: number | undefined;
 
             if (tier === 2 && payload.port) {
-              // Tier 2: Phase 80 — nginx reverse proxy URL (stable, port-free)
-              deploymentPort = payload.port;
-              liveUrl = `http://${instance.publicIp}/apps/${id}/`;
+              // Tier 2: Use publicAddress from CapabilityProfile for URL
+              const publicAddr = profile.publicAddress || payload.publicAddress;
+              if (publicAddr) {
+                deploymentPort = payload.port;
+                liveUrl = `http://${publicAddr}/apps/${id}/`;
+              } else {
+                deploymentPort = payload.port;
+                liveUrl = payload.url || `http://${profile.peerId}:${payload.port}`;
+              }
             } else if (payload.url) {
-              // Tier 1: EC2 returns the S3 URL
               liveUrl = payload.url;
             } else if (payload.s3Url) {
               liveUrl = payload.s3Url;
             }
 
-            // Update project record
+            // Update project record — store deployPeerId (not instanceId)
             const update: Record<string, any> = {
               deploymentUrl: liveUrl,
               deploymentStatus: 'deployed',
               repoUrl,
               githubRepo,
-              instanceId: instance.instanceId,
+              deployPeerId: profile.peerId,
               updatedAt: Date.now(),
             };
             if (deploymentPort) update.deploymentPort = deploymentPort;
@@ -6255,39 +6273,33 @@ export class ApiServer {
                 liveUrl,
                 tier,
                 deploymentPort,
-                instanceId: instance.instanceId,
+                deployPeerId: profile.peerId,
                 lastDeployedAt: Date.now(),
                 githubRepo,
               } as any);
             }
 
-            console.log(`[deploy] Project ${id} deployed: ${liveUrl} (tier ${tier})`);
+            console.log(`[deploy] Project ${id} deployed: ${liveUrl} (tier ${tier}, peer ${profile.peerId})`);
             return {
               url: liveUrl,
               tier,
               status: 'deployed',
               repoUrl,
               githubRepo,
-              instanceId: instance.instanceId,
+              deployPeerId: profile.peerId,
               port: deploymentPort,
             };
           } else {
-            const errMsg = response?.payload?.error || 'Deploy failed';
-            console.log(`[deploy] P2P deploy failed: ${errMsg}`);
-            return reply.code(502).send({ error: errMsg });
+            lastError = response?.payload?.error || 'Deploy failed';
+            console.log(`[deploy] Peer ${profile.peerId} failed: ${lastError}`);
           }
         } catch (err: any) {
-          console.log(`[deploy] Deploy error: ${err.message}`);
-          return reply.code(502).send({ error: err.message });
+          lastError = err.message;
+          console.log(`[deploy] Peer ${profile.peerId} error: ${err.message}`);
         }
       }
 
-      return reply.code(503).send({
-        error: 'No EC2 instance available for deployment',
-        hint: 'Launch a compute instance first: POST /instances/launch',
-        repoUrl,
-        githubRepo,
-      });
+      return reply.code(502).send({ error: lastError || 'All compute peers failed to deploy' });
     });
 
     // Phase 80: POST /projects/:id/undeploy — stop and remove a deployed app
@@ -6316,14 +6328,13 @@ export class ApiServer {
       const deleteFiles = (request.body as any)?.deleteFiles !== false; // default true
 
       try {
-        if (tier === 2 && (project as any).instanceId) {
-          // Tier 2: Send P2P undeploy to compute node
+        if (tier === 2 && (project as any).deployPeerId) {
+          // Tier 2: Send P2P undeploy to compute node (Phase 87 — uses deployPeerId directly)
           const requestReply = this.node.getRequestReply?.();
-          const instances = this.node.getCloudInstanceManager?.()?.getInstances() || [];
-          const instance = instances.find((i: any) => i.instanceId === (project as any).instanceId);
+          const deployPeerId = (project as any).deployPeerId;
 
-          if (instance?.peerId && requestReply) {
-            const response = await requestReply.request(instance.peerId, 'pando/undeploy-app', {
+          if (deployPeerId && requestReply) {
+            const response = await requestReply.request(deployPeerId, 'pando/undeploy-app', {
               projectId: id,
               deleteFiles,
             }, 60_000);
@@ -6378,7 +6389,7 @@ export class ApiServer {
           deploymentUrl: '',
           deploymentStatus: 'none',
           deploymentPort: undefined as any,
-          instanceId: undefined as any,
+          deployPeerId: undefined as any,
         });
 
         // Update P2P ProjectRegistry
@@ -6388,7 +6399,7 @@ export class ApiServer {
             deploymentUrl: '',
             liveUrl: '',
             deploymentPort: undefined,
-            instanceId: undefined,
+            deployPeerId: undefined,
           } as any);
         }
 

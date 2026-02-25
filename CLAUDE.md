@@ -216,8 +216,8 @@ Key endpoints for agents and users:
 - `GET /apps/:appName/*` — serve hosted app with URL injection
 - `GET /resources?type=<type>` — filter resources by type (e.g., `storage_db`, `ai_api_key`)
 - `GET/POST /projects/:id/preflight` — pre-flight check (GET) or auto-fix (POST) for app deployment
-- `POST /projects/:id/deploy` — unified deploy endpoint (Phase 70+80) — GitHub push + EC2 deploy. Tier 2 URLs: `http://<ip>/apps/<projectId>/` via nginx
-- `POST /projects/:id/undeploy` — stop and remove deployed app (Phase 80). Tier 1: S3 cleanup. Tier 2: PM2+nginx cleanup via P2P
+- `POST /projects/:id/deploy` — **unified deploy endpoint (Phase 87)** — GitHub push + P2P CapabilityProfile discovery + compute peer deploy. Stores `deployPeerId`. Tier 2 URLs: `http://<publicAddress>/apps/<projectId>/`
+- `POST /projects/:id/undeploy` — stop and remove deployed app (Phase 87). Uses `deployPeerId` directly. Tier 1: S3 cleanup. Tier 2: PM2+nginx cleanup via P2P
 - `POST /projects/:id/validate-deploy` — post-deploy health check (URL, injection, Resource Proxy)
 
 ## System Architecture

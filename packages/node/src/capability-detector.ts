@@ -168,6 +168,8 @@ export function detectCapabilityProfile(peerId: string, apiPort?: number, linked
     credentialAccess: !!process.env.CREDENTIAL_MASTER_KEY,
     // Phase 83: storageBackend type — 'mongodb' if direct, 'none' at startup (becomes 'p2p' after P2PStorageBackend init)
     storageBackend: process.env.PANDO_STORAGE_URL ? 'mongodb' : 'none',
+    // Phase 87: Public address for HTTP access (Tier 2 URL construction)
+    publicAddress: detectPublicAddress(),
     capabilities: {
       relay: true,                     // every node relays
       api_keys: hasKeys,
@@ -187,6 +189,19 @@ export function detectCapabilityProfile(peerId: string, apiPort?: number, linked
       httpApi: apiPort ? { host: '0.0.0.0', port: apiPort, https: false } : undefined,
     },
   };
+}
+
+/**
+ * Phase 87: Detect the node's public IP address for HTTP access.
+ * Uses PUBLIC_IP env var (set on EC2/cloud nodes).
+ * Returns undefined for private/local nodes (they don't host Tier 2 apps).
+ */
+function detectPublicAddress(): string | undefined {
+  const publicIp = process.env.PUBLIC_IP;
+  if (publicIp && publicIp.trim()) {
+    return publicIp.trim();
+  }
+  return undefined;
 }
 
 /**

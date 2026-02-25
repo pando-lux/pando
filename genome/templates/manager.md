@@ -138,12 +138,11 @@ curl -s -X POST http://127.0.0.1:${API_PORT}/projects/${PROJECT_ID}/deploy \
 
 **You NEVER need to:**
 - Call GitHub APIs or use `gh` CLI
-- Call `/instances/:id/deploy` manually
-- Figure out which EC2 instance to use
+- Figure out which compute node to use (P2P discovery handles it)
 - Upload to S3 directly
 - Know about AWS or infrastructure details
 
-Just call `/projects/:id/deploy` and report the URL to the user.
+Just call `POST /projects/:id/deploy` and report the URL to the user. The node auto-discovers compute peers via P2P CapabilityProfile.
 
 ### Tier Selection (already done by doorman)
 

@@ -1126,7 +1126,9 @@ location /apps/${projectId}/ {
 
           console.log(`[deploy] Started ${projectId} via PM2 as ${pm2Name} on port ${port}`);
 
-          return { status: 'deployed', projectId, port, pm2Name, url: `http://localhost:${port}` };
+          // Phase 87: Include publicAddress so caller can construct the URL
+          const publicAddress = process.env.PUBLIC_IP || undefined;
+          return { status: 'deployed', projectId, port, pm2Name, url: `http://localhost:${port}`, publicAddress };
         }
 
         // Static app without explicit tier — serve locally
@@ -2115,16 +2117,19 @@ location /apps/${projectId}/ {
       this.agentManager.setProjectStore(this.projectStore);
     }
 
-    // Phase 67: Wire CloudInstanceManager to AgentManager for Tier 2 context injection
-    if (this.cloudInstanceManager) {
-      const cim = this.cloudInstanceManager;
-      this.agentManager.setCloudInstanceProvider(() => {
-        return cim.getInstances().map((i: any) => ({
-          instanceId: i.instanceId || i.instance_id,
-          publicIp: i.publicIp || i.public_ip || '',
-          peerId: i.peerId || i.peer_id || null,
-          status: i.status || 'unknown',
-        }));
+    // Phase 87: Wire CapabilityRegistry to AgentManager for compute node context injection
+    if (this.capabilityRegistry) {
+      const capReg = this.capabilityRegistry;
+      const localPeer = this.identity?.peerId || '';
+      this.agentManager.setComputeNodeProvider(() => {
+        return (capReg.getAllProfiles?.() || [])
+          .filter((p: any) => p.storageBackend === 'mongodb' && p.peerId !== localPeer)
+          .map((p: any) => ({
+            peerId: p.peerId,
+            publicAddress: p.publicAddress || '',
+            storageBackend: p.storageBackend,
+            credentialAccess: !!p.credentialAccess,
+          }));
       });
     }
 

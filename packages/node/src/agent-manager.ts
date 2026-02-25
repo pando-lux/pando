@@ -184,7 +184,7 @@ export class AgentManager {
 
 
   /** Optional provider for running compute instance info (Phase 67: Tier 2 context injection). */
-  private cloudInstanceProvider: (() => Array<{ instanceId: string; publicIp: string; peerId: string | null; status: string }>) | null = null;
+  private cloudInstanceProvider: (() => Array<Record<string, any>>) | null = null;
 
   /** Active user→agent direct connections: userId → agentId. */
   private readonly directConnections: Map<string, string> = new Map();
@@ -714,8 +714,8 @@ export class AgentManager {
     return this.projectStore;
   }
 
-  /** Phase 67: Inject running compute instance info so manager knows Tier 2 is available. */
-  setCloudInstanceProvider(provider: () => Array<{ instanceId: string; publicIp: string; peerId: string | null; status: string }>): void {
+  /** Phase 87: Inject compute node info from P2P CapabilityRegistry so manager knows Tier 2 is available. */
+  setComputeNodeProvider(provider: () => Array<{ peerId: string; publicAddress: string; storageBackend: string; credentialAccess: boolean }>): void {
     this.cloudInstanceProvider = provider;
   }
 
@@ -956,18 +956,17 @@ export class AgentManager {
       prompt += `- After creating a governance proposal, also vote approve on it: POST /governance/proposals/<id>/vote with {"vote":"approve"}\n`;
       prompt += `- If the user asks to fix bugs, upgrade features, or modify the Pando node/gateway/API → governance required\n`;
 
-      // Phase 67: Inject compute instance info so manager knows Tier 2 is available
+      // Phase 87: Inject compute node info from P2P CapabilityRegistry
       if (this.cloudInstanceProvider) {
-        const instances = this.cloudInstanceProvider().filter(i => i.status === 'running');
-        if (instances.length > 0) {
-          prompt += `\n**COMPUTE INSTANCES (Tier 2 deployment targets):**\n`;
-          for (const inst of instances) {
-            const peerStatus = inst.peerId ? `peerId=${inst.peerId} (P2P READY)` : 'peerId=pending';
-            prompt += `- ${inst.instanceId} ip=${inst.publicIp} ${peerStatus}\n`;
+        const nodes = this.cloudInstanceProvider();
+        if (nodes.length > 0) {
+          prompt += `\n**COMPUTE NODES (Tier 2 deployment targets via P2P discovery):**\n`;
+          for (const node of nodes) {
+            prompt += `- peerId=${node.peerId} publicAddress=${(node as any).publicAddress || 'none'} storage=${(node as any).storageBackend || 'unknown'}\n`;
           }
-          prompt += `To deploy Tier 2 (backend) apps: POST /instances/<id>/deploy { "projectId": "<id>" }\n`;
-          prompt += `Tier 2 = apps needing Express/WebSocket/SSE server. Tier 1 = static HTML+JS (deploy via /agents/${agentId}/deploy).\n`;
-          prompt += `If user requests Tier 2 and an instance with peerId is available, USE IT. Do NOT downgrade to Tier 1.\n`;
+          prompt += `To deploy: POST /projects/<id>/deploy — the node auto-discovers compute peers via P2P.\n`;
+          prompt += `Tier 2 = apps needing Express/WebSocket/SSE server. Tier 1 = static HTML+JS.\n`;
+          prompt += `If user requests Tier 2 and compute nodes are available, USE IT. Do NOT downgrade to Tier 1.\n`;
         }
       }
     }

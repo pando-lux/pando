@@ -188,8 +188,8 @@ curl -s -X POST http://127.0.0.1:${API_PORT}/projects/${PROJECT_ID}/deploy \
 
 This single call:
 - Pushes your code to GitHub
-- Sends a P2P deploy request to a hardened EC2 instance
-- EC2 handles S3 upload (Tier 1) or app hosting (Tier 2)
+- Auto-discovers a compute peer via P2P CapabilityProfile
+- Compute node handles S3 upload (Tier 1) or app hosting (Tier 2)
 - Returns the live URL
 
 **You do NOT need to:**

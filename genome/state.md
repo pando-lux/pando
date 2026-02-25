@@ -1,6 +1,6 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-25 (Phase 86 — JWT Auth + Dead Code Cleanup + 5-Node E2E Testing)
+> Last updated: 2026-02-25 (Phase 87 — P2P Deploy Discovery)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
 
 ## Health
@@ -15,7 +15,15 @@
 
 ## Current Phase
 
-All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, **86** COMPLETE except Phase 14 (Universal Onboarding — deferred). Phase 53.7-53.9 remaining. Phase 68.4 (Returning User Routing) NOT STARTED.
+All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, **87** COMPLETE except Phase 14 (Universal Onboarding — deferred). Phase 53.7-53.9 remaining. Phase 68.4 (Returning User Routing) NOT STARTED.
+
+**Phase 87: P2P Deploy Discovery — COMPLETE (2026-02-25).**
+Deploy endpoint (`POST /projects/:id/deploy`) no longer uses CloudInstanceManager. Instead, it discovers compute peers via CapabilityProfile P2P broadcast — the same pattern P2PStorageBackend uses for storage routing. This fixes the root architecture gap where persistent EC2 nodes couldn't be found for deployment.
+- **Deploy**: Filters CapabilityRegistry for `storageBackend === 'mongodb'` peers, tries up to 3 via `requestReply.request(peerId, 'pando/deploy-app', ...)`. Stores `deployPeerId` on project (not `instanceId`).
+- **Undeploy**: Reads `project.deployPeerId` directly — no CloudInstanceManager lookup needed.
+- **publicAddress**: New field on CapabilityProfile, set via `PUBLIC_IP` env var on EC2 nodes. Used for Tier 2 URL construction (`http://<publicAddress>/apps/<id>/`).
+- **Bootstrap mesh**: Added EC2-1 to `DEFAULT_BOOTSTRAPS` — new nodes connect to 2 bootstrap peers instead of 1.
+- **AgentManager**: `setCloudInstanceProvider` → `setComputeNodeProvider` — agent context shows P2P compute peers, not just tracked instances.
 
 **Phase 86: JWT Auth — Stateless Cross-Node Authentication — COMPLETE (2026-02-25).**
 Replaced MongoDB session-based auth with self-verifying JWT tokens signed by each node's Ed25519 private key. Verification uses `peerIdFromString().publicKey.verify()` — no ledger or MongoDB lookup needed. Cross-node auth now works (any node can verify tokens issued by any other node).
@@ -33,9 +41,7 @@ Replaced MongoDB session-based auth with self-verifying JWT tokens signed by eac
 | 4 | Governance proposal P2P | PASS | Proposal created on Windows, propagated to 5/5 nodes, voted from EC2-1, decision propagated to 5/5 |
 | 5 | Cross-node JWT (gateway) | PASS | Guest created via Vercel gateway (EC2-2), JWT verified on EC2-1 and LS-1 |
 | 6 | Gateway UI | PASS | Home, Governance (90 proposals), Marketplace, Wallet all render correctly |
-| 7 | Deploy (Tier 1 S3) | BLOCKED | Deploy endpoint requires CloudInstanceManager-tracked EC2 instances. Persistent EC2 nodes not registered. |
-
-**Architecture gap found: persistent EC2 nodes not in CloudInstanceManager.** The `/projects/:id/deploy` endpoint uses `cloudManager.getInstances()` which only knows about EC2 instances launched via `POST /instances/launch`. Persistent nodes (EC2-1, EC2-2) are not registered. Fix needed: either self-register persistent compute nodes, or add a way to register existing instances.
+| 7 | Deploy (Tier 1 S3) | FIXED | Was BLOCKED — deploy used CloudInstanceManager (only tracked dynamic EC2). **Phase 87 fix**: now uses P2P CapabilityProfile discovery. |
 
 **Phase 83: Network Hardening — P2PStorageBackend + Two-Tier Trust — COMPLETE (2026-02-25).**
 Transformed the network from "dev mode where everybody has everything" to the real two-tier trust architecture. Untrusted nodes (no MongoDB, no master key) proxy all storage operations via P2P to compute nodes with MongoDB. Every node gets a StorageBackend — no more 503s.

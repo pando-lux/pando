@@ -120,9 +120,9 @@ Create/resume manager agent (Claude Code session)
   ↓
 Manager → spawn builder → builder writes code
   ↓
-Manager → deploy:
-  Tier 1: S3 (deployAgentWorkspace)
-  Tier 2: EC2 (POST /instances/:id/deploy)
+Manager → deploy via POST /projects/:id/deploy:
+  Auto-discovers compute peer via P2P CapabilityProfile
+  Tier 1: S3 upload | Tier 2: PM2 app hosting
   ↓
 Manager → relay URL to user via SSE
   ↓
@@ -135,15 +135,14 @@ User clicks URL → live app
 |---|---|
 | `GET /agents/tree` | Agent hierarchy with status/cost |
 | `GET /projects` | All projects with deployment status |
-| `GET /instances` | EC2 compute instances |
 | `GET /status` | Node health, peers, balance |
-| `POST /agents/:id/deploy` | Trigger S3 deployment |
-| `POST /instances/:id/deploy` | Trigger EC2 deployment |
+| `GET /network/capabilities` | All compute peer profiles |
+| `POST /projects/:id/deploy` | Unified deploy (P2P discovery, Tier 1 + 2) |
 
 ## Known Considerations
 
-- Auth session expires after 15 min — re-login if needed during long waits
-- Tier classification is inferred by manager from message text (not stored in project record yet)
+- JWT auth is stateless — tokens last 24h, no session expiry concerns
+- Tier classification is inferred by manager from message text
 - Manager may take 1-2 min to start (Claude Code session cold start)
 - Builder may take 5-10 min for complex apps
-- EC2 instance takes ~3 min to launch if not already running
+- Deploy auto-discovers compute peers via P2P — no instance launch needed

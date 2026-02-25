@@ -786,6 +786,29 @@ Replaced the complex Phase 73/81 patch-distribution system with simple `git pull
 
 ---
 
+## Phase 87: P2P Deploy Discovery — COMPLETE (2026-02-25)
+
+> Deploy endpoint now uses P2P CapabilityProfile discovery instead of CloudInstanceManager. Fixes the root architecture gap where persistent EC2 nodes couldn't be found for deployment.
+
+- [x] **87.1** Add `publicAddress` to CapabilityProfile — new optional field set via `PUBLIC_IP` env var. Used for Tier 2 URL construction.
+- [x] **87.2** Rewrite deploy endpoint — `POST /projects/:id/deploy` filters CapabilityRegistry for `storageBackend === 'mongodb'` peers, tries up to 3 via P2P `requestReply.request()`. Stores `deployPeerId` (not `instanceId`).
+- [x] **87.3** Rewrite undeploy endpoint — reads `project.deployPeerId` directly, no CloudInstanceManager lookup.
+- [x] **87.4** Deploy handler returns `publicAddress` — Tier 2 handler includes `PUBLIC_IP` in response for URL confirmation.
+- [x] **87.5** AgentManager compute node provider — `setCloudInstanceProvider` → `setComputeNodeProvider`. Agent context shows P2P-discovered compute peers.
+- [x] **87.6** Bootstrap mesh fix — added EC2-1 to `DEFAULT_BOOTSTRAPS`. New nodes connect to 2 bootstrap peers for better mesh connectivity.
+
+**Root cause fixed:** Deploy was built around `CloudInstanceManager` which only tracked dynamically-launched EC2 instances. Persistent nodes (the actual production compute) were invisible. Now uses the same P2P CapabilityProfile discovery that P2PStorageBackend already uses for storage routing — one pattern for everything.
+
+**Files modified:**
+- `packages/shared/src/types.ts` — `publicAddress` field on CapabilityProfile
+- `packages/node/src/capability-detector.ts` — `detectPublicAddress()` from `PUBLIC_IP` env var
+- `packages/node/src/api-server.ts` — deploy+undeploy endpoints rewritten for P2P discovery
+- `packages/node/src/index.ts` — deploy handler returns publicAddress; `setComputeNodeProvider` wiring
+- `packages/node/src/agent-manager.ts` — renamed `setCloudInstanceProvider` → `setComputeNodeProvider`
+- `packages/node/src/cli.ts` — EC2-1 added to `DEFAULT_BOOTSTRAPS`
+
+---
+
 ## Future (Not Scheduled)
 
 - [ ] Dynamic concurrent sessions based on CPU/memory

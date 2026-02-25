@@ -96,7 +96,7 @@ Each collection has a `recordTo*()` helper that handles:
 - **5 indexes** for efficient queries on owner_id, status, type, visibility, and collaborator user_id.
 - **Manifest fields (Phase 46):** `repoUrl` (GitHub/S3 path), `teamHistory` (JSON stringified agent history), `notes` (manager summary for cross-node pickup). These enable any node to pick up a project cold.
 - **Resource fields (Phase 53):** `resources` (array of `{ type, resourceId, assignedAt, status }` — assigned ResourceRegistry resources), `apiKey` (32-byte hex for Resource Proxy auth). Resources are contributed via ResourceRegistry and assigned per-project.
-- **Deployment fields (Phase 79):** MongoDB-persisted `tier` (1=S3 static, 2=EC2 compute), `deploymentPort` (EC2 backend port), `instanceId` (EC2 instance ID), `githubRepo` (org/repo name). These 4 fields live only in MongoDB — SQLite caches the rest but `updateProject()` explicitly preserves MongoDB-only fields during writes.
+- **Deployment fields (Phase 79+87):** MongoDB-persisted `tier` (1=S3 static, 2=EC2 compute), `deploymentPort` (backend port), `deployPeerId` (Phase 87: peerId of compute node hosting the app), `instanceId` (legacy, pre-Phase 87), `githubRepo` (org/repo name). These fields live only in MongoDB — SQLite caches the rest but `updateProject()` explicitly preserves MongoDB-only fields during writes.
 
 ## API Routes (in api-server.ts)
 

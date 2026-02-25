@@ -96,9 +96,10 @@ async function tryShutdownExistingNode(apiPort: number, dataDir?: string): Promi
 }
 
 // Default public bootstrap nodes for peer discovery.
-// Lightsail relay is the primary public bootstrap — all new nodes connect here first.
+// Phase 87: Multiple bootstraps for mesh connectivity (2+ peers per node).
 const DEFAULT_BOOTSTRAPS: string[] = [
-  '/ip4/54.145.144.221/tcp/4001/p2p/12D3KooWNSUWHf6tzHPb8uzUkaRfk3VfuMVrjzGgyueR4yioMGDP',
+  '/ip4/54.145.144.221/tcp/4001/p2p/12D3KooWNSUWHf6tzHPb8uzUkaRfk3VfuMVrjzGgyueR4yioMGDP', // LS-1
+  '/ip4/54.82.241.132/tcp/4001/p2p/12D3KooWDRjGzaUuATiPuhg5D2k1CQTT6nCMpjdsDTVwrGDC4QVP',  // EC2-1
 ];
 
 async function main() {

@@ -2,7 +2,7 @@
 id: user-journey-scale
 type: flow
 domain: architecture
-depends_on: [pando-node, agent-manager, hosting-service, cloud-instance-manager, resource-router]
+depends_on: [pando-node, agent-manager, hosting-service, capability-registry, resource-router]
 last_verified: 2026-02-23
 ---
 

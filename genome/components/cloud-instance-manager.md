@@ -9,6 +9,8 @@ status: implemented
 
 # Cloud Instance Manager
 
+> **Phase 87 note:** Deploy/undeploy no longer use CloudInstanceManager. Compute peer discovery is now handled by P2P CapabilityProfile (same pattern as P2PStorageBackend). CloudInstanceManager is retained only for on-demand EC2 launch/terminate (`POST /instances/launch`, `POST /instances/:id/terminate`).
+
 ## Purpose
 
 Launches and manages secure EC2 compute instances from contributed AWS credentials. Instances run Pando nodes in `compute` mode — no SSH access, tripwire-monitored, all management via P2P.

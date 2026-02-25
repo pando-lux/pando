@@ -65,14 +65,14 @@ exposes:
   - DELETE /projects/:id/hosting — remove deployed files
   - GET/POST /projects/:id/preflight — pre-flight check + auto-fix (API key, MongoDB)
   - POST /projects/:id/validate-deploy — post-deploy health check (uses direct S3 URL, not gateway proxy)
-  - POST /projects/:id/deploy — unified deploy endpoint (GitHub push + P2P EC2 deploy)
+  - POST /projects/:id/deploy — unified deploy endpoint (Phase 87: P2P CapabilityProfile discovery, tries up to 3 compute peers, stores deployPeerId)
   - POST /projects/:id/github/push — push workspace to GitHub via contributed PAT
-  - POST /projects/:id/undeploy — stop and remove deployed app (Tier 1: S3 cleanup, Tier 2: PM2+nginx cleanup via P2P)
+  - POST /projects/:id/undeploy — stop and remove deployed app (Phase 87: uses deployPeerId directly, no CloudInstanceManager)
   - POST /admin/migrate-apps — redeploy Tier 2 apps from dead instance to running one
   - POST /admin/cleanup-projects — archive specified projects (soft delete)
   - GET /marketplace — browse public projects
 rules: []
-last_verified: 2026-02-25 (Phase 86)
+last_verified: 2026-02-25 (Phase 87)
 ---
 
 # API Server

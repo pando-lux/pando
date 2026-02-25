@@ -377,6 +377,8 @@ export interface CapabilityProfile {
   credentialAccess?: boolean;
   /** Phase 83: What storage backend this node uses — 'mongodb' (direct), 'p2p' (proxied), 'none' */
   storageBackend?: 'mongodb' | 'p2p' | 'none';
+  /** Phase 87: Public IP/hostname for HTTP access (Tier 2 URL construction). Set via PUBLIC_IP env var. */
+  publicAddress?: string;
   /** Optional details per capability */
   details?: {
     api_keys?: { providers: string[] };
@@ -1116,8 +1118,10 @@ export interface Project {
   tier?: DeploymentTier;
   /** Phase 70: For Tier 2 — actual port the app runs on */
   deploymentPort?: number;
-  /** Phase 70: For Tier 2 — which EC2 instance hosts this app */
+  /** Phase 70: For Tier 2 — which EC2 instance hosts this app (legacy, use deployPeerId) */
   instanceId?: string;
+  /** Phase 87: PeerId of the compute node hosting this app (replaces instanceId for routing) */
+  deployPeerId?: string;
   /** Phase 70: GitHub repo name e.g. "pando-lux/app-guestbook-abc123" */
   githubRepo?: string;
 }

@@ -55,12 +55,11 @@ This means:
 5. Environment variables injected at deploy time: `MONGODB_URI`, `S3_BUCKET`, `PORT`, etc.
 6. User gets EC2 URL (via ALB or direct IP)
 
-**Current Tier 2 Infrastructure (Phase 64a+65):**
-- Launched dynamically via CloudInstanceManager from contributed AWS credentials
-- No SSH access (security tripwire monitors for intrusion)
-- Resources auto-granted on P2P connect
-- Apps served via `/apps/:appName/*` endpoint with automatic URL injection
-- See `genome/components/cloud-instance-manager.md` for full details
+**Current Tier 2 Infrastructure (Phase 87):**
+- Persistent EC2 compute nodes discovered via P2P CapabilityProfile (storageBackend=mongodb)
+- Deploy endpoint auto-discovers compute peers — no manual instance management needed
+- Apps served via nginx reverse proxy at `http://<publicAddress>/apps/<projectId>/`
+- `deployPeerId` stored on project record for undeploy routing
 
 **Cost:** EC2 instance runtime + bandwidth. Billed to resource contributor.
 

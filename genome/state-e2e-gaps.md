@@ -53,13 +53,8 @@
   - C) Both — gateway route for nice URLs, S3 direct as fallback
 - **Recommended**: Option B now (immediate fix), Option A later for nice URLs
 
-### GAP-2: EC2 deployment URL is wrong (Tier 2)
-- **Where**: `packages/node/src/cloud-instance-manager.ts:406` (`deployApp`)
-- **What**: After P2P deploy, the returned URL is `http://${record.publicIp}/apps/${projectId}/index.html` — uses port 80 and `/apps/` path. But the actual app runs on a dynamic port (e.g., 3002) and serves from root `/`.
-- **Actual working URL**: `http://100.53.198.66:3002/` (port from deploy response)
-- **The deploy response INCLUDES the correct port**: `{"status":"deployed","projectId":"...","port":3002,"pid":6332,"url":"http://localhost:3001"}` — but `deployApp()` ignores it and constructs a wrong URL.
-- **Impact**: User gets dead link for EC2 apps.
-- **Fix**: Parse `response.payload.port` and construct URL as `http://${record.publicIp}:${port}/`
+### GAP-2: EC2 deployment URL is wrong (Tier 2) — **FIXED (Phase 87)**
+- **Status**: RESOLVED. Phase 87 rewrote deploy endpoint to use P2P CapabilityProfile discovery. Tier 2 URL is now constructed from `profile.publicAddress` + nginx reverse proxy path (`/apps/<id>/`). No more CloudInstanceManager URL construction.
 
 ### GAP-3: GitHub `pushToGitHub()` fails — org repo creation returns 404
 - **Where**: `packages/node/src/agent-manager.ts:1697` (`pushToGitHub`)
@@ -68,11 +63,11 @@
 - **Impact**: No code pushed to GitHub → EC2 deploy blocked (requires repoUrl) → GitHub push for Tier 1 also fails silently (repoUrl stays empty)
 - **Fix**: Debug `pushToGitHub()` — check what org/user it's using, verify token scopes. Must read the contributed `code_repository` resource from ResourceRegistry and use THAT token, not any local config.
 
-### GAP-4: EC2 deploy requires GitHub repoUrl — no alternative code delivery path
-- **Where**: `packages/node/src/api-server.ts` (instance deploy endpoint), `cloud-instance-manager.ts:375` (`deployApp`)
-- **What**: `POST /instances/:id/deploy` returns `"repoUrl required"` if no GitHub URL. The P2P deploy handler on the EC2 instance does `git clone <repoUrl>`, so it fundamentally depends on GitHub.
-- **Impact**: If GitHub push fails (GAP-3), EC2 deploy is completely blocked. No fallback.
-- **Fix**: See "Proposed Architecture" section at bottom — use S3 as code delivery mechanism instead of GitHub.
+### GAP-4: Deploy requires GitHub repoUrl — no alternative code delivery path
+- **Where**: `packages/node/src/api-server.ts` (deploy endpoint), `pando/deploy-app` handler in index.ts
+- **What**: `POST /projects/:id/deploy` sends repoUrl to compute peer. Compute node does `git clone <repoUrl>`. If GitHub push fails, deploy is blocked.
+- **Impact**: If GitHub push fails (GAP-3), deploy is completely blocked. No fallback.
+- **Fix**: Future — use S3 as code delivery mechanism instead of GitHub.
 
 ### GAP-5: GitHub resource not automatically assigned to projects
 - **Where**: `packages/node/src/api-server.ts` (doorman preflight, `runPreflight()`)
@@ -153,13 +148,13 @@
 ## Security — Must Address Before Multi-Operator
 
 ### GAP-15: Agents/managers may access raw AWS/resource credentials
-- **Where**: EC2 deploy flow, CloudInstanceManager, resource decryption
-- **What**: When manager triggers `POST /instances/:id/deploy`, the node decrypts the contributed AWS resource to interact with EC2. The agent (Claude Code session) itself calls the node API — it doesn't SEE the raw creds. BUT: agents have Bash access and run as child processes of the node process. They COULD potentially:
+- **Where**: Resource decryption, CredentialStore, agent child processes
+- **What**: Agents have Bash access and run as child processes of the node process. They COULD potentially:
   - Read env vars: `env | grep CREDENTIAL_MASTER_KEY`
   - Read `~/.pando/api-token` and call endpoints that return sensitive data
   - Read the node process environment from `/proc/<pid>/environ`
-- **Jai's concern**: "if node operators have access to the aws resource its game over... tell manager or protocol to not mess with the aws resource — they technically should not have access to the resource key"
-- **Current flow**: Manager → `POST /instances/:id/deploy` → Node decrypts AWS creds → Node calls EC2 SDK → Agent never sees raw keys (by design). This is correct — the agent doesn't directly touch AWS. But the Bash access creates a side-channel.
+- **Note**: Phase 70 already strips `CREDENTIAL_MASTER_KEY` + `PANDO_STORAGE_URL` from agent child env. Phase 87 removed CloudInstanceManager from deploy flow — agents call `POST /projects/:id/deploy` which routes via P2P, no raw AWS creds involved.
+- **Current flow**: Manager → `POST /projects/:id/deploy` → Node discovers compute peer via P2P → requestReply to peer → peer handles deploy. Agent never sees raw keys.
 - **Impact**: CRITICAL for multi-operator networks. If Node A contributes AWS creds, Node B's agents MUST NOT see them.
 - **Fix (phased)**:
   - Phase 1 (now): Audit all API endpoints — ensure none return raw credentials. Ensure `CREDENTIAL_MASTER_KEY` is not inherited by child processes (agent spawns).
@@ -237,41 +232,31 @@ The manager created a PUBLIC GitHub repo (`jairangwani/app-a51d261f618c1136bd583
 
 Replace GitHub as the code delivery mechanism for EC2 deploys. GitHub becomes optional (code backup/persistence), not on the critical deploy path.
 
-### New Flow:
+### New Flow (Phase 87 — partially implemented):
 ```
 1. Builder finishes code in workspace
-2. Node packages workspace as tarball → uploads to S3: s3://pando-deployments/code/{projectId}.tar.gz
-3. Node generates signed S3 URL (1-hour TTL)
-4. POST /instances/:id/deploy sends { projectId, codeUrl: "<signed S3 URL>" }
-5. EC2 instance downloads tarball from S3 (no credentials needed — signed URL)
-6. EC2 extracts → npm install → npm start on assigned port
-7. Deploy response includes actual port → node constructs correct URL
-8. (Optional, async) pushToGitHub() runs for code persistence — failure doesn't block deploy
+2. Manager calls POST /projects/:id/deploy with workspaceDir
+3. Node pushes to GitHub (if possible)
+4. Node discovers compute peer via P2P CapabilityProfile (storageBackend=mongodb)
+5. Tries up to 3 peers via requestReply.request(peerId, 'pando/deploy-app', ...)
+6. Compute node: git clone → npm install → npm start (Tier 2) or S3 upload (Tier 1)
+7. Deploy response includes port + publicAddress → node constructs correct URL
+8. deployPeerId stored on project record (not instanceId)
 ```
 
-### Benefits:
-- S3 resource is ALWAYS available (already assigned to every project)
-- No GitHub credentials needed on EC2
-- No public/private repo visibility issue
-- Signed URLs expire (security)
-- GitHub push failures don't block deployment
-- Simpler error recovery: retry S3 upload is trivial
-
-### Changes Required:
-- `agent-manager.ts`: After build, package workspace as tarball, upload to S3
-- `cloud-instance-manager.ts`: Accept `codeUrl` in deploy payload, download + extract instead of `git clone`
-- `api-server.ts`: Update `/instances/:id/deploy` to accept `codeUrl` alongside `repoUrl`
-- EC2 deploy handler (`cli.ts` on compute node): Handle tarball download path
+### Future improvement: S3 code delivery
+- Replace GitHub as code delivery for deploys (S3 tarball with signed URL)
+- GitHub push failures wouldn't block deployment
 
 ---
 
-## Priority Fix Order
+## Priority Fix Order (updated Phase 87)
 
 | Priority | Gap(s) | Effort | Impact |
 |---|---|---|---|
-| 1 | GAP-1, GAP-2 — Fix deployment URLs | 30 min | Users can actually see their deployed apps |
-| 2 | GAP-3 — Fix pushToGitHub() | 1 hour | GitHub push works, enables EC2 via git |
-| 3 | S3 code delivery | 2-3 hours | Removes GitHub from critical EC2 deploy path |
+| 1 | ~~GAP-1, GAP-2~~ | DONE | Fixed by Phase 79+87 |
+| 2 | GAP-3 — Fix pushToGitHub() | 1 hour | GitHub push works for code persistence |
+| 3 | S3 code delivery | 2-3 hours | Removes GitHub from critical deploy path |
 | 4 | GAP-5 — Auto-assign GitHub resource | 15 min | Manager doesn't waste time on resource discovery |
 | 5 | GAP-11 — Store tier in project | 30 min | Manager knows tier without re-analyzing |
 | 6 | GAP-12 — Skip S3 for Tier 2 | 15 min | No wasted S3 uploads for server apps |

@@ -102,10 +102,11 @@ The network will have many nodes — some on AWS, some on laptops, some on phone
 ```typescript
 interface Project {
   // ... existing fields ...
-  tier?: 1 | 2;                    // NEW: deployment tier (1=S3 static, 2=EC2 compute)
-  deploymentPort?: number;          // NEW: for Tier 2 — actual port the app runs on
-  instanceId?: string;              // NEW: for Tier 2 — which EC2 instance hosts this
-  githubRepo?: string;              // NEW: full repo name e.g. "pando-lux/app-guestbook-abc123"
+  tier?: 1 | 2;                    // deployment tier (1=S3 static, 2=EC2 compute)
+  deploymentPort?: number;          // for Tier 2 — actual port the app runs on
+  deployPeerId?: string;            // Phase 87: peerId of compute node hosting this app
+  instanceId?: string;              // legacy (pre-Phase 87), use deployPeerId
+  githubRepo?: string;              // full repo name e.g. "pando-lux/app-guestbook-abc123"
 }
 ```
 
@@ -231,13 +232,14 @@ User: "the submit button doesn't work"
   → URL stays the same — user just refreshes
 ```
 
-### EC2 Instance Selection
+### Compute Peer Selection (Phase 87)
 ```
-Node → CloudInstanceManager.getAvailableInstance()
-  → Returns first instance with status="running" and peerId set
-  → If no instance available, try next one (minimum 2 instances)
-  → If ALL instances down, return error (can't deploy right now)
-  → Future: governance decides instance count, auto-scaling
+Node → CapabilityRegistry.getAllProfiles()
+  → Filter: storageBackend === 'mongodb' && peerId !== localPeerId
+  → Try up to 3 peers via requestReply.request(peerId, 'pando/deploy-app', ...)
+  → On success: use profile.publicAddress for Tier 2 URL construction
+  → Store deployPeerId on project record
+  → If ALL peers fail, return error
 ```
 
 ### Private Repos (Future)
@@ -301,13 +303,13 @@ Input: { projectId, workspaceDir? }
 Flow:
   1. Read project record → get tier, visibility, githubRepo
   2. If workspaceDir provided: push to GitHub via /projects/:id/github/push
-  3. Find available EC2 instance via CloudInstanceManager
-  4. Send P2P deploy: pando/deploy-app { projectId, repoUrl, tier, envVars }
-  5. EC2 handles the rest (S3 upload for Tier 1, app hosting for Tier 2)
-  6. Parse response → construct URL
-  7. Update project record: deploymentUrl, deploymentStatus, deploymentPort, instanceId
+  3. Discover compute peers via CapabilityRegistry (filter: storageBackend=mongodb)
+  4. Try up to 3 peers via P2P: requestReply.request(peerId, 'pando/deploy-app', ...)
+  5. Compute node handles the rest (S3 upload for Tier 1, app hosting for Tier 2)
+  6. Parse response → construct URL (using profile.publicAddress for Tier 2)
+  7. Update project record: deploymentUrl, deploymentStatus, deploymentPort, deployPeerId
   8. Sync to ProjectRegistry (GossipSub broadcast)
-  9. Return { url, tier, status }
+  9. Return { url, tier, status, deployPeerId }
 ```
 
 ### Template Instructions (What Managers Are Told)
@@ -321,15 +323,14 @@ After builder completes code, deploy with ONE call:
 
 The node handles EVERYTHING:
 - Pushes code to GitHub (you don't need to)
-- Sends deploy command to EC2 via P2P
-- EC2 deploys to the right infrastructure (S3 for Tier 1, runs app for Tier 2)
+- Auto-discovers compute peers via P2P CapabilityProfile
+- Compute node deploys to the right infrastructure (S3 for Tier 1, runs app for Tier 2)
 - Returns the live URL
 
 You NEVER need to:
 - Call GitHub APIs directly
 - Use `gh` CLI
-- Call /instances/:id/deploy manually
-- Figure out which EC2 instance to use
+- Figure out which compute node to use (P2P discovery handles it)
 - Upload to S3
 - Know about AWS or infrastructure details
 
@@ -453,9 +454,9 @@ Even if a malicious node operator extracts the token, they can only push code (r
 7. Remove old `pushToGitHub()` from agent-manager.ts
 
 ### Phase 70c — Unified Deploy
-8. `POST /projects/:id/deploy` — one endpoint, pushes to GitHub + P2P to EC2
-9. EC2 selection via CloudInstanceManager with failover
-10. Parse deploy response for correct URL/port
+8. `POST /projects/:id/deploy` — one endpoint, pushes to GitHub + P2P deploy
+9. Phase 87: Compute peer selection via CapabilityRegistry (replaces CloudInstanceManager)
+10. Parse deploy response for correct URL/port, store deployPeerId
 
 ### Phase 70d — EC2 Deploy Handler Extension
 11. Extend `pando/deploy-app` handler to support `tier: 1`
