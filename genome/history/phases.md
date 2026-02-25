@@ -767,6 +767,25 @@ Replaced the complex Phase 73/81 patch-distribution system with simple `git pull
 
 ---
 
+## Phase 86: JWT Auth — Stateless Cross-Node Authentication -- COMPLETE (2026-02-25)
+
+> Replaced MongoDB session-based auth with self-verifying JWT tokens. Cross-node auth works without any shared state.
+
+- [x] **86.1** JWT session tokens — `createGuest()`, `login()`, `loginByPeerId()` now return JWTs signed by the node's Ed25519 private key. Token payload: `{ userId, peerId, issuer (nodeId), exp }`. No database writes for sessions.
+- [x] **86.2** JWT verification via peerId — `peerIdFromString(issuer).publicKey.verify(signature, payload)`. Any node can verify a JWT issued by any other node by deriving the public key from the issuer's peerId. No ledger lookup, no MongoDB lookup needed.
+- [x] **86.3** Stateless challenge tokens — `POST /auth/challenge` returns a JWT challenge (signed, with expiry) instead of storing a nonce in an in-memory Map. `POST /auth/verify` validates the challenge JWT + Ed25519 signature, returns a session JWT. No server-side state.
+- [x] **86.4** Cross-node auth fix — original implementation used `node.getIdentity().peerId` for verification, which only worked for locally-issued tokens. Fixed to use `peerIdFromString(issuer)` to extract the public key from the peerId embedded in the JWT, enabling verification of tokens from any node.
+- [x] **86.5** 11/11 cross-node auth tests passing — covers: guest creation (JWT returned), login (JWT returned), JWT verification (local), JWT verification (cross-node via peerIdFromString), challenge-response (stateless JWT challenges), token expiry, invalid signatures rejected.
+- [x] **86.6** Dead code identified — `auth_sessions` table in `auth-local.db`, `validateSession()`, `refreshSession()`, `cleanupExpiredSessions()`, `startCleanup()`/`stopCleanup()`, `getUserSessions()` are all dead code. To be removed in follow-up cleanup.
+
+**Key design decision:** JWTs are verified purely from the cryptographic material embedded in the token itself (peerId -> public key -> verify signature). This means auth is fully stateless and works across nodes without any shared database or P2P coordination. A token issued by Node A can be verified by Node B without Node B ever having communicated with Node A.
+
+**Files modified:**
+- `packages/node/src/user-accounts.ts` — JWT creation (sign with Ed25519 key) and verification (peerIdFromString)
+- `packages/node/src/api-server.ts` — `/auth/challenge` and `/auth/verify` endpoints updated for stateless JWT challenges
+
+---
+
 ## Future (Not Scheduled)
 
 - [ ] Dynamic concurrent sessions based on CPU/memory

@@ -3,7 +3,7 @@ id: data-residency
 type: rule
 domain: architecture
 created: 2026-02-22
-last_verified: 2026-02-22
+last_verified: 2026-02-25
 ---
 
 # Data Residency — The Three Buckets Rule
@@ -16,7 +16,7 @@ Every piece of data in Pando belongs to exactly one of three buckets. No excepti
 |---|---|---|---|---|
 | **User Data** | MongoDB (StorageBackend) | Any node reads/writes via StorageBackend interface | Yes | Projects, threads, messages, collaborators, invites, transfers, deployments, ratings, reports, revenue, distributions, subscriptions, contributions, scores |
 | **Network State** | SQLite + P2P GossipSub | Replicated to all nodes automatically | Yes (rebuilds from peers) | Ledger (accounts, auth/username/password_hash, balances, transactions), governance (proposals, votes), capabilities, content registry, reputation, resources |
-| **Node-Local** | Local SQLite/filesystem | Doesn't sync | No (disposable) | Sessions (`auth-local.db`), identity keys, agent workspaces, logs, metrics, monitor audit trail, guardrails config, task file locks, known-peers cache |
+| **Node-Local** | Local SQLite/filesystem | Doesn't sync | No (disposable) | Key store (`auth-local.db`), identity keys, agent workspaces, logs, metrics, monitor audit trail, guardrails config, task file locks, known-peers cache |
 
 ## The Decision Test
 
@@ -82,7 +82,7 @@ MongoDB Atlas has a temporary outage.
 | `project_contributions` | ContributionTracker | 44 |
 | `contribution_scores` | ContributionTracker | 44 |
 
-Note: `user_accounts` and `auth_sessions` removed from MongoDB in Phase 56 — auth data (username, password_hash, is_claimed) moved to P2P-synced ledger accounts table. Sessions stored in local `auth-local.db`.
+Note: `user_accounts` and `auth_sessions` removed from MongoDB in Phase 56 — auth data (username, password_hash, is_claimed) moved to P2P-synced ledger accounts table. Phase 86 replaced local `auth_sessions` table with stateless JWTs signed by each node's Ed25519 key — sessions are no longer stored anywhere (not MongoDB, not SQLite). Verification is purely cryptographic via `peerIdFromString().publicKey.verify()`. The `auth_sessions` table in `auth-local.db` is dead code.
 
 ### Network State (SQLite + P2P)
 
@@ -101,6 +101,7 @@ Note: `user_accounts` and `auth_sessions` removed from MongoDB in Phase 56 — a
 
 | Location | Source | Purpose |
 |---|---|---|
+| `~/.pando/auth-local.db` | UserAccountStore | Key store only (Phase 86: `auth_sessions` table is dead code — sessions are stateless JWTs) |
 | `~/.pando/agents/` | AgentManager | Ephemeral agent workspaces |
 | `~/.pando/logs/` | FileLogger | Node console logs |
 | `~/.pando/monitor/` | HealthMonitor | Metrics, audit trail |

@@ -24,19 +24,21 @@ exposes:
   - cleanupExpiredSessions() — garbage collect expired sessions
   - startCleanup() / stopCleanup() — manage cleanup timer (30-min interval)
 rules: [data-residency, credential-security]
-last_verified: 2026-02-22
+last_verified: 2026-02-25
 ---
 
 # User Accounts (Phase 56: P2P User Accounts)
 
 ## What It Does
 
-Unified Ed25519 identity system with P2P-synced auth data. Auto-guest creation, claim with password+username, login via username or peerId. Auth data lives in the ledger (P2P-synced). Sessions and encrypted keys live in local SQLite only.
+Unified Ed25519 identity system with P2P-synced auth data. Auto-guest creation, claim with password+username, login via username or peerId. Auth data lives in the ledger (P2P-synced). Encrypted keys live in local SQLite only.
+
+**Phase 86: JWT Auth.** Session tokens are now self-verifying JWTs signed by the node's Ed25519 private key. Verification uses `peerIdFromString().publicKey.verify()` — no ledger lookup, no MongoDB lookup, no in-memory session map needed. Cross-node auth works: any node can verify a JWT issued by any other node by extracting the signing node's public key from the peerId embedded in the token. Challenge tokens for signature-based auth are also stateless JWTs (no in-memory nonce map).
 
 ## Architecture (Phase 56)
 
 - **Auth data in ledger (P2P-synced):** `username`, `display_name`, `password_hash`, `is_claimed` columns on the ledger `accounts` table. Synced across all nodes via existing ledger GossipSub. Login works from any node.
-- **Local auth-local.db (NOT synced):** Two tables: `auth_sessions` (session tokens, TTL, per-node) and `key_store` (encrypted Ed25519 private keys, per-node). These are node-local — sessions are only valid on the node that created them.
+- **Local auth-local.db (NOT synced):** `key_store` table (encrypted Ed25519 private keys, per-node). The `auth_sessions` table still exists but is **DEAD CODE** as of Phase 86 — sessions are now stateless JWTs, not database rows. `validateSession()` and `refreshSession()` are dead code to be removed.
 - **No MongoDB/StorageBackend dependency.** Constructor takes `PandoLedger` directly. All prior StorageBackend/MongoDB code paths removed.
 
 ## How Account Claims Work
@@ -57,7 +59,7 @@ Unified Ed25519 identity system with P2P-synced auth data. Auto-guest creation, 
 ## Key Details
 
 - **Identity:** Ed25519 keypairs. Guests get auto-generated keypair. Claimed users encrypt their private key with PBKDF2 + AES-256-GCM at rest.
-- **Session tokens:** 64-byte random hex (512-bit), 7-day default TTL. Auto-garbage collected every 30 minutes.
+- **Session tokens (Phase 86):** Self-verifying JWTs signed by the node's Ed25519 key. Contain userId, peerId, issuer nodeId, expiry. Verified via `peerIdFromString(issuer).publicKey.verify()`. No database lookup needed. Cross-node verification works because the public key is derived from the peerId embedded in the JWT. The old 64-byte random hex tokens and `auth_sessions` table are dead code.
 - **Password hashing:** PBKDF2 (100K iterations, SHA-512, 64-byte key, 32-byte salt). Timing-safe comparison.
 - **Lux faucet:** New guests receive welcome Lux (25 base x early multiplier). Unclaimed guests older than 30 days have Lux reclaimed.
 
@@ -69,6 +71,8 @@ Unified Ed25519 identity system with P2P-synced auth data. Auto-guest creation, 
 | POST | /auth/claim | User token | Upgrade guest to claimed account (broadcasts ACCOUNT_CLAIM) |
 | POST | /auth/login | No | Login by username+password (works from any node) |
 | POST | /auth/login-peer | No | Login by peerId+password |
+| POST | /auth/challenge | No | Get a stateless JWT challenge token for Ed25519 signature auth |
+| POST | /auth/verify | No | Verify Ed25519 signature against challenge, returns JWT session token |
 | POST | /auth/logout | User token | Invalidate session |
 | GET | /auth/me | User token | Get current user profile + Lux balance |
 | POST | /auth/refresh | User token | Extend session TTL |

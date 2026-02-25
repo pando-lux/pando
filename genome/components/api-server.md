@@ -50,10 +50,12 @@ exposes:
   - GET /resources/marketplace — resource marketplace listings
   - POST /resources/prices — set operator pricing
   - GET /resources/marketplace/find — find cheapest provider
-  - POST /auth/guest — create guest account (auto Ed25519 keypair)
+  - POST /auth/guest — create guest account (auto Ed25519 keypair), returns JWT session token
   - POST /auth/claim — claim guest account with password+username
-  - POST /auth/login — login with username or peerId
-  - GET /auth/me — get current user info
+  - POST /auth/login — login with username or peerId, returns JWT session token
+  - POST /auth/challenge — get a stateless JWT challenge token for Ed25519 signature auth (no in-memory nonce map)
+  - POST /auth/verify — verify Ed25519 signature against JWT challenge, returns JWT session token
+  - GET /auth/me — get current user info (JWT verified via peerIdFromString)
   - GET /projects — list projects
   - POST /projects — create project (user session OR Bearer token)
   - PATCH /projects/:id — update project
@@ -70,7 +72,7 @@ exposes:
   - POST /admin/cleanup-projects — archive specified projects (soft delete)
   - GET /marketplace — browse public projects
 rules: []
-last_verified: 2026-02-25
+last_verified: 2026-02-25 (Phase 86)
 ---
 
 # API Server
@@ -82,6 +84,7 @@ Fastify HTTP API server for the Pando node. Exposes node operations over HTTP so
 - Built on Fastify with `@fastify/cors` for cross-origin support. Starts on the configured API port (default 4000).
 - Per-IP sliding window rate limiter: each endpoint has a configurable max requests per 60-second window (e.g., search=10, input=20, transfer=30, propose=5). Rate limits are overridable via environment variables (e.g., `PANDO_RATE_SEARCH`).
 - Bearer token authentication: write endpoints require `Authorization: Bearer <token>` header. Token is auto-generated at `~/.pando/api-token` (32-byte hex). Read endpoints (GET) are open.
+- **User auth (Phase 86 — JWT):** User session tokens are self-verifying JWTs signed by the issuing node's Ed25519 private key. Verification uses `peerIdFromString(issuer).publicKey.verify()` — no database lookup needed. Cross-node auth works: a token issued by Node A can be verified by Node B. Challenge tokens for signature-based auth (`/auth/challenge`, `/auth/verify`) are also stateless JWTs (no in-memory nonce map).
 - AgentManager handles all AI chat via Bridge Queue dispatch to Manager agents.
 
 ## Gotchas

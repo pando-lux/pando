@@ -1,6 +1,6 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-25 (Phase 83 — P2PStorageBackend + Two-Tier Trust)
+> Last updated: 2026-02-25 (Phase 86 — JWT Auth)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
 
 ## Health
@@ -13,7 +13,14 @@
 
 ## Current Phase
 
-All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, **83** COMPLETE except Phase 14 (Universal Onboarding — deferred). Phase 53.7-53.9 remaining. Phase 68.4 (Returning User Routing) NOT STARTED.
+All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, **86** COMPLETE except Phase 14 (Universal Onboarding — deferred). Phase 53.7-53.9 remaining. Phase 68.4 (Returning User Routing) NOT STARTED.
+
+**Phase 86: JWT Auth — Stateless Cross-Node Authentication — COMPLETE (2026-02-25).**
+Replaced MongoDB session-based auth with self-verifying JWT tokens signed by each node's Ed25519 private key. Verification uses `peerIdFromString().publicKey.verify()` — no ledger or MongoDB lookup needed. Cross-node auth now works (any node can verify tokens issued by any other node).
+- **JWT session tokens**: Signed by issuing node's Ed25519 key, contain userId/peerId/issuer/expiry. Verified by extracting public key from peerId embedded in token.
+- **Stateless challenge tokens**: Challenge-response auth uses JWT challenges instead of in-memory nonce map. No server state needed.
+- **11/11 cross-node auth tests passing**: Full test coverage including cross-node JWT verification via `peerIdFromString()`.
+- **Dead code identified**: `auth_sessions` table, `validateSession()`, `refreshSession()`, `cleanupExpiredSessions()` — all dead code to be removed in follow-up cleanup.
 
 **Phase 83: Network Hardening — P2PStorageBackend + Two-Tier Trust — COMPLETE (2026-02-25).**
 Transformed the network from "dev mode where everybody has everything" to the real two-tier trust architecture. Untrusted nodes (no MongoDB, no master key) proxy all storage operations via P2P to compute nodes with MongoDB. Every node gets a StorageBackend — no more 503s.
@@ -149,7 +156,7 @@ Plus:
 
 **Phase 57: Clean Data Architecture — DONE.** Eliminated dual-write architecture. MongoDB is single source of truth for user data. LocalStorageBackend deleted. All user data stores (ProjectStore, RevenueEngine, ContributionTracker, ThreadStore) require StorageBackend (MongoDB). Write pattern: MongoDB-first with await, then SQLite cache update. Nodes without MongoDB return 503 for user data endpoints. SQLite tables kept as read-performance cache, hydrated from MongoDB on startup via `loadFromBackend()`.
 
-**Phase 56: P2P User Accounts — DONE.** Auth data (username, password_hash, is_claimed) moved from per-node UserAccountStore to P2P-synced ledger accounts table. Account claims broadcast via GossipSub ACCOUNT_CLAIM. Login works from any node. MongoDB/StorageBackend removed from UserAccountStore. Local auth-local.db for sessions + key_store only.
+**Phase 56: P2P User Accounts — DONE.** Auth data (username, password_hash, is_claimed) moved from per-node UserAccountStore to P2P-synced ledger accounts table. Account claims broadcast via GossipSub ACCOUNT_CLAIM. Login works from any node. MongoDB/StorageBackend removed from UserAccountStore. Local auth-local.db for key_store only (sessions replaced by stateless JWTs in Phase 86).
 
 **Phase 55: Resource UX Simplification + User Ownership — DONE.** Service-first contribute form (6 presets: OpenAI, Anthropic, Gemini, MongoDB, AWS S3, Other). Resources owned by users (userId), not nodes (providerPeerId). Login required to contribute. TUI `/contribute <service> <key>` with service mapping. See details below.
 
