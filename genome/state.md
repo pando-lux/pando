@@ -23,6 +23,14 @@ v2-architecture branch fully merged to master. v2.1 (layer separation) + v2.2 (A
 
 All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88** COMPLETE. Now doing architectural v2 work — no new features until layer separation + tests done.
 
+**v2.4: Active Tripwire — COMPLETE (2026-02-26)**
+- ✅ CREDENTIAL_MASTER_KEY deleted from process.env after loading (key is now memory-only)
+- ✅ CredentialStore.wipe() — zeros out Buffer, disables all subsequent decryption
+- ✅ GossipSub topic `pando/node-compromised` — publish + subscribe across P2P
+- ✅ PandoNode.triggerLocalCompromise(reason) — wipes key + broadcasts compromise
+- ✅ Receiving node_compromised: removes compromised peer from credential routing
+- ✅ POST /v1/admin/wipe-credentials — emergency admin trigger endpoint
+
 **v2.3: NodeHealth + Boot Tracking — COMPLETE (2026-02-26)**
 - ✅ `OperationalMode` (1|2|3) + `BootStepStatus` + `NodeHealth` added to @pando/shared
 - ✅ `PandoNode._computeBootHealth()` — derives health from initialized fields at end of _start()

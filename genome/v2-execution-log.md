@@ -57,6 +57,7 @@ BRANCH: All work on v2-architecture branch.
 | E2E test scenarios | ✅ DONE | genome/flows/e2e-test-scenarios.md — 42 scenarios written by parallel agent |
 | v2.2: API versioning | ✅ DONE | /v1/ prefix on all HTTP routes; MESSAGE_VERSION on P2P; gateway+MCP+tests updated; deployed to all 5 nodes |
 | v2.3: Boot sequence enforcement | ✅ DONE | NodeHealth in /v1/status: kernel/core/platform + per-step bootSteps + OperationalMode 1/2/3 |
+| v2.4: Active Tripwire | ✅ DONE | CREDENTIAL_MASTER_KEY deleted from process.env; CredentialStore.wipe(); node_compromised GossipSub; credential routing isolation |
 
 ---
 
@@ -79,6 +80,18 @@ BRANCH: All work on v2-architecture branch.
   - Old messages (version=undefined) still processed — graceful backward compat on receive.
   - Future nodes with higher version: logged + processed anyway.
 - v2.2 deployed to all 5 nodes atomically with v2.1 (single upgrade cycle).
+
+### 2026-02-26 — v2.4 Active Tripwire Implementation
+- `CREDENTIAL_MASTER_KEY` deleted from `process.env` immediately after CredentialStore loads it into memory
+  - Previously: env var stayed accessible for the entire process lifetime (readable via /proc/environ)
+  - Now: key lives ONLY in `CredentialStore.masterKey` Buffer (in-process heap, not env)
+- `CredentialStore.wipe()` — fills master key Buffer with zeros, sets to null
+  - After wipe: `hasDecryptionCapability()` returns false, all `getCredential()` calls return null
+- `PandoNetwork.publishNodeCompromised(reason)` + `subscribeNodeCompromised()` — new GossipSub topic `pando/node-compromised`
+- `PandoNode.triggerLocalCompromise(reason)` — wipes key + broadcasts compromise signal to network
+- On receiving `node_compromised` from any peer: `capabilityRegistry.credentialAccess = false` for that peer
+- `POST /v1/admin/wipe-credentials` — emergency admin endpoint to manually trigger tripwire
+- EC2 bash-level tripwire (Phase 64) unchanged — still handles filesystem wipe + shutdown at OS level
 
 ### 2026-02-26 — v2.3 NodeHealth Implementation
 - Added `OperationalMode` (1|2|3) to @pando/shared — distinct from existing `NodeMode` ('full'|'compute'|'relay')
