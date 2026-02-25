@@ -58,6 +58,8 @@ export class ClaudeBackend implements AIBackend {
   readonly capabilities = ['text-generation', 'code-execution'];
   available = false;
   onProgress?: (msg: string) => void;
+  /** Called immediately after spawn with the child process PID. */
+  onPid?: (pid: number) => void;
 
   async detect(): Promise<boolean> {
     return detectClaudePath() !== null;
@@ -97,6 +99,8 @@ export class ClaudeBackend implements AIBackend {
         stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true,
       });
+
+      if (child.pid) this.onPid?.(child.pid);
 
       let stdoutBuffer = '';
       let stderrBuffer = '';

@@ -1179,6 +1179,17 @@ export class AgentManager {
         }
       }
     } catch (err: any) {
+      // Kill any stray child process left behind if event processing was abandoned
+      const strayPid = agent.getChildPid();
+      if (strayPid) {
+        try {
+          process.kill(strayPid, 'SIGTERM');
+          console.log(`[agent-manager] Killed stray child PID ${strayPid} for ${managerId}`);
+        } catch {
+          // Process may have already exited
+        }
+      }
+
       // Refund payment hold on failure
       if ((item as any)._paymentHoldId && this.paymentGate) {
         this.paymentGate.refundPayment((item as any)._paymentHoldId);

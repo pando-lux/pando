@@ -945,6 +945,11 @@ export class Agent {
       (backend as any).onProgress = this.onProgress;
     }
 
+    // Wire PID callback — store child PID so external callers can kill stray processes
+    if ('onPid' in backend) {
+      (backend as any).onPid = (pid: number) => { this.childPid = pid; };
+    }
+
     if (this.state.sessionId) {
       console.log(`[agent]   Resuming: --continue --resume ${this.state.sessionId}`);
     }
@@ -958,6 +963,9 @@ export class Agent {
         cwd: this.workspaceDir,
       },
     });
+
+    // Process exited — clear PID
+    this.childPid = null;
 
     const durationMs = Date.now() - startTime;
     const costUsd = aiResult.cost ?? 0;
