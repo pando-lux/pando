@@ -1,7 +1,11 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-25 (Phase 87 — P2P Deploy Discovery)
+> Last updated: 2026-02-26 (v2-architecture branch — Layer Separation)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
+
+## ⚠️ Active Sprint: v2-architecture branch
+
+All code changes are on the `v2-architecture` branch. The 5 nodes are running the pre-v2 `master` branch until v2.1 build passes and we deploy.
 
 ## Health
 
@@ -15,7 +19,21 @@
 
 ## Current Phase
 
-All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88** COMPLETE except Phase 14 (Universal Onboarding — deferred). Phase 53.7-53.9 remaining. Phase 68.4 (Returning User Routing) NOT STARTED.
+**v2-architecture sprint IN PROGRESS (2026-02-26).**
+
+All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88** COMPLETE. Now doing architectural v2 work — no new features until layer separation + tests done.
+
+**v2.1: Layer Separation — IN PROGRESS**
+- ✅ Directory structure created: `kernel/`, `core/`, `platform/`, `api/`, `api/middleware/`
+- ✅ All 50+ files git mv'd to correct layers
+- ✅ AI Backend interface design complete (genome/components/ai-backend.md)
+- ✅ Foundation docs moved into repo (genome/foundation/)
+- 🔄 Import path updates in progress (parallel agent)
+- ⏳ api-server.ts split (kernel-api, core-api, platform-api)
+- ⏳ AI Backend files created (core/ai-backend*.ts)
+- ⏳ AgentTemplate capabilities added to shared types
+- ⏳ Import boundary lint rule
+- ⏳ Build pass + deploy to all 5 nodes
 
 **Phase 88: Auto-Detect Tier from Code — COMPLETE (2026-02-25).**
 Tier is now detected from the actual code at deploy time on the compute node, not guessed by the doorman AI. `detectTierFromCode(appDir)` inspects package.json (start script, server deps, main entry, backend/ dir) after git clone. If detected tier differs from the project's stored tier, the compute node uses the detected tier and the caller auto-corrects the project record. Doorman's tier remains as a hint for agent context.

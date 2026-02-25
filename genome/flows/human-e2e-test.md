@@ -1,5 +1,9 @@
 # Human-Level E2E Test — Full Project Lifecycle
 
+> **Note:** This file covers the app-build flow only (Tier 1 + Tier 2 deploy).
+> For comprehensive E2E coverage across all layers and modes, see:
+> **`genome/flows/e2e-test-scenarios.md`** — 42 scenarios covering Layer 0, Layer 1, Layer 2, degraded mode, AI backends, and 5-node cross-node scenarios.
+>
 > Reusable test scenario for verifying the complete user experience.
 > Run after any major code change to ensure nothing is broken.
 

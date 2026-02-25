@@ -220,10 +220,34 @@ Key endpoints for agents and users:
 - `POST /projects/:id/undeploy` — stop and remove deployed app (Phase 87). Uses `deployPeerId` directly. Tier 1: S3 cleanup. Tier 2: PM2+nginx cleanup via P2P
 - `POST /projects/:id/validate-deploy` — post-deploy health check (URL, injection, Resource Proxy)
 
+## v2 Architecture Sprint (Active — Branch: v2-architecture)
+
+**IMPORTANT FOR ALL AGENTS:** We are in dev sprint mode. No external users. No backward compatibility required. Full rewrite authority. Core rules:
+
+1. **No legacy code protection.** Delete if it's in the way. We have git.
+2. **Fresh start.** Make the right decision, then update docs to match.
+3. **Two-document rule:** `genome/foundation/the-stack.md` = target state. `genome/v2-architecture-plan.md` = execution plan. When you make a decision that changes either, update it immediately in the same session.
+4. **Docs are mandatory.** Every code change → update genome/components/ + genome/v2-execution-log.md same session.
+5. **Build must pass.** `npm run build` zero errors before any commit.
+
+**New directory structure (v2.1 complete):**
+```
+packages/node/src/
+  kernel/    ← Layer 0 (network, sync, governance, guardrails, monitor, security, reputation, emission)
+  core/      ← Layer 1 (agents, storage, deploy, credentials, bridges, upgrade, payment)
+  platform/  ← Layer 2 (scheduler, resources, content, chat, projects, pipeline, hosting)
+  api/       ← HTTP API split by layer (kernel-api, core-api, platform-api, server, middleware/)
+  (root)     ← Entry points only: index.ts, cli.ts, tui.ts, logger.ts, config.ts
+```
+
+**Import boundary rule:** kernel/ → only kernel + @pando/*. core/ → kernel + @pando/*. platform/ → core + kernel + @pando/*. Never upward.
+
 ## System Architecture
 
 Subsystem deep-dives: **`genome/components/`**
-Architecture decisions & roadmap: **`genome/`** (the whole genome IS the architecture)
+Architecture target: **`genome/foundation/the-stack.md`** ← READ THIS FIRST
+Architecture bridge plan: **`genome/v2-architecture-plan.md`**
+Sprint log: **`genome/v2-execution-log.md`**
 Phase 27 design: **`genome/roadmap.md`** (sections 27.0-27.10)
 
 **Core principle:** Nodes are stateless compute proxies. P2P state (identity, ledger, governance) stays on nodes. User data (threads, messages, projects) lives on internet infrastructure (MongoDB, S3). See `genome/rules/p2p-first.md`.
@@ -236,21 +260,35 @@ Phase 27 design: **`genome/roadmap.md`** (sections 27.0-27.10)
 
 **Shared state:** Each manager maintains `project-state.md` in its workspace — the single source of truth for the project. Workers read it for context. Manager updates it after every action.
 
-**Key subsystems:**
-- **Agent** (`agent.ts`) — Universal primitive. Every agent (manager, builder, tester, etc.) is an instance of this class. Owns workspace (`~/.pando/agents/<id>/`), Claude Code session (spawn + resume via `--continue --resume <sessionId>`), state persistence (`state.json`), and 4-layer template injection (role principles + project context + learned lessons + current task). Hard limits enforced in code: budget, max depth (5), max agents per project (50).
-- **AgentManager** (`agent-manager.ts`) — Agent lifecycle, bridge watcher, project registry, access control. Creates `pando-node-mgr` on startup as the node's own manager. Spawns/resumes/rotates agents. Routes bridge events to the correct agent with retry (max 3, then escalate). Agent cleanup sweep (IDLE → ARCHIVED after TTL). Per-user message routing and priority queue.
-- **AgentTools** (`agent-tools.ts`) — Agent HTTP API routes: `POST /agents/spawn`, `POST /agents/:id/message`, `POST /agents/:id/report`, `GET /agents/tree`, `GET /agents/:id/status`, `POST /projects/:id/collaborators`, `POST /agents/:id/connect`.
-- **Scheduler** (`scheduler.ts`) — Pure executor. Receives approved tasks from Manager. Dequeues tasks, checks capacity. Does NOT spawn agents (that is AgentManager's job). Zero decision-making.
-- **HealthMonitor** (`monitor.ts`) — Data source ONLY (always, no toggle). Collects metrics, detects alerts. No recovery actions — Manager reads data and decides.
-- **Guardrails** (`guardrails.ts`) — Safety layer. Protected paths, rate limits, immutable kernel. Cannot be bypassed.
-- **SecurityMonitor** (`security-monitor.ts`) — Threat detection, peer quarantine.
-- **PipelineRunner** (`pipeline-runner.ts`) — Tool for agents. 7-stage: extract → backup → apply → build → QA → commit.
-- **ContentRegistry** (`content-registry.ts`) — SQLite content records, GossipSub sync, full-text search. The "DNS" of Pando.
-- **UpgradeProtocol** (`upgrade-protocol.ts`) — Simple git pull upgrade: propose → governance approve → git pull + hash verify → build → restart. No patches, no canary.
-- **ResourceRouter** (`resource-router.ts`) — Smart task routing to capable nodes, auto-degrade on failure, P2P task forwarding.
-- **PaymentGate** (`payment-gate.ts`) — Cost estimation by tier, escrow hold/release/refund, free tier for simple queries.
-- **RegressionSuite** (`regression-suite.ts`) — 14 built-in tests, persistent storage, run by category on every deploy.
-- **Templates** (`genome/templates/*.md`) — 6 role-specific agent templates: manager, builder, tester, reviewer, researcher, devops. Strict principles, workflow, and learned lessons (auto-updated via REFLECT).
+**Key subsystems (v2.1 layer-organized):**
+
+*Layer 0 — Kernel (`packages/node/src/kernel/`):*
+- **PandoNetwork** (`kernel/network.ts`) — libp2p, message signing, GossipSub, agent events
+- **LedgerSync** (`kernel/sync.ts`) — GossipSub distributed ledger sync
+- **GovernanceSync** (`kernel/governance.ts`) — proposals, votes, decisions
+- **HealthMonitor** (`kernel/monitor.ts`) — data source ONLY. Collects metrics, detects alerts. No recovery.
+- **Guardrails** (`kernel/guardrails.ts`) — protected paths, rate limits, immutable kernel. Cannot be bypassed.
+- **SecurityMonitor** (`kernel/security-monitor.ts`) — threat detection, peer quarantine.
+- **ReputationManager** (`kernel/reputation.ts`) — track and broadcast node reputation.
+- **EmissionWitness** (`kernel/emission-witness.ts`) — witness-based Lux minting.
+
+*Layer 1 — Core (`packages/node/src/core/`):*
+- **Agent** (`core/agent.ts`) — Universal primitive. Owns workspace, AI backend session (via AIBackendRegistry), state, 4-layer template injection. Hard limits: budget, max depth 5, max 50 agents.
+- **AgentManager** (`core/agent-manager.ts`) — Agent lifecycle, bridge watcher, project registry, access control.
+- **AIBackendRegistry** (`core/ai-backend-registry.ts`) — detect, register, select best AI backend. Backends: claude-code, ollama (stub).
+- **StorageBackend** (`core/storage-backend.ts`) — interface. MongoBackend + P2PStorageBackend implementations.
+- **DeployManager** (`core/deploy-manager.ts`) — backup, build, commit, rollback.
+- **UpgradeProtocol** (`core/upgrade-protocol.ts`) — git pull upgrade: propose → governance → build → restart.
+- **PaymentGate** (`core/payment-gate.ts`) — cost estimation, escrow hold/release/refund.
+
+*Layer 2 — Platform (`packages/node/src/platform/`):*
+- **Scheduler** (`platform/scheduler.ts`) — pure executor. Dequeues tasks, checks capacity. No agent spawning.
+- **ContentRegistry** (`platform/content-registry.ts`) — SQLite content records, GossipSub sync, full-text search.
+- **ResourceRouter** (`platform/resource-router.ts`) — smart task routing, auto-degrade, P2P forwarding.
+- **PipelineRunner** (`platform/pipeline-runner.ts`) — 7-stage pipeline: extract → backup → apply → build → QA → commit.
+- **RegressionSuite** (`platform/regression-suite.ts`) — 14 built-in tests, persistent storage.
+- **AgentTools** (`platform/agent-tools.ts`) — Agent HTTP API routes.
+- **Templates** (`genome/templates/*.md`) — 6 role-specific agent templates: manager, builder, tester, reviewer, researcher, devops.
 
 ## Pando MCP Tools
 

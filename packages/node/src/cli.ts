@@ -4,9 +4,9 @@ import { parsePort } from './config.js';
 import { MessageType, loadSession } from '@pando/shared';
 import { FileLogger } from './logger.js';
 const RESTART_EXIT_CODE = 75;
-import { checkAndRecordStartup, markStable, getStabilityDelay } from './crash-guard.js';
-import { readRestartReason, clearRestartReason } from './restart-reason.js';
-import { QaRunner } from './qa-runner.js';
+import { checkAndRecordStartup, markStable, getStabilityDelay } from './kernel/crash-guard.js';
+import { readRestartReason, clearRestartReason } from './kernel/restart-reason.js';
+import { QaRunner } from './platform/qa-runner.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { writeFileSync, mkdirSync, existsSync, cpSync, rmSync, readFileSync } from 'node:fs';
@@ -205,7 +205,7 @@ async function main() {
     if (storageUrl.startsWith('mongodb')) {
       console.log('[cli] Initializing MongoDB storage backend...');
       try {
-        const { MongoStorageBackend } = await import('./mongo-backend.js');
+        const { MongoStorageBackend } = await import('./core/mongo-backend.js');
         const mongoBackend = new MongoStorageBackend(storageUrl);
         await mongoBackend.init();
         node.setStorageBackend(mongoBackend);

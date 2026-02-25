@@ -1649,3 +1649,40 @@ export interface CloudInstanceRecord {
   apps: string[];             // project IDs deployed on this instance
   error: string | null;
 }
+
+// ── v2.1: Agent Template with Capability Declarations ────────────────────────
+
+/**
+ * AgentTemplate — the configuration that defines an agent's role and permissions.
+ *
+ * Capabilities are declared by the template and enforced by the sandbox.
+ * For v2.1: the format exists so we never rewrite templates when the
+ * marketplace is built. Enforcement (community sandbox) is post-v2.
+ */
+export interface AgentTemplate {
+  role: string;               // 'manager', 'builder', 'tester', 'reviewer', 'researcher', 'devops'
+  template: string;           // Markdown instructions for the agent
+  version: number;            // Template version — for marketplace update checks
+  capabilities: AgentCapabilityDeclaration;
+  publisherPeerId?: string;   // Who published this (set for marketplace agents)
+  requiredBackends?: string[]; // Specific AI backends needed (e.g. ['ollama'])
+}
+
+export interface AgentCapabilityDeclaration {
+  textAI: boolean;         // Needs text generation (LLM)
+  imageAI: boolean;        // Needs image generation (ComfyUI, DALL-E)
+  codeExecution: boolean;  // Needs Claude Code-style execution (file edits, bash)
+  localFiles: boolean;     // Needs Local Environment file access (v2.5)
+  internet: boolean;       // Needs outbound HTTP (fetch to external URLs)
+  p2pMessaging: boolean;   // Can message other nodes' agents
+}
+
+/** Default capabilities for built-in agents (manager, builder, etc.) */
+export const DEFAULT_AGENT_CAPABILITIES: AgentCapabilityDeclaration = {
+  textAI: true,
+  imageAI: false,
+  codeExecution: true,
+  localFiles: false,
+  internet: true,
+  p2pMessaging: true,
+};

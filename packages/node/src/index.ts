@@ -1,55 +1,58 @@
 import { loadOrCreateIdentity, loadRawIdentityFile, saveIdentity, type NodeIdentity, type NodeConfig, WorkType, MessageType, NodeCapability, type CapabilityDeclaration } from '@pando/shared';
 import { PandoLedger } from '@pando/ledger';
-import { PandoNetwork } from './network.js';
-import { ApiServer } from './api-server.js';
-import { LedgerSync } from './sync.js';
-import { GovernanceSync } from './governance.js';
-import { FileRegistry } from './file-registry.js';
-import { Scheduler } from './scheduler.js';
-import { TaskQueue } from './task-queue.js';
-import { HealthMonitor } from './monitor.js';
-import { Guardrails } from './guardrails.js';
-import { RequestReplyManager } from './request-reply.js';
-import { ReputationManager } from './reputation.js';
-import { AgentManager, type AgentManagerConfig } from './agent-manager.js';
-import { EmissionWitness, TOPIC_EMISSIONS } from './emission-witness.js';
-import { SecurityMonitor } from './security-monitor.js';
-import { ResourceProofChallenger } from './resource-proof.js';
-import { ReputationWeightedGovernance } from './reputation-governance.js';
-import { ContentSafetyReviewer } from './content-safety.js';
-import { ContentRegistry } from './content-registry.js';
-import { ContentPublisher } from './content-publish.js';
-import { ContentMaintenance } from './content-maintenance.js';
-import { PipelineRunner } from './pipeline-runner.js';
-import { CodePipeline } from './code-pipeline.js';
-import { QaRunner } from './qa-runner.js';
-import { DeployManager } from './deploy-manager.js';
-import { VersionProtocol } from './version-protocol.js';
-import { detectCapabilities, detectCapabilityProfile, type DetectionResult } from './capability-detector.js';
-import { CapabilityRegistry } from './capability-registry.js';
-import { ResourceRouter } from './resource-router.js';
-import { ResourceMeter } from './resource-meter.js';
-import { ResourceMarketplace } from './resource-marketplace.js';
-import { ResourceRegistry } from './resource-registry.js';
-import { CredentialStore } from './credential-store.js';
+import { PandoNetwork } from './kernel/network.js';
+import { ApiServer } from './api/api-server.js';
+import { LedgerSync } from './kernel/sync.js';
+import { GovernanceSync } from './kernel/governance.js';
+import { FileRegistry } from './platform/file-registry.js';
+import { Scheduler } from './platform/scheduler.js';
+import { TaskQueue } from './platform/task-queue.js';
+import { HealthMonitor } from './kernel/monitor.js';
+import { Guardrails } from './kernel/guardrails.js';
+import { RequestReplyManager } from './core/request-reply.js';
+import { ReputationManager } from './kernel/reputation.js';
+import { AgentManager, type AgentManagerConfig } from './core/agent-manager.js';
+import { EmissionWitness, TOPIC_EMISSIONS } from './kernel/emission-witness.js';
+import { SecurityMonitor } from './kernel/security-monitor.js';
+import { ResourceProofChallenger } from './platform/resource-proof.js';
+import { ReputationWeightedGovernance } from './platform/reputation-governance.js';
+import { ContentSafetyReviewer } from './platform/content-safety.js';
+import { ContentRegistry } from './platform/content-registry.js';
+import { ContentPublisher } from './platform/content-publish.js';
+import { ContentMaintenance } from './platform/content-maintenance.js';
+import { PipelineRunner } from './platform/pipeline-runner.js';
+import { CodePipeline } from './platform/code-pipeline.js';
+import { QaRunner } from './platform/qa-runner.js';
+import { DeployManager } from './core/deploy-manager.js';
+import { VersionProtocol } from './core/version-protocol.js';
+import { detectCapabilities, detectCapabilityProfile, type DetectionResult } from './platform/capability-detector.js';
+import { CapabilityRegistry } from './platform/capability-registry.js';
+import { ResourceRouter } from './platform/resource-router.js';
+import { ResourceMeter } from './platform/resource-meter.js';
+import { ResourceMarketplace } from './platform/resource-marketplace.js';
+import { ResourceRegistry } from './platform/resource-registry.js';
+import { CredentialStore } from './core/credential-store.js';
 import type { CapabilityProfile } from '@pando/shared';
 import { getDefaultConfig } from './config.js';
 const RESTART_EXIT_CODE = 75;
-import { UpgradeProtocol } from './upgrade-protocol.js';
-import { RegressionSuite } from './regression-suite.js';
-import { PaymentGate } from './payment-gate.js';
-import { UserAccountStore } from './user-accounts.js';
-import { ProjectStore } from './project-store.js';
-import { ProjectRegistry, TOPIC_PROJECTS } from './project-registry.js';
-import { RevenueEngine } from './revenue-engine.js';
-import { ContributionTracker } from './contribution-tracker.js';
-import { GenomeAgent } from './genome-agent.js';
-import { Council } from './council.js';
-import { NetworkState } from './network-state.js';
-import { ThreadStore } from './thread-store.js';
-import { HostingService } from './hosting-service.js';
-import { CloudInstanceManager } from './cloud-instance-manager.js';
-import type { StorageBackend } from './storage-backend.js';
+import { UpgradeProtocol } from './core/upgrade-protocol.js';
+import { RegressionSuite } from './platform/regression-suite.js';
+import { PaymentGate } from './core/payment-gate.js';
+import { UserAccountStore } from './platform/user-accounts.js';
+import { ProjectStore } from './platform/project-store.js';
+import { ProjectRegistry, TOPIC_PROJECTS } from './platform/project-registry.js';
+import { RevenueEngine } from './platform/revenue-engine.js';
+import { ContributionTracker } from './platform/contribution-tracker.js';
+import { GenomeAgent } from './platform/genome-agent.js';
+import { Council } from './platform/council.js';
+import { NetworkState } from './kernel/network-state.js';
+import { ThreadStore } from './platform/thread-store.js';
+import { HostingService } from './platform/hosting-service.js';
+import { CloudInstanceManager } from './core/cloud-instance-manager.js';
+import type { StorageBackend } from './core/storage-backend.js';
+import { AIBackendRegistry } from './core/ai-backend-registry.js';
+import { ClaudeBackend } from './core/ai-backend-claude.js';
+import { OllamaBackend } from './core/ai-backend-ollama.js';
 import { toString as uint8ArrayToString } from 'uint8arrays';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -705,7 +708,7 @@ export class PandoNode {
 
       // Wire broadcast: publish to pando/upgrades topic
       upgradeProtocol.setBroadcast(async (msg: Record<string, unknown>) => {
-        const { TOPIC_UPGRADES } = await import('./upgrade-protocol.js');
+        const { TOPIC_UPGRADES } = await import('./core/upgrade-protocol.js');
         await this.network!.publishToTopic(TOPIC_UPGRADES, {
           type: 'agent_event' as any, from: this.identity!.peerId, timestamp: Date.now(), payload: msg,
         } as any);
@@ -717,7 +720,7 @@ export class PandoNode {
       });
 
       // Subscribe to upgrade notifications from peers
-      const { TOPIC_UPGRADES } = await import('./upgrade-protocol.js');
+      const { TOPIC_UPGRADES } = await import('./core/upgrade-protocol.js');
       await this.network.subscribeTopic(TOPIC_UPGRADES, async (msg: any) => {
         try {
           const payload = typeof msg.payload === 'string' ? JSON.parse(msg.payload) : msg.payload;
@@ -834,7 +837,7 @@ export class PandoNode {
       const storageUrl = process.env.PANDO_STORAGE_URL;
       if (storageUrl) {
         try {
-          const { MongoStorageBackend } = await import('./mongo-backend.js');
+          const { MongoStorageBackend } = await import('./core/mongo-backend.js');
           const mongo = new MongoStorageBackend(storageUrl);
           await mongo.init();
           this.setStorageBackend(mongo);
@@ -848,7 +851,7 @@ export class PandoNode {
     // Phase 83: If no MongoDB, create P2PStorageBackend to proxy storage to compute nodes
     if (!this.storageBackend) {
       try {
-        const { P2PStorageBackend } = await import('./p2p-storage-backend.js');
+        const { P2PStorageBackend } = await import('./core/p2p-storage-backend.js');
         const p2pBackend = new P2PStorageBackend(this.requestReply, this.capabilityRegistry, this.identity.peerId);
         await p2pBackend.init();
         this.setStorageBackend(p2pBackend);
@@ -2148,6 +2151,15 @@ location /apps/${projectId}/ {
     if (this.agentSystemStarted) return;
     this.agentSystemStarted = true;
 
+    // v2.1: Initialize AI Backend Registry — detect available backends
+    const backendRegistry = new AIBackendRegistry();
+    backendRegistry.register(new ClaudeBackend());
+    backendRegistry.register(new OllamaBackend());
+    // detectAll() runs async — backends mark themselves available when detected
+    backendRegistry.detectAll().catch(err =>
+      console.warn('[ai-backend] Detection error:', err)
+    );
+
     // Start AgentManager — the new universal agent system (Phase 27)
     this.agentManager = new AgentManager({
       localPeerId: this.identity?.peerId || '',
@@ -2921,63 +2933,63 @@ location /apps/${projectId}/ {
   }
 }
 
-export { PandoNetwork } from './network.js';
-export { ApiServer } from './api-server.js';
-export { LedgerSync } from './sync.js';
-export { GovernanceSync } from './governance.js';
-export { FileRegistry } from './file-registry.js';
+export { PandoNetwork } from './kernel/network.js';
+export { ApiServer } from './api/api-server.js';
+export { LedgerSync } from './kernel/sync.js';
+export { GovernanceSync } from './kernel/governance.js';
+export { FileRegistry } from './platform/file-registry.js';
 export { getDefaultConfig } from './config.js';
 // Phase 27: New agent system exports
-export { Agent } from './agent.js';
-export type { AgentConfig, AgentState, AgentMemory, AgentRole, AgentStatus, AgentLimits, AgentEventResult } from './agent.js';
-export { AgentManager } from './agent-manager.js';
-export type { AgentManagerConfig, SpawnAgentConfig, AgentTreeNode } from './agent-manager.js';
-export { registerAgentRoutes } from './agent-tools.js';
-export { Scheduler } from './scheduler.js';
-export type { SchedulerConfig, SchedulerStatus, ActiveTask, TaskLifecycle } from './scheduler.js';
-export { TaskQueue } from './task-queue.js';
-export type { Task, TaskStatus, TaskPriority, TaskResult, TaskRoleMetadata } from './task-queue.js';
-export { HealthMonitor } from './monitor.js';
-export { Guardrails } from './guardrails.js';
-export { RequestReplyManager } from './request-reply.js';
-export type { RequestReplyStats } from './request-reply.js';
-export { ReputationManager } from './reputation.js';
-export type { ReputationRecord, ReputationEvent } from './reputation.js';
-export { QaRunner } from './qa-runner.js';
-export { DeployManager } from './deploy-manager.js';
-export type { DeployStatus, CommitResult, BuildResult, BackupInfo } from './deploy-manager.js';
-export { VersionProtocol } from './version-protocol.js';
-export { PipelineRunner } from './pipeline-runner.js';
-export type { PipelineRunnerConfig, PipelineStageResult, PipelineRunResult, PipelineStatus } from './pipeline-runner.js';
-export { EmissionWitness, TOPIC_EMISSIONS } from './emission-witness.js';
-export type { EmissionProposal, WitnessAttestation, EmissionStats } from './emission-witness.js';
-export { SecurityMonitor } from './security-monitor.js';
-export type { SecurityAlert, SecurityAlertType, SecurityAlertSeverity, QuarantineEntry, SecurityStats } from './security-monitor.js';
-export { ContentRegistry, TOPIC_CONTENT } from './content-registry.js';
-export { ContentPublisher } from './content-publish.js';
-export type { PublishOptions, ExtractedContent } from './content-publish.js';
-export { ContentMaintenance } from './content-maintenance.js';
-export type { MaintenanceConfig, MaintenanceCheck, MaintenanceIssue } from './content-maintenance.js';
-export { UpgradeProtocol } from './upgrade-protocol.js';
-export type { UpgradeProtocolDeps } from './upgrade-protocol.js';
-export { ResourceRouter } from './resource-router.js';
-export { ResourceMeter } from './resource-meter.js';
-export { ResourceMarketplace } from './resource-marketplace.js';
-export { ResourceRegistry } from './resource-registry.js';
-export { RegressionSuite } from './regression-suite.js';
-export { PaymentGate } from './payment-gate.js';
-export { UserAccountStore } from './user-accounts.js';
-export { ProjectStore } from './project-store.js';
-export { ProjectRegistry, TOPIC_PROJECTS } from './project-registry.js';
-export type { CreateProjectOpts, ListProjectsOpts, ProjectStats } from './project-store.js';
-export { GenomeAgent } from './genome-agent.js';
-export type { GenomeAgentConfig, ScopedGenomeContext, DriftIssue, CommitInfo, ChangedFile, ComponentMatch, GenomeRegistry } from './genome-agent.js';
+export { Agent } from './core/agent.js';
+export type { AgentConfig, AgentState, AgentMemory, AgentRole, AgentStatus, AgentLimits, AgentEventResult } from './core/agent.js';
+export { AgentManager } from './core/agent-manager.js';
+export type { AgentManagerConfig, SpawnAgentConfig, AgentTreeNode } from './core/agent-manager.js';
+export { registerAgentRoutes } from './platform/agent-tools.js';
+export { Scheduler } from './platform/scheduler.js';
+export type { SchedulerConfig, SchedulerStatus, ActiveTask, TaskLifecycle } from './platform/scheduler.js';
+export { TaskQueue } from './platform/task-queue.js';
+export type { Task, TaskStatus, TaskPriority, TaskResult, TaskRoleMetadata } from './platform/task-queue.js';
+export { HealthMonitor } from './kernel/monitor.js';
+export { Guardrails } from './kernel/guardrails.js';
+export { RequestReplyManager } from './core/request-reply.js';
+export type { RequestReplyStats } from './core/request-reply.js';
+export { ReputationManager } from './kernel/reputation.js';
+export type { ReputationRecord, ReputationEvent } from './kernel/reputation.js';
+export { QaRunner } from './platform/qa-runner.js';
+export { DeployManager } from './core/deploy-manager.js';
+export type { DeployStatus, CommitResult, BuildResult, BackupInfo } from './core/deploy-manager.js';
+export { VersionProtocol } from './core/version-protocol.js';
+export { PipelineRunner } from './platform/pipeline-runner.js';
+export type { PipelineRunnerConfig, PipelineStageResult, PipelineRunResult, PipelineStatus } from './platform/pipeline-runner.js';
+export { EmissionWitness, TOPIC_EMISSIONS } from './kernel/emission-witness.js';
+export type { EmissionProposal, WitnessAttestation, EmissionStats } from './kernel/emission-witness.js';
+export { SecurityMonitor } from './kernel/security-monitor.js';
+export type { SecurityAlert, SecurityAlertType, SecurityAlertSeverity, QuarantineEntry, SecurityStats } from './kernel/security-monitor.js';
+export { ContentRegistry, TOPIC_CONTENT } from './platform/content-registry.js';
+export { ContentPublisher } from './platform/content-publish.js';
+export type { PublishOptions, ExtractedContent } from './platform/content-publish.js';
+export { ContentMaintenance } from './platform/content-maintenance.js';
+export type { MaintenanceConfig, MaintenanceCheck, MaintenanceIssue } from './platform/content-maintenance.js';
+export { UpgradeProtocol } from './core/upgrade-protocol.js';
+export type { UpgradeProtocolDeps } from './core/upgrade-protocol.js';
+export { ResourceRouter } from './platform/resource-router.js';
+export { ResourceMeter } from './platform/resource-meter.js';
+export { ResourceMarketplace } from './platform/resource-marketplace.js';
+export { ResourceRegistry } from './platform/resource-registry.js';
+export { RegressionSuite } from './platform/regression-suite.js';
+export { PaymentGate } from './core/payment-gate.js';
+export { UserAccountStore } from './platform/user-accounts.js';
+export { ProjectStore } from './platform/project-store.js';
+export { ProjectRegistry, TOPIC_PROJECTS } from './platform/project-registry.js';
+export type { CreateProjectOpts, ListProjectsOpts, ProjectStats } from './platform/project-store.js';
+export { GenomeAgent } from './platform/genome-agent.js';
+export type { GenomeAgentConfig, ScopedGenomeContext, DriftIssue, CommitInfo, ChangedFile, ComponentMatch, GenomeRegistry } from './platform/genome-agent.js';
 // Phase 50: Network State exports
-export { NetworkState } from './network-state.js';
-export type { NetworkStateSnapshot } from './network-state.js';
+export { NetworkState } from './kernel/network-state.js';
+export type { NetworkStateSnapshot } from './kernel/network-state.js';
 // Phase 50: Council exports
-export { Council } from './council.js';
-export type { CouncilMember, CouncilState, ReflectionResult } from './council.js';
+export { Council } from './platform/council.js';
+export type { CouncilMember, CouncilState, ReflectionResult } from './platform/council.js';
 // Phase 42: StorageBackend exports
-export type { StorageBackend } from './storage-backend.js';
-export { MongoStorageBackend } from './mongo-backend.js';
+export type { StorageBackend } from './core/storage-backend.js';
+export { MongoStorageBackend } from './core/mongo-backend.js';

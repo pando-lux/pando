@@ -17,6 +17,7 @@
   },
   "scripts": {
     "build": "tsc",
+    "lint:imports": "node ../../scripts/check-imports.mjs",
     "test": "node --test dist/tests/api.test.js",
     "start": "node --loader ts-node/esm src/cli.ts",
     "clean": "rm -rf dist",

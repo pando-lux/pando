@@ -526,6 +526,46 @@ rules:
     severity: critical
     summary: "Three Buckets: User Data → MongoDB (survives node death), Network State → SQLite+P2P (rebuilds from peers), Operational → local (disposable). Phase 44."
 
+  # ── v2.1 new: AI Backend system ────────────────────────────────────────
+  - id: ai-backend
+    file: components/ai-backend.md
+    type: interface
+    layer: core
+    domain: core
+    source: packages/node/src/core/ai-backend.ts
+    summary: "AIBackend interface — execute(task) → result. Implementations: claude-code (primary), ollama (stub). Agent system uses registry, never spawns directly."
+
+  - id: ai-backend-registry
+    file: components/ai-backend.md
+    type: service
+    layer: core
+    domain: core
+    source: packages/node/src/core/ai-backend-registry.ts
+    summary: "AIBackendRegistry — detect all backends on startup, getBest(taskType) for agent use, fallback logic."
+
+# ── Foundation Docs (canonical architecture reference) ─────────────────────
+
+foundation:
+  - id: the-stack
+    file: foundation/the-stack.md
+    summary: "Definitive architecture specification. Every agent reads this first. If conflicts with other docs, this wins."
+
+  - id: ai-os-architecture
+    file: foundation/ai-os-architecture.md
+    summary: "AI OS layer model — kernel through community apps. Long-term architecture vision."
+
+  - id: philosophy
+    file: foundation/philosophy.md
+    summary: "Core principles, values, design philosophy."
+
+# ── v2 Execution ────────────────────────────────────────────────────────────
+
+v2:
+  plan: v2-architecture-plan.md
+  log: v2-execution-log.md
+  branch: v2-architecture
+  summary: "v2.1 layer separation (kernel/core/platform/api), AI backend interface, AgentTemplate capabilities. No backward compat — dev sprint."
+
 # ── Roadmap ────────────────────────────────────────────────────────────────
 
 roadmap:

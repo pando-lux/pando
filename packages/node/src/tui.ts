@@ -1312,7 +1312,7 @@ class PandoTUI {
 
   private async showTasks(): Promise<void> {
     // Read tasks from the TaskQueue
-    const { TaskQueue } = await import('./task-queue.js');
+    const { TaskQueue } = await import('./platform/task-queue.js');
     const dataDir = this.node.getDataDir() || undefined;
     const tq = new TaskQueue(dataDir);
     const tasks = tq.getTasks({});
