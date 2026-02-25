@@ -4358,7 +4358,7 @@ export class ApiServer {
       }
 
       // Phase 86: Issue fresh JWT for the now-claimed account
-      const jwt = await this.issueJwt(result.peerId);
+      const jwt = await this.issueJwt(result.peerId!);
       return { ...result, token: jwt.token, expiresAt: jwt.expiresAt };
     });
 
@@ -4388,7 +4388,7 @@ export class ApiServer {
         }
 
         // Phase 86: Issue JWT instead of returning session token from UserAccountStore
-        const jwt = await this.issueJwt(result.peerId);
+        const jwt = await this.issueJwt(result.peerId!);
         return { ...result, token: jwt.token, expiresAt: jwt.expiresAt };
       } catch (err: any) {
         console.error('[api] Login error:', err.message);
