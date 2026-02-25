@@ -25,6 +25,30 @@ export interface EncryptedSerializedIdentity {
 /** Current P2P message protocol version. Increment when envelope format changes. */
 export const MESSAGE_VERSION = 1;
 
+/**
+ * Node operational mode (v2.3).
+ * Mode 1 = local-only (no P2P, no internet infra — works offline)
+ * Mode 2 = P2P connected (no internet infra storage)
+ * Mode 3 = full (P2P + internet infra: MongoDB, S3, etc.)
+ */
+export type OperationalMode = 1 | 2 | 3;
+
+/** Boot step result for a single subsystem. */
+export type BootStepStatus = 'ok' | 'degraded' | 'failed' | 'skipped';
+
+/**
+ * Node health snapshot (v2.3). Returned in /v1/status.
+ * Tracks which layers started successfully and current operational mode.
+ */
+export interface NodeHealth {
+  mode: OperationalMode;
+  degraded: string[];             // Names of subsystems running in degraded state
+  kernel: 'healthy' | 'failed';  // Layer 0: network, ledger, sync, governance, monitor, guardrails
+  core: 'healthy' | 'degraded' | 'failed';    // Layer 1: storage, agents, payment
+  platform: 'healthy' | 'degraded' | 'failed'; // Layer 2: scheduler, content, resources
+  bootSteps: Record<string, BootStepStatus>;   // Step-by-step startup results
+}
+
 export interface PandoMessage {
   type: MessageType;
   version?: number;         // v2.2: envelope version (stamped by publishToTopic, optional for callers)

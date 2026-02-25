@@ -1,4 +1,4 @@
-import { loadOrCreateIdentity, loadRawIdentityFile, saveIdentity, type NodeIdentity, type NodeConfig, WorkType, MessageType, NodeCapability, type CapabilityDeclaration } from '@pando/shared';
+import { loadOrCreateIdentity, loadRawIdentityFile, saveIdentity, type NodeIdentity, type NodeConfig, WorkType, MessageType, NodeCapability, type CapabilityDeclaration, type NodeHealth, type OperationalMode } from '@pando/shared';
 import { PandoLedger } from '@pando/ledger';
 import { PandoNetwork } from './kernel/network.js';
 import { ApiServer } from './api/api-server.js';
@@ -175,6 +175,16 @@ export class PandoNode {
   private _p2pDataLoaded = false;
   // Phase 55: Linked user account — rewards flow to user, not node
   private linkedUser: { peerId: string; username?: string } | null = null;
+
+  // v2.3: Boot health tracking
+  private nodeHealth: NodeHealth = {
+    mode: 1,
+    degraded: [],
+    kernel: 'healthy',
+    core: 'healthy',
+    platform: 'healthy',
+    bootSteps: {},
+  };
 
   constructor(config?: Partial<NodeConfig>) {
     this.config = getDefaultConfig(config);
@@ -1821,6 +1831,9 @@ location /apps/${projectId}/ {
       }
     });
 
+    // v2.3: Compute and log final boot health
+    this._computeBootHealth();
+
   }
 
   /**
@@ -1987,6 +2000,78 @@ location /apps/${projectId}/ {
       } catch (err: any) {
         console.error(`[snapshot] Auto-create failed: ${err.message}`);
       }
+    }
+  }
+
+  /** v2.3: Get current boot health snapshot. */
+  getNodeHealth(): NodeHealth {
+    return { ...this.nodeHealth, bootSteps: { ...this.nodeHealth.bootSteps }, degraded: [...this.nodeHealth.degraded] };
+  }
+
+  /**
+   * v2.3: Compute final boot health from initialized field state.
+   * Called at the end of _start() after all subsystems have been initialized.
+   */
+  private _computeBootHealth(): void {
+    const s = this.nodeHealth.bootSteps;
+
+    // Kernel (Layer 0): must-have P2P primitives
+    s['ledger']     = this.ledger         ? 'ok' : 'failed';
+    s['network']    = this.network        ? 'ok' : 'failed';
+    s['sync']       = this.sync           ? 'ok' : 'failed';
+    s['governance'] = this.governance     ? 'ok' : 'failed';
+    s['security']   = this.securityMonitor ? 'ok' : 'skipped';
+
+    // Core (Layer 1): business logic
+    s['request-reply']    = this.requestReply    ? 'ok' : 'failed';
+    s['storage']          = this.storageBackend  ? 'ok' : 'degraded';
+    s['resource-registry']= this.resourceRegistry ? 'ok' : 'skipped';
+    s['upgrade-protocol'] = this.upgradeProtocol ? 'ok' : 'skipped';
+
+    // Platform (Layer 2): optional services
+    s['api-server']   = this.apiServer     ? 'ok' : 'failed';
+    s['scheduler']    = this.schedulerEnabled ? 'ok' : 'skipped';
+    s['monitor']      = this.monitorEnabled  ? 'ok' : 'skipped';
+    s['agents']       = this.agentSystemStarted ? 'ok' : 'skipped';
+    s['thread-store'] = this.threadStore   ? 'ok' : 'degraded';
+    s['content']      = this.contentRegistry ? 'ok' : 'skipped';
+
+    // Kernel health: any critical kernel step failed → failed
+    const kernelFailed = ['ledger', 'network', 'sync', 'governance'].some(k => s[k] === 'failed');
+    this.nodeHealth.kernel = kernelFailed ? 'failed' : 'healthy';
+
+    // Core health: storage degraded or request-reply failed → degraded
+    if (s['request-reply'] === 'failed') {
+      this.nodeHealth.core = 'failed';
+    } else if (s['storage'] === 'degraded') {
+      this.nodeHealth.core = 'degraded';
+    } else {
+      this.nodeHealth.core = 'healthy';
+    }
+
+    // Platform health: api-server failed → failed; optional services missing → degraded
+    if (s['api-server'] === 'failed') {
+      this.nodeHealth.platform = 'failed';
+    } else if (s['thread-store'] === 'degraded' || !this.schedulerEnabled || !this.monitorEnabled) {
+      this.nodeHealth.platform = 'degraded';
+    } else {
+      this.nodeHealth.platform = 'healthy';
+    }
+
+    // Operational mode: 3 = full (storage + agents), 2 = P2P (storage, no agents), 1 = local-only
+    const mode: OperationalMode = this.storageBackend
+      ? (this.agentSystemStarted ? 3 : 2)
+      : 1;
+    this.nodeHealth.mode = mode;
+
+    // Collect all degraded/failed steps
+    this.nodeHealth.degraded = Object.entries(s)
+      .filter(([, v]) => v === 'failed' || v === 'degraded')
+      .map(([k]) => k);
+
+    console.log(`[boot] Health: kernel=${this.nodeHealth.kernel} core=${this.nodeHealth.core} platform=${this.nodeHealth.platform} mode=${this.nodeHealth.mode}`);
+    if (this.nodeHealth.degraded.length > 0) {
+      console.log(`[boot] Degraded: ${this.nodeHealth.degraded.join(', ')}`);
     }
   }
 
