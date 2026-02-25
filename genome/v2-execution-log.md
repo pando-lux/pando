@@ -56,7 +56,7 @@ BRANCH: All work on v2-architecture branch.
 | v2.1: Deploy + smoke test all 5 nodes | ✅ DONE | Merged v2-architecture→master, pushed pando-lux/pando, triggered /upgrade on EC2-1, EC2-2, LS-1, LS-2, WIN |
 | E2E test scenarios | ✅ DONE | genome/flows/e2e-test-scenarios.md — 42 scenarios written by parallel agent |
 | v2.2: API versioning | ✅ DONE | /v1/ prefix on all HTTP routes; MESSAGE_VERSION on P2P; gateway+MCP+tests updated; deployed to all 5 nodes |
-| v2.3: Boot sequence enforcement | ⏳ QUEUED | Enforced startup order + degraded mode |
+| v2.3: Boot sequence enforcement | ✅ DONE | NodeHealth in /v1/status: kernel/core/platform + per-step bootSteps + OperationalMode 1/2/3 |
 
 ---
 
@@ -79,6 +79,17 @@ BRANCH: All work on v2-architecture branch.
   - Old messages (version=undefined) still processed — graceful backward compat on receive.
   - Future nodes with higher version: logged + processed anyway.
 - v2.2 deployed to all 5 nodes atomically with v2.1 (single upgrade cycle).
+
+### 2026-02-26 — v2.3 NodeHealth Implementation
+- Added `OperationalMode` (1|2|3) to @pando/shared — distinct from existing `NodeMode` ('full'|'compute'|'relay')
+  - Renamed to avoid naming collision (both were called NodeMode before this fix)
+  - Mode 1 = local-only (no storage), Mode 2 = P2P + storage, Mode 3 = P2P + storage + agents
+- Added `NodeHealth` interface with `kernel/core/platform` layer health + per-step `bootSteps` map
+- `PandoNode._computeBootHealth()` reads from initialized field state at end of `_start()`
+- No try/catch refactor of _start() — health is derived from subsystem fields (nullable = not started)
+- GET /v1/status now includes `health: NodeHealth` field
+- E2E confirmed on EC2-1: mode=2, kernel=healthy, core=healthy, platform=degraded (scheduler/monitor/agents=skipped on compute nodes)
+- `degraded` array tracks only status='failed'/'degraded' steps, not 'skipped' intentional omissions
 
 ### 2026-02-26 — v2.1 Layer Separation Final Result
 - 86 files changed, 12881 insertions, 7814 deletions

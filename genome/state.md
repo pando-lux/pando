@@ -1,11 +1,11 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-26 (v2-architecture branch — Layer Separation)
+> Last updated: 2026-02-26 (master — v2.3 NodeHealth complete)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
 
-## ⚠️ Active Sprint: v2-architecture branch
+## v2-architecture sprint — v2.3 complete, merged to master
 
-All code changes are on the `v2-architecture` branch. The 5 nodes are running the pre-v2 `master` branch until v2.1 build passes and we deploy.
+v2-architecture branch fully merged to master. v2.1 (layer separation) + v2.2 (API versioning) + v2.3 (NodeHealth) deployed to all 5 nodes.
 
 ## Health
 
@@ -23,20 +23,24 @@ All code changes are on the `v2-architecture` branch. The 5 nodes are running th
 
 All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88** COMPLETE. Now doing architectural v2 work — no new features until layer separation + tests done.
 
-**v2.1: Layer Separation — COMPLETE (build passing)**
-- ✅ Directory structure created: `kernel/`, `core/`, `platform/`, `api/`, `api/middleware/`
-- ✅ All 50+ files git mv'd to correct layers
-- ✅ AI Backend interface design complete (genome/components/ai-backend.md)
-- ✅ Foundation docs moved into repo (genome/foundation/)
-- ✅ Import path updates complete — all broken imports fixed across all layers
-- ✅ Barrel exports: kernel/index.ts, core/index.ts, platform/index.ts
-- ✅ AI Backend files created: core/ai-backend.ts, ai-backend-registry.ts, ai-backend-claude.ts, ai-backend-ollama.ts
-- ✅ agent.ts refactored to use AIBackendRegistry (Claude Code spawn extracted to ClaudeBackend)
-- ✅ AgentTemplate capabilities: AgentCapabilityDeclaration in @pando/shared types.ts
-- ✅ Import boundary lint: scripts/check-imports.mjs — passes clean
-- ✅ Full build pass: zero TypeScript errors across all 4 packages
-- ⏳ api-server.ts split deferred to v2.2 (7296 lines, needs careful refactoring)
-- ⏳ Deploy to all 5 nodes (next step)
+**v2.3: NodeHealth + Boot Tracking — COMPLETE (2026-02-26)**
+- ✅ `OperationalMode` (1|2|3) + `BootStepStatus` + `NodeHealth` added to @pando/shared
+- ✅ `PandoNode._computeBootHealth()` — derives health from initialized fields at end of _start()
+- ✅ `PandoNode.getNodeHealth()` — safe copy getter
+- ✅ `GET /v1/status` now includes `health: NodeHealth` field
+- ✅ E2E confirmed EC2-1: mode=2, kernel=healthy, core=healthy, platform=degraded (compute node expected)
+- ✅ Per-step bootSteps map: ledger/network/sync/governance/security/request-reply/storage/resource-registry/upgrade-protocol/api-server/scheduler/monitor/agents/thread-store/content
+
+**v2.2: API Versioning — COMPLETE (2026-02-26)**
+- ✅ HTTP: All routes prefixed /v1/ via Fastify register
+- ✅ P2P: MESSAGE_VERSION=1 stamped on all outbound messages; forward-compat warning on receive
+
+**v2.1: Layer Separation — COMPLETE (2026-02-26)**
+- ✅ Directory structure: `kernel/`, `core/`, `platform/`, `api/`, `api/middleware/`
+- ✅ api-server.ts: 7292→887 lines (kernel-api.ts 2249L, core-api.ts 370L, platform-api.ts 3882L)
+- ✅ AI Backend interface: ClaudeBackend + OllamaBackend via AIBackendRegistry
+- ✅ Import boundary lint: check-imports.mjs passes clean
+- ✅ All 5 nodes running v2.3 master
 
 **Phase 88: Auto-Detect Tier from Code — COMPLETE (2026-02-25).**
 Tier is now detected from the actual code at deploy time on the compute node, not guessed by the doorman AI. `detectTierFromCode(appDir)` inspects package.json (start script, server deps, main entry, backend/ dir) after git clone. If detected tier differs from the project's stored tier, the compute node uses the detected tier and the caller auto-corrects the project record. Doorman's tier remains as a hint for agent context.
