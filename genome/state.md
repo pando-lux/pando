@@ -25,6 +25,14 @@ v2.1-v2.5 complete. Phase 53.7 (App Directory) + Phase 68.4 (Returning User Rout
 
 All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88**, **53.7**, **68.4** COMPLETE. Now doing architectural v2 work — no new features until layer separation + tests done.
 
+**Ledger Explorer — COMPLETE (2026-02-26)**
+- ✅ `GET /v1/ledger/accounts` — top N accounts by balance (public, no auth)
+- ✅ `GET /v1/ledger/transactions` — most recent N global transactions (public, no auth)
+- ✅ `node-connection.ts`: `getLedgerAccounts()` + `getLedgerTransactions()` methods
+- ✅ `/api/ledger` gateway proxy (`?type=accounts|transactions`)
+- ✅ `/explore/economy` upgraded: top accounts table with % share, global tx history with type badges, "you" marker, 4-stat header, 20s auto-refresh
+- Live data: EC2-1 has 177 accounts, 26,297 Lux supply, 2,518 transactions
+
 **Phase 53.7: Gateway App Directory — COMPLETE (2026-02-26)**
 - ✅ `packages/gateway/app/apps/page.tsx` — new public page listing all deployed apps
   - App cards: name, description, host type badge (S3/EC2/Gateway), status dot, URL, "Open ↗" button
