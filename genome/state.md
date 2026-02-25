@@ -1,27 +1,48 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-26 (master — v2.5 Local Environment complete)
+> Last updated: 2026-02-26 (master — v2.5 + Phase 53.7 + Phase 68.4 complete)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
 
-## v2-architecture sprint — v2.5 complete, on master
+## v2-architecture sprint — v2.5 complete, Phase 53.7 complete, Phase 68.4 complete
 
-v2.1 (layer separation) + v2.2 (API versioning) + v2.3 (NodeHealth) + v2.4 (Active Tripwire) + v2.5 (Local Environment) all complete and deployed to all 5 nodes. Only v2.6 (installer) remains from the v2 plan.
+v2.1-v2.5 complete. Phase 53.7 (App Directory) + Phase 68.4 (Returning User Routing) complete and deployed.
 
 ## Health
 
 | Node | IP | Status | Peers | StorageBackend | CredentialAccess | Supervisor | Uptime |
 |---|---|---|---|---|---|---|---|
-| EC2-1 (compute) | 54.82.241.132 | ONLINE | 2+ | **mongodb** | true | **systemd** | Continuous |
+| EC2-1 (compute) | 54.82.241.132 | ONLINE | 7+ | **mongodb** | true | **systemd** | Continuous |
 | EC2-2 (compute) | 34.201.82.126 | ONLINE | 1+ | **mongodb** | true | **systemd** | Continuous |
-| LS-1 (relay) | 54.145.144.221 | ONLINE | 2+ | **p2p** | false | PM2 | Continuous |
+| LS-1 (relay) | 54.145.144.221 | **DOWN** | -- | **p2p** | false | PM2 | Machine unreachable |
 | LS-2 (untrusted) | 3.237.175.38 | ONLINE | 1+ | **p2p** | false | PM2 | Continuous |
 | Windows (dev) | 100.87.67.78:4100 | ONLINE | 2+ | mongodb | true | Manual | Dev sessions |
+
+**LS-1 alert**: SSH + HTTP both unreachable since 2026-02-26. Machine-level issue. Needs Lightsail console restart (Jai: action required).
 
 ## Current Phase
 
 **v2-architecture sprint IN PROGRESS (2026-02-26).**
 
-All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88** COMPLETE. Now doing architectural v2 work — no new features until layer separation + tests done.
+All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88**, **53.7**, **68.4** COMPLETE. Now doing architectural v2 work — no new features until layer separation + tests done.
+
+**Phase 53.7: Gateway App Directory — COMPLETE (2026-02-26)**
+- ✅ `packages/gateway/app/apps/page.tsx` — new public page listing all deployed apps
+  - App cards: name, description, host type badge (S3/EC2/Gateway), status dot, URL, "Open ↗" button
+  - Search by name/description/URL
+  - Filter by host type (All / S3 / EC2 / Gateway) with counts
+  - Live connectivity check via HEAD request (mode: no-cors)
+  - Loading skeleton + empty state with "ask AI to build something" CTA
+- ✅ `packages/gateway/app/api/apps/route.ts` — API: fetches deployed projects, classifies host type
+- ✅ `packages/gateway/components/NavBar.tsx` — "Apps" link added
+- Deployed to EC2-1, EC2-2, LS-2 (LS-1 still down)
+- Gateway auto-deployed to Vercel on push to master
+
+**Phase 68.4: Returning User Routing — COMPLETE (2026-02-26)**
+- ✅ Gateway chat page shows "Your Projects" sidebar section for authenticated returning users
+- ✅ Clicking a project sets `activeProjectId`, routes all messages to that project's manager agent
+- ✅ `effectiveProjectId = activeProjectId || projectIdParam` — backwards compatible with URL params
+- ✅ Header shows project name + purple icon when in project context
+- ✅ "✕ Project" button exits project context
 
 **v2.5: Local Environment — COMPLETE (2026-02-26)**
 - ✅ `packages/node/src/kernel/local-environment.ts` — new file (Envelope 1)
