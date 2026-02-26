@@ -78,7 +78,7 @@ exposes:
   - POST /admin/cleanup-projects — archive specified projects (soft delete)
   - GET /marketplace — browse public projects
 rules: []
-last_verified: 2026-02-26 (GW-01 E2E verified: auth bypass /v1/ prefix fix, chat routes public)
+last_verified: 2026-02-26 (SEC-07 E2E verified: rate limiter /v1/ prefix strip fix — was silently disabled since v2.2)
 ---
 
 # API Server
@@ -88,7 +88,7 @@ Fastify HTTP API server for the Pando node. Exposes node operations over HTTP so
 
 ## How It Works
 - Built on Fastify with `@fastify/cors` for cross-origin support. Starts on the configured API port (default 4000).
-- Per-IP sliding window rate limiter: each endpoint has a configurable max requests per 60-second window (e.g., search=10, input=20, transfer=30, propose=5). Rate limits are overridable via environment variables (e.g., `PANDO_RATE_SEARCH`).
+- Per-IP sliding window rate limiter: each endpoint has a configurable max requests per 60-second window (e.g., search=10, chat=20, transfer=30, propose=5). Rate limits are overridable via environment variables (e.g., `PANDO_RATE_SEARCH`). **Critical:** rate limiter key must strip the `/v1/` prefix from `request.url` before looking up in RATE_LIMITS map — fixed in commit `722b1b1d` (SEC-07 test found it silently disabled since v2.2 added the `/v1/` prefix).
 - **Auth tiers:** All GET requests are public. POST/PUT/DELETE are split into two tiers:
   - **Public (no token needed):** `/auth/*`, `/chat/*`, `/projects/*` — user-facing endpoints that handle their own identity (userId scoping, E2E encryption, JWT session tokens). These must work from any gateway/node without the gateway knowing the node's operator token.
   - **Operator-protected:** All other write endpoints (e.g., `/instances`, `/upgrade`, `/admin/*`, `/transfer`) require `Authorization: Bearer <node-api-token>`.
