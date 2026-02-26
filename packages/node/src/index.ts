@@ -2810,8 +2810,8 @@ location /apps/${projectId}/ {
         { prompt, context },
         5 * 60 * 1000  // 5 min timeout
       ) as any;
-      if (result?.error) return null;
-      return { output: result.output || '', executedBy: result.executedBy || peer.peerId };
+      if (result?.error || result?.payload?.error) return null;
+      return { output: result.payload?.output || '', executedBy: result.payload?.executedBy || peer.peerId };
     } catch {
       return null;
     }
