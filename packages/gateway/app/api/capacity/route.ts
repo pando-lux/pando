@@ -4,7 +4,7 @@ import { getNodeUrl } from "@/lib/node-connection";
 export async function GET() {
   try {
     const nodeUrl = getNodeUrl();
-    const res = await fetch(`${nodeUrl}/capacity`, {
+    const res = await fetch(`${nodeUrl}/v1/capacity`, {
       signal: AbortSignal.timeout(5000),
       cache: "no-store",
     });

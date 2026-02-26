@@ -16,7 +16,7 @@ export async function GET() {
   const stream = new ReadableStream({
     async start(controller) {
       try {
-        const res = await fetch(`${nodeUrl}/events`, {
+        const res = await fetch(`${nodeUrl}/v1/events`, {
           headers,
           cache: "no-store",
         });

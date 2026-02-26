@@ -10,7 +10,7 @@ export async function POST() {
       headers["Authorization"] = `Bearer ${token}`;
     }
 
-    const res = await fetch(`${nodeUrl}/chat/clear`, {
+    const res = await fetch(`${nodeUrl}/v1/chat/clear`, {
       method: "POST",
       headers,
       signal: AbortSignal.timeout(5000),
