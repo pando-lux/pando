@@ -144,9 +144,25 @@ export default function NodeSetupPage() {
           </ul>
         </div>
 
+        {/* One-liner install */}
+        <div className="rounded-xl border border-amber-500/30 bg-amber-50 dark:bg-amber-900/10 p-5 space-y-3">
+          <div className="flex items-center gap-2">
+            <span className="text-lg">⚡</span>
+            <h2 className="text-sm font-semibold text-amber-800 dark:text-amber-300">One-line install (Mac / Linux)</h2>
+          </div>
+          <CodeBlock
+            caption="Paste in your terminal"
+            code={`curl -fsSL https://raw.githubusercontent.com/pando-lux/pando/master/scripts/install.sh | bash`}
+          />
+          <p className="text-xs text-amber-700/70 dark:text-amber-400/70">
+            This script checks for Node.js 18+, clones the repo, builds, and starts the node automatically.
+            Windows users: see manual steps below.
+          </p>
+        </div>
+
         {/* Setup steps */}
         <div className="space-y-6">
-          <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">Setup Steps</h2>
+          <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">Manual Setup Steps</h2>
 
           <Step n={1} title="Clone the repository">
             <CodeBlock
