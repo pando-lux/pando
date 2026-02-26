@@ -685,7 +685,7 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
       await this.createCouncilProposal(title, description, pushedHash || undefined);
     } else if (item.type === 'task_failed') {
       console.error(`[council] Builder ${item.payload?.agentId} failed: ${item.payload?.summary}`);
-      this.appendMinutes(`## Builder Failed — ${new Date().toISOString().slice(0, 10)}\n- ${item.payload?.summary || 'Unknown failure'}\n`);
+      this.appendMinutes(`## Builder Failed — ${new Date().toISOString().slice(0, 10)}\n- Agent: ${item.payload?.agentId || 'unknown'}\n- ${item.payload?.summary || 'Unknown failure'}\n`);
     }
   }
 
