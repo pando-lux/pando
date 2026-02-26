@@ -699,6 +699,17 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
     try {
       const repoDir = this.getRepoRoot();
 
+      // Skip in test environments to avoid committing test artifacts to real repo
+      const dataDir = this.councilDir.toLowerCase().replace(/\\/g, '/');
+      const isTestEnv = process.env.PANDO_NO_AUTO_COMMIT === '1'
+        || dataDir.includes('pando-e2e') || dataDir.includes('pando-stress')
+        || dataDir.includes('/tmp/') || dataDir.includes('/temp/')
+        || dataDir.includes('appdata/local/temp');
+      if (isTestEnv) {
+        console.log('[council] Skipping commit/push in test environment');
+        return null;
+      }
+
       const status = execSync('git status --porcelain', {
         cwd: repoDir, encoding: 'utf-8', timeout: 10_000, stdio: 'pipe',
       }).trim();
