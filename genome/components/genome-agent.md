@@ -2,7 +2,7 @@
 id: genome-agent
 type: utility
 domain: support
-entry: packages/node/src/genome-agent.ts
+entry: packages/node/src/platform/genome-agent.ts
 depends_on: []
 depended_by: []
 exposes:

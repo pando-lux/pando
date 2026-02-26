@@ -1,7 +1,7 @@
 ---
 id: guardrails
 type: safety
-entry: packages/node/src/guardrails.ts
+entry: packages/node/src/kernel/guardrails.ts
 depends_on: []
 depended_by: [code-pipeline, pipeline-runner, scheduler, pando-node, upgrade-protocol]
 exposes:

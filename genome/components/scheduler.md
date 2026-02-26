@@ -2,7 +2,7 @@
 id: scheduler
 type: service
 domain: core
-entry: packages/node/src/scheduler.ts
+entry: packages/node/src/platform/scheduler.ts
 depends_on: [task-queue, agent-manager, bridge-queue]
 depended_by: []
 exposes:

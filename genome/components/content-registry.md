@@ -2,7 +2,7 @@
 id: content-registry
 type: service
 domain: content
-entry: packages/node/src/content-registry.ts
+entry: packages/node/src/platform/content-registry.ts
 depends_on: [ledger, network]
 depended_by: [content-publish, content-maintenance]
 exposes:

@@ -2,7 +2,7 @@
 id: credential-store
 type: service
 domain: resources
-entry: packages/node/src/credential-store.ts
+entry: packages/node/src/core/credential-store.ts
 depends_on: [storage-backend]
 depended_by: [resource-registry, api-server, cloud-instance-manager]
 created: 2026-02-24

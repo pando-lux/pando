@@ -2,7 +2,7 @@
 id: contribution-tracker
 type: service
 domain: economy
-entry: packages/node/src/contribution-tracker.ts
+entry: packages/node/src/platform/contribution-tracker.ts
 depends_on: [ledger, storage-backend]
 depended_by: [api-server, revenue-engine]
 exposes:

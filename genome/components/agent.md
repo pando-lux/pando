@@ -2,7 +2,7 @@
 id: agent
 type: service
 domain: core
-entry: packages/node/src/agent.ts
+entry: packages/node/src/core/agent.ts
 depends_on: [bridge-queue]
 depended_by: [agent-manager]
 exposes:

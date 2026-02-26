@@ -2,7 +2,7 @@
 id: regression-suite
 type: service
 domain: evolution
-entry: packages/node/src/regression-suite.ts
+entry: packages/node/src/platform/regression-suite.ts
 depends_on: []
 depended_by: [pando-node]
 exposes:

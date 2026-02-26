@@ -1,7 +1,7 @@
 ---
 id: reputation-governance
 type: safety
-entry: packages/node/src/reputation-governance.ts
+entry: packages/node/src/platform/reputation-governance.ts
 depends_on: [reputation]
 depended_by: [governance, pando-node]
 exposes:

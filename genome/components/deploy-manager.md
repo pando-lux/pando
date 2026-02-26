@@ -2,7 +2,7 @@
 id: deploy-manager
 type: service
 domain: pipeline
-entry: packages/node/src/deploy-manager.ts
+entry: packages/node/src/core/deploy-manager.ts
 depends_on: []
 depended_by: [pipeline-runner, scheduler, upgrade-protocol, pando-node]
 exposes:

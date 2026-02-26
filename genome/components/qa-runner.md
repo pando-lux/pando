@@ -2,7 +2,7 @@
 id: qa-runner
 type: service
 domain: pipeline
-entry: packages/node/src/qa-runner.ts
+entry: packages/node/src/platform/qa-runner.ts
 depends_on: []
 depended_by: [pipeline-runner, pando-node, cli]
 exposes:

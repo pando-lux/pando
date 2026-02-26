@@ -2,7 +2,7 @@
 id: pipeline-runner
 type: service
 domain: pipeline
-entry: packages/node/src/pipeline-runner.ts
+entry: packages/node/src/platform/pipeline-runner.ts
 depends_on: [code-pipeline, qa-runner, deploy-manager, version-protocol, guardrails]
 depended_by: [api-server, agent-manager]
 status: ACTIVE

@@ -2,7 +2,7 @@
 id: revenue-engine
 type: service
 domain: economy
-entry: packages/node/src/revenue-engine.ts
+entry: packages/node/src/platform/revenue-engine.ts
 depends_on: [ledger, project-store, storage-backend]
 depended_by: [api-server]
 exposes:

@@ -2,7 +2,7 @@
 id: agent-tools
 type: service
 domain: core
-entry: packages/node/src/agent-tools.ts
+entry: packages/node/src/platform/agent-tools.ts
 depends_on: [agent-manager, bridge-queue]
 depended_by: [api-server]
 exposes:

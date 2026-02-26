@@ -2,7 +2,7 @@
 id: storage-backend
 type: service
 domain: infrastructure
-entry: packages/node/src/storage-backend.ts
+entry: packages/node/src/core/storage-backend.ts
 dependencies: [thread-store, user-accounts, project-store, revenue-engine, contribution-tracker]
 created: 2026-02-22
 last_verified: 2026-02-22

@@ -2,7 +2,7 @@
 id: resource-marketplace
 type: service
 domain: resources
-entry: packages/node/src/resource-marketplace.ts
+entry: packages/node/src/platform/resource-marketplace.ts
 depends_on: [capability-registry, network]
 depended_by: []
 exposes:

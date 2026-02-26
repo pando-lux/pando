@@ -2,7 +2,7 @@
 id: bridge-queue
 type: service
 domain: core
-entry: packages/node/src/bridge-queue.ts
+entry: packages/node/src/core/bridge-queue.ts
 depends_on: [task-queue]
 depended_by: [agent-manager, manager, scheduler]
 exposes:

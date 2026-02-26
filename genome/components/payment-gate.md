@@ -2,7 +2,7 @@
 id: payment-gate
 type: service
 domain: economy
-entry: packages/node/src/payment-gate.ts
+entry: packages/node/src/core/payment-gate.ts
 depends_on: [ledger]
 depended_by: []
 exposes:

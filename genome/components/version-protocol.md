@@ -2,7 +2,7 @@
 id: version-protocol
 type: service
 domain: evolution
-entry: packages/node/src/version-protocol.ts
+entry: packages/node/src/core/version-protocol.ts
 depends_on: []
 depended_by: [pipeline-runner, pando-node]
 exposes:

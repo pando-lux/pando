@@ -2,7 +2,7 @@
 id: hosting-service
 type: service
 domain: infrastructure
-entry: packages/node/src/hosting-service.ts
+entry: packages/node/src/platform/hosting-service.ts
 depends_on: [project-store, api-server]
 depended_by: [gateway]
 exposes:

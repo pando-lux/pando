@@ -2,7 +2,7 @@
 id: upgrade-protocol
 type: service
 domain: evolution
-entry: packages/node/src/upgrade-protocol.ts
+entry: packages/node/src/core/upgrade-protocol.ts
 depends_on: [governance, guardrails, network]
 depended_by: []
 exposes:

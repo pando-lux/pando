@@ -1,7 +1,7 @@
 ---
 id: reputation
 type: infrastructure
-entry: packages/node/src/reputation.ts
+entry: packages/node/src/kernel/reputation.ts
 depends_on: [network, request-reply]
 depended_by: [reputation-governance, resource-router, upgrade-protocol, pando-node]
 exposes:

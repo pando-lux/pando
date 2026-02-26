@@ -2,7 +2,7 @@
 id: council
 type: service
 domain: governance
-entry: packages/node/src/council.ts
+entry: packages/node/src/platform/council.ts
 depends_on: [capability-registry, reputation, health-monitor, governance]
 depended_by: [pando-node, api-server, gateway]
 exposes:

@@ -2,7 +2,7 @@
 id: resource-registry
 type: service
 domain: resources
-entry: packages/node/src/resource-registry.ts
+entry: packages/node/src/platform/resource-registry.ts
 depends_on: [network, ledger, credential-store]
 depended_by: [resource-router, resource-meter, api-server, gateway]
 created: 2026-02-22

@@ -2,7 +2,7 @@
 id: task-queue
 type: data-store
 domain: core
-entry: packages/node/src/task-queue.ts
+entry: packages/node/src/platform/task-queue.ts
 depends_on: [task-database, network]
 depended_by: [scheduler, manager]
 exposes:

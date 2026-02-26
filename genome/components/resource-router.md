@@ -2,7 +2,7 @@
 id: resource-router
 type: service
 domain: resources
-entry: packages/node/src/resource-router.ts
+entry: packages/node/src/platform/resource-router.ts
 depends_on: [capability-registry, request-reply, reputation]
 depended_by: [scheduler]
 exposes:

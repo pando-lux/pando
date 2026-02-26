@@ -2,7 +2,7 @@
 id: content-maintenance
 type: service
 domain: content
-entry: packages/node/src/content-maintenance.ts
+entry: packages/node/src/platform/content-maintenance.ts
 depends_on: [content-registry]
 depended_by: []
 exposes:

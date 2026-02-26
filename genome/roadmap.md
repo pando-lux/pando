@@ -55,12 +55,13 @@
 | TD-09 | MEDIUM | GossipSub | No message ordering -- no sequence numbers, out-of-order events cause state divergence | Task state transitions (created, claimed, in_progress, completed) can arrive out of order on remote nodes. Fix: add monotonic sequence number per task, reject/buffer events that arrive out of order. |
 | TD-13 | LOW | GossipSub | No priority/backpressure -- bandwidth saturation at scale | All GossipSub messages are equal priority. At scale (100+ nodes, heavy traffic), high-priority messages (ledger sync, emission proposals) compete with low-priority messages (profile sync, strategy suggestions). Fix: message priority tiers + backpressure signaling. |
 | TD-14 | LOW | P2P | Clock skew in First-Claim-Wins -- some nodes always win | First-Claim-Wins uses timestamps to resolve contention. Nodes with faster clocks always claim first. Fix: logical clocks (Lamport or vector) instead of wall-clock timestamps. |
+| TD-31 | MEDIUM | ResourceRegistry | Registry metadata lost on node reinstall | ResourceRegistry stores metadata (type, status, provider) in SQLite, but credentials in MongoDB CredentialStore. If the node's SQLite is wiped during a reinstall/bootstrap, all contributed resource records are gone — even though the encrypted credentials are still orphaned in MongoDB. Fix: for trusted (MongoDB-connected) nodes, also persist registry metadata to MongoDB so it survives reinstalls. On startup, hydrate SQLite from MongoDB if empty (same pattern as thread/message cache). |
 | ~~TD-15~~ | ~~LOW~~ | ~~P2P~~ | ~~Profile cache poisoning via shared profiles~~ | **SUPERSEDED (Phase 27):** profile-cache.ts and profile-sync.ts deleted. No more auto-imported profiles. |
 | ~~TD-25~~ | ~~MEDIUM~~ | ~~Manager/Pipeline~~ | ~~Manager-Pipeline commit handoff~~ | **RESOLVED (Phase 25)** — Pipeline commit trigger removed from orchestrator. Manager is the ONLY committer via workflow. No conflict possible. |
 | ~~TD-29~~ | ~~HIGH~~ | ~~Manager~~ | ~~Manager CLAUDE.md references admin_docs/~~ | **RESOLVED (Phase 25)** — Fixed manager-context.ts line 236 to reference genome/ paths. |
 | ~~TD-30~~ | ~~MEDIUM~~ | ~~Orchestrator~~ | ~~No event-driven agent communication~~ | **RESOLVED (Phase 25)** — Bridge Queue replaces heartbeat. Workers post mid-task via POST /tasks/:id/messages. Event-driven, zero cost when idle. |
 
-**Summary:** 27 of 30 tech debt items resolved. 3 remain open (TD-09, TD-13, TD-14 — P2P issues deferred to Phase 20+). TD-15 superseded by Phase 27 (deleted files).
+**Summary:** 27 of 31 tech debt items resolved. 4 remain open (TD-09, TD-13, TD-14 — P2P issues deferred to Phase 20+; TD-31 — ResourceRegistry durability). TD-15 superseded by Phase 27 (deleted files).
 
 ---
 

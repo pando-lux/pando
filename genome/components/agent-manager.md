@@ -2,7 +2,7 @@
 id: agent-manager
 type: service
 domain: core
-entry: packages/node/src/agent-manager.ts
+entry: packages/node/src/core/agent-manager.ts
 depends_on: [agent, bridge-queue, task-queue]
 depended_by: [api-server, tui]
 exposes:

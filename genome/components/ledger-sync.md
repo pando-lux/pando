@@ -1,7 +1,7 @@
 ---
 id: ledger-sync
 type: infrastructure
-entry: packages/node/src/sync.ts
+entry: packages/node/src/kernel/sync.ts
 depends_on: [network, ledger]
 depended_by: [emission-witness, pando-node]
 exposes:

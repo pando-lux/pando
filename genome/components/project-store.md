@@ -2,7 +2,7 @@
 id: project-store
 type: service
 domain: projects
-entry: packages/node/src/project-store.ts
+entry: packages/node/src/platform/project-store.ts
 depends_on: [ledger, storage-backend]
 depended_by: [api-server, agent-manager, revenue-engine]
 exposes:

@@ -1,7 +1,7 @@
 ---
 id: content-safety
 type: safety
-entry: packages/node/src/content-safety.ts
+entry: packages/node/src/platform/content-safety.ts
 depends_on: []
 depended_by: [pando-node]
 exposes:

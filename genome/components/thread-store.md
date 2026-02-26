@@ -2,7 +2,7 @@
 id: thread-store
 type: service
 domain: chat
-entry: packages/node/src/thread-store.ts
+entry: packages/node/src/platform/thread-store.ts
 depends_on: [storage-backend]
 depended_by: [api-server, agent-manager]
 exposes:

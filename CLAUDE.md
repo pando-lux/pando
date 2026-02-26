@@ -53,8 +53,7 @@ pando/
 │   ├── gateway/      # Web UI — Next.js 16 + Tailwind (connects to local node via HTTP)
 │   ├── mcp-server/   # Pando MCP — gives Claude Code agents access to the network
 │   └── extension/    # Chrome extension (placeholder — not built yet)
-├── genome/           # Project Genome — structured knowledge system (components, flows, rules, state)
-├── admin_docs/       # Architecture plans, current state audit, builder task instructions
+├── genome/           # Project Genome — structured knowledge system (components, flows, rules, state, history)
 ├── docs/             # Strategy, architecture, vision, economics, governance docs
 ├── tests/            # Integration & E2E tests
 ├── scripts/          # Admin tools, supervisors, watchdogs
@@ -475,10 +474,7 @@ Early multiplier: accounts 1-100 get 5x, 101-1000 get 3x, 1001-10000 get 2x, the
 | `genome/` | Complete project architecture — components, flows, rules, state, history |
 | `genome/genome.yaml` | Component registry — the map of all 56 subsystems |
 | `genome/roadmap.md` | Future phases, priorities, open architecture questions |
-| `admin_docs/MANAGER-INTELLIGENCE.md` | Phase 22 deep design: Claude Code as manager brain |
-| `admin_docs/RESOURCE-NETWORK.md` | Heterogeneous node architecture design |
-| `admin_docs/API-REFERENCE.md` | Full HTTP API endpoint reference |
-| `admin_docs/TEST-TRACKER.md` | Test tracking (102 tests, pass/fail status) |
+| `genome/history/` | Archived design docs (Phase 22 manager intelligence, Phase 16 pipeline, test tracker) |
 
 ## Running Tests
 

@@ -1,7 +1,7 @@
 ---
 id: security-monitor
 type: safety
-entry: packages/node/src/security-monitor.ts
+entry: packages/node/src/kernel/security-monitor.ts
 depends_on: [network, ledger, emission-witness]
 depended_by: [pando-node]
 exposes:

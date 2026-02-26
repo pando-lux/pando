@@ -2,7 +2,7 @@
 id: governance
 type: service
 domain: governance
-entry: packages/node/src/governance.ts
+entry: packages/node/src/kernel/governance.ts
 depends_on: [network, ledger, payment-gate, agent-manager]
 depended_by: [upgrade-protocol]
 exposes:

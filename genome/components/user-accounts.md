@@ -2,7 +2,7 @@
 id: user-accounts
 type: service
 domain: identity
-entry: packages/node/src/user-accounts.ts
+entry: packages/node/src/platform/user-accounts.ts
 depends_on: [ledger]
 depended_by: [api-server, thread-store, tui]
 exposes:

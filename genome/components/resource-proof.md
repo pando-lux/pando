@@ -1,7 +1,7 @@
 ---
 id: resource-proof
 type: safety
-entry: packages/node/src/resource-proof.ts
+entry: packages/node/src/platform/resource-proof.ts
 depends_on: [request-reply, network]
 depended_by: [pando-node]
 exposes:

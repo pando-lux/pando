@@ -2,7 +2,7 @@
 id: file-registry
 type: service
 domain: support
-entry: packages/node/src/file-registry.ts
+entry: packages/node/src/platform/file-registry.ts
 depends_on: []
 depended_by: [scheduler]
 exposes:

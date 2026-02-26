@@ -1,7 +1,7 @@
 ---
 id: request-reply
 type: infrastructure
-entry: packages/node/src/request-reply.ts
+entry: packages/node/src/core/request-reply.ts
 depends_on: [network]
 depended_by: [reputation, resource-proof, resource-router, pando-node]
 exposes:
@@ -12,7 +12,7 @@ exposes:
   - query(type, payload, opts?)
   - getStats()
 rules: []
-last_verified: 2026-02-18
+last_verified: 2026-02-26
 ---
 
 # Request/Reply Manager
@@ -35,7 +35,8 @@ Structured request/response messaging between Pando nodes over the existing `pan
 
 ## Gotchas
 - The GossipSub topic is shared with all agent messages -- non-request/reply messages (no `messageKind` field) are silently ignored, but all messages still transit through the handler.
-- `request()` to a specific peer still publishes via GossipSub broadcast -- the `to` field is only used for handler filtering on the receiving end, not for targeted delivery.
+- **Phase 93 — Direct TCP unicast:** `request()` now tries direct TCP stream first (`sendMessage(to, REQUEST_REPLY_REQUEST, payload)`), falling back to GossipSub broadcast if direct send fails. `REQUEST_REPLY_REQUEST` and `REQUEST_REPLY_REPLY` are new MessageTypes in `packages/shared/src/types.ts`. The `to` field on GossipSub fallback is still used for handler filtering only.
+- `request()` to a specific peer still publishes via GossipSub broadcast on fallback -- the `to` field is only used for handler filtering on the receiving end, not for targeted delivery.
 - Pending requests are stored in a Map keyed by `requestId`. If the node crashes, all pending requests are lost (no persistence).
 - The `query()` function always waits the full timeout before resolving, even if `maxReplies` are received early.
 

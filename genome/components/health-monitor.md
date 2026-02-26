@@ -2,7 +2,7 @@
 id: health-monitor
 type: data-source
 domain: observability
-entry: packages/node/src/monitor.ts
+entry: packages/node/src/kernel/monitor.ts
 depends_on: [scheduler, network]
 depended_by: [upgrade-protocol, pando-node]
 exposes:

@@ -2,7 +2,7 @@
 id: emission-witness
 type: service
 domain: economy
-entry: packages/node/src/emission-witness.ts
+entry: packages/node/src/kernel/emission-witness.ts
 depends_on: [ledger, network, sync]
 depended_by: [security-monitor]
 exposes:

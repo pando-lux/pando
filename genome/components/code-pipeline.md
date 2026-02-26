@@ -2,7 +2,7 @@
 id: code-pipeline
 type: service
 domain: pipeline
-entry: packages/node/src/code-pipeline.ts
+entry: packages/node/src/platform/code-pipeline.ts
 depends_on: [guardrails]
 depended_by: [pipeline-runner, scheduler, pando-node]
 exposes:

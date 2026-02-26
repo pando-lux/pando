@@ -2,7 +2,7 @@
 id: content-publish
 type: service
 domain: content
-entry: packages/node/src/content-publish.ts
+entry: packages/node/src/platform/content-publish.ts
 depends_on: [content-registry]
 depended_by: []
 exposes:

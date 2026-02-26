@@ -2,7 +2,7 @@
 id: manager
 type: service
 domain: core
-entry: packages/node/src/agent.ts (manager role)
+entry: packages/node/src/core/agent.ts (manager role)
 depends_on: [agent, agent-manager, bridge-queue, task-queue]
 depended_by: [agent-manager]
 exposes:

@@ -2,7 +2,7 @@
 id: resource-meter
 type: service
 domain: resources
-entry: packages/node/src/resource-meter.ts
+entry: packages/node/src/platform/resource-meter.ts
 depends_on: []
 depended_by: [scheduler]
 exposes:
