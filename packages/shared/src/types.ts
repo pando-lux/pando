@@ -271,6 +271,16 @@ export const EARLY_MULTIPLIERS = {
   AFTER: 1,
 };
 
+// === Identity / Actor Types (Phase 102.5) ===
+
+export type ActorType = 'operator' | 'user' | 'agent' | 'system' | 'anonymous';
+
+export interface RequestActor {
+  type: ActorType;
+  id: string;
+  label: string;
+}
+
 // === Protocol Constants ===
 
 export const PANDO_PROTOCOL = '/pando/message/1.0.0';

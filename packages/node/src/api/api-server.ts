@@ -19,6 +19,7 @@ import { randomBytes } from 'node:crypto';
 import { registerAgentRoutes } from '../platform/agent-tools.js';
 import type { AgentManager } from '../core/agent-manager.js';
 import type { PandoNode } from '../index.js';
+import type { RequestActor } from '@pando/shared';
 import { registerKernelRoutes } from './kernel-api.js';
 import { registerCoreRoutes } from './core-api.js';
 import { registerPlatformRoutes } from './platform-api.js';
@@ -197,9 +198,48 @@ export class ApiServer {
     });
     this.apiToken = loadOrGenerateApiToken(node.getDataDir() || join(homedir(), '.pando'));
 
+    this.setupIdentity();
     this.setupAuth();
     this.setupRateLimiting();
     // Routes are registered asynchronously in start() via setupRoutes()
+  }
+
+  /** Phase 102.5: Decorate every request with an actor identity. */
+  private setupIdentity(): void {
+    this.fastify.decorateRequest('actor', null);
+    this.fastify.addHook('onRequest', async (request: any) => {
+      const authHeader = request.headers.authorization;
+      const agentId = request.headers['x-agent-id'] as string | undefined;
+
+      // 1. Agent: Bearer token + x-agent-id header
+      if (authHeader?.startsWith('Bearer ') && agentId) {
+        const token = authHeader.slice(7);
+        if (token === this.apiToken) {
+          request.actor = { type: 'agent', id: agentId, label: `agent:${agentId.slice(0, 12)}` } as RequestActor;
+          return;
+        }
+      }
+
+      // 2. User: JWT token (via X-User-Token or Authorization)
+      const userPeerId = await this.verifyUserJwt(request);
+      if (userPeerId) {
+        request.actor = { type: 'user', id: userPeerId, label: `user:${userPeerId.slice(0, 12)}` } as RequestActor;
+        return;
+      }
+
+      // 3. Operator: Bearer token (no x-agent-id)
+      if (authHeader?.startsWith('Bearer ')) {
+        const token = authHeader.slice(7);
+        if (token === this.apiToken) {
+          const identity = this.node.getIdentity();
+          request.actor = { type: 'operator', id: identity?.peerId || 'operator', label: 'operator' } as RequestActor;
+          return;
+        }
+      }
+
+      // 4. Anonymous
+      request.actor = { type: 'anonymous', id: 'anonymous', label: 'anonymous' } as RequestActor;
+    });
   }
 
   /** Add onRequest hook that checks Bearer token on protected endpoints. */
@@ -224,7 +264,8 @@ export class ApiServer {
       if (
         pathNoVersion.startsWith('/auth/') ||
         pathNoVersion.startsWith('/projects') ||
-        pathNoVersion.startsWith('/chat/')
+        pathNoVersion.startsWith('/chat/') ||
+        pathNoVersion.startsWith('/council/')
       ) return;
 
       // Extract Bearer token from Authorization header

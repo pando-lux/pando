@@ -53,7 +53,7 @@ import { CredentialStore } from './core/credential-store.js';
 import type { CapabilityProfile } from '@pando/shared';
 import { getDefaultConfig } from './config.js';
 const RESTART_EXIT_CODE = 75;
-import { UpgradeProtocol } from './core/upgrade-protocol.js';
+import { UpgradeProtocol, safeGitReset } from './core/upgrade-protocol.js';
 import { RegressionSuite } from './platform/regression-suite.js';
 import { PaymentGate } from './core/payment-gate.js';
 import { UserAccountStore } from './platform/user-accounts.js';
@@ -1507,9 +1507,7 @@ location /apps/${projectId}/ {
           return { status: 'already_up_to_date', output: 'Already up to date.' };
         }
 
-        execSync('git reset --hard origin/master', {
-          cwd: repoDir, encoding: 'utf-8', timeout: 30_000, stdio: 'pipe',
-        });
+        safeGitReset(repoDir, 'origin/master');
         const pullOutput = `Updated ${localSha.slice(0, 8)} -> ${remoteSha.slice(0, 8)}`;
         console.log(`[upgrade-node] ${pullOutput}`);
 

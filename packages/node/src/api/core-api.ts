@@ -9,6 +9,7 @@
  */
 
 import { execSync } from 'node:child_process';
+import { safeGitReset } from '../core/upgrade-protocol.js';
 import type { RouteHelpers } from './middleware/auth.js';
 
 export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Promise<void> {
@@ -52,10 +53,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
           if (localSha === remoteSha) {
             pullOutput = 'Already up to date.';
           } else {
-            execSync('git reset --hard origin/master', {
-              cwd: repoDir, encoding: 'utf-8', timeout: 30_000,
-              stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-            });
+            safeGitReset(repoDir, 'origin/master');
             pullOutput = `Updated ${localSha.slice(0, 8)} -> ${remoteSha.slice(0, 8)}`;
           }
         } catch (err: any) {

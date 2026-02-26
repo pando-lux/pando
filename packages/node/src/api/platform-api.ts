@@ -3767,6 +3767,34 @@ export async function registerPlatformRoutes(
 
     // ── Phase 50: Council Endpoints ──────────────────────────────────────────
 
+    // ── Auth guard helpers for council routes ──────────────────────────────
+    function requireAuth(request: any, reply: any): boolean {
+      const actor = (request as any).actor;
+      if (!actor || actor.type === 'anonymous') {
+        reply.code(401).send({ error: 'Authentication required' });
+        return false;
+      }
+      return true;
+    }
+
+    function requireOperator(request: any, reply: any): boolean {
+      const actor = (request as any).actor;
+      if (!actor || (actor.type !== 'operator' && actor.type !== 'system')) {
+        reply.code(403).send({ error: 'Operator access required' });
+        return false;
+      }
+      return true;
+    }
+
+    function requireOperatorOrAgent(request: any, reply: any): boolean {
+      const actor = (request as any).actor;
+      if (!actor || (actor.type !== 'operator' && actor.type !== 'agent' && actor.type !== 'system')) {
+        reply.code(403).send({ error: 'Operator or agent access required' });
+        return false;
+      }
+      return true;
+    }
+
     // GET /council — returns council state (members, rotation, this node's membership)
     fastify.get('/council', async (_request: any, reply: any) => {
       const council = node.getCouncil();
@@ -3783,6 +3811,98 @@ export async function registerPlatformRoutes(
         return reply.code(503).send({ error: 'Council system not initialized' });
       }
       return { minutes: council.getMinutes() };
+    });
+
+    // POST /council/message — send message to council (Phase 101c)
+    fastify.post('/council/message', async (request: any, reply: any) => {
+      if (!requireAuth(request, reply)) return;
+      const council = node.getCouncil();
+      if (!council) {
+        return reply.code(503).send({ error: 'Council system not initialized' });
+      }
+      const { message } = request.body || {};
+      if (!message || typeof message !== 'string') {
+        return reply.code(400).send({ error: 'message is required' });
+      }
+      const actor = (request as any).actor;
+      const response = await council.handleMessage(message.trim(), actor);
+      return { status: 'ok', response };
+    });
+
+    // POST /council/directive — add founder directive (Phase 102.5)
+    fastify.post('/council/directive', async (request: any, reply: any) => {
+      if (!requireOperator(request, reply)) return;
+      const council = node.getCouncil();
+      if (!council) {
+        return reply.code(503).send({ error: 'Council system not initialized' });
+      }
+      const { content } = request.body || {};
+      if (!content || typeof content !== 'string') {
+        return reply.code(400).send({ error: 'content is required' });
+      }
+      const actor = (request as any).actor;
+      const directive = council.addFounderDirective(content.trim(), actor?.id || 'operator');
+      return { status: 'ok', directive };
+    });
+
+    // POST /council/veto/:id — veto a council proposal (Phase 102.5)
+    fastify.post('/council/veto/:id', async (request: any, reply: any) => {
+      if (!requireOperator(request, reply)) return;
+      const governance = node.getGovernance();
+      if (!governance) {
+        return reply.code(503).send({ error: 'Governance not initialized' });
+      }
+      const { id } = request.params || {};
+      const { reason } = request.body || {};
+      try {
+        const identity = node.getIdentity();
+        if (!identity) return reply.code(503).send({ error: 'Node identity not available' });
+        await governance.castVote(id, 'reject', reason || 'Operator veto');
+        return { status: 'vetoed', proposalId: id };
+      } catch (err: any) {
+        return reply.code(400).send({ error: err.message });
+      }
+    });
+
+    // POST /council/reflect — trigger manual reflection (Phase 101b)
+    fastify.post('/council/reflect', async (request: any, reply: any) => {
+      if (!requireOperatorOrAgent(request, reply)) return;
+      const council = node.getCouncil();
+      if (!council) {
+        return reply.code(503).send({ error: 'Council system not initialized' });
+      }
+      const result = await council.runDailyReflection();
+      if (result) {
+        council.appendMinutes(result.minutesEntry);
+      }
+      return { status: 'ok', result };
+    });
+
+    // GET /council/requests — council request log (Phase 102.5)
+    fastify.get('/council/requests', async (_request: any, reply: any) => {
+      const council = node.getCouncil();
+      if (!council) {
+        return reply.code(503).send({ error: 'Council system not initialized' });
+      }
+      return { requests: council.getRequestLog() };
+    });
+
+    // GET /council/chat — council chat history (Phase 101c)
+    fastify.get('/council/chat', async (_request: any, reply: any) => {
+      const council = node.getCouncil();
+      if (!council) {
+        return reply.code(503).send({ error: 'Council system not initialized' });
+      }
+      return { messages: council.getChatHistory() };
+    });
+
+    // GET /council/directives — founder directives (Phase 102.5)
+    fastify.get('/council/directives', async (_request: any, reply: any) => {
+      const council = node.getCouncil();
+      if (!council) {
+        return reply.code(503).send({ error: 'Council system not initialized' });
+      }
+      return { directives: council.getFounderDirectives() };
     });
 
     // ── Phase 51: Infrastructure Awareness ──────────────────────────────────

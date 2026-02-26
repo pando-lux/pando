@@ -67,6 +67,7 @@ export function registerAgentRoutes(
     }
 
     try {
+      const requestedBy = (request as any).actor?.id;
       const agentId = await agentManager.spawnAgent({
         role: role as AgentRole,
         template: template || undefined,
@@ -74,6 +75,7 @@ export function registerAgentRoutes(
         projectId,
         description,
         taskContext: taskContext || undefined,
+        requestedBy,
       });
 
       if (!agentId) {

@@ -84,6 +84,8 @@ export interface SpawnAgentConfig {
   description: string;
   /** Optional initial task context for the agent's CLAUDE.md Layer 4. */
   taskContext?: string;
+  /** Phase 102.5: Who requested this agent (actor ID from identity middleware). */
+  requestedBy?: string;
 }
 
 export interface AgentTreeNode {

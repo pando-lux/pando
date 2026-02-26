@@ -41,6 +41,30 @@ const MAX_HISTORY = 200;
 export const TOPIC_UPGRADES = 'pando/upgrades';
 const RESTART_EXIT_CODE = 75;
 
+/** Stash uncommitted changes before destructive git reset. */
+export function safeGitReset(repoDir: string, target: string = 'origin/master'): void {
+  const status = execSync('git status --porcelain', {
+    cwd: repoDir, encoding: 'utf-8', timeout: 10_000, stdio: 'pipe',
+  }).trim();
+
+  if (status.length > 0) {
+    console.warn(`[upgrade] WARNING: Uncommitted changes detected (${status.split('\n').length} files). Stashing...`);
+    try {
+      execSync(`git stash push -m "pando-auto-stash-${Date.now()}"`, {
+        cwd: repoDir, encoding: 'utf-8', timeout: 15_000, stdio: 'pipe', windowsHide: true,
+      });
+      console.warn('[upgrade] Changes stashed. Recover with: git stash pop');
+    } catch (stashErr: any) {
+      console.warn(`[upgrade] Stash failed (${stashErr.message}). Proceeding with reset.`);
+    }
+  }
+
+  execSync(`git reset --hard ${target}`, {
+    cwd: repoDir, encoding: 'utf-8', timeout: 30_000,
+    stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+  });
+}
+
 // ── File patterns considered "protocol changes" (longer review) ──
 
 const PROTOCOL_FILE_PATTERNS = [
@@ -188,13 +212,10 @@ export class UpgradeProtocol {
       console.warn(`[upgrade] Hash note: governance approved ${commitHash.slice(0, 12)}, origin/master is ${remoteSha.slice(0, 12)} (orphan branch or different repo — proceeding anyway)`);
     }
 
-    // Step 5: Reset to origin/master
+    // Step 5: Reset to origin/master (stash uncommitted changes first)
     console.log(`[upgrade] Updating ${localSha.slice(0, 8)} → ${remoteSha.slice(0, 8)}`);
     try {
-      execSync('git reset --hard origin/master', {
-        cwd: repoDir, encoding: 'utf-8', timeout: 30_000,
-        stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-      });
+      safeGitReset(repoDir, 'origin/master');
     } catch (err: any) {
       const msg = err.stderr?.toString()?.slice(0, 500) || err.message;
       console.error(`[upgrade] Git reset failed: ${msg}`);
