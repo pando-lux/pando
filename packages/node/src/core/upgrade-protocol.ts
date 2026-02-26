@@ -236,11 +236,19 @@ export class UpgradeProtocol {
   // ── Upgrade Proposal (for governance) ──────────────────────────────────
 
   /**
-   * Create an upgrade proposal. Submits to governance with the current commit hash.
+   * Create an upgrade proposal. Submits to governance with the remote HEAD commit hash.
+   * Fetches origin/master first so the proposal targets the latest remote code, not local HEAD.
    * No diffs, no patches — just a description and a hash for peers to verify.
    */
   async createUpgradeProposal(description: string): Promise<UpgradeProposal> {
-    const commitHash = this.getCurrentVersion();
+    // Fetch remote state first so we propose the remote HEAD, not local HEAD.
+    // This ensures all nodes actually pull new code rather than seeing "already at target".
+    try {
+      this.git('fetch origin master');
+    } catch (e) {
+      console.warn('[upgrade] git fetch failed — proposal will use local HEAD:', e);
+    }
+    const commitHash = this.getRemoteVersion();
     const filesTouched = this.getRecentFilesTouched();
 
     // Check immutable kernel
@@ -536,11 +544,22 @@ export class UpgradeProtocol {
 
   private getRecentFilesTouched(): string[] {
     try {
-      const output = this.git('diff --name-only HEAD~1 HEAD');
+      // Show what will change when upgrading to origin/master (pending changes).
+      // Falls back to last commit diff if origin/master is unavailable.
+      const output = this.git('diff --name-only HEAD origin/master');
       return output.split('\n').filter(Boolean);
     } catch {
-      return [];
+      try {
+        const output = this.git('diff --name-only HEAD~1 HEAD');
+        return output.split('\n').filter(Boolean);
+      } catch {
+        return [];
+      }
     }
+  }
+
+  private getRemoteVersion(): string {
+    try { return this.git('rev-parse --short origin/master'); } catch { return this.getCurrentVersion(); }
   }
 
   private assessRisk(filesTouched: string[]): RiskAssessment {
