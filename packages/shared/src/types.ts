@@ -126,6 +126,7 @@ export interface NodeConfig {
   capabilities?: string[];
   nodeMode?: NodeMode;     // Phase 64: node specialization (default: 'full')
   ledgerMode?: LedgerMode; // Phase 64: ledger retention (default: 'full')
+  publicIp?: string;       // Phase 91: Public IP for libp2p announce (set via PUBLIC_IP env var on EC2/VPS nodes)
 }
 
 export interface PeerInfo {

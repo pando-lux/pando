@@ -168,6 +168,15 @@ export class PandoNetwork {
       `/ip4/0.0.0.0/tcp/0/ws`,
     ];
 
+    // Announce addresses: tell other peers our public IP so they can dial us directly.
+    // Required for nodes behind NAT/VPC (EC2, VPS) where the bound address (0.0.0.0)
+    // differs from the externally reachable address. Set PUBLIC_IP env var on cloud nodes.
+    const announceAddrs: string[] = [];
+    if (this.config.publicIp && this.config.listenPort > 0) {
+      announceAddrs.push(`/ip4/${this.config.publicIp}/tcp/${this.config.listenPort}`);
+      console.log(`[network] Public IP announce: /ip4/${this.config.publicIp}/tcp/${this.config.listenPort}`);
+    }
+
     // Services: core + optional relay server + DCUtR hole-punching
     const services: Record<string, any> = {
       identify: identify(),
@@ -189,6 +198,7 @@ export class PandoNetwork {
       privateKey,
       addresses: {
         listen: listenAddrs,
+        ...(announceAddrs.length > 0 ? { announce: announceAddrs } : {}),
       },
       transports,
       connectionEncrypters: [noise()],

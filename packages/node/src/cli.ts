@@ -190,6 +190,8 @@ async function main() {
     storageUrl = args[storageFlag + 1];
   }
 
+  const publicIp = process.env.PUBLIC_IP?.trim() || undefined;
+
   const node = new PandoNode({
     listenPort: port,
     apiPort,
@@ -198,6 +200,7 @@ async function main() {
     ...(isRelay ? { relay: true } : {}),
     nodeMode: nodeMode as any,
     ledgerMode: ledgerMode as any,
+    ...(publicIp ? { publicIp } : {}),
   });
 
   // Initialize MongoDB storage backend
