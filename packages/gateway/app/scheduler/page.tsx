@@ -299,7 +299,15 @@ function TaskRow({
 
   return (
     <div className={isChild ? "border-l-2 border-neutral-300 dark:border-neutral-700 ml-4" : ""}>
-      <button onClick={onToggle} className="w-full grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-2 px-4 py-2.5 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800/50 transition text-left">
+      <button
+        onClick={onToggle}
+        className="w-full grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-2 px-4 py-2.5 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800/50 transition text-left"
+        title={[
+          task.description ? `${task.description.slice(0, 120)}${task.description.length > 120 ? "…" : ""}` : null,
+          task.createdAt ? `Created: ${new Date(task.createdAt).toLocaleString()}` : null,
+          task.profile?.id ? `Agent: ${task.profile.id}` : task.roleMetadata?.roleId ? `Role: ${task.roleMetadata.roleId}` : null,
+        ].filter(Boolean).join("\n") || undefined}
+      >
         <div className="sm:col-span-4 flex items-center gap-2 min-w-0">
           {hasChildren && (
             <span className="text-neutral-500 text-[10px] flex-shrink-0">{isExpanded ? "\u25BC" : "\u25B6"}</span>
