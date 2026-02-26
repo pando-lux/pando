@@ -1,29 +1,48 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-26 (master — v2.5 + Phase 53.7 + Phase 68.4 complete)
+> Last updated: 2026-02-26 (master — overnight sprint complete)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
 
-## v2-architecture sprint — v2.5 complete, Phase 53.7 complete, Phase 68.4 complete
+## Overnight sprint complete (2026-02-26)
 
-v2.1-v2.5 complete. Phase 53.7 (App Directory) + Phase 68.4 (Returning User Routing) complete and deployed.
+v2.1-v2.5 + Phase 53.7 + Phase 68.4 + Ledger Explorer + Node Setup + 18/18 smoke tests all complete and deployed.
 
 ## Health
 
 | Node | IP | Status | Peers | StorageBackend | CredentialAccess | Supervisor | Uptime |
 |---|---|---|---|---|---|---|---|
-| EC2-1 (compute) | 54.82.241.132 | ONLINE | 7+ | **mongodb** | true | **systemd** | Continuous |
-| EC2-2 (compute) | 34.201.82.126 | ONLINE | 1+ | **mongodb** | true | **systemd** | Continuous |
+| EC2-1 (compute) | 54.82.241.132 | **ONLINE** | 8 | **mongodb** | true | **systemd** | Continuous |
+| EC2-2 (compute) | 34.201.82.126 | **ONLINE** | 1+ | **mongodb** | true | **systemd** | Continuous |
 | LS-1 (relay) | 54.145.144.221 | **DOWN** | -- | **p2p** | false | PM2 | Machine unreachable |
-| LS-2 (untrusted) | 3.237.175.38 | ONLINE | 1+ | **p2p** | false | PM2 | Continuous |
+| LS-2 (untrusted) | 3.237.175.38 | **ONLINE** | 1+ | **p2p** | false | PM2 | Continuous |
 | Windows (dev) | 100.87.67.78:4100 | ONLINE | 2+ | mongodb | true | Manual | Dev sessions |
 
 **LS-1 alert**: SSH + HTTP both unreachable since 2026-02-26. Machine-level issue. Needs Lightsail console restart (Jai: action required).
 
+**Smoke test**: `node tests/smoke-test.mjs` → 18/18 PASS on 3-node network (LS-1 excluded)
+
 ## Current Phase
 
-**v2-architecture sprint IN PROGRESS (2026-02-26).**
+**Overnight sprint COMPLETE (2026-02-26).**
 
-All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88**, **53.7**, **68.4** COMPLETE. Now doing architectural v2 work — no new features until layer separation + tests done.
+All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88**, **53.7**, **68.4** COMPLETE. v2.1-v2.5 architecture complete. See "What's next" below for priorities.
+
+**Node Setup / Developer Onboarding — COMPLETE (2026-02-26)**
+- ✅ `packages/gateway/app/node-setup/page.tsx` — new /node-setup page
+  - 5-step setup guide with copy buttons on all commands
+  - Live stats: peer count, accounts, Lux supply (fetched from /api/onboard)
+  - Earning table (what you get for running a node)
+  - Requirements checklist, bootstrap peers, GitHub link
+- ✅ `/api/onboard` enriched with public bootstrap IPs (replaces private EC2 IPs from /v1/onboard)
+- ✅ NavBar: "Get Started" link added (second position)
+
+**Smoke Test Suite — COMPLETE (2026-02-26)**
+- ✅ `tests/smoke-test.mjs` — 18 automated tests, 0 failures
+  - Layer 0: 3-node status, NodeHealth, wallet, peers
+  - Ledger Explorer: accounts, transactions, cross-node consistency
+  - P2P Storage: LS-2 create → read → EC2-1 cross-node
+  - Governance, AI Search, Network Capabilities, App Directory
+- Run: `node tests/smoke-test.mjs`
 
 **Ledger Explorer — COMPLETE (2026-02-26)**
 - ✅ `GET /v1/ledger/accounts` — top N accounts by balance (public, no auth)
