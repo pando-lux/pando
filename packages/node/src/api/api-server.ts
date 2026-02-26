@@ -88,8 +88,9 @@ const RATE_LIMITS: Record<string, { max: number; envVar: string }> = {
   'POST /governance/propose':  { max: 5,  envVar: 'PANDO_RATE_PROPOSE' },
   'POST /governance/vote':     { max: 30, envVar: 'PANDO_RATE_VOTE' },
   'POST /governance/comment':  { max: 20, envVar: 'PANDO_RATE_COMMENT' },
-  'POST /chat/message':        { max: 20, envVar: 'PANDO_RATE_CHAT' },
-  'POST /auth/guest':          { max: 5,  envVar: 'PANDO_RATE_AUTH_GUEST' },
+  'POST /chat/message':              { max: 20, envVar: 'PANDO_RATE_CHAT' },
+  'POST /chat/threads/:id/message':  { max: 30, envVar: 'PANDO_RATE_CHAT_THREAD' },
+  'POST /auth/guest':                { max: 5,  envVar: 'PANDO_RATE_AUTH_GUEST' },
 };
 
 function getEnvLimit(envVar: string, fallback: number): number {
@@ -255,6 +256,10 @@ export class ApiServer {
       // Check parametric thread route: POST /tasks/<id>/thread
       if (!limiter && request.method === 'POST' && /^\/tasks\/[^/]+\/thread$/.test(urlPath)) {
         limiter = this.rateLimiters.get('POST /tasks/:id/thread');
+      }
+      // Check parametric chat thread message route: POST /chat/threads/<id>/message
+      if (!limiter && request.method === 'POST' && /^\/chat\/threads\/[^/]+\/message$/.test(urlPath)) {
+        limiter = this.rateLimiters.get('POST /chat/threads/:id/message');
       }
       if (!limiter) return; // No rate limit for this route
       const ip = request.ip || request.raw?.socket?.remoteAddress || 'unknown';
