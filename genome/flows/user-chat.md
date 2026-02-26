@@ -20,6 +20,21 @@ How users interact with the node via natural language. The Doorman (OpenAI gpt-4
 
 **Returning users:** If the request includes a `projectId`, the message routes directly to the project's manager (`project-<projectId>`). No doorman involved.
 
+## Tier-Based Routing (Phase 130f96a1)
+
+Messages on `POST /chat/threads/:id/message` carry an optional `tier` body parameter set by the gateway chat UI:
+
+| Tier | Gateway label | Cost | Behaviour |
+|------|--------------|------|-----------|
+| `simple` (default) | Quick | ~$0.001 | Stateless doorman — keyword match or single-turn OpenAI call |
+| `medium` | Smart | ~$0.001/msg | Multi-turn `doormanChat` — passes last 20 messages as history to OpenAI gpt-4o-mini |
+| `complex` / `build` | Full | $0.50–5 | Routes to per-project Claude Code manager agent |
+
+**Routing decision (platform-api.ts `POST /chat/threads/:id/message`):**
+1. `tier === 'medium'` → call `doormanChat(message, last20messages)` → save reply with `tier: 'medium'`
+2. `tier === 'complex'` or `doormanClassify` returns `'build'` → create/route to project manager
+3. Otherwise (default `simple`) → `doormanClassify` → keyword/OpenAI stateless reply
+
 ## Classification & Routing
 
 ```
@@ -29,28 +44,34 @@ HAS projectId? ─── YES ──→ Route to project-<projectId> manager (ski
   │
   NO
   ↓
-doormanClassify(message)
-  ├─ SIMPLE (keyword match — free, instant)
-  │   "balance" → reads ledger, returns number
-  │   "status" → reads node status, returns summary
-  │   "peers" → lists connected peers
-  │   "tasks" → lists task queue
-  │   "proposals" → lists governance proposals
-  │   "help" → returns help text
-  │   Doorman answers directly — no AI cost
+TIER CHECK (body.tier)
+  ├─ tier === 'medium' → doormanChat(message, history[last 20])
+  │   Multi-turn Smart mode. Full conversation context.
+  │   Uses OpenAI gpt-4o-mini with system prompt.
+  │   Returns tier: 'medium' in response.
   │
-  ├─ QUESTION (AI classification — ~$0.001)
-  │   General questions → doorman answers via OpenAI
-  │   No project created, no Claude Code
-  │
-  ├─ BUILD ("build me X", "create X", "I want X")
-  │   → Create project + preflight (API key, MongoDB assigned)
-  │   → Spawn per-project manager (Claude Code)
-  │   → Enqueue to bridge → return instant response
-  │   → Manager works asynchronously
-  │
-  └─ PROJECT (existing project context detected)
-      → Route to appropriate project manager
+  └─ tier === 'simple' | undefined → doormanClassify(message)
+        ├─ SIMPLE (keyword match — free, instant)
+        │   "balance" → reads ledger, returns number
+        │   "status" → reads node status, returns summary
+        │   "peers" → lists connected peers
+        │   "tasks" → lists task queue
+        │   "proposals" → lists governance proposals
+        │   "help" → returns help text
+        │   Doorman answers directly — no AI cost
+        │
+        ├─ QUESTION (AI classification — ~$0.001)
+        │   General questions → doorman answers via OpenAI
+        │   No project created, no Claude Code
+        │
+        ├─ BUILD ("build me X", "create X", "I want X")
+        │   → Create project + preflight (API key, MongoDB assigned)
+        │   → Spawn per-project manager (Claude Code)
+        │   → Enqueue to bridge → return instant response
+        │   → Manager works asynchronously
+        │
+        └─ PROJECT (existing project context detected)
+            → Route to appropriate project manager
 ```
 
 ## Conversation Steps

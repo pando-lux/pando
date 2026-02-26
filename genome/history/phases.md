@@ -824,6 +824,164 @@ Replaced the complex Phase 73/81 patch-distribution system with simple `git pull
 
 ---
 
+## v2.1: Layer Separation — COMPLETE (2026-02-26)
+
+> Broke monolithic api-server.ts (7292 lines) into route layer modules. Added AI Backend interface.
+
+- [x] **v2.1.1** Directory structure: `kernel/`, `core/`, `platform/`, `api/`, `api/middleware/` (`079edc20`, `c83d4a51`)
+- [x] **v2.1.2** api-server.ts split → kernel-api.ts (2249L), core-api.ts (370L), platform-api.ts (3882L), api-server.ts orchestrator (887L) (`c83d4a51`, `7135f80e`)
+- [x] **v2.1.3** AI Backend interface: `AIBackend`, `ClaudeBackend`, `OllamaBackend` (stub) via `AIBackendRegistry` (`363889f4`)
+- [x] **v2.1.4** Import boundary lint: `check-imports.mjs` passes clean — no upward imports
+
+## v2.2: API Versioning — COMPLETE (2026-02-26)
+
+- [x] **v2.2.1** All HTTP routes prefixed `/v1/` via Fastify register (`46f3eca3`)
+- [x] **v2.2.2** P2P MESSAGE_VERSION=1 stamped on all outbound messages; forward-compat warning on receive (`46f3eca3`)
+- [x] **v2.2.3** Genome docs updated: api-server.md, state.md, CLAUDE.md (`9d8e360d`)
+
+## v2.3: NodeHealth + Boot Tracking — COMPLETE (2026-02-26)
+
+- [x] **v2.3.1** `OperationalMode` (1|2|3) + `BootStepStatus` + `NodeHealth` types added to `@pando/shared` (`e12c9b46`)
+- [x] **v2.3.2** `PandoNode._computeBootHealth()` — derives health from initialized fields at end of `_start()` (`e12c9b46`)
+- [x] **v2.3.3** `GET /v1/status` now includes `health: NodeHealth` field with per-step `bootSteps` map (`e12c9b46`)
+- [x] **v2.3.4** E2E confirmed EC2-1: `mode=2`, `kernel=healthy`, `core=healthy`, `platform=degraded` (correct for compute node) (`ae6bf5ba`)
+
+## v2.4: Active Tripwire — COMPLETE (2026-02-26)
+
+- [x] **v2.4.1** `CREDENTIAL_MASTER_KEY` deleted from `process.env` after loading — key is memory-only from that point (`35d1ab27`)
+- [x] **v2.4.2** `CredentialStore.wipe()` — zeros out Buffer, disables all subsequent decryption (`35d1ab27`)
+- [x] **v2.4.3** GossipSub topic `pando/node-compromised` — publish + subscribe across P2P (`35d1ab27`)
+- [x] **v2.4.4** `PandoNode.triggerLocalCompromise(reason)` — wipes key + broadcasts compromise (`35d1ab27`)
+- [x] **v2.4.5** `POST /v1/admin/wipe-credentials` emergency endpoint (`35d1ab27`)
+
+## v2.5: Local Environment — COMPLETE (2026-02-26)
+
+> AI agents can search and read files the user grants access to. User memory persists across sessions.
+
+- [x] **v2.5.1** `kernel/local-environment.ts` — SQLite FTS5 file index at `~/.pando/file-index.db` (`19eae4ef`)
+- [x] **v2.5.2** Protected paths hard-blocked: ssh, gnupg, pando/identities, aws/credentials (`19eae4ef`)
+- [x] **v2.5.3** User memory: `~/.pando/memory/user-memory.md` read/write API (`19eae4ef`)
+- [x] **v2.5.4** 6 API endpoints: `GET /v1/local/status`, `POST/DELETE /v1/local/index`, `GET /v1/local/search`, `GET /v1/local/file`, `GET/POST /v1/local/memory`, `GET /v1/local/memory/file` (`5de49415`)
+- [x] **v2.5.5** AgentManager wired: `setLocalEnv()` — user-memory.md prepended to agent spawn prompt (`5de49415`)
+- [x] **v2.5.6** TUI: `/index`, `/unindex`, `/local`, `/memory` commands (`5de49415`)
+
+---
+
+## Phase 89: Developer Hub — COMPLETE (2026-02-26)
+
+- [x] **89.1** `/dev` gateway page — API reference (all endpoints with types), code examples, quick start guide (`2e4780bf`)
+- [x] **89.2** Developer onboarding flow — 5-step node setup guide at `/node-setup` (`4a1d7e0a`)
+- [x] **89.3** `/api/onboard` enriched with public bootstrap IPs (replaces private EC2 IPs from `/v1/onboard`) (`4a1d7e0a`)
+
+## Phase 90: One-Line Install Script — COMPLETE (2026-02-26)
+
+- [x] **90.1** Install script: single curl command bootstraps Node.js, git clone, build, start (`4a1d7e0a`)
+- [x] **90.2** Node-setup page updated with install command and live network stats (`4a1d7e0a`)
+
+## Phase 91: P2P Public IP Announce — COMPLETE (2026-02-26)
+
+> Fixed EC2 P2P isolation — nodes weren't announcing their public IP, so they couldn't be found by new peers.
+
+- [x] **91.1** EC2 nodes announce public IP via CapabilityProfile broadcast (`e9222886`)
+- [x] **91.2** EC2-2 added to `DEFAULT_BOOTSTRAPS` — new nodes connect to both EC2-1 and EC2-2 (`39470a1f`)
+- [x] **91.3** 18/18 smoke tests pass on 3-node network after fix (`47201912`)
+
+## Phase 92: Direct TCP Capability Exchange — COMPLETE (2026-02-26)
+
+- [x] **92.1** Direct TCP stream for capability profile exchange on peer connect (`0ca3ec02`)
+- [x] **92.2** Replaces GossipSub-only capability sync — deterministic on connect rather than eventual (`0ca3ec02`)
+
+## Phase 93: Direct TCP Request/Reply — COMPLETE (2026-02-26)
+
+- [x] **93.1** Direct TCP unicast stream for `requestReply` calls — replaces GossipSub round-trip for request/reply (`37b3b193`)
+- [x] **93.2** Lower latency storage proxy responses (direct stream, not pub/sub) (`37b3b193`)
+
+## Phase 94: Project Settings — repoUrl + tier — COMPLETE (2026-02-26)
+
+- [x] **94.1** `PATCH /v1/projects/:id` accepts `repoUrl` and `tier` fields (`21751be2`)
+- [x] **94.2** Gateway projects settings form: GitHub Repo URL field (enables Deploy button for any project) (`21751be2`)
+- [x] **94.3** Gateway projects settings form: Deploy Tier selector (Tier 1 static / Tier 2 server) (`21751be2`)
+- [x] **94.4** Gateway projects page: Deploy button shows for any owner project with a repoUrl (`21751be2`)
+- [x] **94.5** Fix TypeScript error: scheduler/monitor `bootSteps` are `'ok'|'skipped'` only — removed dead `'failed'` comparison (`21751be2`)
+- [x] **94.6** 18/18 smoke tests PASS, deployed to EC2-1, EC2-2, LS-2 (`16083da0`)
+
+## Phase 95: Gateway UX Cleanup — COMPLETE (2026-02-26)
+
+> Simplified gateway navigation from 16 links to 5 primary links. Added "Your Work" home section.
+
+- [x] **95.1** NavBar: slimmed from 16 links → 5 primary (Home, Chat, Projects, Explore, Dev) (`e1ec8e5d`)
+- [x] **95.2** Wallet link in auth area (next to username) for logged-in users — desktop + mobile (`e1ec8e5d`)
+- [x] **95.3** Home page: "Your Work" section — guest state (3-step explainer), no-projects state, projects-present state (mini cards) (`e1ec8e5d`)
+- [x] **95.4** Chat page: replaced node-status quick actions with builder-oriented ones (Build todo app, Build landing page, Build weather app) (`314f708e`)
+- [x] **95.5** Explore page: expanded "For Node Operators" section — Resources, Marketplace, Search, Wallet links (`314f708e`)
+
+## Phases 96-99: Three-Tier Capability Architecture — COMPLETE (2026-02-26)
+
+> Detection ≠ Sharing. Nodes always know what they have locally; peers only see what the user opts in to share.
+
+- [x] **96.1** `LocalCapabilityStore` (`~/.pando/local-capabilities.json`) — persists full detected capabilities + sharing prefs. Never broadcast. (`5e49315e`)
+- [x] **96.2** `CapabilityRegistry.canExecuteLocally()` now uses LocalCapabilityStore (own tasks always work). (`5e49315e`)
+- [x] **96.3** TUI `/contribute claude-code` → sets `shareCompute=true`; `/revoke claude-code` → sets `shareCompute=false` (`5e49315e`)
+- [x] **97.1** `shareCompute` flag on `CapabilityProfile`. Only nodes that opted in are visible to peers as compute providers. (`5e49315e`)
+- [x] **97.2** `PandoNode.rebuildCapabilityProfile()` — rebroadcasts profile on opt-in/out change (`5e49315e`)
+- [x] **98.1** `claude_task` P2P handler on PandoNode — accepts compute requests only when `shareCompute: true` (`5e49315e`)
+- [x] **98.2** `routeClaudeTaskP2P()` on PandoNode — gateway-facing nodes forward Claude tasks to opted-in peers via RequestReply (5-min timeout) (`5e49315e`)
+- [x] **98.3** `platform-api.ts` tries P2P routing before returning "no Claude" error (`5e49315e`)
+- [x] **99.1** NodePool simplified — removed `hasClaudeCode` field + `'claude'` routing preference. Chat routes use `'any'`. (`5e49315e`)
+- [x] **99.2** `discoverNodes()` uses `profile.publicAddress` (not `httpApi.host`) — only adds nodes with public IPs (`5e49315e`)
+- [x] **99.3** `FALLBACK_SEEDS` reduced from 4 → 2 (EC2-1, EC2-2 only) (`5e49315e`)
+- [x] **INFRA-10 E2E verified**: `/contribute claude-code` toggles `shareCompute`, broadcasts to peers, AI routing works
+
+---
+
+## Phase 68.4: Returning User Routing — COMPLETE (2026-02-26)
+
+- [x] **68.4.1** Gateway chat page shows "Your Projects" sidebar for authenticated returning users (`34e36c1b`)
+- [x] **68.4.2** Clicking a project sets `activeProjectId`, routes all subsequent messages to that project's manager (`34e36c1b`)
+- [x] **68.4.3** `effectiveProjectId = activeProjectId || projectIdParam` — backwards compatible with URL params (`34e36c1b`)
+- [x] **68.4.4** Header shows project name + purple icon when in project context; "✕ Project" button exits (`34e36c1b`)
+
+---
+
+## Phase 53.7: Gateway App Directory — COMPLETE (2026-02-26)
+
+- [x] **53.7.1** `/apps` page listing all deployed apps with search and host type filter (`S3/EC2/Gateway`) (`3222e6c4` area)
+- [x] **53.7.2** Live connectivity check via HEAD request per app card (`3222e6c4` area)
+- [x] **53.7.3** `/api/apps` route fetches deployed projects, classifies host type
+
+## Phase 53.8: Resource Health Monitoring — COMPLETE (2026-02-26)
+
+- [x] **53.8.1** `ResourceHealthChecker` class — checks `ai_api_key` (OpenAI/Anthropic/Gemini), `storage_db` (MongoDB ping), `storage_blob` (S3), `code_repository` (GitHub), `cloud_compute` (AWS) every 5 minutes on trusted nodes
+- [x] **53.8.2** `GET /v1/resources/health` — returns health results for all resources (public endpoint)
+- [x] **53.8.3** Resources page: live health badges (emerald=healthy, amber=degraded, red=unhealthy) with latency tooltip
+
+---
+
+## Ledger Explorer — COMPLETE (2026-02-26)
+
+- [x] `GET /v1/ledger/accounts` — top N accounts by balance (public, no auth) (`3222e6c4`)
+- [x] `GET /v1/ledger/transactions` — most recent N global transactions (public, no auth) (`3222e6c4`)
+- [x] `/explore/economy` page: top accounts table with % share, global tx history, "you" marker, 4-stat header (`3222e6c4`)
+
+---
+
+## Pre-Launch Bug Fixes — 2026-02-26
+
+> Bugs found during pre-launch test scenarios GW-01 through GW-11, SEC-01 through SEC-08.
+
+- [x] **GW-01/b8e17b57** Auth bypass `startsWith('/auth/')` never matched `/v1/auth/guest` — strip version prefix first: `urlPath.replace(/^\\/v\\d+/, '')`
+- [x] **GW-01/043cece9** `atob(user.publicKey)` crashed on unpadded base64 — add padding helper `padB64` before both `atob()` calls in `chat/page.tsx`
+- [x] **GW-01/d500f5a0** `/chat/threads` POST returned 403 — chat routes were operator-protected. Made `/chat/` routes public (same as `/auth/` and `/projects`) in auth middleware
+- [x] **INFRA-02/a92a0313** Build-intent path in `/chat/threads/:id/message` returned "No AI-capable nodes" without trying P2P — added `routeClaudeTaskP2P` fallback matching the `/chat/message` pattern
+- [x] **INFRA-03/05ea747a** `deployPeerId` not persisted to MongoDB — missing from `mongoOnlyKeys`, `projectToRecord`, `recordToProject`. Undeploy always saw `deployPeerId=undefined`, skipped P2P undeploy, left PM2+nginx running
+- [x] **INFRA-07/da7bfa13** `createUpgradeProposal()` captured local `git rev-parse HEAD` — all nodes already at that commit, `pullAndUpgrade()` short-circuited with "Already at target version". Fix: `git fetch origin master` first, use `git rev-parse --short origin/master` as target hash
+- [x] **SEC-07/722b1b1d** Rate limiter silently broken since v2.2 added `/v1/` prefix — `request.url` = `/v1/chat/message` but RATE_LIMITS keys had no prefix. Fix: strip version prefix before key lookup (same pattern as auth bypass)
+- [x] **GW-10/a29ce486** Thread encryption setup failed: "point expected Uint8Array of length 32, got length=0" — guard checked `user?.peerId` but not `user?.publicKey`. During auth init race `publicKey` is `""` → crypto fails. Added `user?.publicKey` to encryption guard in `chat/page.tsx`
+- [x] **GW-09/20d9c4c6** `/chat/threads/:id/message` not in RATE_LIMITS — only legacy `/chat/message` was rate-limited. Added `'POST /chat/threads/:id/message': { max: 30 }` + parametric route matcher (regex) in `onRequest` hook
+- [x] **GW-05/130f96a1** Smart mode silently ignored — server always ran stateless doorman regardless of `tier` hint. Added `doormanChat(message, history)` method with OpenAI + last-20-messages context. `platform-api.ts` checks `tier === 'medium'` and calls `doormanChat` before doormanClassify
+
+---
+
 ## Future (Not Scheduled)
 
 - [ ] Dynamic concurrent sessions based on CPU/memory
