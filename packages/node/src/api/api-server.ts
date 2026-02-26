@@ -217,8 +217,10 @@ export class ApiServer {
 
       // Auth and project endpoints use their own authentication or are public.
       // They do not require the node-level API Bearer token.
+      // Strip version prefix (/v1/) before matching — routes are registered under /v1/ prefix.
       const urlPath = (request.url as string).split('?')[0];
-      if (urlPath.startsWith('/auth/') || urlPath.startsWith('/projects')) return;
+      const pathNoVersion = urlPath.replace(/^\/v\d+/, '');
+      if (pathNoVersion.startsWith('/auth/') || pathNoVersion.startsWith('/projects')) return;
 
       // Extract Bearer token from Authorization header
       const authHeader = request.headers.authorization;
