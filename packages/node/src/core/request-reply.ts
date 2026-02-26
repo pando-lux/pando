@@ -1,15 +1,18 @@
 /**
- * Request/Reply Messaging — Phase 10.1
+ * Request/Reply Messaging — Phase 10.1 / Phase 93
  *
- * Enables structured request/reply conversations between Pando nodes
- * over the existing pando/agent-messages GossipSub topic.
+ * Phase 10.1: GossipSub-based request/reply over pando/agent-messages topic.
+ * Phase 93: Direct TCP stream for unicast requests (replaces GossipSub for
+ * point-to-point calls like P2P storage proxy). GossipSub is kept as fallback
+ * and for broadcast queries (to: '*').
  *
- * Messages are distinguished by `messageKind: 'request' | 'reply'` in
- * the GossipSub envelope, keeping full backward compatibility with
- * existing agent-messages.
+ * Direct TCP is used when targeting a specific peer and they are directly
+ * connected. This makes P2P storage proxy calls reliable without needing
+ * GossipSub mesh formation.
  */
 
 import { randomUUID } from 'node:crypto';
+import { MessageType } from '@pando/shared';
 import type { PandoNetwork } from '../kernel/network.js';
 import type { PandoRequest, PandoReply } from '@pando/shared';
 
@@ -142,16 +145,30 @@ export class RequestReplyManager {
 
       this.pending.set(request.requestId, { resolve, reject, timer, sentAt: Date.now() });
 
-      // Publish via the agent-messages topic with messageKind envelope
-      this.network.publishAgentMessage(to, {
+      // Phase 93: Try direct TCP stream first for unicast. Falls back to GossipSub.
+      // Direct TCP bypasses GossipSub mesh formation issues in small networks.
+      const sendDirect = () => this.network.sendMessage(to, {
+        type: MessageType.REQUEST_REPLY_REQUEST,
+        from: peerId,
+        timestamp: Date.now(),
+        payload: request,
+      });
+      const sendGossipSub = () => this.network.publishAgentMessage(to, {
         messageKind: 'request',
         data: request,
-      }).then(() => {
+      });
+
+      sendDirect().then(() => {
         this.statsSent++;
-      }).catch((err) => {
-        this.pending.delete(request.requestId);
-        clearTimeout(timer);
-        reject(new Error(`Failed to send request: ${err.message}`));
+      }).catch(() => {
+        // Direct TCP failed (peer not directly connected or busy) — try GossipSub
+        sendGossipSub().then(() => {
+          this.statsSent++;
+        }).catch((err) => {
+          this.pending.delete(request.requestId);
+          clearTimeout(timer);
+          reject(new Error(`Failed to send request: ${err.message}`));
+        });
       });
     });
   }
@@ -206,6 +223,23 @@ export class RequestReplyManager {
         resolve([]);
       });
     });
+  }
+
+  /**
+   * Phase 93: Handle a direct TCP stream message (REQUEST_REPLY_REQUEST or REQUEST_REPLY_REPLY).
+   * Called from the onMessage handler in index.ts when message.type matches either type.
+   */
+  async handleDirectMessage(message: any, fromPeerId: string): Promise<void> {
+    const payload = message.payload;
+    if (!payload) return;
+
+    if (message.type === MessageType.REQUEST_REPLY_REQUEST) {
+      // This is an incoming request via direct TCP
+      await this.handleIncomingRequest(payload as PandoRequest, fromPeerId);
+    } else if (message.type === MessageType.REQUEST_REPLY_REPLY) {
+      // This is an incoming reply via direct TCP
+      this.handleIncomingReply(payload as PandoReply);
+    }
   }
 
   /**
@@ -268,13 +302,24 @@ export class RequestReplyManager {
       timestamp: Date.now(),
     };
 
+    // Phase 93: Try direct TCP first, fall back to GossipSub
     try {
-      await this.network.publishAgentMessage(req.from, {
-        messageKind: 'reply',
-        data: reply,
+      await this.network.sendMessage(req.from, {
+        type: MessageType.REQUEST_REPLY_REPLY,
+        from: this.network.getIdentity().peerId,
+        timestamp: Date.now(),
+        payload: reply,
       });
-    } catch (err: any) {
-      console.error(`[request-reply] Failed to send reply: ${err.message}`);
+    } catch {
+      // Fall back to GossipSub if direct TCP fails
+      try {
+        await this.network.publishAgentMessage(req.from, {
+          messageKind: 'reply',
+          data: reply,
+        });
+      } catch (err: any) {
+        console.error(`[request-reply] Failed to send reply: ${err.message}`);
+      }
     }
   }
 

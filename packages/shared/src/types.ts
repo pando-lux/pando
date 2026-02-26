@@ -110,6 +110,9 @@ export enum MessageType {
   PROJECT_ARCHIVE = 'project_archive',
   // Phase 92: Direct TCP stream capability profile exchange (fallback for GossipSub mesh failures)
   CAPABILITY_PROFILE_DIRECT = 'capability_profile_direct',
+  // Phase 93: Direct TCP stream request/reply (replaces GossipSub for unicast P2P storage proxy calls)
+  REQUEST_REPLY_REQUEST = 'request_reply_request',
+  REQUEST_REPLY_REPLY = 'request_reply_reply',
 }
 
 export enum NodeTier {

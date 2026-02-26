@@ -1873,6 +1873,11 @@ location /apps/${projectId}/ {
         }).catch(() => {});
       }
 
+      // Phase 93: Direct TCP stream request/reply (replaces GossipSub for unicast P2P calls)
+      if (message.type === MessageType.REQUEST_REPLY_REQUEST || message.type === MessageType.REQUEST_REPLY_REPLY) {
+        this.requestReply?.handleDirectMessage(message, from).catch(() => {});
+      }
+
       // Phase 92: Direct TCP stream capability profile exchange
       // Fallback for GossipSub mesh failures (small networks where mesh doesn't form)
       if (message.type === MessageType.CAPABILITY_PROFILE_DIRECT) {
