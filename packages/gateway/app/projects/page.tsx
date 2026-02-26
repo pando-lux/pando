@@ -18,9 +18,12 @@ interface Project {
   budgetLimit: number;
   threadId: string;
   managerAgentId: string;
+  repoUrl: string;
+  githubRepo: string;
   deploymentUrl: string;
   deploymentType: string;
   deploymentStatus: string;
+  tier: number;
   status: "active" | "archived" | "transferred";
   createdAt: number;
   updatedAt: number;
@@ -179,6 +182,10 @@ export default function ProjectsPage() {
   const [undeploying, setUndeploying] = useState(false);
   const [undeployMsg, setUndeployMsg] = useState<{ ok?: boolean; text: string } | null>(null);
 
+  // P2P Deploy (Phase 87 — GitHub + compute peer)
+  const [p2pDeploying, setP2pDeploying] = useState(false);
+  const [p2pDeployMsg, setP2pDeployMsg] = useState<{ ok?: boolean; text: string } | null>(null);
+
   const authHeaders = useCallback((): Record<string, string> => {
     const h: Record<string, string> = {};
     if (token) h["Authorization"] = `Bearer ${token}`;
@@ -266,6 +273,7 @@ export default function ProjectsPage() {
       setHostingInfo(null);
       setDeployMsg(null);
       setHostingFiles(null);
+      setP2pDeployMsg(null);
     } else {
       setExpanded(id);
       setCollaborators([]);
@@ -278,6 +286,7 @@ export default function ProjectsPage() {
       setHostingInfo(null);
       setDeployMsg(null);
       setHostingFiles(null);
+      setP2pDeployMsg(null);
 
       // Pre-fill settings form
       const proj = projects.find((p) => p.id === id);
@@ -556,6 +565,38 @@ export default function ProjectsPage() {
       setUndeployMsg({ text: "Network error" });
     }
     setUndeploying(false);
+  }
+
+  /* -- P2P Deploy (Phase 87) -------------------------------- */
+
+  async function handleP2PDeploy(projectId: string) {
+    setP2pDeploying(true);
+    setP2pDeployMsg(null);
+    try {
+      const res = await fetch(
+        `/api/projects/${encodeURIComponent(projectId)}/deploy`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json", ...authHeaders() },
+          body: JSON.stringify({}),
+        }
+      );
+      if (res.ok) {
+        const d = await res.json();
+        const url = d.deploymentUrl || d.url || "";
+        setP2pDeployMsg({
+          ok: true,
+          text: url ? `Deployed: ${url}` : "Deployed successfully",
+        });
+        setTimeout(fetchData, 1000);
+      } else {
+        const d = await res.json();
+        setP2pDeployMsg({ text: d.error || "Deploy failed" });
+      }
+    } catch {
+      setP2pDeployMsg({ text: "Network error" });
+    }
+    setP2pDeploying(false);
   }
 
   /* -- Render ----------------------------------------------- */
@@ -947,6 +988,28 @@ export default function ProjectsPage() {
                           </div>
                         )}
 
+                        {/* GitHub repo */}
+                        {project.repoUrl && (
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-neutral-500">
+                              Repo:
+                            </span>
+                            <a
+                              href={project.repoUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-xs text-blue-400 hover:text-blue-300 transition underline font-mono truncate max-w-xs"
+                            >
+                              {project.githubRepo || project.repoUrl}
+                            </a>
+                            {project.tier && (
+                              <span className="text-[10px] text-neutral-500 font-mono">
+                                Tier {project.tier}
+                              </span>
+                            )}
+                          </div>
+                        )}
+
                         {/* Deployment info */}
                         {project.deploymentUrl && (
                           <div className="flex items-center gap-2">
@@ -1330,6 +1393,28 @@ export default function ProjectsPage() {
                           {undeployMsg && (
                             <span className={`text-xs ${undeployMsg.ok ? "text-green-400" : "text-red-400"}`}>
                               {undeployMsg.text}
+                            </span>
+                          )}
+                          {/* P2P Deploy button — owner only, calls Phase 87 endpoint */}
+                          {isOwner && project.repoUrl && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleP2PDeploy(project.id);
+                              }}
+                              disabled={p2pDeploying}
+                              className="text-xs px-2.5 py-1 rounded-lg bg-violet-500/10 text-violet-400 hover:bg-violet-500/20 transition font-medium border border-violet-500/20 disabled:opacity-50"
+                            >
+                              {p2pDeploying
+                                ? "Deploying..."
+                                : project.deploymentStatus === "live"
+                                  ? "Redeploy"
+                                  : "Deploy"}
+                            </button>
+                          )}
+                          {p2pDeployMsg && (
+                            <span className={`text-xs ${p2pDeployMsg.ok ? "text-green-400" : "text-red-400"}`}>
+                              {p2pDeployMsg.text}
                             </span>
                           )}
                         </div>

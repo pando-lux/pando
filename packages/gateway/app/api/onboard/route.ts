@@ -9,7 +9,7 @@ import { getNodeConnection } from "@/lib/node-connection";
 // Public bootstrap peers (EC2-1 + EC2-2)
 const PUBLIC_BOOTSTRAPS = [
   "/ip4/54.82.241.132/tcp/4001/p2p/12D3KooWDRjGzaUuATiPuhg5D2k1CQTT6nCMpjdsDTVwrGDC4QVP",
-  "/ip4/34.201.82.126/tcp/4001/p2p/12D3KooWGU4PxDgFJoGopHBqikamKKAQBsMpLRoXMVTkU1Dm8a1c",
+  "/ip4/34.201.82.126/tcp/4001/p2p/12D3KooWLMnoeqedX6uTWoBbq2ZfRyYKpDtttdtp6uNfm3PeJ33d",
 ];
 
 export async function GET() {

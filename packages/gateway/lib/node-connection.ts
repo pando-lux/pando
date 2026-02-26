@@ -605,6 +605,21 @@ class NodeConnection {
     return await res.json();
   }
 
+  async triggerP2PDeploy(projectId: string, token: string): Promise<any> {
+    const url = getNodePool().getBestNodeUrl('primary');
+    const res = await fetch(`${url}/v1/projects/${encodeURIComponent(projectId)}/deploy`, {
+      method: "POST",
+      headers: this.authHeaders({ "Content-Type": "application/json", "X-User-Token": token }),
+      body: JSON.stringify({}),
+      signal: AbortSignal.timeout(120000),  // 2 min — P2P deploy can be slow
+    });
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}));
+      throw new Error((error as any).error || "Failed to deploy project");
+    }
+    return await res.json();
+  }
+
   async removeProjectHosting(projectId: string, token: string): Promise<any> {
     const url = getNodePool().getBestNodeUrl('primary');
     const res = await fetch(`${url}/v1/projects/${encodeURIComponent(projectId)}/hosting`, {
