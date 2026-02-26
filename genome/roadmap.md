@@ -1,7 +1,8 @@
 # Pando Roadmap
 
 > Last updated: 2026-02-26
-> All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, 88, **89**, **90** COMPLETE. Phase 53.7, 53.8, 68.4 COMPLETE. Phase 53.9 deferred. Phase 14 (Universal Onboarding) deferred. v2.1-v2.5 architecture complete.
+> All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, 88, **89**, **90**, **91** COMPLETE. Phase 53.7, 53.8, 68.4 COMPLETE. Phase 53.9 deferred. Phase 14 (Universal Onboarding) deferred. v2.1-v2.5 architecture complete.
+> **Phase 91 DONE:** P2P public IP announce — fix EC2/VPS node P2P isolation. `publicIp` added to `NodeConfig`. `PUBLIC_IP` env var wired through cli.ts → `NodeConfig.publicIp` → libp2p `announce` addresses. EC2 nodes now advertise their public IPs so other peers can dial them directly. EC2-1 peers jumped to 8. 18/18 smoke test PASS.
 > **Phase 90 DONE:** One-line install script — `curl -fsSL .../install.sh | bash`. Checks Node.js 18+, clones pando-lux/pando, npm install + build, starts node with bootstrap peer. Node-setup page updated with prominent one-liner section.
 > **Phase 89 DONE:** Developer Hub — `/dev` page. Live stats, quick start commands, 4 code example tabs, 12 expandable API endpoints with request/response examples, architecture overview. NavBar: Dev link.
 > **Phase 88 DONE:** Auto-detect tier from code at deploy time. `detectTierFromCode(appDir)` inspects package.json at the compute node. Doorman's tier is a hint; compute node's detection is authoritative.
