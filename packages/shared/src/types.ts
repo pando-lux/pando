@@ -413,6 +413,8 @@ export interface CapabilityProfile {
   storageBackend?: 'mongodb' | 'p2p' | 'none';
   /** Phase 87: Public IP/hostname for HTTP access (Tier 2 URL construction). Set via PUBLIC_IP env var. */
   publicAddress?: string;
+  /** Phase 97: Willing to accept compute task requests from peers. Set via /contribute claude-code. */
+  shareCompute?: boolean;
   /** Optional details per capability */
   details?: {
     api_keys?: { providers: string[] };

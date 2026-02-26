@@ -716,9 +716,9 @@ export function getNodeConnection(): NodeConnection {
  * Returns the best available node URL from the pool.
  * Phase 43: Multi-node aware — routes to healthiest node.
  *
- * @param preference - 'any' (default), 'claude' (nodes with Claude Code), 'primary' (write ops)
+ * @param preference - 'any' (default), 'primary' (write ops)
  */
-export function getNodeUrl(preference?: 'any' | 'claude' | 'primary'): string {
+export function getNodeUrl(preference?: 'any' | 'primary'): string {
   return getNodePool().getBestNodeUrl(preference);
 }
 
@@ -734,9 +734,9 @@ export function getApiToken(): string | undefined {
  *
  * @param path - API path (e.g. "/auth/guest")
  * @param options - fetch options
- * @param preference - node preference: 'any' (default), 'claude', 'primary'
+ * @param preference - node preference: 'any' (default), 'primary'
  */
-export async function fetchFromNode(path: string, options?: RequestInit, preference?: 'any' | 'claude' | 'primary'): Promise<Response> {
+export async function fetchFromNode(path: string, options?: RequestInit, preference?: 'any' | 'primary'): Promise<Response> {
   const pool = getNodePool();
   const url = pool.getBestNodeUrl(preference);
   const start = Date.now();

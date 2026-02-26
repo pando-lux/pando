@@ -37,7 +37,7 @@ export async function POST(request: Request) {
       headers,
       body: JSON.stringify({ message, tier, sessionId, projectId }),
       signal: AbortSignal.timeout(timeout),
-    }, 'claude');
+    }, 'any');
 
     if (!res.ok) {
       const error = await res.json().catch(() => ({ error: "Node error" }));

@@ -3,7 +3,7 @@ id: capability-registry
 type: service
 domain: resources
 entry: packages/node/src/platform/capability-registry.ts
-depends_on: [network]
+depends_on: [network, local-capability-store]
 depended_by: [resource-marketplace, resource-router, scheduler, api-server, gateway]
 exposes:
   - setLocalProfile(profile) — set this node's CapabilityProfile
@@ -11,11 +11,12 @@ exposes:
   - updatePeerProfile(profile) — store a peer's profile (from GossipSub)
   - getPeerProfile(peerId) — get a specific peer's profile (TTL-checked)
   - findCapableNodes(requirements) — find all peers with ALL specified capabilities
-  - canExecuteLocally(requirements) — check if local node can handle given requirements
+  - canExecuteLocally(requirements) — check if local node can handle given requirements (uses LocalCapabilityStore when available)
   - getAllProfiles() — get all known non-expired profiles (local profile never expires)
+  - setLocalCapabilityStore(store) — attach LocalCapabilityStore for own-task routing
   - cleanup() — prune expired profiles (local profile never expires)
 rules: []
-last_verified: 2026-02-22
+last_verified: 2026-02-26
 ---
 
 # Capability Registry
@@ -69,15 +70,31 @@ The `/network/capabilities` endpoint includes the local node's own profile (defe
 ## Phase 92: Direct TCP capability exchange
 On every peer connect, the node immediately sends its CapabilityProfile via direct TCP stream (`CAPABILITY_PROFILE_DIRECT` MessageType), in addition to GossipSub broadcasts. This guarantees compute peer discovery even when GossipSub mesh fails to form (requires D=6 peers; fails in small 2-3 node networks).
 
+## Phase 96: LocalCapabilityStore + Detection vs Sharing Split
+
+`canExecuteLocally()` now has two code paths:
+- **With LocalCapabilityStore** (normal, post-Phase 96): reads full detected capabilities via `localResourceTypeAvailable()`. Own tasks always work regardless of sharing preferences.
+- **Without LocalCapabilityStore** (fallback/legacy): reads broadcast profile.
+
+The mapping `localResourceTypeAvailable(req)`:
+- `compute_cpu` → `localCapStore.has('claude-code')` — detected locally, regardless of sharing
+- `compute_gpu` → `localCapStore.has('gpu')`
+- `storage/relay/gateway/validator/index` → `true` (always available locally)
+- `api_keys` → `false` (checked at runtime via ResourceRegistry, not capabilities)
+
+**Key invariant:** `canExecuteLocally()` being `true` does NOT imply the node is sharing its compute with the network. Sharing is controlled by `shareCompute` in `LocalCapabilityStore`. A node that has Claude Code but hasn't run `/contribute claude-code` can still execute its OWN tasks locally.
+
 ## Gotchas
 - Profiles are purely in-memory — all peer profiles are lost on node restart and must be re-discovered via GossipSub broadcasts or Phase 92 direct TCP exchange.
 - TTL of 15 minutes means peers must re-broadcast regularly or be "forgotten." The local node's own profile is exempt from TTL.
 - No dedup or conflict resolution — if a peer sends conflicting capability profiles, the latest one wins.
 - Claude Code is a **node capability** (detected by `capability-detector.ts`), NOT a resource. It appears in CapabilityProfile, not ResourceRegistry.
 - `api_keys` in CapabilityProfile is **always false** (hardcoded in capability-detector.ts). Actual API key availability is checked at runtime via `ResourceRegistry.findResources('ai_api_key')`.
+- `compute_cpu` in the BROADCAST profile is only `true` when the user has explicitly opted in via `/contribute claude-code`. Detection (having the binary) ≠ sharing.
 
 ## Key Files
 - `packages/node/src/platform/capability-registry.ts` — CapabilityRegistry class
-- `packages/node/src/platform/capability-detector.ts` — Auto-detects capabilities at startup, accepts `linkedUser` param
-- `packages/node/src/index.ts` — `updateCapabilityLinkedUser()` for live rebroadcast on login/logout
+- `packages/node/src/platform/capability-detector.ts` — Auto-detects capabilities at startup, accepts `localCapStore` param
+- `packages/node/src/platform/local-capability-store.ts` — Stores full detected + user sharing preferences (never broadcast)
+- `packages/node/src/index.ts` — `rebuildCapabilityProfile()`, `getLocalCapabilityStore()`
 - `packages/shared/src/types.ts` — CapabilityProfile, ResourceType types

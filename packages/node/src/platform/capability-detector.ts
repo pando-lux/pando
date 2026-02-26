@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import { platform, homedir } from 'node:os';
 import { NodeCapability } from '@pando/shared';
 import type { CapabilityProfile } from '@pando/shared';
+import type { LocalCapabilityStore } from './local-capability-store.js';
 
 export interface DetectionResult {
   capabilities: NodeCapability[];
@@ -152,12 +153,20 @@ function detectPlaywright(): boolean {
 /**
  * Detect a full CapabilityProfile for the local node.
  * This is the Phase A rich profile with ResourceType capabilities,
- * used by the CapabilityRegistry for routing decisions.
+ * used by the CapabilityRegistry for routing decisions (broadcast to peers).
+ *
+ * Phase 96: If localCapStore is provided, compute_cpu and the capabilities list
+ * reflect only what the user has explicitly SHARED — not everything detected.
+ * This ensures claude-code is not advertised to peers unless the user opted in.
  */
-export function detectCapabilityProfile(peerId: string, apiPort?: number, linkedUser?: { username: string } | null): CapabilityProfile {
+export function detectCapabilityProfile(peerId: string, apiPort?: number, linkedUser?: { username: string } | null, localCapStore?: LocalCapabilityStore | null): CapabilityProfile {
   const hasClaudeCodeBinary = detectClaudeCode();
   const hasGpuHardware = detectGpu();
   const hasKeys = hasApiKeys();
+
+  // Phase 96: Use shared capabilities for broadcast, fall back to detection if no store
+  const isSharingClaudeCode = localCapStore ? localCapStore.isSharing('claude-code') : hasClaudeCodeBinary;
+  const isSharingGpu = localCapStore ? localCapStore.isSharing('gpu') : hasGpuHardware;
 
   return {
     peerId,
@@ -170,19 +179,21 @@ export function detectCapabilityProfile(peerId: string, apiPort?: number, linked
     storageBackend: process.env.PANDO_STORAGE_URL ? 'mongodb' : 'none',
     // Phase 87: Public address for HTTP access (Tier 2 URL construction)
     publicAddress: detectPublicAddress(),
+    // Phase 97: shareCompute flag — true only if user has explicitly opted in via /contribute
+    shareCompute: localCapStore ? localCapStore.isShareCompute() : false,
     capabilities: {
-      relay: true,                     // every node relays
+      relay: true,                       // every node relays
       api_keys: hasKeys,
-      compute_cpu: hasClaudeCodeBinary,
-      compute_gpu: hasGpuHardware,
-      storage: true,                   // assume storage is always available
-      gateway: true,                   // API port is open since we're running
-      validator: true,                 // lightweight — always available
-      index: true,                     // search index — always available
+      compute_cpu: isSharingClaudeCode,  // Phase 96: only true if user opted in
+      compute_gpu: isSharingGpu,         // Phase 96: only true if user opted in
+      storage: true,                     // assume storage is always available
+      gateway: true,                     // API port is open since we're running
+      validator: true,                   // lightweight — always available
+      index: true,                       // search index — always available
     },
     details: {
       compute_cpu: {
-        claudeCode: hasClaudeCodeBinary,
+        claudeCode: isSharingClaudeCode,
         maxConcurrent: 3,
         os: platform() === 'win32' ? 'windows' : platform() === 'darwin' ? 'mac' : 'linux',
       },

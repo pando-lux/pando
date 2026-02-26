@@ -245,6 +245,12 @@ components:
     domain: resources
     summary: Dynamic capability detection + P2P broadcast
 
+  - id: local-capability-store
+    file: components/local-capability-store.md
+    type: service
+    domain: resources
+    summary: Persists full detected capabilities + user sharing preferences (never broadcast)
+
   - id: resource-router
     file: components/resource-router.md
     type: service

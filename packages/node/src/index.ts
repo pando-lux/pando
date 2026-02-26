@@ -27,6 +27,7 @@ import { DeployManager } from './core/deploy-manager.js';
 import { VersionProtocol } from './core/version-protocol.js';
 import { detectCapabilities, detectCapabilityProfile, type DetectionResult } from './platform/capability-detector.js';
 import { CapabilityRegistry } from './platform/capability-registry.js';
+import { LocalCapabilityStore } from './platform/local-capability-store.js';
 import { ResourceRouter } from './platform/resource-router.js';
 import { ResourceMeter } from './platform/resource-meter.js';
 import { ResourceMarketplace } from './platform/resource-marketplace.js';
@@ -137,6 +138,8 @@ export class PandoNode {
   private upgradeCallbacks: Array<(info: { version: string; peerId: string }) => void> = [];
   private peerCapabilities: Map<string, CapabilityDeclaration> = new Map();
   private capabilityRegistry: CapabilityRegistry = new CapabilityRegistry();
+  // Phase 96: Local capability store — separates detection from sharing
+  private localCapStore: LocalCapabilityStore | null = null;
   private capabilityBroadcastTimer: ReturnType<typeof setInterval> | null = null;
   private resourceRouter: ResourceRouter | null = null;
   private resourceMeter: ResourceMeter | null = null;
@@ -291,14 +294,24 @@ export class PandoNode {
       }
     } catch { /* no linked user, that's fine */ }
 
+    // Phase 96: Init LocalCapabilityStore before capability detection
+    this.localCapStore = new LocalCapabilityStore(this.config.dataDir || undefined);
+
     this.capabilityDetection = detectCapabilities(this.config.capabilities);
     this.detectedCapabilities = this.capabilityDetection.capabilities.map(c => c as string);
-    console.log(`Capabilities: ${this.detectedCapabilities.join(', ')}`);
+    // Phase 96: Write full detected list to local store (preserves existing sharedCapabilities)
+    this.localCapStore.setDetected(this.detectedCapabilities);
+    console.log(`Capabilities (local): ${this.detectedCapabilities.join(', ')}`);
+    const shared = this.localCapStore.getShared();
+    console.log(`Capabilities (shared): ${shared.length > 0 ? shared.join(', ') : '(none — use /contribute to share)'}`);
 
-    // Phase A: Detect rich capability profile and register locally
+    // Phase A + 96: Detect rich capability profile for broadcast
+    // detectCapabilityProfile reads sharedCapabilities from localCapStore — peers only see what user shared
     const linkedUserForProfile = this.linkedUser?.username ? { username: this.linkedUser.username } : null;
-    const capProfile = detectCapabilityProfile(this.identity.peerId, this.config.apiPort, linkedUserForProfile);
+    const capProfile = detectCapabilityProfile(this.identity.peerId, this.config.apiPort, linkedUserForProfile, this.localCapStore);
     this.capabilityRegistry.setLocalProfile(capProfile);
+    // Phase 96: Wire LocalCapabilityStore into registry for own-task routing
+    this.capabilityRegistry.setLocalCapabilityStore(this.localCapStore);
     const activeResources = Object.entries(capProfile.capabilities)
       .filter(([, v]) => v).map(([k]) => k);
     console.log(`Resources: ${activeResources.join(', ')}`);
@@ -617,6 +630,31 @@ export class PandoNode {
 
     this.requestReply.registerHandler('profile_query', async () => {
       return []; // Phase 27: ProfileCache removed — agents manage own profiles
+    });
+
+    // Phase 98: claude_task — one-shot Claude Code execution for P2P compute routing.
+    // Only handles requests when shareCompute=true (user opted in via /contribute claude-code).
+    // Receives a prompt, runs claude -p, returns text output. Stateless — no project creation.
+    this.requestReply.registerHandler('claude_task', async (req) => {
+      if (!this.localCapStore?.isShareCompute()) {
+        return { error: 'This node is not sharing compute. Use /contribute claude-code to opt in.' };
+      }
+      const { prompt, context, model } = req.payload || {};
+      if (!prompt) return { error: 'prompt required' };
+      const { ClaudeBackend } = await import('./core/ai-backend-claude.js');
+      const backend = new ClaudeBackend();
+      const fullPrompt = context ? `${context}\n\n${prompt}` : prompt;
+      const result = await backend.execute({
+        type: 'text',
+        prompt: fullPrompt,
+        options: { model: model || 'claude-sonnet-4-6' },
+      });
+      return {
+        success: result.success,
+        output: result.output,
+        error: result.error,
+        executedBy: this.identity!.peerId,
+      };
     });
 
     // Remote task queries — allows any node to query this node's tasks via P2P
@@ -2229,9 +2267,14 @@ location /apps/${projectId}/ {
     return new Map(this.peerCapabilities);
   }
 
-  /** Phase A: Get the local node's rich capability profile */
+  /** Phase A: Get the local node's rich capability profile (broadcast profile — shared caps only) */
   getCapabilityProfile(): CapabilityProfile | null {
     return this.capabilityRegistry.getLocalProfile();
+  }
+
+  /** Phase 96: Get the LocalCapabilityStore (full detected + sharing preferences) */
+  getLocalCapabilityStore(): LocalCapabilityStore | null {
+    return this.localCapStore;
   }
 
   /** Phase A: Get all known capability profiles (local + peers) */
@@ -2317,6 +2360,20 @@ location /apps/${projectId}/ {
       this.capabilityRegistry.setLocalProfile(localProfile);
       this.broadcastCapabilityProfile().catch(() => {});
     }
+  }
+
+  /**
+   * Phase 97: Rebuild and rebroadcast the capability profile after sharing preferences change.
+   * Called by /contribute and /revoke TUI commands after updating LocalCapabilityStore.
+   */
+  rebuildCapabilityProfile(): void {
+    if (!this.identity) return;
+    const linkedUserForProfile = this.linkedUser?.username ? { username: this.linkedUser.username } : null;
+    const newProfile = detectCapabilityProfile(this.identity.peerId, this.config.apiPort, linkedUserForProfile, this.localCapStore);
+    this.capabilityRegistry.setLocalProfile(newProfile);
+    this.broadcastCapabilityProfile().catch(() => {});
+    const shared = this.localCapStore?.getShared() || [];
+    console.log(`[capabilities] Profile rebuilt. Sharing: ${shared.length > 0 ? shared.join(', ') : '(none)'}`);
   }
 
   private async broadcastCapabilityProfile(): Promise<void> {
@@ -2728,6 +2785,36 @@ location /apps/${projectId}/ {
 
   getRequestReply(): RequestReplyManager | null {
     return this.requestReply;
+  }
+
+  /**
+   * Phase 98: Route a compute task to a peer that has shareCompute=true and compute_cpu capability.
+   * Used when the local node has no Claude Code. Returns the peer's output or null if no peer found.
+   * Timeout: 5 minutes (collect-and-return — no streaming in V1).
+   */
+  async routeClaudeTaskP2P(prompt: string, context?: string): Promise<{ output: string; executedBy: string } | null> {
+    if (!this.requestReply) return null;
+    // Find peers that have opted in to sharing compute
+    const candidates = this.capabilityRegistry.getAllProfiles().filter(p =>
+      p.shareCompute === true &&
+      p.capabilities.compute_cpu === true &&
+      p.peerId !== this.identity?.peerId
+    );
+    if (candidates.length === 0) return null;
+    // Pick first available candidate
+    const peer = candidates[0];
+    try {
+      const result = await this.requestReply.request(
+        peer.peerId,
+        'claude_task',
+        { prompt, context },
+        5 * 60 * 1000  // 5 min timeout
+      ) as any;
+      if (result?.error) return null;
+      return { output: result.output || '', executedBy: result.executedBy || peer.peerId };
+    } catch {
+      return null;
+    }
   }
 
   getReputationManager(): ReputationManager | null {

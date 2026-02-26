@@ -16,7 +16,6 @@ export interface NodeEntry {
   latencyMs: number;
   consecutiveFailures: number;
   capabilities: string[];
-  hasClaudeCode: boolean;
   circuitOpen: boolean;
   circuitOpenUntil: number;
 }
@@ -30,7 +29,6 @@ function defaultEntry(url: string): NodeEntry {
     latencyMs: 0,
     consecutiveFailures: 0,
     capabilities: [],
-    hasClaudeCode: false,
     circuitOpen: false,
     circuitOpenUntil: 0,
   };
@@ -63,11 +61,11 @@ class NodePool {
 
   constructor() {
     // Bootstrap seed nodes: env var > hardcoded public nodes > localhost
+    // Phase 99: Only seed with trusted compute nodes that have stable public IPs.
+    // Discovery via /network/capabilities will find the rest.
     const FALLBACK_SEEDS = [
-      'http://54.145.144.221:4000',  // Lightsail-1
       'http://54.82.241.132:4000',   // EC2-1
       'http://34.201.82.126:4000',   // EC2-2
-      'http://3.237.175.38:4000',    // Lightsail-2
     ];
     const nodeList = process.env.PANDO_NODES?.split(',').map(s => s.trim()).filter(Boolean);
     const singleNode = process.env.PANDO_NODE_URL;
@@ -117,7 +115,7 @@ class NodePool {
   }
 
   /** Get the best node URL for a given request type */
-  getBestNodeUrl(preference: 'any' | 'claude' | 'primary' = 'any'): string {
+  getBestNodeUrl(preference: 'any' | 'primary' = 'any'): string {
     if (preference === 'primary') return this.primaryUrl;
 
     const now = Date.now();
@@ -131,8 +129,6 @@ class NodePool {
         entry.circuitOpen = false;
       }
       if (!entry.healthy) continue;
-
-      if (preference === 'claude' && !entry.hasClaudeCode) continue;
       candidates.push(entry);
     }
 
@@ -226,11 +222,6 @@ class NodePool {
         // Extract capabilities from status
         if (data.capabilities && Array.isArray(data.capabilities)) {
           entry.capabilities = data.capabilities;
-          entry.hasClaudeCode = data.capabilities.includes('claude-code');
-        }
-        if (data.schedulerRunning !== undefined) {
-          // If scheduler is running, node likely has Claude Code
-          entry.hasClaudeCode = entry.hasClaudeCode || data.schedulerRunning;
         }
       } catch {
         entry.lastCheck = Date.now();
@@ -268,19 +259,17 @@ class NodePool {
         if (!Array.isArray(profiles)) continue;
 
         for (const profile of profiles) {
+          // Phase 99: Use publicAddress (set via PUBLIC_IP env var on EC2 nodes) as the
+          // canonical reachable host. httpApi.host may be a private IP (NAT/VPC).
+          // Only add nodes that explicitly advertise a public address.
+          const publicAddress = profile.publicAddress;
+          if (!publicAddress || isPrivateIp(publicAddress)) continue;
+
           const httpApi = profile.details?.httpApi;
           if (!httpApi || !httpApi.port) continue;
 
-          // Determine host — use the profile's httpApi.host, but skip private IPs
-          let host = httpApi.host;
-          if (!host || isPrivateIp(host)) {
-            // If profile has a known public IP in addresses, we could use that
-            // For now, skip nodes advertising private IPs
-            continue;
-          }
-
           const protocol = httpApi.https ? 'https' : 'http';
-          const url = `${protocol}://${host}:${httpApi.port}`;
+          const url = `${protocol}://${publicAddress}:${httpApi.port}`;
 
           // Don't re-add nodes we already know about
           if (this.nodes.has(url)) continue;

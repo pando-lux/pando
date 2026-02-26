@@ -18,7 +18,6 @@ export async function GET() {
       lastCheck: n.lastCheck,
       consecutiveFailures: n.consecutiveFailures,
       capabilities: n.capabilities,
-      hasClaudeCode: n.hasClaudeCode,
       circuitOpen: n.circuitOpen,
     })),
     primaryUrl: status.primaryUrl,

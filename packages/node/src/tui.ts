@@ -1494,10 +1494,32 @@ class PandoTUI {
     const serviceLower = firstArg?.toLowerCase() || '';
 
     if (serviceLower === 'claude-code' || serviceLower === 'claudecode') {
+      // Phase 97: Explicit opt-in to share Claude Code with the network
+      const localCapStore = this.node.getLocalCapabilityStore?.();
+      if (!localCapStore) {
+        this.log(`${c.red}Capability store not available.${c.reset}`);
+        return;
+      }
+      if (!localCapStore.has('claude-code')) {
+        this.log('');
+        this.log(`${c.red}Claude Code is not detected on this node.${c.reset}`);
+        this.log(`${c.dim}Install Claude Code and log in (run: claude login), then restart the node.${c.reset}`);
+        this.log('');
+        return;
+      }
+      if (localCapStore.isSharing('claude-code')) {
+        this.log('');
+        this.log(`${c.yellow}Claude Code is already being shared with the network.${c.reset}`);
+        this.log(`${c.dim}Use /revoke claude-code to stop sharing.${c.reset}`);
+        this.log('');
+        return;
+      }
+      localCapStore.setShared('claude-code');
+      this.node.rebuildCapabilityProfile?.();
       this.log('');
-      this.log(`${c.yellow}Claude Code is detected automatically as a node capability.${c.reset}`);
-      this.log(`${c.dim}It shows under "My Nodes" on the Resources page — no need to /contribute it separately.${c.reset}`);
-      this.log(`${c.dim}Use /status to see your node's capabilities.${c.reset}`);
+      this.log(`${c.green}✓ Claude Code is now shared with the network.${c.reset}`);
+      this.log(`${c.dim}Peers can route compute tasks to your node. You will earn Lux per task.${c.reset}`);
+      this.log(`${c.dim}Use /revoke claude-code to stop sharing at any time.${c.reset}`);
       this.log('');
       return;
     }
@@ -1619,7 +1641,31 @@ class PandoTUI {
   private async doRevoke(argsStr: string): Promise<void> {
     const id = argsStr.trim();
     if (!id) {
-      this.log(`${c.dim}Usage: /revoke <id>${c.reset}`);
+      this.log(`${c.dim}Usage: /revoke <id> or /revoke claude-code${c.reset}`);
+      return;
+    }
+
+    // Phase 97: /revoke claude-code stops sharing compute with the network
+    if (id === 'claude-code' || id === 'claudecode') {
+      const localCapStore = this.node.getLocalCapabilityStore?.();
+      if (!localCapStore) {
+        this.log(`${c.red}Capability store not available.${c.reset}`);
+        return;
+      }
+      if (!localCapStore.isSharing('claude-code')) {
+        this.log('');
+        this.log(`${c.yellow}Claude Code is not currently being shared.${c.reset}`);
+        this.log(`${c.dim}Use /contribute claude-code to start sharing.${c.reset}`);
+        this.log('');
+        return;
+      }
+      localCapStore.unsetShared('claude-code');
+      this.node.rebuildCapabilityProfile?.();
+      this.log('');
+      this.log(`${c.green}✓ Claude Code is no longer shared with the network.${c.reset}`);
+      this.log(`${c.dim}Your node will still use Claude Code for its own tasks.${c.reset}`);
+      this.log(`${c.dim}Peers will stop routing tasks to you within 15 minutes (TTL).${c.reset}`);
+      this.log('');
       return;
     }
 

@@ -48,7 +48,15 @@ export async function registerPlatformRoutes(
         }
 
         if (!getAM() || !hasClaudeCodeAuth()) {
-          const noAgentReply = 'No AI-capable nodes available. Ask a node operator to enable Claude Code.';
+          // Phase 98: Try P2P routing to a shareCompute peer before returning error
+          const p2pResult = await node.routeClaudeTaskP2P?.(trimmed);
+          if (p2pResult) {
+            if (threadStore && threadId) {
+              threadStore.addMessage(threadId, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' as any });
+            }
+            return { status: 'ok', threadId, reply: p2pResult.output, tier: 'simple', routedTo: p2pResult.executedBy };
+          }
+          const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
           if (threadStore && threadId) {
             threadStore.addMessage(threadId, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' as any });
           }
@@ -81,7 +89,18 @@ export async function registerPlatformRoutes(
 
       // Intent is 'build' — create project, run preflight, spawn per-project manager
       if (!getAM() || !hasClaudeCodeAuth()) {
-        const noAgentReply = 'No AI-capable nodes available. Ask a node operator to enable Claude Code.';
+        // Phase 98: Try P2P routing to a shareCompute peer before returning error
+        const p2pResult = await node.routeClaudeTaskP2P?.(trimmed);
+        if (p2pResult) {
+          if (threadStore) {
+            threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+            threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
+            threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
+            threadStore.addMessage(threadId, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' as any });
+          }
+          return { status: 'ok', threadId, reply: p2pResult.output, tier: 'simple', routedTo: p2pResult.executedBy };
+        }
+        const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
         if (threadStore) {
           threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
@@ -310,7 +329,13 @@ export async function registerPlatformRoutes(
       if (threadMeta?.projectId) {
         // Existing project thread — route directly to manager
         if (!getAM() || !hasClaudeCodeAuth()) {
-          const noAgentReply = 'No AI-capable nodes available. Ask a node operator to enable Claude Code.';
+          // Phase 98: Try P2P routing before returning error
+          const p2pResult = await node.routeClaudeTaskP2P?.(plaintextForProcessing);
+          if (p2pResult) {
+            threadStore.addMessage(id, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' });
+            return { status: 'ok', threadId: id, reply: p2pResult.output, tier: 'simple', routedTo: p2pResult.executedBy };
+          }
+          const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
           threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
           return { status: 'ok', threadId: id, reply: noAgentReply, tier: 'simple' };
         }
@@ -459,7 +484,7 @@ export async function registerPlatformRoutes(
 
     // ── Capability Declaration API ──────────────────────────────
 
-    // GET /capabilities — local node capability profile (Phase A enriched + legacy)
+    // GET /capabilities — local node capability profile (Phase A enriched + Phase 96 local/shared split)
     fastify.get('/capabilities', async () => {
       const identity = node.getIdentity();
       const declaration = node.getCapabilityDeclaration();
@@ -478,12 +503,19 @@ export async function registerPlatformRoutes(
       // Phase A: include rich capability profile if available
       const capabilityProfile = node.getCapabilityProfile?.() || null;
 
+      // Phase 96: include local vs shared breakdown
+      const localCapStore = node.getLocalCapabilityStore?.() || null;
+      const localData = localCapStore?.getData() || null;
+
       return {
         peerId: identity?.peerId || null,
         capabilities: declaration?.capabilities || node.getCapabilities(),
         detectedAt: declaration?.detectedAt || null,
         peers,
         profile: capabilityProfile,
+        // Phase 96: local = all detected (private), shared = what peers see
+        local: localData ? { capabilities: localData.capabilities, detectedAt: localData.detectedAt } : null,
+        shared: localData ? { capabilities: localData.sharedCapabilities, shareCompute: localData.shareCompute } : null,
       };
     });
 

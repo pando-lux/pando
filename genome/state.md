@@ -148,6 +148,13 @@ All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88**, **89**, 
 - ✅ Import boundary lint: check-imports.mjs passes clean
 - ✅ All 5 nodes running v2.3 master
 
+**Phases 96–99: Three-Tier Capability Architecture — COMPLETE (2026-02-26).**
+Detection ≠ Sharing. Nodes always know what they have locally; peers only see what the user opts in to share.
+- **Phase 96**: `LocalCapabilityStore` (`~/.pando/local-capabilities.json`) — persists full detected capabilities + sharing prefs. Never broadcast. `CapabilityRegistry.canExecuteLocally()` now uses it (own tasks always work). `capability-detector` split: detected caps go to store; `compute_cpu` in broadcast profile only `true` if user opted in.
+- **Phase 97**: `shareCompute` flag on `CapabilityProfile`. `/contribute claude-code` → opt in; `/revoke claude-code` → opt out. `PandoNode.rebuildCapabilityProfile()` rebroadcasts on change.
+- **Phase 98**: `claude_task` P2P handler on PandoNode — accepts compute requests only when `shareCompute: true`. `routeClaudeTaskP2P()` on PandoNode — gateway-facing EC2 nodes forward Claude tasks to opted-in peers via RequestReply (5-min timeout). `platform-api.ts` tries P2P routing before returning "no Claude" error.
+- **Phase 99**: NodePool simplified — removed `hasClaudeCode` field + `'claude'` routing preference. `discoverNodes()` now uses `profile.publicAddress` (not `httpApi.host`) — only adds nodes with public IPs. FALLBACK_SEEDS reduced from 4 → 2 (EC2-1, EC2-2 only). Chat routes use `'any'` instead of `'claude'`.
+
 **Phase 88: Auto-Detect Tier from Code — COMPLETE (2026-02-25).**
 Tier is now detected from the actual code at deploy time on the compute node, not guessed by the doorman AI. `detectTierFromCode(appDir)` inspects package.json (start script, server deps, main entry, backend/ dir) after git clone. If detected tier differs from the project's stored tier, the compute node uses the detected tier and the caller auto-corrects the project record. Doorman's tier remains as a hint for agent context.
 - **Detection logic**: No package.json → Tier 1. Start script → Tier 2. Server deps (express, fastify, socket.io, ws) → Tier 2. `main` points to server file → Tier 2. backend/ dir → Tier 2. Default → Tier 1.

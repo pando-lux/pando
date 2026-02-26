@@ -42,7 +42,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
       headers: nodeHeaders(request),
       body: JSON.stringify(forwardBody),
       signal: AbortSignal.timeout(30000),
-    }, 'claude');
+    }, 'any');
 
     if (!res.ok) {
       const error = await res.json().catch(() => ({ error: "Node error" }));

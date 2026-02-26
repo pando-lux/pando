@@ -10,6 +10,7 @@
  */
 
 import type { CapabilityProfile, ResourceType } from '@pando/shared';
+import type { LocalCapabilityStore } from './local-capability-store.js';
 
 interface StoredProfile {
   profile: CapabilityProfile;
@@ -21,6 +22,8 @@ const TTL_MS = 15 * 60 * 1000; // 15 minutes
 export class CapabilityRegistry {
   private profiles: Map<string, StoredProfile> = new Map();
   private localProfile: CapabilityProfile | null = null;
+  // Phase 96: LocalCapabilityStore for own-task routing (never filters by sharing prefs)
+  private localCapStore: LocalCapabilityStore | null = null;
 
   /** Set the local node's profile */
   setLocalProfile(profile: CapabilityProfile): void {
@@ -71,11 +74,45 @@ export class CapabilityRegistry {
     return results;
   }
 
+  /**
+   * Phase 96: Attach the LocalCapabilityStore for local task routing.
+   * When set, canExecuteLocally() reads from the full detected capabilities
+   * instead of the broadcast profile (which only reflects shared capabilities).
+   */
+  setLocalCapabilityStore(store: LocalCapabilityStore): void {
+    this.localCapStore = store;
+  }
+
   /** Check if local node can execute a task with given requirements */
   canExecuteLocally(requirements: ResourceType[]): boolean {
-    if (!this.localProfile) return false; // No profile = cannot claim tasks (must declare capabilities)
     if (requirements.length === 0) return true; // No requirements = any node
+    // Phase 96: Use LocalCapabilityStore when available — reflects full detected capabilities,
+    // not just shared ones. Own tasks always work regardless of sharing preferences.
+    if (this.localCapStore) {
+      return requirements.every(req => this.localResourceTypeAvailable(req));
+    }
+    // Fallback: use broadcast profile (legacy path — no LocalCapabilityStore set)
+    if (!this.localProfile) return false;
     return requirements.every(req => this.localProfile!.capabilities[req]);
+  }
+
+  /**
+   * Phase 96: Map a ResourceType requirement to whether this node has it locally.
+   * Uses LocalCapabilityStore (full detected list, never filtered by sharing).
+   */
+  private localResourceTypeAvailable(req: ResourceType): boolean {
+    if (!this.localCapStore) return false;
+    switch (req) {
+      case 'compute_cpu': return this.localCapStore.has('claude-code');
+      case 'compute_gpu': return this.localCapStore.has('gpu');
+      case 'storage':     return true;  // always available
+      case 'relay':       return true;
+      case 'gateway':     return true;
+      case 'validator':   return true;
+      case 'index':       return true;
+      case 'api_keys':    return false; // checked at runtime via ResourceRegistry
+      default:            return false;
+    }
   }
 
   /** Get all known profiles (for API) */
