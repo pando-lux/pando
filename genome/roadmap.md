@@ -1,6 +1,6 @@
 # Pando Roadmap
 
-> Last updated: 2026-02-26
+> Last updated: 2026-02-26 (Phase 113 added: Node Health Protocol)
 > All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, 88, **89**, **90**, **91**, **92** COMPLETE. Phase 53.7, 53.8, 68.4 COMPLETE. Phase 53.9 deferred. Phase 14 (Universal Onboarding) deferred. v2.1-v2.5 architecture complete.
 > **Phase 93 DONE:** Direct TCP stream for request/reply unicast calls — P2P storage proxy calls now use direct TCP stream first (sendMessage), falling back to GossipSub if direct TCP fails. Makes `pando/storage-proxy` P2P calls between LS-2 and EC2-1 reliable without GossipSub mesh dependency. `REQUEST_REPLY_REQUEST` + `REQUEST_REPLY_REPLY` MessageTypes added. Broadcast query() (to: '*') still uses GossipSub. 18/18 smoke test PASS.
 > **Phase 92 DONE:** Direct TCP stream capability profile exchange — fix GossipSub mesh failures in small networks. After simultaneous node restarts, GossipSub mesh (D=6) often fails to form with only 1-2 peers. `CAPABILITY_PROFILE_DIRECT` MessageType added. On peer connect, nodes now send their capability profile via direct TCP stream (2s delay) in addition to GossipSub broadcasts. This guarantees compute peers are discovered even when GossipSub mesh fails. 18/18 smoke test PASS.
@@ -1075,6 +1075,143 @@ Node earns Lux. Lux has utility. Framing: not "pay for infrastructure" but "inve
 - [ ] Protected commands (rm -rf, system paths) return Guardrails block
 - [ ] Personal node earns Lux uptime epochs when laptop is off
 - [ ] SSH is NOT required at any step
+
+---
+
+## Phase 113 — Node Health Protocol: Maintenance Agreement Model (SPEC READY)
+
+> **Status:** Not started. Depends on Phase 112 (repair loop) for the DevOps agent execution path. Pre-diagnosis and notification logic can be built independently of Phase 112.
+> **Why this matters:** Phase 112 handles the mechanics of autonomous repair. This phase handles **consent**. Without it, any repair on an externally-contributed node requires a per-incident governance vote. That is too slow and too manual for a network meant to self-heal. Operators must pre-authorize what the network may do to their node — once, at contribution time.
+> **Rule file:** `genome/rules/node-health-protocol.md` — full spec, security model, notification logic.
+
+### The Gap in Phase 112
+
+Phase 112 assumes credentials are available and consent is given. Neither is defined for externally-contributed nodes. Phase 113 fills both gaps:
+
+1. **Consent model** — operators choose M0–M3 at contribution time
+2. **Pre-diagnosis** — lightweight observational checks before any repair action
+3. **Notification windows** — M1/M2 repairs give operators time to reject before action
+4. **Pattern detection** — regional failures skip repair and propose governance policy update
+
+### Maintenance Tiers
+
+| Tier | Name | What the Network May Do | Notification Window |
+|---|---|---|---|
+| **M0** | Notify Only | Nothing. Alerts only. | 72h for owner to act. |
+| **M1** | Restart | PM2/systemd restart if down 24h+ | 1h owner reject window. |
+| **M2** | Instance Reboot | EC2 reboot if M1 fails | 12h owner reject window. |
+| **M3** | Full Maintenance | All `SAFE_REPAIR_OPS` (Phase 111) | No window. |
+
+Default: **M0**. Operators opt in to autonomous action explicitly.
+
+### Automated Pre-Diagnosis (No Credentials Required)
+
+Before any repair, Council runs:
+```
+Step 1: P2P reachable?
+  YES → node alive, not a crash. Log alert, skip repair.
+  NO  → proceed
+
+Step 2: API port reachable? (HTTP, no auth)
+  YES → node alive, P2P routing issue. Notify operator, no repair.
+  NO  → proceed
+
+Step 3: EC2 instance state? (read-only DescribeInstances via Phase 110 scoped token)
+  RUNNING    → systemd/PM2 crash → M1 appropriate
+  STOPPED    → billing/manual stop → M2 appropriate or human escalation
+  TERMINATED → catastrophic → human escalation ONLY, no autonomous action
+
+Step 4: Pattern detection
+  3+ nodes same AWS region + same symptom within 1h:
+  → systemic cause (outage / policy change)
+  → SKIP individual repairs
+  → Council proposes governance update to bootstrap/config (Tier 2 vote)
+```
+
+### Notification Channels
+
+Before acting within a notification window, Council sends via all available channels:
+1. **P2P message** — queued; delivered on next connection
+2. **Telegram** — if operator linked via `/contribute telegram-bot`
+3. **Governance identity page** — public record visible on gateway
+
+**Anonymous operators** (no channel, node offline 24h+, M1+ chosen):
+Action proceeds without notification window. Council logs: "M1 pre-authorized, no contact channel, proceeding." Operators who want control must either choose M0 or link a notification channel at contribution time.
+
+### Implementation Tasks
+
+**Task 1: `maintenanceTier` on ResourceRegistry**
+- Add `maintenanceTier: 'M0' | 'M1' | 'M2' | 'M3'` to node resource records in `platform/resource-marketplace.ts` or wherever contributed node records live
+- Default: `M0`
+- Settable at contribution time (TUI `/contribute node` or via `PATCH /v1/resources/:id`)
+- Persisted in MongoDB resource record + P2P-synced via ResourceRegistry
+
+**Task 2: Pre-diagnosis chain in `platform/council.ts`**
+```typescript
+async diagnoseNode(peerId: string, resourceId: string): Promise<DiagnosisResult> {
+  // Step 1: P2P reachable?
+  const p2pAlive = await this.network.ping(peerId);
+  if (p2pAlive) return { type: 'routing_issue', repairNeeded: false };
+
+  // Step 2: API port?
+  const apiAlive = await fetch(`http://${nodeIp}:4000/v1/status`).catch(() => null);
+  if (apiAlive) return { type: 'p2p_routing', repairNeeded: false };
+
+  // Step 3: EC2 state (read-only scoped token)
+  const instanceState = await this.getEC2State(resourceId);  // via Phase 110
+  if (instanceState === 'terminated') return { type: 'catastrophic', repairNeeded: false, escalate: true };
+
+  // Step 4: Pattern detection
+  const sameRegionDown = await this.countNodesDownInRegion(awsRegion, '1h');
+  if (sameRegionDown >= 3) return { type: 'systemic', repairNeeded: false, proposeGovernance: true };
+
+  return { type: instanceState === 'stopped' ? 'm2' : 'm1', repairNeeded: true };
+}
+```
+
+**Task 3: Notification window logic**
+```typescript
+async notifyAndWait(operatorId: string, resourceId: string, repairPlan: RepairPlan): Promise<boolean> {
+  const tier = repairPlan.maintenanceTier; // 'M1' | 'M2'
+  const windowMs = tier === 'M1' ? 3600000 : 43200000; // 1h or 12h
+
+  // Send notifications
+  await this.sendP2PMessage(operatorPeerId, `REPAIR_PENDING: ${repairPlan.description}`);
+  if (operatorTelegram) await this.sendTelegram(operatorTelegram, repairPlan.description);
+
+  // Wait for rejection or window expiry
+  const rejected = await this.waitForRejection(resourceId, windowMs);
+  if (rejected) {
+    this.logToMinutes(`Repair rejected by operator for ${resourceId}`);
+    return false;
+  }
+  return true; // window expired, proceed
+}
+```
+
+**Task 4: Pattern detection → Tier 2 governance proposal**
+- When `sameRegionDown >= 3`: Council assembles a governance proposal: "Systemic failure in AWS ${region}. Proposed update to bootstrap endpoints."
+- Proposal type: `infrastructure_update`, tier: 2 (72h vote)
+- Individual repairs suspended for all affected nodes until proposal resolves
+
+**Task 5: TUI UX for tier selection**
+- In `/contribute node` flow, after node is connected and validated:
+  - Show one-liner explanation of tiers
+  - Default: M0 (no confirmation needed)
+  - Warn for M1+: "Without a notification channel, repairs will proceed without warning"
+- In `/resources` output: show current `maintenanceTier` for each contributed node
+- `PATCH /v1/resources/:id` body: `{ maintenanceTier: 'M1' }` — changeable at any time
+
+### Test Bar
+- [ ] Contribute node → default `maintenanceTier` is M0
+- [ ] Change tier to M1 via `PATCH /v1/resources/:id` → ResourceRegistry updated
+- [ ] Node goes offline 24h → pre-diagnosis runs, classifies type (M1-appropriate systemd crash)
+- [ ] Notification sent via P2P + Telegram → 1h window starts
+- [ ] Owner rejects within window → no repair, Council logs rejection
+- [ ] Window expires with no rejection → M1 action executed, Council logs result
+- [ ] 3+ nodes in same AWS region down within 1h → pattern detection fires → governance proposal created (not repair)
+- [ ] Anonymous M1 node (no notification channel): repair executed without window, logged to Council minutes
+- [ ] `TERMINATED` EC2 instance → pre-diagnosis returns catastrophic, no autonomous repair
 
 ---
 
