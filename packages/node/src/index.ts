@@ -1,3 +1,17 @@
+// @know
+// entity PandoNode {
+//   type: module
+//   blueprint: NODE_CORE
+//   status: active
+//   description: "Main PandoNode class that wires together all subsystems (kernel, core, platform layers), manages startup/shutdown lifecycle, and exposes getters for every subsystem."
+//   depends_on: [PandoNetwork, PandoLedger, ApiServer, LedgerSync, GovernanceSync, AgentManager, Scheduler, HealthMonitor, Guardrails, EmissionWitness, SecurityMonitor, CapabilityRegistry, ResourceRegistry, StorageBackend]
+//   @gotcha("PandoNode is a GOD OBJECT with 50+ private fields — each subsystem is nullable and initialized conditionally during start(). Always null-check before use.")
+//   @gotcha("detectClaudeCode() has a 3-second timeout — on slow systems (Windows especially) this can delay startup.")
+//   @gotcha("Daily emission cap (500 Lux) is tracked in-memory (dailyEmissions) and reset by date string comparison — restarting the node resets the counter.")
+//   @why("Subsystems are initialized in layered order: kernel (network, ledger, sync) -> core (agents, storage) -> platform (scheduler, resources). This matches the import boundary rule.")
+// }
+// @end
+
 import { loadOrCreateIdentity, loadRawIdentityFile, saveIdentity, type NodeIdentity, type NodeConfig, WorkType, MessageType, NodeCapability, type CapabilityDeclaration, type NodeHealth, type OperationalMode } from '@pando/shared';
 import { PandoLedger } from '@pando/ledger';
 import { PandoNetwork } from './kernel/network.js';
@@ -2032,15 +2046,14 @@ location /apps/${projectId}/ {
             let dialed = 0;
             for (const peer of exchangedPeers) {
               if (peer.peerId === myPeerId || connectedPeers.has(peer.peerId)) continue;
-              console.log(`[peer-exchange] Trying ${peer.peerId.slice(0, 12)} (${peer.addrs.length} addrs: ${peer.addrs.map(a => a.replace(/\/p2p\/.*/, '')).join(', ')})`);
               for (const addr of peer.addrs) {
                 try {
                   await network.dialPeer(addr);
                   dialed++;
                   console.log(`[peer-exchange] Connected to ${peer.peerId.slice(0, 12)} via exchange from ${from.slice(0, 12)}`);
                   break;
-                } catch (err: any) {
-                  console.log(`[peer-exchange] Failed to dial ${addr.replace(/\/p2p\/.*/, '')}: ${err.message?.slice(0, 80)}`);
+                } catch {
+                  // addr may be unreachable, try next
                 }
               }
             }
