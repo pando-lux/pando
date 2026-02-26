@@ -363,13 +363,31 @@ export class PandoNetwork {
     return this.peers.size;
   }
 
-  /** Get connected peer addresses for peer exchange (share with other nodes so they can dial). */
+  /** Get connected peer addresses for peer exchange (share with other nodes so they can dial).
+   *  Combines connection addresses + saved known-peers (which include public/announce IPs). */
   getConnectedPeerAddresses(): { peerId: string; addrs: string[] }[] {
     if (!this.node) return [];
+    const known = this.loadKnownPeers();
     const result: { peerId: string; addrs: string[] }[] = [];
     for (const peerId of this.peers.keys()) {
+      const addrSet = new Set<string>();
+      // Connection addresses (current TCP socket)
       const connections = this.node.getConnections().filter(c => c.remotePeer.toString() === peerId);
-      const addrs = connections.map(c => c.remoteAddr.toString()).filter(a => !a.includes('/p2p-circuit/'));
+      for (const c of connections) {
+        const addr = c.remoteAddr.toString();
+        if (!addr.includes('/p2p-circuit/')) addrSet.add(addr);
+      }
+      // Known-peer saved addresses (often include public/announce IPs from previous sessions)
+      const knownPeer = known.find(p => p.peerId === peerId);
+      if (knownPeer) {
+        for (const addr of knownPeer.addrs) {
+          if (!addr.includes('/p2p-circuit/')) addrSet.add(addr);
+        }
+      }
+      // Ensure all addresses include /p2p/ suffix for dialability
+      const addrs = Array.from(addrSet).map(a =>
+        a.includes('/p2p/') ? a : `${a}/p2p/${peerId}`
+      );
       if (addrs.length > 0) {
         result.push({ peerId, addrs });
       }
