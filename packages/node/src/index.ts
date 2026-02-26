@@ -964,6 +964,32 @@ export class PandoNode {
       }
     }
 
+    // Phase 69 (follow-up): Wire P2P credential proxy for non-secure nodes.
+    // If this node has no decryption capability, proxy code_repository credential requests to compute peers.
+    {
+      const credStore = (this as any)._credentialStore as import('./core/credential-store.js').CredentialStore | undefined;
+      if (!credStore?.hasDecryptionCapability()) {
+        this.resourceRegistry.setP2PCredentialProxy(async (resourceId: string, type: string) => {
+          if (!this.requestReply || !this.capabilityRegistry) return null;
+          const allProfiles = this.capabilityRegistry.getAllProfiles();
+          const computePeers = allProfiles.filter((p: any) =>
+            p.storageBackend === 'mongodb' && p.peerId !== this.identity?.peerId
+          );
+          for (const peer of computePeers.slice(0, 3)) {
+            try {
+              const resp = await this.requestReply.request(peer.peerId, 'pando/get-credential', { resourceId, type }, 10_000);
+              if (resp?.success && resp.payload?.credential) {
+                console.log(`[resources] P2P credential proxy: got ${type} from ${peer.peerId.slice(0, 12)}`);
+                return resp.payload.credential;
+              }
+            } catch { /* try next peer */ }
+          }
+          console.warn(`[resources] P2P credential proxy: no compute peer could decrypt ${resourceId.slice(0, 8)}`);
+          return null;
+        });
+      }
+    }
+
     // Phase B: Initialize ResourceRouter — smart task routing + error correction
     this.resourceRouter = new ResourceRouter(this.capabilityRegistry, this.requestReply);
     if (this.reputation) {
@@ -1272,6 +1298,20 @@ location /apps/${projectId}/ {
         console.log(`[deploy] Failed for ${projectId}: ${err.message}`);
         return { status: 'failed', error: err.message };
       }
+    });
+
+    // Phase 69 (follow-up): P2P credential proxy handler — EC2 nodes decrypt code_repository credentials
+    // for non-secure nodes that lack CREDENTIAL_MASTER_KEY. Only code_repository type is allowed.
+    this.requestReply.registerHandler('pando/get-credential', async (req) => {
+      const { resourceId, type } = req.payload || {};
+      if (!resourceId) return { error: 'Missing resourceId' };
+      // Security: only proxy code_repository credentials (GitHub PAT). S3/MongoDB MUST stay on EC2.
+      if (type !== 'code_repository') return { error: 'Credential type not proxyable' };
+      const credStore = (this as any)._credentialStore as import('./core/credential-store.js').CredentialStore | undefined;
+      if (!credStore?.hasDecryptionCapability()) return { error: 'This node cannot decrypt credentials' };
+      const credential = await credStore.getCredential(resourceId);
+      if (!credential) return { error: 'Credential not found or decryption failed' };
+      return { credential };
     });
 
     // Phase 80: Register undeploy-app handler — remove apps from compute nodes

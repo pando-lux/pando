@@ -560,7 +560,7 @@ export class Agent {
       }
     } catch { /* ignore */ }
 
-    const base = `http://127.0.0.1:${this.apiPort}`;
+    const base = `http://127.0.0.1:${this.apiPort}/v1`;
     const parentId = this.state.parentId || 'user';
 
     const identity = [
@@ -627,13 +627,25 @@ export class Agent {
       `curl ${base}/agents/${this.id}/status`,
       '```',
       '',
-      '### Deploy Web Content',
-      'After building any web content (HTML/CSS/JS), you MUST deploy it:',
+      '### Deploy the App (REQUIRED — do this after building)',
+      '',
+      '**Step 1: Run preflight** (assigns GitHub repo + resources automatically):',
       '```bash',
-      `curl -s -X POST ${base}/agents/${this.id}/deploy -H 'Content-Type: application/json'${apiToken ? ` -H 'Authorization: Bearer ${apiToken}'` : ''}`,
+      `curl -s -X POST ${base}/projects/${this.projectId}/preflight \\`,
+      apiToken ? `  -H "Authorization: Bearer ${apiToken}" \\` : '',
+      '  -H "Content-Type: application/json"',
       '```',
-      `Response: \`{ "deployed": true, "url": "https://...", "fileCount": N, "totalSize": N }\``,
-      '**ALWAYS deploy web content and share the URL with the user. NEVER give local file paths.**',
+      '',
+      '**Step 2: Deploy** (GitHub push + deploy to EC2 node):',
+      '```bash',
+      `curl -s -X POST ${base}/projects/${this.projectId}/deploy \\`,
+      apiToken ? `  -H "Authorization: Bearer ${apiToken}" \\` : '',
+      '  -H "Content-Type: application/json" \\',
+      `  -d '{"workspaceDir": "${this.workspaceDir.replace(/\\/g, '\\\\')}"}'`,
+      '```',
+      'Response includes `deploymentUrl` — the live URL of the deployed app.',
+      '**ALWAYS run preflight then deploy WITH the workspaceDir body, and share the deploymentUrl with the user.**',
+      '**NEVER give local file paths. NEVER skip deploy.**',
       '',
       '',
       '## Project State Protocol',

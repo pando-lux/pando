@@ -26,6 +26,8 @@ export class ResourceRegistry {
   private localPeerId: string;
   private db: Database.Database;
   private credentialStore: CredentialStore | null = null;
+  // P2P proxy: used by non-secure nodes to request credential decryption from compute peers
+  private p2pCredentialProxy: ((resourceId: string, type: string) => Promise<string | null>) | null = null;
 
   private resources: Map<string, ResourceRecord> = new Map();
   private processedIds: Set<string> = new Set();
@@ -46,6 +48,13 @@ export class ResourceRegistry {
   setCredentialStore(store: CredentialStore): void {
     this.credentialStore = store;
     console.log(`[resources] CredentialStore attached (decryption: ${store.hasDecryptionCapability() ? 'YES' : 'NO'})`);
+  }
+
+  /** Set P2P credential proxy — called by non-secure nodes that lack CREDENTIAL_MASTER_KEY.
+   *  Only proxies code_repository credentials; S3/MongoDB credentials must stay on EC2. */
+  setP2PCredentialProxy(fn: (resourceId: string, type: string) => Promise<string | null>): void {
+    this.p2pCredentialProxy = fn;
+    console.log('[resources] P2P credential proxy registered (non-secure node mode)');
   }
 
   async start(): Promise<void> {
@@ -210,12 +219,23 @@ export class ResourceRegistry {
     return results;
   }
 
-  /** Decrypt a credential via CredentialStore (MongoDB). Returns null on user nodes. */
+  /** Decrypt a credential via CredentialStore (MongoDB), or via P2P proxy on non-secure nodes. */
   async getCredential(resourceId: string): Promise<string | null> {
     const record = this.resources.get(resourceId);
     if (!record || record.status !== 'active') return null;
-    if (!this.credentialStore) return null;
-    return this.credentialStore.getCredential(resourceId);
+
+    // Try local decryption first (EC2 nodes with CREDENTIAL_MASTER_KEY)
+    if (this.credentialStore) {
+      const local = await this.credentialStore.getCredential(resourceId);
+      if (local !== null) return local;
+    }
+
+    // Fall back to P2P proxy (non-secure nodes — only allowed for code_repository credentials)
+    if (this.p2pCredentialProxy && record.type === 'code_repository') {
+      return this.p2pCredentialProxy(resourceId, record.type);
+    }
+
+    return null;
   }
 
   /** Get the first available AI API key, decrypted and ready to use */
