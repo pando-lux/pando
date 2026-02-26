@@ -1930,7 +1930,7 @@ export class ProjectStore {
     const existing = await this.backend.getRecord('projects', projectId);
     const record = { ...(existing || {}), ...this.projectToRecord(project) };
     // Restore MongoDB-only fields that projectToRecord would set to undefined
-    const mongoOnlyKeys = ['tier', 'deploymentPort', 'instanceId', 'githubRepo'] as const;
+    const mongoOnlyKeys = ['tier', 'deploymentPort', 'instanceId', 'githubRepo', 'deployPeerId'] as const;
     if (existing) {
       for (const key of mongoOnlyKeys) {
         if (record[key] === undefined && existing[key] !== undefined) record[key] = existing[key];
@@ -1976,6 +1976,7 @@ export class ProjectStore {
       deploymentPort: project.deploymentPort || undefined,
       instanceId: project.instanceId || undefined,
       githubRepo: (project as any).githubRepo || undefined,
+      deployPeerId: (project as any).deployPeerId || undefined,
     };
   }
 
@@ -2064,7 +2065,8 @@ export class ProjectStore {
       deploymentPort: r.deploymentPort || r.deployment_port || undefined,
       instanceId: r.instanceId || r.instance_id || undefined,
       githubRepo: r.githubRepo || r.github_repo || undefined,
-    };
+      deployPeerId: r.deployPeerId || undefined,
+    } as any;
   }
 
   private rowToCollaborator(row: any): ProjectCollaborator {
