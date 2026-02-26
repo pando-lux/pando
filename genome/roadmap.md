@@ -85,6 +85,7 @@
 | **104** | **Agent Economic Autonomy** — Agents earn a Lux sub-budget from completed tasks. Can spend from that budget to hire child agents (researcher, reviewer) without user intervention. Agents become economic actors, not just cost centres. See spec below. | Phase 103 | Pending |
 | **105** | **Council Growth Engine** — Council daily reflection gains a second output: one growth action proposal per week when network is healthy. Council drafts the actual outreach message. Governance votes before any public posting. Network grows itself when ready. See spec below. | Phase 101 | Pending |
 | **106** | **Decentralization Milestone Protocol** — Automatic Layer 0 governance power transitions based on unique human operator count. Baked into kernel — not governable. Defines when Jai's node stops having special weight. See `genome/rules/decentralization-milestones.md`. | Phase 50 | Pending |
+| **107** | **Genome Knowledge Layer** — Wire the Genome compiled knowledge graph system into Pando. Migrate Pando's own 75 TypeScript files. Wire Genome MCP into agent spawning. Add genome queries to Council reflection. Add migrate step to deploy pipeline. Replace Phase 103 GenomeAgent with Genome's built-in record/reflect system. See spec below. | Phase 101 | **DO SOON** |
 
 ---
 
@@ -464,6 +465,126 @@ function getEffectiveVotingWeight(peerId: string, rawWeight: number): number {
 - [ ] 100 operators: single operator above 15% gets weight capped automatically
 - [ ] Milestone transitions logged to Council minutes with timestamp
 - [ ] Milestone transitions are PUBLIC — gateway shows current decentralization level
+
+---
+
+## Phase 107 — Genome Knowledge Layer (SPEC READY — DO SOON)
+
+> **Status:** Genome project exists at `C:\Users\jaira\Desktop\genome`. Full tool, working, tested. This phase wires it into Pando. It is NOT a rebuild — it is an integration.
+> **Why do this soon:** Genome replaces Phase 103 (GenomeAgent) which would take weeks to build. Genome is already built. Wiring takes hours. Every phase after 101 is better with Genome in place — Council reflections, adversarial QA context, agent spawning, deployed app memory.
+> **Full benefit analysis:** `docs/pando/02-product/genome-knowledge-layer.md` (product) + `docs/pando/06-marketing/genome-advantage.md` (marketing)
+
+### What Genome Is
+
+A compiled knowledge graph tool at `C:\Users\jaira\Desktop\genome`. Knowledge lives co-located with code as `@know` blocks, compiles to a queryable JSON graph, and auto-injects verified 400-token context into agents before every edit via MCP tools and a PreToolUse hook.
+
+**Key capability:** `genome_impact(EntityName)` → what breaks if this changes. `genome_context(EntityName)` → 400 verified tokens of exactly what an agent needs before touching that entity. `genome_open_audits` → known problems without owners.
+
+### What It Replaces
+
+**Phase 103 (GenomeAgent) is superseded.** Do not build it. Genome already does everything Phase 103 planned — lessons accumulate via `record lesson`, reflections via `record reflection`, and the MCP tool `genome_recent_reflections` delivers them to agents. Same outcome, already built.
+
+### The 6 Integration Tasks
+
+**Task 1: Migrate Pando's own codebase**
+```bash
+cd C:\Users\jaira\Desktop\pando
+python C:\Users\jaira\Desktop\genome\genome.py migrate packages/node/src
+```
+This bootstraps a knowledge graph from Pando's 75 TypeScript files in one command. Architecture pass (Sonnet, 1 API call) + file annotation (Haiku, parallel). Output: `packages/node/src/output/graph.json`.
+
+Run the graph quality check:
+```bash
+python C:\Users\jaira\Desktop\genome\genome.py verify packages/node/src
+```
+Fix any exit 1 issues. Exit 2 (warnings) is acceptable for initial migration.
+
+**Task 2: Wire Genome MCP into agent spawning**
+
+In `core/agent-manager.ts`, when building an agent's CLAUDE.md, add the Genome MCP server to the agent's available tools:
+```typescript
+// In the MCP config section of CLAUDE.md assembly:
+const genomeMcpConfig = `
+## Genome Knowledge Tools (use BEFORE editing any file)
+MCP Server: python ${GENOME_PATH}/tools/mcp_server.py
+Available: genome_context, genome_brief, genome_impact, genome_blast,
+           genome_search, genome_stale, genome_open_audits,
+           genome_recent_reflections, genome_handoff, genome_flow_trace
+
+RULE: Before editing any file, call genome_brief(<filepath>) first.
+RULE: Before changing any entity, call genome_impact(<EntityName>) first.
+`;
+```
+
+Add `GENOME_PATH` to node config (points to genome project location).
+
+**Task 3: Add genome queries to Council reflection prompt**
+
+In `platform/council.ts`, after Phase 101 activates the AI call, add to the reflection prompt assembly:
+```typescript
+const openAudits = await this.queryGenome('genome_open_audits');
+const staleNodes = await this.queryGenome('genome_stale');
+const recentReflections = await this.queryGenome('genome_recent_reflections');
+
+// Add to prompt:
+`## Codebase Intelligence (from Genome)
+Open audits (known problems without owners): ${openAudits}
+Stale facts (may have drifted): ${staleNodes}
+Recent agent reflections: ${recentReflections}`
+```
+
+This gives the Council grounded, verified context about the codebase state — not just manually-maintained markdown.
+
+**Task 4: Add `genome.py migrate` to deploy pipeline**
+
+In `platform/pipeline-runner.ts`, after a project build succeeds and before deployment:
+```typescript
+// After build, before deploy:
+await exec(`python ${GENOME_PATH}/genome.py migrate ${project.workDir}`);
+// This generates output/graph.json in the project directory
+// Deployed alongside the app — future modification agents get it automatically
+```
+
+If migrate fails (Python not found, etc.) — log warning, continue deploy. Not a hard gate.
+
+**Task 5: Add `genome.py verify` to governance CI gate**
+
+In `core/upgrade-protocol.ts`, as part of the pre-deploy check:
+```typescript
+const verifyResult = await exec(
+  `python ${GENOME_PATH}/genome.py verify ${projectDir}`,
+  { ignoreExitCode: true }
+);
+if (verifyResult.exitCode === 1) {
+  // Hard block — broken references, unverified critical lessons, failing tests
+  throw new Error(`Genome verify failed: ${verifyResult.stderr}`);
+}
+// exitCode 2 = warnings — log but continue
+```
+
+**Task 6: Install PreToolUse hook for coding agents**
+
+When AgentManager creates an agent workspace, install the Genome Claude hook:
+```bash
+python ${GENOME_PATH}/genome.py hooks install-claude ${agentWorkspace}
+```
+This wires the PreToolUse hook — before every Edit/Write, the agent automatically gets `genome_brief` for the file it's about to touch. Zero agent discipline required.
+
+### What This Unlocks (in priority order)
+
+1. **Council reflections are grounded in verified codebase state** (Task 3 — biggest immediate impact)
+2. **Fix agents know blast radius before touching anything** (Task 2 + 6)
+3. **Every deployed app gets permanent memory** (Task 4)
+4. **CI gate catches documentation drift** (Task 5)
+5. **Phase 103 (GenomeAgent) is superseded — skip it** (Genome does it better)
+
+### Test Bar
+- [ ] `genome.py migrate packages/node/src` completes, produces graph.json with 70+ nodes
+- [ ] `genome_context('councilTs')` returns lessons, decisions, blast radius for council.ts
+- [ ] Coding agent spawned with Genome MCP calls `genome_brief` before first edit (check agent logs)
+- [ ] Council reflection prompt includes open_audits output
+- [ ] App deployed via pipeline has output/graph.json in its deployed directory
+- [ ] `genome.py verify` blocks a governance proposal that breaks a documented invariant
 
 ---
 
