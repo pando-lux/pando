@@ -192,7 +192,27 @@ async function main() {
     storageUrl = args[storageFlag + 1];
   }
 
-  const publicIp = process.env.PUBLIC_IP?.trim() || undefined;
+  let publicIp = process.env.PUBLIC_IP?.trim() || undefined;
+
+  // Auto-detect public IP for cloud nodes (when PUBLIC_IP env var isn't set).
+  // Uses AWS IMDS (EC2/Lightsail) first, falls back to external service.
+  if (!publicIp) {
+    try {
+      // AWS Instance Metadata Service v1 (works on EC2 and Lightsail)
+      const imdsRes = await fetch('http://169.254.169.254/latest/meta-data/public-ipv4', {
+        signal: AbortSignal.timeout(2000),
+      });
+      if (imdsRes.ok) {
+        const ip = (await imdsRes.text()).trim();
+        if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(ip)) {
+          publicIp = ip;
+          console.log(`[cli] Auto-detected public IP via IMDS: ${publicIp}`);
+        }
+      }
+    } catch {
+      // Not on AWS or IMDS not available — skip
+    }
+  }
 
   const node = new PandoNode({
     listenPort: port,
