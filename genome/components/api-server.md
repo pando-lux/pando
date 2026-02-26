@@ -78,7 +78,7 @@ exposes:
   - POST /admin/cleanup-projects — archive specified projects (soft delete)
   - GET /marketplace — browse public projects
 rules: []
-last_verified: 2026-02-25 (Phase 87)
+last_verified: 2026-02-26 (GW-01 E2E verified: auth bypass /v1/ prefix fix, chat routes public)
 ---
 
 # API Server
@@ -89,7 +89,11 @@ Fastify HTTP API server for the Pando node. Exposes node operations over HTTP so
 ## How It Works
 - Built on Fastify with `@fastify/cors` for cross-origin support. Starts on the configured API port (default 4000).
 - Per-IP sliding window rate limiter: each endpoint has a configurable max requests per 60-second window (e.g., search=10, input=20, transfer=30, propose=5). Rate limits are overridable via environment variables (e.g., `PANDO_RATE_SEARCH`).
-- Bearer token authentication: write endpoints require `Authorization: Bearer <token>` header. Token is auto-generated at `~/.pando/api-token` (32-byte hex). Read endpoints (GET) are open.
+- **Auth tiers:** All GET requests are public. POST/PUT/DELETE are split into two tiers:
+  - **Public (no token needed):** `/auth/*`, `/chat/*`, `/projects/*` — user-facing endpoints that handle their own identity (userId scoping, E2E encryption, JWT session tokens). These must work from any gateway/node without the gateway knowing the node's operator token.
+  - **Operator-protected:** All other write endpoints (e.g., `/instances`, `/upgrade`, `/admin/*`, `/transfer`) require `Authorization: Bearer <node-api-token>`.
+  - Implementation: strip `/v1/` version prefix, then check `pathNoVersion.startsWith('/auth/')`, `/chat/`, or `/projects`. If matched → bypass operator auth. Otherwise → verify Bearer token against `~/.pando/api-token`.
+- Bearer token is auto-generated at `~/.pando/api-token` (32-byte hex). Gateways on Vercel/remote hosts must set `PANDO_API_TOKEN` env var only for admin operations; chat/auth/projects work without it.
 - **User auth (Phase 86 — JWT):** User session tokens are self-verifying JWTs signed by the issuing node's Ed25519 private key. Verification uses `peerIdFromString(issuer).publicKey.verify()` — no database lookup needed. Cross-node auth works: a token issued by Node A can be verified by Node B. Challenge tokens for signature-based auth (`/auth/challenge`, `/auth/verify`) are also stateless JWTs (no in-memory nonce map).
 - AgentManager handles all AI chat via Bridge Queue dispatch to Manager agents.
 
@@ -102,6 +106,8 @@ Fastify HTTP API server for the Pando node. Exposes node operations over HTTP so
 - A custom content type parser accepts empty JSON bodies (`application/json` with zero-length payload). This fixes endpoints like `POST /tasks/:id/approve` that are called with no body.
 - **Doorman (Phase 68.3)**: `doormanClassify(message)` handles first-contact routing. Keyword patterns (balance, status, peers, help) get instant local responses. Ambiguous messages go to OpenAI gpt-4o-mini for classification (~$0.001). Build requests create a project + spawn per-project manager. Messages with a `projectId` skip the doorman entirely and route to the project manager.
 - **Phase 83 — 503 guards are defense-in-depth**: After P2PStorageBackend, every node has a StorageBackend (direct or proxied). The `if (!threadStore) return 503` and `if (!projectStore) return 503` guards remain as safety nets but should never trigger in normal operation.
+- **Auth bypass must strip version prefix**: The `onRequest` hook sees the full URL including `/v1/` prefix (e.g., `/v1/auth/guest`). The bypass check strips the version prefix first: `urlPath.replace(/^\/v\d+/, '')` before `startsWith('/auth/')`. Forgetting this causes auth endpoints to require operator token. Verified fixed: commit `b8e17b57`.
+- **Gateway `PANDO_API_TOKEN` is for admin ops only**: Chat, auth, and project routes are public. A remote gateway (Vercel, AWS) does NOT need `PANDO_API_TOKEN` to serve users. It only needs it for admin operations. If you see 403s on `/chat/threads` from a gateway, the route was accidentally added to the protected set — check the auth bypass list.
 
 ## Graceful Shutdown (Phase 29+)
 
