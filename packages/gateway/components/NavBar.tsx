@@ -7,20 +7,8 @@ import { useAuth } from "@/lib/auth-context";
 
 const links = [
   { href: "/", label: "Home" },
-  { href: "/node-setup", label: "Get Started" },
-  { href: "/services", label: "Services" },
-  { href: "/marketplace", label: "Marketplace" },
   { href: "/chat", label: "Chat" },
-  { href: "/search", label: "Search" },
-  { href: "/content", label: "Content" },
   { href: "/projects", label: "Projects" },
-  { href: "/apps", label: "Apps" },
-  { href: "/agents", label: "Agents" },
-  { href: "/wallet", label: "Wallet" },
-  { href: "/governance", label: "Governance" },
-  { href: "/resources", label: "Resources" },
-  { href: "/capacity", label: "Capacity" },
-  { href: "/council", label: "Council" },
   { href: "/explore", label: "Explore" },
   { href: "/dev", label: "Dev" },
 ];
@@ -98,6 +86,12 @@ export default function NavBar() {
             <div className="hidden sm:flex items-center gap-2">
               {isClaimed ? (
                 <>
+                  <a
+                    href="/wallet"
+                    className="text-xs px-2.5 py-1 rounded-full text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition"
+                  >
+                    Wallet
+                  </a>
                   <span className="text-xs text-neutral-500 dark:text-neutral-400 font-mono">
                     {user?.username || truncatePeerId(user?.peerId || "")}
                   </span>
@@ -176,6 +170,13 @@ export default function NavBar() {
                   <div className="px-3 py-1 text-xs text-neutral-500 dark:text-neutral-400 font-mono">
                     {user?.username || truncatePeerId(user?.peerId || "")}
                   </div>
+                  <a
+                    href="/wallet"
+                    onClick={() => setMenuOpen(false)}
+                    className="px-3 py-2 text-sm font-medium rounded-lg text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition"
+                  >
+                    Wallet
+                  </a>
                   <button
                     onClick={() => { logout(); setMenuOpen(false); }}
                     className="text-left px-3 py-2 text-sm font-medium rounded-lg text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition"

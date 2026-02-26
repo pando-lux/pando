@@ -29,6 +29,15 @@ interface ActivityEvent {
   agentId?: string;
 }
 
+interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  deploymentStatus?: string;
+  deploymentUrl?: string;
+  repoUrl?: string;
+}
+
 
 export default function HomePage() {
   const router = useRouter();
@@ -36,6 +45,8 @@ export default function HomePage() {
   const [status, setStatus] = useState<Status | null>(null);
   const [scheduler, setScheduler] = useState<SchedulerStatus | null>(null);
   const [activity, setActivity] = useState<ActivityEvent[]>([]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [projectsLoaded, setProjectsLoaded] = useState(false);
   const [inputText, setInputText] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [openingChat, setOpeningChat] = useState(false);
@@ -63,6 +74,32 @@ export default function HomePage() {
     const interval = setInterval(fetchData, 10000);
     return () => clearInterval(interval);
   }, [fetchData]);
+
+  // Fetch user's projects when token is available
+  useEffect(() => {
+    let cancelled = false;
+    async function loadProjects() {
+      if (!token) {
+        setProjectsLoaded(true);
+        return;
+      }
+      try {
+        const res = await fetch("/api/projects", {
+          headers: { "X-User-Token": token },
+          signal: AbortSignal.timeout(8000),
+        });
+        const data = await res.json();
+        if (!cancelled) {
+          setProjects(data.projects || []);
+          setProjectsLoaded(true);
+        }
+      } catch {
+        if (!cancelled) setProjectsLoaded(true);
+      }
+    }
+    loadProjects();
+    return () => { cancelled = true; };
+  }, [token]);
 
   async function handleInputSubmit(e: React.SyntheticEvent) {
     e.preventDefault();
@@ -177,8 +214,108 @@ export default function HomePage() {
           <StatCard label="Total Supply" value={status ? `${status.totalSupply.toLocaleString(undefined, { maximumFractionDigits: 2 })} Lux` : "—"} loading={!status} />
         </div>
 
+        {/* Your Work / Onboarding */}
+        <div className="animate-page-fade-in-delay-2">
+          {!projectsLoaded ? (
+            <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4 space-y-3">
+              <div className="h-5 w-28 bg-neutral-200 dark:bg-neutral-800 rounded animate-pulse" />
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {[1, 2, 3].map(i => (
+                  <div key={i} className="h-20 rounded-lg bg-neutral-200 dark:bg-neutral-800 animate-pulse" />
+                ))}
+              </div>
+            </div>
+          ) : !token ? (
+            /* Guest: explain the core loop */
+            <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-5 space-y-4">
+              <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">Build with AI, earn Lux, ship to the world</h2>
+              <div className="grid grid-cols-3 gap-4 text-center">
+                <div className="space-y-1.5">
+                  <div className="w-9 h-9 rounded-xl bg-amber-500/15 border border-amber-500/20 flex items-center justify-center mx-auto text-amber-500 text-base font-bold">1</div>
+                  <p className="text-xs font-medium text-neutral-800 dark:text-neutral-200">Chat</p>
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">Describe what you want to build</p>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="w-9 h-9 rounded-xl bg-violet-500/15 border border-violet-500/20 flex items-center justify-center mx-auto text-violet-500 text-base font-bold">2</div>
+                  <p className="text-xs font-medium text-neutral-800 dark:text-neutral-200">AI Builds</p>
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">Agent writes, tests, and deploys code</p>
+                </div>
+                <div className="space-y-1.5">
+                  <div className="w-9 h-9 rounded-xl bg-green-500/15 border border-green-500/20 flex items-center justify-center mx-auto text-green-500 text-base font-bold">3</div>
+                  <p className="text-xs font-medium text-neutral-800 dark:text-neutral-200">Live</p>
+                  <p className="text-xs text-neutral-500 dark:text-neutral-400">Your app is live on the network</p>
+                </div>
+              </div>
+              <div className="flex items-center gap-3 pt-1">
+                <a href="/chat" className="inline-block bg-amber-500 hover:bg-amber-600 text-black font-medium rounded-lg px-4 py-2 text-sm transition">
+                  Start building &rarr;
+                </a>
+                <a href="/register" className="text-sm text-neutral-500 dark:text-neutral-400 hover:text-neutral-700 dark:hover:text-neutral-200 transition">
+                  Create account
+                </a>
+              </div>
+            </div>
+          ) : projects.length === 0 ? (
+            /* Logged in, no projects yet */
+            <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4 flex items-center justify-between gap-4">
+              <div>
+                <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">No projects yet</h2>
+                <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-0.5">Tell the AI what you want to build and it&apos;ll handle the rest.</p>
+              </div>
+              <a href="/chat" className="shrink-0 bg-amber-500 hover:bg-amber-600 text-black font-medium rounded-lg px-4 py-2 text-sm transition">
+                Start chatting &rarr;
+              </a>
+            </div>
+          ) : (
+            /* Logged in with projects */
+            <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <h2 className="text-base font-semibold text-neutral-900 dark:text-neutral-100">Your Work</h2>
+                <a href="/projects" className="text-xs text-amber-500 dark:text-amber-400 hover:text-amber-400 dark:hover:text-amber-300">
+                  All projects &rarr;
+                </a>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                {projects.slice(0, 3).map(p => (
+                  <div
+                    key={p.id}
+                    onClick={() => router.push("/projects")}
+                    className="bg-neutral-200/60 dark:bg-neutral-800/60 border border-neutral-300 dark:border-neutral-700 rounded-lg p-3 hover:border-amber-500/30 transition cursor-pointer group"
+                  >
+                    <div className="flex items-center justify-between mb-1.5 gap-1">
+                      <span className="text-sm font-medium text-neutral-900 dark:text-neutral-100 truncate group-hover:text-amber-600 dark:group-hover:text-amber-400 transition">
+                        {p.name}
+                      </span>
+                      {p.deploymentStatus === "live" && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400 font-medium shrink-0">live</span>
+                      )}
+                      {p.deploymentStatus === "building" && (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400 font-medium shrink-0">building</span>
+                      )}
+                    </div>
+                    {p.description && (
+                      <p className="text-xs text-neutral-500 dark:text-neutral-400 truncate">{p.description}</p>
+                    )}
+                    {p.deploymentUrl && (
+                      <a
+                        href={p.deploymentUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onClick={e => e.stopPropagation()}
+                        className="mt-1.5 inline-flex items-center gap-1 text-xs text-amber-600 dark:text-amber-400 hover:underline"
+                      >
+                        Open app &#8599;
+                      </a>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
         {/* Unified Input Gateway */}
-        <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4 space-y-4 animate-page-fade-in-delay-2">
+        <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4 space-y-4 animate-page-fade-in-delay-3">
           <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">What would you like to do?</h2>
           <p className="text-xs text-neutral-500 dark:text-neutral-400">Ask a question, create a task, check your balance, manage governance — the Smart Router figures out the rest.</p>
           <form onSubmit={handleInputSubmit} className="space-y-3">
@@ -264,7 +401,7 @@ export default function HomePage() {
         </div>
 
         {/* Recent Activity */}
-        <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4 space-y-3 animate-page-fade-in-delay-3">
+        <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4 space-y-3 animate-page-fade-in-delay-4">
           <div className="flex items-center justify-between">
             <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">Recent Activity</h2>
             <a href="/explore/tasks" className="text-xs text-amber-500 dark:text-amber-400 hover:text-amber-400 dark:hover:text-amber-300">View all &rarr;</a>
