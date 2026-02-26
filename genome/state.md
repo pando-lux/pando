@@ -1,11 +1,13 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-26 (master — overnight sprint complete)
+> Last updated: 2026-02-26 (master — overnight sprint continuing)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
 
-## Overnight sprint complete (2026-02-26)
+## Overnight sprint (2026-02-26) — continuing
 
-v2.1-v2.5 + Phase 53.7 + Phase 68.4 + Ledger Explorer + Node Setup + 18/18 smoke tests all complete and deployed.
+v2.1-v2.5 + Phase 53.7 + Phase 53.8 + Phase 68.4 + Ledger Explorer + Node Setup + 18/18 smoke tests all complete and deployed.
+
+**Production alert**: Resource health checker found S3 resource `51909cbe` is UNHEALTHY — "The AWS Access Key Id you provided does not exist in our records." EC2-1 health check data confirms the S3 credentials contributed are invalid. Jai: re-contribute S3 credentials.
 
 ## Health
 
@@ -23,9 +25,20 @@ v2.1-v2.5 + Phase 53.7 + Phase 68.4 + Ledger Explorer + Node Setup + 18/18 smoke
 
 ## Current Phase
 
-**Overnight sprint COMPLETE (2026-02-26).**
+**Overnight sprint continuing (2026-02-26).**
 
-All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88**, **53.7**, **68.4** COMPLETE. v2.1-v2.5 architecture complete. See "What's next" below for priorities.
+All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88**, **53.7**, **53.8**, **68.4** COMPLETE. v2.1-v2.5 architecture complete. See "What's next" below for priorities.
+
+**Phase 53.8: Resource Health Monitoring — COMPLETE (2026-02-26)**
+- ✅ `packages/node/src/platform/resource-health.ts` — ResourceHealthChecker class
+  - Runs every 5 minutes on trusted compute nodes (where CredentialStore is available)
+  - Checks: `ai_api_key` (OpenAI/Anthropic/Gemini models list), `storage_db` (MongoDB ping),
+    `storage_blob` (S3 ListBuckets), `code_repository` (GitHub rate_limit), `cloud_compute` (AWS describe-regions)
+  - Results in-memory: `Map<resourceId, { status, latencyMs, checkedAt, error }>`
+- ✅ `GET /v1/resources/health` — returns health results for all resources (public endpoint)
+- ✅ `packages/gateway/app/api/resources/health/route.ts` — gateway proxy
+- ✅ Resources page: live health badges (emerald=healthy, amber=degraded, red=unhealthy) with tooltip showing latency/error
+- **Production finding**: S3 resource `51909cbe` is UNHEALTHY — invalid AWS credentials. GitHub PAT `3be74ffa` is healthy (743ms).
 
 **Node Setup / Developer Onboarding — COMPLETE (2026-02-26)**
 - ✅ `packages/gateway/app/node-setup/page.tsx` — new /node-setup page
