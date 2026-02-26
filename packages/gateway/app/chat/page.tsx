@@ -449,7 +449,8 @@ function ChatPage() {
             const userPrivKey = cryptoMod.getPrivateKey(user.peerId);
             if (userPrivKey) {
               const threadKey = cryptoMod.generateThreadKey();
-              const userPublicKeyBytes = Uint8Array.from(atob(user.publicKey), c => c.charCodeAt(0));
+              const padB64 = (s: string) => s + '='.repeat((4 - (s.length % 4)) % 4);
+              const userPublicKeyBytes = Uint8Array.from(atob(padB64(user.publicKey)), c => c.charCodeAt(0));
 
               // Encrypt the thread key for the user (for recovery on other devices via localStorage)
               const encKeyForUser = await cryptoMod.encryptThreadKey(threadKey, userPrivKey, userPublicKeyBytes);
@@ -515,7 +516,8 @@ function ChatPage() {
         if (encryptionReady && nodePublicKey && user?.peerId) {
           const userPrivKey = cryptoMod.getPrivateKey(user.peerId);
           if (userPrivKey) {
-            const nodePublicKeyBytes = Uint8Array.from(atob(nodePublicKey), c => c.charCodeAt(0));
+            const padB64 = (s: string) => s + '='.repeat((4 - (s.length % 4)) % 4);
+            const nodePublicKeyBytes = Uint8Array.from(atob(padB64(nodePublicKey)), c => c.charCodeAt(0));
             body.encryptedThreadKey = await cryptoMod.encryptThreadKeyForNode(
               threadKey, userPrivKey, nodePublicKeyBytes
             );
