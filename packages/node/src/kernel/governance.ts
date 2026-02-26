@@ -342,10 +342,15 @@ export class GovernanceSync {
       this.db.exec("ALTER TABLE governance_proposals ADD COLUMN human_only INTEGER DEFAULT 0");
     }
 
+    // Phase 73 migration: add upgrade_payload column (stores commitHash + description for auto-upgrade proposals)
+    if (!proposalCols.some((c: any) => c.name === 'upgrade_payload')) {
+      this.db.exec("ALTER TABLE governance_proposals ADD COLUMN upgrade_payload TEXT DEFAULT ''");
+    }
+
     // === Prepare SQL statements (after all migrations) ===
     this.stmtInsertProposal = this.db.prepare(
-      `INSERT OR IGNORE INTO governance_proposals (id, title, description, proposed_by, created_at, voting_ends_at, status, stake_amount, stake_hold_id, category, reviewer_count, human_only)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO governance_proposals (id, title, description, proposed_by, created_at, voting_ends_at, status, stake_amount, stake_hold_id, category, reviewer_count, human_only, upgrade_payload)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     this.stmtUpdateProposalStatus = this.db.prepare(
       `UPDATE governance_proposals SET status = ? WHERE id = ?`
@@ -455,6 +460,8 @@ export class GovernanceSync {
         ...(row.reviewer_count ? { reviewerCount: row.reviewer_count } : {}),
         // Phase 30.5: human-only mode
         ...(row.human_only ? { humanOnly: true } : {}),
+        // Phase 73: upgrade payload (commitHash + description for auto-upgrade proposals)
+        ...(row.upgrade_payload ? (() => { try { return { upgradePayload: JSON.parse(row.upgrade_payload) }; } catch { return {}; } })() : {}),
       };
       this.proposals.set(proposal.id, proposal);
       this.processedIds.add(`proposal:${proposal.id}`);
@@ -608,12 +615,13 @@ export class GovernanceSync {
     this.comments.set(proposal.id, this.comments.get(proposal.id) || []);
     this.votes.set(proposal.id, this.votes.get(proposal.id) || new Map());
 
-    // Persist to SQLite (including Phase 30 staking fields)
+    // Persist to SQLite (including Phase 30 staking fields + Phase 73 upgradePayload)
     this.stmtInsertProposal.run(
       proposal.id, proposal.title, proposal.description || '',
       proposal.proposedBy, proposal.createdAt, proposal.votingEndsAt, proposal.status,
       proposal.stakeAmount ?? 0, proposal.stakeHoldId ?? '', proposal.category ?? '', proposal.reviewerCount ?? 0,
-      proposal.humanOnly ? 1 : 0
+      proposal.humanOnly ? 1 : 0,
+      proposal.upgradePayload ? JSON.stringify(proposal.upgradePayload) : ''
     );
 
     console.log(`[governance] New proposal: "${proposal.title}" by ${proposal.proposedBy.slice(0, 16)}...${proposal.stakeAmount ? ` (stake: ${proposal.stakeAmount} Lux)` : ''}`);
@@ -1748,7 +1756,8 @@ export class GovernanceSync {
       proposal.id, proposal.title, proposal.description,
       proposal.proposedBy, proposal.createdAt, proposal.votingEndsAt, proposal.status,
       proposal.stakeAmount ?? 0, proposal.stakeHoldId ?? '', proposal.category ?? '', proposal.reviewerCount ?? 0,
-      proposal.humanOnly ? 1 : 0
+      proposal.humanOnly ? 1 : 0,
+      proposal.upgradePayload ? JSON.stringify(proposal.upgradePayload) : ''
     );
 
     // Broadcast
