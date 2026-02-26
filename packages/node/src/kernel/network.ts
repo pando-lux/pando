@@ -101,12 +101,37 @@ export class PandoNetwork {
     }
   }
 
-  private updateKnownPeer(peerId: string): void {
+  /** Get a peer's addresses from the peerStore (includes announce/public IPs from identify protocol) */
+  private async getPeerStoreAddresses(peerId: string): Promise<string[]> {
+    if (!this.node) return [];
+    try {
+      const { peerIdFromString } = await import('@libp2p/peer-id');
+      const peerIdObj = peerIdFromString(peerId);
+      const peerInfo = await this.node.peerStore.get(peerIdObj);
+      return peerInfo.addresses
+        .map(a => a.multiaddr.toString())
+        .filter(a => !a.includes('/p2p-circuit/'));
+    } catch {
+      return []; // peer not in store yet
+    }
+  }
+
+  private async updateKnownPeer(peerId: string): Promise<void> {
     if (!this.node || peerId === this.identity.peerId) return;
     const known = this.loadKnownPeers();
-    // Get current addresses from libp2p's peerStore
+    const addrSet = new Set<string>();
+    // Connection addresses (current TCP socket — may be internal VPC IPs)
     const connections = this.node.getConnections().filter(c => c.remotePeer.toString() === peerId);
-    const addrs = connections.map(c => c.remoteAddr.toString()).filter(a => !a.includes('/p2p-circuit/'));
+    for (const c of connections) {
+      const addr = c.remoteAddr.toString();
+      if (!addr.includes('/p2p-circuit/')) addrSet.add(addr);
+    }
+    // PeerStore addresses (includes announce/public IPs from identify protocol)
+    const peerStoreAddrs = await this.getPeerStoreAddresses(peerId);
+    for (const addr of peerStoreAddrs) {
+      addrSet.add(addr);
+    }
+    const addrs = Array.from(addrSet);
     if (addrs.length === 0) return; // no dialable address, skip
 
     const existing = known.find(p => p.peerId === peerId);
@@ -250,8 +275,8 @@ export class PandoNetwork {
         connectedAt: Date.now(),
         lastSeen: Date.now(),
       });
-      // Phase 54.2: Persist known peer (delayed to allow connection to settle)
-      setTimeout(() => this.updateKnownPeer(peerId), 2000);
+      // Phase 54.2: Persist known peer (delayed 3s to allow identify protocol to populate peerStore)
+      setTimeout(() => this.updateKnownPeer(peerId).catch(() => {}), 3000);
       // Notify handlers
       for (const handler of this.peerConnectHandlers) {
         try { handler(peerId); } catch {}
@@ -364,14 +389,14 @@ export class PandoNetwork {
   }
 
   /** Get connected peer addresses for peer exchange (share with other nodes so they can dial).
-   *  Combines connection addresses + saved known-peers (which include public/announce IPs). */
-  getConnectedPeerAddresses(): { peerId: string; addrs: string[] }[] {
+   *  Combines connection addresses + saved known-peers + peerStore announce addresses. */
+  async getConnectedPeerAddresses(): Promise<{ peerId: string; addrs: string[] }[]> {
     if (!this.node) return [];
     const known = this.loadKnownPeers();
     const result: { peerId: string; addrs: string[] }[] = [];
     for (const peerId of this.peers.keys()) {
       const addrSet = new Set<string>();
-      // Connection addresses (current TCP socket)
+      // Connection addresses (current TCP socket — may be internal VPC IPs)
       const connections = this.node.getConnections().filter(c => c.remotePeer.toString() === peerId);
       for (const c of connections) {
         const addr = c.remoteAddr.toString();
@@ -383,6 +408,11 @@ export class PandoNetwork {
         for (const addr of knownPeer.addrs) {
           if (!addr.includes('/p2p-circuit/')) addrSet.add(addr);
         }
+      }
+      // PeerStore addresses (includes announce/public IPs from identify protocol)
+      const peerStoreAddrs = await this.getPeerStoreAddresses(peerId);
+      for (const addr of peerStoreAddrs) {
+        addrSet.add(addr);
       }
       // Ensure all addresses include /p2p/ suffix for dialability
       const addrs = Array.from(addrSet).map(a =>

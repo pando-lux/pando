@@ -741,7 +741,7 @@ export class PandoNode {
       setTimeout(async () => {
         try {
           if (!this.network) return;
-          const peerAddrs = this.network.getConnectedPeerAddresses()
+          const peerAddrs = (await this.network.getConnectedPeerAddresses())
             .filter(p => p.peerId !== peerId); // don't send them their own address
           if (peerAddrs.length === 0) return;
           await this.network.sendMessage(peerId, {
@@ -900,7 +900,7 @@ export class PandoNode {
         setTimeout(async () => {
           if (!this.network) return;
           const peers = this.network.getPeers();
-          const peerAddrs = this.network.getConnectedPeerAddresses();
+          const peerAddrs = await this.network.getConnectedPeerAddresses();
           if (peers.length < 2 || peerAddrs.length === 0) return;
           for (const peer of peers) {
             const toShare = peerAddrs.filter(p => p.peerId !== peer.peerId);
