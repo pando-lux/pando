@@ -444,7 +444,7 @@ function ChatPage() {
         // Phase 41.5: Generate thread key and encrypt for user ONLY (not the node).
         // The node receives the thread key per-request (stateless), not via stored encryptionKeys.
         const createBody: Record<string, unknown> = { title: msg.slice(0, 50) };
-        if (encryptionReady && nodePublicKey && nodePeerId && user?.peerId) {
+        if (encryptionReady && nodePublicKey && nodePeerId && user?.peerId && user?.publicKey) {
           try {
             const userPrivKey = cryptoMod.getPrivateKey(user.peerId);
             if (userPrivKey) {
