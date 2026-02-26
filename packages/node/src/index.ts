@@ -189,6 +189,8 @@ export class PandoNode {
   private networkState: NetworkState | null = null;
   // Phase 50: Network Council
   private council: Council | null = null;
+  // v2.1: AI Backend Registry (exposed for council + subsystems)
+  private aiBackendRegistry: AIBackendRegistry | null = null;
   // Phase 64: Cloud Instance Manager (EC2 compute nodes)
   private cloudInstanceManager: CloudInstanceManager | null = null;
   // Phase 42: Pluggable StorageBackend
@@ -2534,11 +2536,11 @@ location /apps/${projectId}/ {
     this.agentSystemStarted = true;
 
     // v2.1: Initialize AI Backend Registry — detect available backends
-    const backendRegistry = new AIBackendRegistry();
-    backendRegistry.register(new ClaudeBackend());
-    backendRegistry.register(new OllamaBackend());
+    this.aiBackendRegistry = new AIBackendRegistry();
+    this.aiBackendRegistry.register(new ClaudeBackend());
+    this.aiBackendRegistry.register(new OllamaBackend());
     // detectAll() runs async — backends mark themselves available when detected
-    backendRegistry.detectAll().catch(err =>
+    this.aiBackendRegistry.detectAll().catch(err =>
       console.warn('[ai-backend] Detection error:', err)
     );
 
@@ -3175,6 +3177,10 @@ location /apps/${projectId}/ {
 
   getCouncil(): Council | null {
     return this.council;
+  }
+
+  getAIBackendRegistry(): AIBackendRegistry | null {
+    return this.aiBackendRegistry;
   }
 
   getGenomeAgent(): GenomeAgent | null {

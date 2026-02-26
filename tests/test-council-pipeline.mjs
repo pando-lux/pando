@@ -244,6 +244,9 @@ try {
     }),
     getAgentManager: () => null,
     getAIBackendRegistry: () => null,
+    getRegressionSuite: () => ({
+      runAll: async () => ({ total: 14, passed: 14, failed: 0, skipped: 0, duration: 150, results: [], runAt: Date.now() }),
+    }),
     getApiPort: () => 4000,
     getNetwork: () => ({ getPeerCount: () => 1 }),
   };
@@ -273,6 +276,8 @@ try {
   const minutes = council.getMinutes();
   assert(minutes.includes('Builder Completed'), 'Minutes include builder completion entry');
   assert(minutes.includes('builder-agent-001'), 'Minutes include agent ID');
+  assert(minutes.includes('QA Result'), 'QA regression suite ran before proposal');
+  assert(minutes.includes('PASSED'), 'QA suite passed');
 
   // Test failure handling
   const failItem = {

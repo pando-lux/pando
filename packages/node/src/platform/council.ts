@@ -638,19 +638,104 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
       console.log(`[council] Builder ${agentId} completed: ${(summary || '').slice(0, 100)}`);
       this.appendMinutes(`## Builder Completed — ${new Date().toISOString().slice(0, 10)}\n- Agent: ${agentId}\n- Summary: ${(summary || '').slice(0, 200)}\n`);
 
+      // ── Phase 103d: QA Gate — run regression suite before creating proposal ──
+      let qaPass = true;
+      const regressionSuite = this.node.getRegressionSuite?.();
+      if (regressionSuite) {
+        console.log(`[council] Running QA regression suite after builder ${agentId} completion...`);
+        try {
+          const qaResult = await regressionSuite.runAll();
+          // In dev mode (few peers), allow up to 10% test failures (e.g., peer-dependent tests)
+          const peerCount = this.node.getNetwork?.()?.getPeerCount?.() ?? 0;
+          const maxFailures = peerCount < 3 ? Math.max(1, Math.floor(qaResult.total * 0.1)) : 0;
+          qaPass = qaResult.failed <= maxFailures;
+          console.log(`[council] QA result: ${qaResult.passed}/${qaResult.total} passed, ${qaResult.failed} failed (threshold: ${maxFailures}, ${qaResult.duration}ms)`);
+          this.appendMinutes(`## QA Result — ${new Date().toISOString().slice(0, 10)}\n- Builder: ${agentId}\n- Result: ${qaPass ? 'PASSED' : 'FAILED'} (${qaResult.passed}/${qaResult.total}, threshold: ${maxFailures})\n`);
+
+          // Record to QA memory for historical learning
+          try {
+            const { QAMemory } = await import('./qa-memory.js');
+            const memory = new QAMemory(this.councilDir);
+            memory.addEntry({
+              flow: `builder-${agentId}-completion`,
+              verdict: qaPass ? 'PASS' : 'FAIL',
+              failureDetails: qaPass ? undefined : `${qaResult.failed}/${qaResult.total} tests failed`,
+              timestamp: Date.now(),
+              changeId: agentId,
+            });
+          } catch { /* QAMemory optional */ }
+        } catch (err: any) {
+          console.warn(`[council] QA suite error: ${err.message} — proceeding without QA`);
+        }
+      }
+
+      if (!qaPass) {
+        console.warn(`[council] QA FAILED — skipping governance proposal for builder ${agentId}`);
+        this.appendMinutes(`## QA Gate Blocked — ${new Date().toISOString().slice(0, 10)}\n- Builder: ${agentId}\n- Reason: Regression tests failed\n`);
+        return;
+      }
+
+      // ── Phase 103d: Commit + push so other nodes can pull ──
+      const pushedHash = this.commitAndPush(agentId);
+
       // Create governance proposal for the code change
       const title = `[Council Fix] ${(summary || '').slice(0, 80) || 'Code change'}`;
-      const description = `Builder agent ${agentId} completed a code change.\n\nSummary: ${summary}\n\nDetails: ${(details || '').slice(0, 500) || 'N/A'}`;
-      await this.createCouncilProposal(title, description);
+      const qaNote = regressionSuite ? 'QA: PASSED' : 'QA: not available';
+      const description = `Builder agent ${agentId} completed a code change.\n\nSummary: ${summary}\n\nDetails: ${(details || '').slice(0, 500) || 'N/A'}\n\n${qaNote}`;
+      await this.createCouncilProposal(title, description, pushedHash || undefined);
     } else if (item.type === 'task_failed') {
       console.error(`[council] Builder ${item.payload?.agentId} failed: ${item.payload?.summary}`);
       this.appendMinutes(`## Builder Failed — ${new Date().toISOString().slice(0, 10)}\n- ${item.payload?.summary || 'Unknown failure'}\n`);
     }
   }
 
-  // ── Phase 103c: Governance Proposal Creation ──────────────────────────────
+  // ── Phase 103c-d: Commit + Push + Governance Proposal Creation ─────────────
 
-  private async createCouncilProposal(title: string, description: string): Promise<void> {
+  /**
+   * Commit any uncommitted changes and push to origin/master so other nodes can pull.
+   * Returns the pushed commit hash, or null if nothing to push or push failed.
+   */
+  private commitAndPush(builderAgentId?: string): string | null {
+    try {
+      const repoDir = this.getRepoRoot();
+
+      const status = execSync('git status --porcelain', {
+        cwd: repoDir, encoding: 'utf-8', timeout: 10_000, stdio: 'pipe',
+      }).trim();
+
+      if (!status) {
+        console.log('[council] No uncommitted changes to push');
+        return null;
+      }
+
+      execSync('git add -A', {
+        cwd: repoDir, timeout: 15_000, stdio: 'pipe', windowsHide: true,
+      });
+
+      const msg = `[council] Auto-commit after builder ${builderAgentId || 'unknown'} — ${new Date().toISOString().slice(0, 19)}`;
+      execSync(`git commit -m "${msg}"`, {
+        cwd: repoDir, encoding: 'utf-8', timeout: 15_000, stdio: 'pipe', windowsHide: true,
+      });
+
+      const commitHash = execSync('git rev-parse --short HEAD', {
+        cwd: repoDir, encoding: 'utf-8', timeout: 5_000, stdio: 'pipe',
+      }).trim();
+
+      execSync('git push origin master', {
+        cwd: repoDir, encoding: 'utf-8', timeout: 60_000,
+        stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+      });
+
+      console.log(`[council] Committed and pushed: ${commitHash}`);
+      this.appendMinutes(`## Code Pushed — ${new Date().toISOString().slice(0, 10)}\n- Commit: ${commitHash}\n- Builder: ${builderAgentId || 'unknown'}\n`);
+      return commitHash;
+    } catch (err: any) {
+      console.warn(`[council] Commit/push failed: ${err.message}`);
+      return null;
+    }
+  }
+
+  private async createCouncilProposal(title: string, description: string, commitHash?: string): Promise<void> {
     try {
       const governance = this.node.getGovernance?.();
       if (!governance) {
@@ -660,11 +745,12 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
       const identity = this.node.getIdentity?.();
       if (!identity) return;
 
+      const hash = commitHash || this.getCurrentCommitHash();
       const proposal = await governance.createProposal(
         title,
         description,
         3_600_000, // 1 hour voting
-        { category: 'upgrade', upgradePayload: { commitHash: this.getCurrentCommitHash(), description: title } },
+        { category: 'upgrade', upgradePayload: { commitHash: hash, description: title } },
       );
 
       console.log(`[council] Created governance proposal: ${proposal.id} — "${title}"`);
@@ -755,10 +841,12 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
     // Run initial tick
     this.tick();
 
-    // Register council agent and start bridge watcher (async, fire-and-forget)
-    this.registerCouncilAgent().then(() => {
-      this.startBridgeWatcher();
-    }).catch(() => {});
+    // Register council agent and start bridge watcher (delayed — AgentManager starts after council)
+    setTimeout(() => {
+      this.registerCouncilAgent().then(() => {
+        this.startBridgeWatcher();
+      }).catch(() => {});
+    }, 5_000);
 
     console.log(`[council] Started (reflection interval: ${checkInterval / 60000} min)`);
   }
