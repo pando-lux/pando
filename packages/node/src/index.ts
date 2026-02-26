@@ -31,6 +31,7 @@ import { ResourceRouter } from './platform/resource-router.js';
 import { ResourceMeter } from './platform/resource-meter.js';
 import { ResourceMarketplace } from './platform/resource-marketplace.js';
 import { ResourceRegistry } from './platform/resource-registry.js';
+import { ResourceHealthChecker } from './platform/resource-health.js';
 import { CredentialStore } from './core/credential-store.js';
 import type { CapabilityProfile } from '@pando/shared';
 import { getDefaultConfig } from './config.js';
@@ -141,6 +142,7 @@ export class PandoNode {
   private resourceMeter: ResourceMeter | null = null;
   private resourceMarketplace: ResourceMarketplace | null = null;
   private resourceRegistry: ResourceRegistry | null = null;
+  private resourceHealthChecker: ResourceHealthChecker | null = null;
   private upgradeProtocol: UpgradeProtocol | null = null;
   private regressionSuite: RegressionSuite | null = null;
   private paymentGate: PaymentGate | null = null;
@@ -896,6 +898,10 @@ export class PandoNode {
         }
         this.resourceRegistry.setCredentialStore(credentialStore);
         (this as any)._credentialStore = credentialStore; // Store reference for P2P handlers
+        // Phase 53.8: Start resource health checker (compute nodes only)
+        this.resourceHealthChecker = new ResourceHealthChecker();
+        this.resourceHealthChecker.setDependencies(credentialStore, this.resourceRegistry);
+        this.resourceHealthChecker.start();
       } catch (err) {
         console.error(`[node] Failed to init CredentialStore: ${(err as Error).message}`);
       }
@@ -2220,6 +2226,10 @@ location /apps/${projectId}/ {
     return this.resourceRegistry;
   }
 
+  getResourceHealthChecker(): ResourceHealthChecker | null {
+    return this.resourceHealthChecker;
+  }
+
   /** Returns the reward recipient — only linked user accounts earn rewards */
   getRewardRecipient(): string | null {
     // No login = no rewards. Node is volunteering infrastructure.
@@ -3029,6 +3039,8 @@ location /apps/${projectId}/ {
     }
 
     // Stop resource network components
+    this.resourceHealthChecker?.stop();
+    this.resourceHealthChecker = null;
     this.resourceRegistry?.stop();
     this.resourceRegistry = null;
     if (this.resourceMeter) {

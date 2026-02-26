@@ -831,6 +831,13 @@ export async function registerPlatformRoutes(
 
     // ── Resource Registry Routes (Phase 42.5) ──────────────────────────
 
+    // GET /resources/health — health check results for all resources (Phase 53.8)
+    fastify.get('/resources/health', async () => {
+      const checker = node.getResourceHealthChecker?.();
+      if (!checker) return { results: [], available: false };
+      return { results: checker.getResults(), available: true };
+    });
+
     // GET /resources — list all resources (Phase 69: metadata only, no secrets in records)
     fastify.get('/resources', async (request: any) => {
       const registry = node.getResourceRegistry();

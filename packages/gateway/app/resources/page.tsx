@@ -6,6 +6,15 @@ import { useAuth } from "@/lib/auth-context";
 
 /* -- Types ------------------------------------------------- */
 
+interface HealthResult {
+  resourceId: string;
+  type: string;
+  status: "healthy" | "degraded" | "unhealthy" | "unchecked";
+  latencyMs?: number;
+  checkedAt?: number;
+  error?: string;
+}
+
 interface Resource {
   resourceId: string;
   type: string;
@@ -242,6 +251,10 @@ export default function ResourcesPage() {
   // Show revoked resources toggle (Network Resources section)
   const [showRevoked, setShowRevoked] = useState(false);
 
+  // Phase 53.8: Resource health check results
+  const [healthResults, setHealthResults] = useState<Map<string, HealthResult>>(new Map());
+  const [healthAvailable, setHealthAvailable] = useState(false);
+
   const myUserId = user?.peerId || "";
   const selectedPreset = SERVICE_PRESETS[formServiceIdx];
   const isOther = selectedPreset.type === null;
@@ -305,18 +318,35 @@ export default function ResourcesPage() {
     setMyNodesLoading(false);
   }, [user?.username, isClaimed]);
 
+  const fetchHealth = useCallback(async () => {
+    try {
+      const res = await fetch("/api/resources/health");
+      if (res.ok) {
+        const data = await res.json();
+        if (data.available && Array.isArray(data.results)) {
+          const map = new Map<string, HealthResult>();
+          for (const r of data.results) map.set(r.resourceId, r);
+          setHealthResults(map);
+          setHealthAvailable(true);
+        }
+      }
+    } catch { /* ignore */ }
+  }, []);
+
   useEffect(() => {
     fetchResources();
     fetchPeers();
     fetchNodeStatus();
     fetchMyNodes();
+    fetchHealth();
     const i = setInterval(() => {
       fetchResources();
       fetchNodeStatus();
       fetchMyNodes();
+      fetchHealth();
     }, 10000);
     return () => clearInterval(i);
-  }, [fetchResources, fetchPeers, fetchNodeStatus, fetchMyNodes]);
+  }, [fetchResources, fetchPeers, fetchNodeStatus, fetchMyNodes, fetchHealth]);
 
   /* -- Actions ---------------------------------------------- */
 
@@ -603,6 +633,27 @@ export default function ResourcesPage() {
                         >
                           {r.status}
                         </span>
+
+                        {/* Health badge (Phase 53.8 — only shown when checker is running on a compute node) */}
+                        {healthAvailable && (() => {
+                          const h = healthResults.get(r.resourceId);
+                          if (!h || h.status === "unchecked") return null;
+                          const cls = h.status === "healthy"
+                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border-emerald-500/25"
+                            : h.status === "degraded"
+                              ? "bg-amber-500/10 text-amber-600 dark:text-amber-400 border-amber-500/25"
+                              : "bg-red-500/10 text-red-500 dark:text-red-400 border-red-500/25";
+                          const dot = h.status === "healthy" ? "bg-emerald-500" : h.status === "degraded" ? "bg-amber-500" : "bg-red-500";
+                          return (
+                            <span
+                              title={h.error ? `Last error: ${h.error}` : h.latencyMs ? `${h.latencyMs}ms` : undefined}
+                              className={`text-[10px] px-1.5 py-0.5 rounded font-medium border flex-shrink-0 flex items-center gap-1 ${cls}`}
+                            >
+                              <span className={`w-1 h-1 rounded-full ${dot}`} />
+                              {h.status}
+                            </span>
+                          );
+                        })()}
 
                         {/* Label */}
                         {r.metadata?.label && (

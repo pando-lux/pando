@@ -672,6 +672,19 @@ class NodeConnection {
       return { transactions: [], total: 0 };
     }
   }
+
+  async getResourceHealth(): Promise<{ results: any[]; available: boolean }> {
+    try {
+      const res = await this.fetchWithFailover("/v1/resources/health", {
+        headers: this.authHeaders(),
+        signal: AbortSignal.timeout(5000),
+      });
+      if (!res.ok) throw new Error("Failed to get resource health");
+      return await res.json();
+    } catch {
+      return { results: [], available: false };
+    }
+  }
 }
 
 // Singleton
