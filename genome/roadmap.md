@@ -80,6 +80,7 @@
 | **99** | Dynamic Discovery — NodePool self-populates from P2P, no hardcoded seeds | Phase 97 | **COMPLETE** |
 | **100** | myNodes Routing Tier — same-user nodes preferred before network peers. `linkedUser` auth on P2P routes. `/contribute claude-code myNodes\|network` scope | Phase 99 | Pending |
 | **101** | **Council Self-Healing Loop** — close the gap between "Council proposes" and "Council fixes". Wire AI call in `runDailyReflection()`, add `spawnFixAgent()`, Tier 4 auto-approval in governance, patch application in UpgradeProtocol. See `the-stack.md` Council section for full wiring spec. | Phase 50 done | Pending |
+| **102** | **Adversarial QA Loop** — Three-ring QA model. Ring 3 = fresh-context adversarial agent with no code knowledge, hostile framing, micro-agent per flow, evidence required for every verdict. QA Memory Agent (persistent, accumulates failure history). Council must pass Ring 3 before any governance auto-approval. See `the-stack.md` QA Architecture section + `genome/templates/qa-adversarial.md`. | Phase 101 | Pending |
 
 ---
 
@@ -125,6 +126,115 @@
 - [ ] Tier 4 proposal auto-approves after 24h with passing tests (verify in governance log)
 - [ ] Patch applies cleanly, build passes, node restarts successfully
 - [ ] Full regression suite (18/18) passes after patch apply
+
+---
+
+## Phase 102 — Adversarial QA Loop (SPEC READY)
+
+> **Status:** Template created (`genome/templates/qa-adversarial.md`). Architecture documented (`the-stack.md` QA Architecture section). Implementation tasks below.
+> **Why this matters:** standard QA agents have confirmation bias — they know what was built and guide tests toward success. Ring 3 adversarial QA has zero code context and hostile framing ("find something broken"). This closes the gap between "tests pass" and "actually works for users."
+
+### The Problem
+
+When a builder agent writes code AND the QA agent testing it was spawned by the same manager AND shares the same project-state.md context, confirmation bias is baked in. The QA agent unconsciously guides tests toward confirming what it was told should work. This is not a bug — it is how context works.
+
+Additionally: a single QA agent running 50 tests will start compressing context by test 30. It hallucinates results. Skips steps. By test 45 it is writing PASS from memory, not from actual test execution.
+
+### The Three Rings
+
+```
+RING 1 — Builder's own tests          (confirmation bias OK — fast, catches obvious errors)
+RING 2 — Manager integration tests    (structured bias — catches integration failures)
+RING 3 — Adversarial QA               (NO code context, hostile framing, micro-agents)
+```
+
+Ring 3 only runs after Ring 1 and Ring 2 pass. Governance only receives proposals that passed all three. Any Ring 3 FAIL → escalates to quorum vote regardless of tier.
+
+### The 4 Implementation Tasks
+
+**Task 1: Adversarial QA template** ← DONE
+- `genome/templates/qa-adversarial.md` created
+- No code context injection, hostile framing, micro-agent per flow, evidence required
+
+**Task 2: Add `runAdversarialQA()` to `platform/council.ts`**
+
+```typescript
+async runAdversarialQA(
+  flows: string[],  // e.g. ['deploy-app', 'governance-vote', 'lux-transfer']
+  changeDescription: string,
+): Promise<QAResult[]> {
+  const results: QAResult[] = [];
+
+  // Spawn ONE micro-agent per flow — parallel, no shared context
+  const agents = await Promise.all(flows.map(flow =>
+    this.node.getAgentManager()?.spawnAgent({
+      role: 'qa-adversarial',        // uses qa-adversarial.md template
+      template: 'qa-adversarial',
+      context: [
+        `FLOW TO TEST: ${flow}`,
+        `DO NOT READ: you have no knowledge of what changed.`,
+        `QA MEMORY BRIEFING:\n${this.getQAMemory(flow)}`,
+        `GATEWAY URL: http://127.0.0.1:${gatewayPort}`,
+        `API PORT: ${apiPort}`,
+        `API TOKEN: ${apiToken}`,
+      ].join('\n'),
+      parentId: null,
+      projectId: 'pando-node',
+    })
+  ));
+
+  // Wait for all micro-agents to report back
+  // Collect results via bridge queue
+  return results;
+}
+```
+
+**Task 3: QA Memory Agent (`platform/qa-memory.ts`)**
+
+A persistent agent (not per-task) that:
+- Accumulates failure history per flow (`qa-memory.json` in council dir)
+- When a Ring 3 test FAILs: records the flow name, what broke, what edge case triggered it
+- When `runAdversarialQA()` runs: `getQAMemory(flow)` returns the historical failure patterns for that flow as a briefing string injected into the adversarial agent's context
+
+```typescript
+interface QAMemoryEntry {
+  flow: string;
+  failureDescription: string;
+  edgeCaseTriggered: string;
+  timestamp: number;
+  fixed: boolean;
+}
+```
+
+**Task 4: Wire Ring 3 into Council upgrade flow**
+
+In the Council's code fix flow (Phase 101), after the builder agent produces a patch, before submitting the governance proposal:
+1. Run `runAdversarialQA(STANDARD_FLOWS, patchDescription)`
+2. If any result is FAIL → do not submit proposal. Log to council-minutes.md. Notify via HealthMonitor alert.
+3. If all PASS → attach `ring3Results` to the governance proposal payload
+4. Update Tier 4 auto-approval logic: require `ring3Results.allPassing === true` (not just `testResults.allPassing`)
+
+### Standard Flow List (define these first)
+
+The set of flows Ring 3 always tests after any change:
+```typescript
+const STANDARD_FLOWS = [
+  'node-startup-connects',      // node starts, peers connect, balance appears
+  'deploy-tier1-app',           // describe app → build → S3 URL → loads in browser
+  'deploy-tier2-app',           // describe app → build → EC2 nginx URL → loads
+  'governance-propose-vote',    // create proposal → vote → check result
+  'lux-transfer',               // transfer Lux to peer → verify balance both sides
+  'cross-node-storage',         // write thread on node A → read from node B
+  'agent-spawn-complete',       // spawn agent → runs task → reports back
+];
+```
+
+### Test Bar (before marking complete)
+- [ ] `runAdversarialQA(['lux-transfer'])` spawns a micro-agent that tests the transfer flow and returns PASS with screenshot evidence
+- [ ] Manually introduce a bug. Adversarial QA catches it. Reports FAIL with reproduction steps.
+- [ ] QA Memory Agent records the failure. Next run injects historical failure into adversarial agent briefing.
+- [ ] Council upgrade flow: patch with failing Ring 3 does NOT reach governance
+- [ ] Patch with passing Ring 3: governance proposal includes `ring3Results` evidence
 
 ---
 
