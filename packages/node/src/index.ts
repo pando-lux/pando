@@ -679,6 +679,25 @@ export class PandoNode {
         } catch {}
       }, 30_000);
 
+      // Phase 92: Direct TCP stream fallback for GossipSub mesh failures.
+      // GossipSub requires min D=6 peers in mesh to reliably propagate.
+      // Small networks (2-5 nodes) often fail to form a mesh after simultaneous
+      // restarts. Direct TCP stream bypasses GossipSub entirely.
+      setTimeout(async () => {
+        try {
+          const profile = this.capabilityRegistry.getLocalProfile();
+          if (!profile || !this.network) return;
+          profile.updatedAt = Date.now();
+          await this.network.sendMessage(peerId, {
+            type: MessageType.CAPABILITY_PROFILE_DIRECT,
+            from: this.getIdentity()!.peerId,
+            timestamp: Date.now(),
+            payload: profile,
+          });
+          console.log(`[capabilities] Direct profile sent to ${peerId.slice(0, 12)}`);
+        } catch {}
+      }, 2_000);
+
       // Phase 69: Auto-wrap removed — credentials in MongoDB, not per-node.
 
       // Phase 83: Deferred data loading for P2PStorageBackend nodes.
@@ -1852,6 +1871,18 @@ location /apps/${projectId}/ {
           timestamp: Date.now(),
           payload: { peerId, balance: peerBalance },
         }).catch(() => {});
+      }
+
+      // Phase 92: Direct TCP stream capability profile exchange
+      // Fallback for GossipSub mesh failures (small networks where mesh doesn't form)
+      if (message.type === MessageType.CAPABILITY_PROFILE_DIRECT) {
+        const profile = message.payload as any;
+        if (profile) {
+          this.capabilityRegistry.updatePeerProfile(profile);
+          const activeResources = Object.entries(profile.capabilities || {})
+            .filter(([, v]) => v).map(([k]) => k);
+          console.log(`[capabilities] Direct profile from ${from.slice(0, 12)}: [${activeResources.join(', ')}]`);
+        }
       }
     });
 
