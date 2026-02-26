@@ -65,6 +65,22 @@
 
 ---
 
+## Next Up: Phases 96–99 — Resource Tier Architecture
+
+> **Full plan:** `genome/resource-tier-plan.md`
+> **Status:** Planning complete — ready to build
+
+**Problem:** Claude Code and other capabilities are auto-detected and broadcast to the entire network with no opt-in. There is no concept of "local private" resources. The gateway also hardcodes node discovery and tries to directly HTTP-reach Claude nodes (breaks for home/NAT nodes).
+
+| Phase | Goal | Depends On | Status |
+|---|---|---|---|
+| **96** | Three-Tier Architecture — `LocalCapabilityStore`, split detection from sharing | None | Pending |
+| **97** | Opt-In Commands — `/contribute claude-code`, `/revoke`, `shareCompute` flag | Phase 96 | Pending |
+| **98** | P2P Task Routing — gateway → EC2 → P2P → Claude node (home nodes now viable) | Phase 97 | Pending |
+| **99** | Dynamic Discovery — NodePool self-populates from P2P, no hardcoded seeds | Phase 97 | Pending |
+
+---
+
 ## Later TODO
 
 - ~~**Auto-deploy on governance approval**~~ — **DONE (Phase 73).** Governance-approved upgrades propagate via GossipSub `pando/upgrades` topic. All nodes auto-apply, build, health check, restart. Auto-approve when <4 active peers.
