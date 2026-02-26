@@ -39,7 +39,7 @@ exposes:
   - getProjectByApiKeyAsync(apiKey) — async variant, MongoDB preferred (Phase 53)
   - loadFromBackend() — hydrate SQLite cache from MongoDB on startup (Phase 57)
 rules: [data-residency]
-last_verified: 2026-02-25
+last_verified: 2026-02-26 (INFRA-03 E2E: deployPeerId persistence fix verified — T2 deploy + undeploy working)
 ---
 
 # Project Store (Phase 31.1 + Phase 44 Data Residency + Phase 57 Clean Data)
@@ -97,6 +97,7 @@ Each collection has a `recordTo*()` helper that handles:
 - **Manifest fields (Phase 46):** `repoUrl` (GitHub/S3 path), `teamHistory` (JSON stringified agent history), `notes` (manager summary for cross-node pickup). These enable any node to pick up a project cold.
 - **Resource fields (Phase 53):** `resources` (array of `{ type, resourceId, assignedAt, status }` — assigned ResourceRegistry resources), `apiKey` (32-byte hex for Resource Proxy auth). Resources are contributed via ResourceRegistry and assigned per-project.
 - **Deployment fields (Phase 79+87):** MongoDB-persisted `tier` (1=S3 static, 2=EC2 compute), `deploymentPort` (backend port), `deployPeerId` (Phase 87: peerId of compute node hosting the app), `instanceId` (legacy, pre-Phase 87), `githubRepo` (org/repo name). These fields live only in MongoDB — SQLite caches the rest but `updateProject()` explicitly preserves MongoDB-only fields during writes.
+  - **Critical**: `deployPeerId` must be in `mongoOnlyKeys`, `projectToRecord`, AND `recordToProject` — all three serialization paths in project-store.ts. If any is missing, `deployPeerId` silently returns `undefined` from `getProjectAsync()`, breaking undeploy (P2P request never sent, PM2+nginx left running). Fixed in commit `05ea747a` (found during INFRA-03).
 
 ## API Routes (in api-server.ts)
 
