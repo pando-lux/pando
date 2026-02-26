@@ -35,14 +35,16 @@ export default function ExplorePage() {
   const [activityStats, setActivityStats] = useState<ActivityStats | null>(null);
   const [health, setHealth] = useState<HealthMetrics | null>(null);
   const [proposalCount, setProposalCount] = useState<number>(0);
+  const [appsCount, setAppsCount] = useState<number | null>(null);
 
   const fetchData = useCallback(async () => {
-    const [s, sc, as_, h, gov] = await Promise.all([
+    const [s, sc, as_, h, gov, apps] = await Promise.all([
       fetch("/api/status").then(r => r.json()).catch(() => null),
       fetch("/api/scheduler/status").then(r => r.json()).catch(() => null),
       fetch("/api/activity/stats?window=24h").then(r => r.json()).catch(() => null),
       fetch("/api/monitor/status").then(r => r.json()).catch(() => null),
       fetch("/api/governance/proposals").then(r => r.json()).catch(() => null),
+      fetch("/api/apps").then(r => r.json()).catch(() => null),
     ]);
     if (s) setStatus(s);
     if (sc) setScheduler(sc);
@@ -53,6 +55,7 @@ export default function ExplorePage() {
       const active = Array.isArray(proposals) ? proposals.filter((p: any) => p.status === "active").length : 0;
       setProposalCount(active);
     }
+    if (apps) setAppsCount(apps.total ?? 0);
   }, []);
 
   useEffect(() => {
@@ -112,6 +115,20 @@ export default function ExplorePage() {
       stat: "FAQ, docs, architecture",
       color: "neutral",
     },
+    {
+      title: "Apps",
+      description: "Apps built by AI agents on the network",
+      href: "/apps",
+      stat: appsCount !== null ? `${appsCount} deployed app${appsCount !== 1 ? "s" : ""}` : null,
+      color: "orange",
+    },
+    {
+      title: "Run a Node",
+      description: "Join the network and start earning Lux",
+      href: "/node-setup",
+      stat: status ? `${status.totalAccounts} account${status.totalAccounts !== 1 ? "s" : ""} in network` : null,
+      color: "emerald",
+    },
   ];
 
   const colorMap: Record<string, { border: string; bg: string; text: string; dot: string }> = {
@@ -121,6 +138,8 @@ export default function ExplorePage() {
     green: { border: "border-green-500/20", bg: "hover:bg-green-500/5", text: "text-green-500 dark:text-green-400", dot: "bg-green-500" },
     blue: { border: "border-blue-500/20", bg: "hover:bg-blue-500/5", text: "text-blue-500 dark:text-blue-400", dot: "bg-blue-500" },
     neutral: { border: "border-neutral-500/20", bg: "hover:bg-neutral-500/5", text: "text-neutral-500 dark:text-neutral-400", dot: "bg-neutral-500" },
+    orange: { border: "border-orange-500/20", bg: "hover:bg-orange-500/5", text: "text-orange-500 dark:text-orange-400", dot: "bg-orange-500" },
+    emerald: { border: "border-emerald-500/20", bg: "hover:bg-emerald-500/5", text: "text-emerald-500 dark:text-emerald-400", dot: "bg-emerald-500" },
   };
 
   return (
