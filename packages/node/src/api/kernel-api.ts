@@ -241,6 +241,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
 
     // GET /status — node status
     fastify.get('/status', async () => {
+      console.log('[Phase 102.5 E2E] Status endpoint hit');
       const network = node.getNetwork();
       const ledger = node.getLedger();
       const identity = node.getIdentity();
