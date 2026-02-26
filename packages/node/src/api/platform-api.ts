@@ -129,7 +129,7 @@ export async function registerPlatformRoutes(
 
           // Run preflight (auto-generates API key, assigns MongoDB)
           try {
-            const preflightUrl = `http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/projects/${newProjectId}/preflight`;
+            const preflightUrl = `http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/v1/projects/${newProjectId}/preflight`;
             const pfRes = await fetch(preflightUrl, {
               method: 'POST',
               headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
@@ -424,7 +424,7 @@ export async function registerPlatformRoutes(
 
           // Run preflight
           try {
-            const pfRes = await fetch(`http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/projects/${newProjectId}/preflight`, {
+            const pfRes = await fetch(`http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/v1/projects/${newProjectId}/preflight`, {
               method: 'POST',
               headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
               signal: AbortSignal.timeout(10000),
@@ -3305,7 +3305,7 @@ export async function registerPlatformRoutes(
       // Ensure repo exists — create if needed
       if (!project.githubRepo) {
         try {
-          const createUrl = `http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/projects/${id}/github`;
+          const createUrl = `http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/v1/projects/${id}/github`;
           const createRes = await fetch(createUrl, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
@@ -3399,7 +3399,7 @@ export async function registerPlatformRoutes(
       let githubRepo = project.githubRepo || '';
       if (body.workspaceDir) {
         try {
-          const pushUrl = `http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/projects/${id}/github/push`;
+          const pushUrl = `http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/v1/projects/${id}/github/push`;
           const pushRes = await fetch(pushUrl, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
