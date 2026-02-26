@@ -97,9 +97,11 @@ async function tryShutdownExistingNode(apiPort: number, dataDir?: string): Promi
 
 // Default public bootstrap nodes for peer discovery.
 // Phase 87: Multiple bootstraps for mesh connectivity (2+ peers per node).
+// Phase 91: EC2-2 added now that it announces its public IP via announceAddresses.
 const DEFAULT_BOOTSTRAPS: string[] = [
   '/ip4/54.145.144.221/tcp/4001/p2p/12D3KooWNSUWHf6tzHPb8uzUkaRfk3VfuMVrjzGgyueR4yioMGDP', // LS-1
   '/ip4/54.82.241.132/tcp/4001/p2p/12D3KooWDRjGzaUuATiPuhg5D2k1CQTT6nCMpjdsDTVwrGDC4QVP',  // EC2-1
+  '/ip4/34.201.82.126/tcp/4001/p2p/12D3KooWLMnoeqedX6uTWoBbq2ZfRyYKpDtttdtp6uNfm3PeJ33d',  // EC2-2
 ];
 
 async function main() {
