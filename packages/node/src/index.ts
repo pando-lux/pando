@@ -2027,18 +2027,20 @@ location /apps/${projectId}/ {
           const network = this.network;
           const myPeerId = this.identity!.peerId;
           const connectedPeers = new Set(network.getPeers().map(p => p.peerId));
+          console.log(`[peer-exchange] Received ${exchangedPeers.length} peer(s) from ${from.slice(0, 12)}, already connected to ${connectedPeers.size}`);
           (async () => {
             let dialed = 0;
             for (const peer of exchangedPeers) {
               if (peer.peerId === myPeerId || connectedPeers.has(peer.peerId)) continue;
+              console.log(`[peer-exchange] Trying ${peer.peerId.slice(0, 12)} (${peer.addrs.length} addrs: ${peer.addrs.map(a => a.replace(/\/p2p\/.*/, '')).join(', ')})`);
               for (const addr of peer.addrs) {
                 try {
                   await network.dialPeer(addr);
                   dialed++;
                   console.log(`[peer-exchange] Connected to ${peer.peerId.slice(0, 12)} via exchange from ${from.slice(0, 12)}`);
                   break;
-                } catch {
-                  // addr may be unreachable, try next
+                } catch (err: any) {
+                  console.log(`[peer-exchange] Failed to dial ${addr.replace(/\/p2p\/.*/, '')}: ${err.message?.slice(0, 80)}`);
                 }
               }
             }
