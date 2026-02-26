@@ -1,6 +1,6 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-26 (master — overnight sprint continuing)
+> Last updated: 2026-02-26 (INFRA-07 upgrade-protocol fix deployed — da7bfa1)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
 
 ## Overnight sprint (2026-02-26) — continuing
