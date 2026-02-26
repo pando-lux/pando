@@ -30,7 +30,7 @@ exposes:
   - getUpgradeAutoApproveThreshold() — get current auto-approve threshold (default 8)
   - onUpgradeApproved(callback) — register callback invoked when an upgrade proposal is approved (either via auto-approve or voting quorum)
 rules: [governance-tiers]
-last_verified: 2026-02-24
+last_verified: 2026-02-26
 ---
 
 # Governance
@@ -63,7 +63,7 @@ Decentralized governance with AI-powered proposal review. Agents and users propo
 - Required reviewers: 1-9 nodes → 1, 10-99 → 2, 100+ → 3
 
 ### SQLite Tables
-- `governance_proposals` — proposals with staking columns (stake_amount, stake_hold_id, category, reviewer_count)
+- `governance_proposals` — proposals with staking columns (stake_amount, stake_hold_id, category, reviewer_count, human_only, upgrade_payload)
 - `governance_comments` — discussion
 - `governance_votes` — votes with model_attestation
 - `governance_decisions` — final decisions with reviewSummary
@@ -121,6 +121,7 @@ The callback receives the proposal object. UpgradeProtocol then runs `pullAndUpg
 - `archiveExpiredProposals()` and `enforceProposalCap()` skip `in_review` proposals.
 - **Auto-vote + early resolution** can cause instant proposal approval on single-node networks. This is by design, not a bug.
 - **Phase 73 auto-approve for upgrades** is distinct from the Phase 33 early resolution. Early resolution resolves when all known nodes have voted. Auto-approve skips voting entirely when the network is small enough that governance adds no security value.
+- **upgradePayload MUST be persisted to SQLite** (commit `e886ffcb`): `stmtInsertProposal` includes `upgrade_payload` (JSON-stringified `{commitHash, description}`). `loadFromDatabase()` restores it on restart. `checkForMissedUpgrades` in UpgradeProtocol skips proposals without `commitHash` — if `upgradePayload` is not persisted, nodes can never catch up after a restart. Migration: `ALTER TABLE governance_proposals ADD COLUMN upgrade_payload TEXT DEFAULT ''`.
 
 ## Key Files
 - `packages/node/src/governance.ts` — GovernanceSync class (all Phase 30 logic + Phase 33 auto-vote/early resolution)

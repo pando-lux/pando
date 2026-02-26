@@ -45,6 +45,7 @@ Simple self-upgrade for the Pando network. Governance approves → commit hash b
 - Build timeout is 180 seconds. If your build takes longer, the upgrade will fail.
 - **Process supervisors**: Lightsail uses PM2, EC2 uses systemd (`pando-node.service`). Both auto-restart on exit code 75. The `pando` user on EC2 has shell `/bin/false` (security) which prevents PM2 daemon — hence systemd.
 - **Dev mode auto-approve**: `activePeers = getPeerCount() + 1`. If `activePeers <= 8` (threshold), proposal auto-approves instantly. EC2-2 with 1 peer: 2 ≤ 8 → auto-approves. EC2-1 with 8+ peers: 9 > 8 → does NOT auto-approve. Set `upgradeAutoApproveThreshold` in governance config for different environments.
+- **`checkForMissedUpgrades` requires `upgradePayload.commitHash`**: This catch-up mechanism (runs every 5 min + 30s after startup) iterates `passed` upgrade proposals and calls `pullAndUpgrade(commitHash)` for any unapplied ones. If `upgradePayload` is not persisted to SQLite, `loadFromDatabase()` restores proposals without `commitHash`, and `checkForMissedUpgrades` silently skips them (`if (!commitHash) continue`). Fixed in commit `e886ffcb` — `upgrade_payload` column added to `governance_proposals` table. Required for P2P upgrade propagation to work correctly when nodes restart between proposal creation and catch-up.
 
 ## Key Files
 - `packages/node/src/upgrade-protocol.ts` — UpgradeProtocol class
