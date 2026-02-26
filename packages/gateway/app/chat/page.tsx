@@ -365,21 +365,28 @@ function ChatPage() {
   // Wait for auth to resolve (token available) before fetching, to avoid leaking other users' threads
   useEffect(() => {
     if (!token) {
-      // If auth finished loading but no token, stop showing "Loading..."
-      if (!authLoading) setThreadsLoading(false);
+      if (!authLoading) {
+        setThreadsLoading(false);
+        // No auth but a ?thread= param — load that thread directly (anonymous session from home page routing)
+        const threadParam = searchParams.get("thread");
+        if (threadParam) loadThread(threadParam);
+      }
       return;
     }
     const headers: Record<string, string> = { "X-User-Token": token };
+    const threadParam = searchParams.get("thread");
     fetch("/api/chat/threads", { headers })
       .then((r) => r.json())
       .then((data) => {
         setThreads(data.threads?.length ? data.threads : []);
-        const threadParam = searchParams.get("thread");
-        if (threadParam && data.threads?.some((t: ThreadMeta) => t.id === threadParam)) {
-          loadThread(threadParam);
-        }
+        // Always try to load the ?thread= param — don't require it to be in the list
+        // (anonymous threads from home-page routing may not be in the user's thread list)
+        if (threadParam) loadThread(threadParam);
       })
-      .catch(() => {})
+      .catch(() => {
+        // Thread list failed — still try loading the specific thread param
+        if (threadParam) loadThread(threadParam);
+      })
       .finally(() => setThreadsLoading(false));
   }, [searchParams, loadThread, token, authLoading]);
 
