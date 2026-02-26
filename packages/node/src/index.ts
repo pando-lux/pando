@@ -894,6 +894,30 @@ export class PandoNode {
         this.governance.requestSync(randomPeer.peerId).catch(() => {});
       }, 5 * 60 * 1000);
 
+      // Delayed peer re-exchange: 30s + 90s after boot, share full peer list with all peers.
+      // The per-connection exchange (5s) may miss peers that haven't connected yet.
+      for (const delay of [30_000, 90_000]) {
+        setTimeout(async () => {
+          if (!this.network) return;
+          const peers = this.network.getPeers();
+          const peerAddrs = this.network.getConnectedPeerAddresses();
+          if (peers.length < 2 || peerAddrs.length === 0) return;
+          for (const peer of peers) {
+            const toShare = peerAddrs.filter(p => p.peerId !== peer.peerId);
+            if (toShare.length === 0) continue;
+            try {
+              await this.network.sendMessage(peer.peerId, {
+                type: MessageType.PEER_EXCHANGE,
+                from: this.getIdentity()!.peerId,
+                timestamp: Date.now(),
+                payload: { peers: toShare },
+              });
+            } catch {}
+          }
+          console.log(`[peer-exchange] Re-shared peers with ${peers.length} connected peer(s)`);
+        }, delay);
+      }
+
       // Log if this is a post-upgrade restart
       const lastUpgradeFile = join(dataDir, 'last-upgrade.json');
       if (existsSync(lastUpgradeFile)) {
