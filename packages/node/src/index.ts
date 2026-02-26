@@ -2137,19 +2137,20 @@ location /apps/${projectId}/ {
       this.nodeHealth.core = 'healthy';
     }
 
-    // Platform health: api-server failed → failed; optional services missing → degraded
+    // Platform health: api-server failed → failed; explicit service failures → degraded
+    // Skipped services (due to node mode / no Claude Code) do NOT count as degraded.
     if (s['api-server'] === 'failed') {
       this.nodeHealth.platform = 'failed';
-    } else if (s['thread-store'] === 'degraded' || !this.schedulerEnabled || !this.monitorEnabled) {
+    } else if (s['thread-store'] === 'degraded' || s['scheduler'] === 'failed' || s['monitor'] === 'failed') {
       this.nodeHealth.platform = 'degraded';
     } else {
       this.nodeHealth.platform = 'healthy';
     }
 
-    // Operational mode: 3 = full (storage + agents), 2 = P2P (storage, no agents), 1 = local-only
+    // Operational mode: 3 = full (storage connected), 2 = P2P-only, 1 = local-only
     const mode: OperationalMode = this.storageBackend
-      ? (this.agentSystemStarted ? 3 : 2)
-      : 1;
+      ? 3
+      : (this.network ? 2 : 1);
     this.nodeHealth.mode = mode;
 
     // Collect all degraded/failed steps
