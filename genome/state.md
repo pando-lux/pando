@@ -27,7 +27,19 @@ v2.1-v2.5 + Phase 53.7 + Phase 53.8 + Phase 68.4 + Ledger Explorer + Node Setup 
 
 **Overnight sprint continuing (2026-02-26).**
 
-All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88**, **89**, **90**, **91**, **92**, **93**, **94**, **53.7**, **53.8**, **68.4** COMPLETE. v2.1-v2.5 architecture complete. See "What's next" below for priorities.
+All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88**, **89**, **90**, **91**, **92**, **93**, **94**, **95**, **53.7**, **53.8**, **68.4** COMPLETE. v2.1-v2.5 architecture complete. See "What's next" below for priorities.
+
+**Phase 95: Gateway UX — NavBar cleanup + Home "Your Work" section — COMPLETE (2026-02-26)**
+- ✅ NavBar: slimmed from 16 links → 5 primary (Home, Chat, Projects, Explore, Dev)
+  - Wallet link added to auth area (next to username) for logged-in users — desktop + mobile
+  - Removed: Get Started, Services, Marketplace, Search, Content, Apps, Agents, Governance, Resources, Capacity, Council (all still accessible via Explore or URL)
+- ✅ Home page: "Your Work" section between stats and unified input
+  - Guest state: 3-step explainer card (Chat → AI Builds → Live) with "Start building →" CTA
+  - Logged in, no projects: prompt with "Start chatting →" CTA
+  - Logged in, with projects: mini cards showing up to 3 projects with live/building badges + "Open app" links
+- ✅ CSS: added `animate-page-fade-in-delay-4` for staggered section entrances
+- ✅ Chat page: replaced node-status quick actions with builder-oriented ones (Build todo app, Build landing page, Build weather app) — keeps Node Status + My Balance
+- ✅ Explore page: expanded "For Node Operators" section — added Resources, Marketplace, Search, Wallet links
 
 **Phase 94: Project Settings — repoUrl + tier fields — COMPLETE (2026-02-26)**
 - ✅ `PATCH /v1/projects/:id` now accepts `repoUrl` and `tier` fields

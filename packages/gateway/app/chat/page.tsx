@@ -132,11 +132,11 @@ function CostIndicator({ tier }: { tier: MessageTier }) {
 }
 
 const QUICK_ACTIONS = [
+  { label: "Build a todo app", message: "Build me a todo app" },
+  { label: "Build a landing page", message: "Build me a landing page" },
+  { label: "Build a weather app", message: "Build me a weather app" },
   { label: "Node Status", message: "show status" },
   { label: "My Balance", message: "what is my balance" },
-  { label: "Show Peers", message: "list peers" },
-  { label: "List Tasks", message: "show tasks" },
-  { label: "Proposals", message: "show proposals" },
 ];
 
 type AgentMode = "auto" | "simple" | "medium" | "complex";
