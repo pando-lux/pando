@@ -11,7 +11,7 @@ exposes:
   - remove(projectId) — delete all deployed files from S3
   - probe(projectId) — check if deployment exists without generating URLs
 rules: []
-last_verified: 2026-02-22
+last_verified: 2026-02-26 (INFRA-02 E2E verified: Phase 87 P2P discovery + Phase 88 auto-tier + injection working)
 ---
 
 # Hosting Service (Phase 32 + Phase 62 URL Injection)
@@ -63,7 +63,7 @@ The gateway serves deployed content at `/apps/*` by proxying to S3 (`app/apps/[.
 - The S3 bucket policy only allows public read on the `public/*` prefix. Any change to the bucket policy could expose private deployments.
 - Pre-signed URLs expire after 1 hour. Clients must call `GET /projects/:id/hosting` again to get a fresh URL.
 - File paths in the upload body are relative to the project root. The service prepends `public/<projectId>/` or `private/<projectId>/` automatically.
-- Set `GATEWAY_PUBLIC_URL` to get clean deployment URLs (e.g., `https://gateway-one-mu.vercel.app`).
+- Set `GATEWAY_PUBLIC_URL` to get clean deployment URLs (e.g., `https://gateway-one-mu.vercel.app`). **On systemd nodes (EC2), this must be set in the service file** — `Environment=GATEWAY_PUBLIC_URL=https://gateway-one-mu.vercel.app` in `/etc/systemd/system/pando-node.service`. The env var is read at deploy time (when building S3 upload), not at node startup. Missing this var means no gateway URL injection in deployed apps — `window.PANDO_GATEWAY_URL` will be absent.
 
 ## Deployment Flow (Phase 87)
 
@@ -78,6 +78,17 @@ The flow:
 6. Manager tells the user the deployment URL
 
 Legacy: `POST /agents/:id/deploy` still exists for direct S3 workspace uploads but is superseded by the unified endpoint.
+
+## Known Gap: Chat → Build → Deploy Not E2E via Gateway
+
+The full user flow ("build me a landing page" in chat → agent builds → deploys) requires multi-turn Claude Code agent sessions on remote P2P nodes. **This is not yet implemented (Phase 100 — remote agent delegation).**
+
+Current state:
+- Deploy pipeline (GitHub push → S3) works end-to-end ✅
+- `routeClaudeTaskP2P` handles one-shot compute (question answering, simple tasks) ✅
+- Multi-turn agent workspace on a remote node (file creation, build, iterate) ✗ — Phase 100
+
+Workaround: Use direct API calls (preflight → `github/push` with a pre-built workspace → `deploy`). EC2 nodes with Claude Code can build locally, then deploy.
 
 ## Key Files
 - `packages/node/src/hosting-service.ts` — HostingService class (S3Client, deploy, presign, remove, probe)
