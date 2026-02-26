@@ -1,6 +1,6 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-26 (pre-launch test run complete — GW-04/05/06/07/09/10/11 tested; 3 bugs fixed: a29ce486 encryption guard, 20d9c4c6 rate limiter, 130f96a1 Smart mode multi-turn)
+> Last updated: 2026-02-26 (governance fix deployed: upgradePayload now persisted to SQLite — checkForMissedUpgrades works after restart; both EC2 nodes at a98bff6)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
 
 ## Overnight sprint (2026-02-26) — continuing
