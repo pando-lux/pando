@@ -113,6 +113,8 @@ export enum MessageType {
   // Phase 93: Direct TCP stream request/reply (replaces GossipSub for unicast P2P storage proxy calls)
   REQUEST_REPLY_REQUEST = 'request_reply_request',
   REQUEST_REPLY_REPLY = 'request_reply_reply',
+  // Peer exchange: share known peer addresses so nodes can form a full mesh
+  PEER_EXCHANGE = 'peer_exchange',
 }
 
 export enum NodeTier {

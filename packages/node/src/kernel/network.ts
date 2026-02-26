@@ -363,6 +363,20 @@ export class PandoNetwork {
     return this.peers.size;
   }
 
+  /** Get connected peer addresses for peer exchange (share with other nodes so they can dial). */
+  getConnectedPeerAddresses(): { peerId: string; addrs: string[] }[] {
+    if (!this.node) return [];
+    const result: { peerId: string; addrs: string[] }[] = [];
+    for (const peerId of this.peers.keys()) {
+      const connections = this.node.getConnections().filter(c => c.remotePeer.toString() === peerId);
+      const addrs = connections.map(c => c.remoteAddr.toString()).filter(a => !a.includes('/p2p-circuit/'));
+      if (addrs.length > 0) {
+        result.push({ peerId, addrs });
+      }
+    }
+    return result;
+  }
+
   getDiscoverySources(): Map<string, DiscoverySource> {
     return this.discoverySources;
   }

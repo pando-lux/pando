@@ -736,6 +736,24 @@ export class PandoNode {
         } catch {}
       }, 2_000);
 
+      // Peer exchange: share our peer list so new nodes can form a full mesh.
+      // Delayed 5s to let the connection settle and capability exchange finish first.
+      setTimeout(async () => {
+        try {
+          if (!this.network) return;
+          const peerAddrs = this.network.getConnectedPeerAddresses()
+            .filter(p => p.peerId !== peerId); // don't send them their own address
+          if (peerAddrs.length === 0) return;
+          await this.network.sendMessage(peerId, {
+            type: MessageType.PEER_EXCHANGE,
+            from: this.getIdentity()!.peerId,
+            timestamp: Date.now(),
+            payload: { peers: peerAddrs },
+          });
+          console.log(`[peer-exchange] Shared ${peerAddrs.length} peer(s) with ${peerId.slice(0, 12)}`);
+        } catch {}
+      }, 5_000);
+
       // Phase 69: Auto-wrap removed — credentials in MongoDB, not per-node.
 
       // Phase 83: Deferred data loading for P2PStorageBackend nodes.
@@ -1965,6 +1983,35 @@ location /apps/${projectId}/ {
           const activeResources = Object.entries(profile.capabilities || {})
             .filter(([, v]) => v).map(([k]) => k);
           console.log(`[capabilities] Direct profile from ${from.slice(0, 12)}: [${activeResources.join(', ')}]`);
+        }
+      }
+
+      // Peer exchange: receive peer list from a connected node and dial unknown peers.
+      if (message.type === MessageType.PEER_EXCHANGE) {
+        const exchangedPeers = (message.payload as any)?.peers as { peerId: string; addrs: string[] }[] | undefined;
+        if (exchangedPeers && Array.isArray(exchangedPeers) && this.network) {
+          const network = this.network;
+          const myPeerId = this.identity!.peerId;
+          const connectedPeers = new Set(network.getPeers().map(p => p.peerId));
+          (async () => {
+            let dialed = 0;
+            for (const peer of exchangedPeers) {
+              if (peer.peerId === myPeerId || connectedPeers.has(peer.peerId)) continue;
+              for (const addr of peer.addrs) {
+                try {
+                  await network.dialPeer(addr);
+                  dialed++;
+                  console.log(`[peer-exchange] Connected to ${peer.peerId.slice(0, 12)} via exchange from ${from.slice(0, 12)}`);
+                  break;
+                } catch {
+                  // addr may be unreachable, try next
+                }
+              }
+            }
+            if (dialed > 0) {
+              console.log(`[peer-exchange] Discovered ${dialed} new peer(s) from ${from.slice(0, 12)}`);
+            }
+          })().catch(() => {});
         }
       }
     });
