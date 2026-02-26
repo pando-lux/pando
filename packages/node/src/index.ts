@@ -884,6 +884,16 @@ export class PandoNode {
 
       console.log('[upgrade] Phase 82 simple self-upgrade wired (with catch-up timer)');
 
+      // Periodic governance re-sync: every 5 min, re-sync with a random connected peer.
+      // Handles thin GossipSub meshes where governance votes/decisions don't propagate.
+      setInterval(() => {
+        if (!this.governance || !this.network) return;
+        const peers = this.network.getPeers();
+        if (peers.length === 0) return;
+        const randomPeer = peers[Math.floor(Math.random() * peers.length)];
+        this.governance.requestSync(randomPeer.peerId).catch(() => {});
+      }, 5 * 60 * 1000);
+
       // Log if this is a post-upgrade restart
       const lastUpgradeFile = join(dataDir, 'last-upgrade.json');
       if (existsSync(lastUpgradeFile)) {
