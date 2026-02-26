@@ -1,0 +1,1427 @@
+{
+  "version": "0.1",
+  "nodes": {
+    "MESSAGE_PIPELINE": {
+      "_type": "blueprint",
+      "_name": "MESSAGE_PIPELINE",
+      "_source": "flows.know",
+      "description": "Complete path from user input to animated avatar response",
+      "status": "active",
+      "contains": [
+        "FrontendHandler",
+        "MessageProcessor",
+        "TTSService",
+        "AnimationRenderer"
+      ]
+    },
+    "LIP_SYNC_PIPELINE": {
+      "_type": "blueprint",
+      "_name": "LIP_SYNC_PIPELINE",
+      "_source": "flows.know",
+      "description": "Audio-driven lip sync sprite selection",
+      "status": "transitioning",
+      "promote_when": [
+        "test_sentence_rules_passing",
+        "test_visual_quality_passing"
+      ]
+    },
+    "UserSubmitsMessage": {
+      "_type": "entity",
+      "_name": "UserSubmitsMessage",
+      "_source": "flows.know",
+      "_tags": [
+        "@why(\"entry point for the user message flow — fired when user presses send\")"
+      ],
+      "type": "event",
+      "status": "active"
+    },
+    "FrontendHandler": {
+      "_type": "entity",
+      "_name": "FrontendHandler",
+      "_source": "flows.know",
+      "type": "module",
+      "blueprint": "MESSAGE_PIPELINE",
+      "file": "src/handler.py:1",
+      "status": "active",
+      "implements": [
+        "USER_MESSAGE_FLOW.cleanup"
+      ]
+    },
+    "MessageProcessor": {
+      "_type": "entity",
+      "_name": "MessageProcessor",
+      "_source": "flows.know",
+      "type": "module",
+      "blueprint": "MESSAGE_PIPELINE",
+      "file": "src/processor.py:1",
+      "status": "active",
+      "implements": [
+        "USER_MESSAGE_FLOW.process"
+      ]
+    },
+    "TTSService": {
+      "_type": "entity",
+      "_name": "TTSService",
+      "_source": "flows.know",
+      "type": "service",
+      "blueprint": "MESSAGE_PIPELINE",
+      "status": "active",
+      "depends_on": [
+        "ElevenLabsAPI"
+      ]
+    },
+    "AnimationRenderer": {
+      "_type": "entity",
+      "_name": "AnimationRenderer",
+      "_source": "flows.know",
+      "type": "module",
+      "blueprint": "MESSAGE_PIPELINE",
+      "file": "src/renderer.py:1",
+      "status": "active",
+      "depends_on": [
+        "OverlayCache",
+        "LipSyncSprites"
+      ]
+    },
+    "ElevenLabsAPI": {
+      "_type": "entity",
+      "_name": "ElevenLabsAPI",
+      "_source": "flows.know",
+      "_tags": [
+        "@why(\"chosen over Google TTS for natural prosody and character alignment output\")"
+      ],
+      "type": "external_service",
+      "status": "active"
+    },
+    "OverlayCache": {
+      "_type": "entity",
+      "_name": "OverlayCache",
+      "_source": "flows.know",
+      "type": "cache",
+      "blueprint": "MESSAGE_PIPELINE",
+      "status": "active"
+    },
+    "LipSyncSprites": {
+      "_type": "entity",
+      "_name": "LipSyncSprites",
+      "_source": "flows.know",
+      "type": "asset",
+      "blueprint": "LIP_SYNC_PIPELINE",
+      "status": "active"
+    },
+    "USER_MESSAGE_FLOW": {
+      "_type": "flow",
+      "_name": "USER_MESSAGE_FLOW",
+      "_source": "flows.know",
+      "_steps": [
+        {
+          "_name": "cleanup",
+          "_target": "process",
+          "_tags": [
+            "@gotcha(\"clearOverlayCache MUST be awaited — see lesson CACHE_RACE_001\")"
+          ],
+          "actor": "FrontendHandler",
+          "does": [
+            "stopAudio",
+            "clearOverlayCache",
+            "resetAnimationState"
+          ],
+          "on_fail": "retry",
+          "_next": "process"
+        },
+        {
+          "_name": "process",
+          "_target": "generate_speech",
+          "actor": "MessageProcessor",
+          "does": [
+            "saveMessageToDatabase",
+            "callLLM"
+          ],
+          "condition": "env.MOCK_MODE",
+          "on_fail": "DatabaseError",
+          "_next": "generate_speech"
+        },
+        {
+          "_name": "mock_response",
+          "_target": "done",
+          "_tags": [
+            "@why(\"zero-cost testing path — no ElevenLabs or LLM calls\")"
+          ],
+          "actor": "MessageProcessor",
+          "does": [
+            "loadMockAlignment",
+            "emitMockFrames"
+          ],
+          "_next": "done"
+        },
+        {
+          "_name": "generate_speech",
+          "_target": "animate",
+          "_tags": [
+            "@gotcha(\"alignment MUST complete fully before animation starts — partial alignment causes lip desync\")"
+          ],
+          "actor": "TTSService",
+          "does": [
+            "generateTTS",
+            "extractPhonemeAlignment"
+          ],
+          "timing": "alignment extraction adds ~200ms",
+          "on_fail": "FallbackTTS",
+          "_next": "animate"
+        },
+        {
+          "_name": "animate",
+          "_target": "done",
+          "_tags": [
+            "@gotcha(\"emit order matters: audio first, then frames — reversed order causes AV desync\")"
+          ],
+          "actor": "AnimationRenderer",
+          "does": [
+            "selectLipSyncSprites",
+            "compositeOverlay",
+            "emitFramesToClient"
+          ],
+          "_next": "done"
+        }
+      ],
+      "description": "Full round-trip from user message to animated response",
+      "trigger": "UserSubmitsMessage"
+    },
+    "TRANSPORT_PROTOCOL": {
+      "_type": "decision",
+      "_name": "TRANSPORT_PROTOCOL",
+      "_source": "flows.know",
+      "_options": [
+        {
+          "_name": "WebRTC",
+          "_target": "rejected",
+          "reason": "Latency 200ms+ at above 500 concurrent users in load test",
+          "evidence": "perf_test_webrtc_v1",
+          "tradeoffs": [
+            "no_server_required",
+            "supports_p2p"
+          ],
+          "reconsider_if": "context.requires_p2p",
+          "_status": "rejected"
+        },
+        {
+          "_name": "SocketIO",
+          "_target": "chosen",
+          "reason": "Latency under 50ms at 1000 concurrent in production",
+          "evidence": "perf_test_socketio_v2",
+          "tradeoffs": [
+            "requires_server",
+            "no_p2p"
+          ],
+          "revisit_when": "concurrent_users",
+          "_status": "chosen"
+        }
+      ],
+      "problem": "Real-time bidirectional communication between server and client",
+      "context": [
+        "high_concurrency",
+        "server_mediated",
+        "cross_platform",
+        "low_latency_required"
+      ]
+    },
+    "TTS_PROVIDER": {
+      "_type": "decision",
+      "_name": "TTS_PROVIDER",
+      "_source": "flows.know",
+      "_options": [
+        {
+          "_name": "GoogleTTS",
+          "_target": "rejected",
+          "reason": "No phoneme-level alignment output — cannot drive lip sync",
+          "reconsider_if": "Google_adds_alignment_API",
+          "_status": "rejected"
+        },
+        {
+          "_name": "AzureTTS",
+          "_target": "rejected",
+          "reason": "Alignment format incompatible with our animation pipeline",
+          "_status": "rejected"
+        },
+        {
+          "_name": "ElevenLabs",
+          "_target": "chosen",
+          "reason": "Character-level alignment output, natural prosody, low latency",
+          "tradeoffs": [
+            "cost_per_character",
+            "rate_limits"
+          ],
+          "revisit_when": "monthly_spend",
+          "_status": "chosen"
+        }
+      ],
+      "problem": "Text-to-speech with phoneme alignment for lip sync",
+      "context": [
+        "lip_sync_required",
+        "natural_prosody",
+        "cost_sensitive"
+      ]
+    },
+    "LIP_SYNC_AXIS_SYSTEM": {
+      "_type": "decision",
+      "_name": "LIP_SYNC_AXIS_SYSTEM",
+      "_source": "flows.know",
+      "_options": [
+        {
+          "_name": "JXM_system",
+          "_target": "rejected",
+          "reason": "J/X/M axes conflate visually distinct movements, hard to tune",
+          "tradeoffs": [
+            216,
+            "_sprites_already_generated",
+            "production_stable"
+          ],
+          "reconsider_if": "false",
+          "_status": "rejected"
+        },
+        {
+          "_name": "JSLT_system",
+          "_target": "chosen",
+          "reason": "J/S/L/T axes map to independent articulators — jaw, smile, lip seal, tuck",
+          "tradeoffs": [
+            160,
+            "_sprites_needed",
+            "not_yet_in_production"
+          ],
+          "revisit_when": "sentence_test_suite_passes",
+          "_status": "chosen"
+        }
+      ],
+      "problem": "Axis system for controlling lip shape sprites",
+      "context": [
+        "sprite_based",
+        "must_cover_all_english_phonemes",
+        "agent_generated"
+      ]
+    },
+    "CACHE_RACE_001": {
+      "_type": "lesson",
+      "_name": "CACHE_RACE_001",
+      "_source": "flows.know",
+      "date": "2026-01-15",
+      "severity": "critical",
+      "in": "USER_MESSAGE_FLOW.cleanup",
+      "what": "Animation frames from previous message rendered over new message audio",
+      "why": "clearOverlayCache() was called but not awaited — async function returned immediately while cache was still populated",
+      "fix": "Added await to clearOverlayCache() call in FrontendHandler.handleMessage()",
+      "invariant": "OverlayCache MUST be fully empty before audio playback begins",
+      "verified_by": "test_cache_clear_before_audio"
+    },
+    "AV_DESYNC_001": {
+      "_type": "lesson",
+      "_name": "AV_DESYNC_001",
+      "_source": "flows.know",
+      "date": "2026-01-22",
+      "severity": "critical",
+      "in": "USER_MESSAGE_FLOW.animate",
+      "what": "Video frames arrived at client before audio — first 200ms of speech showed neutral face",
+      "why": "emit order in AnimationRenderer was frames first, then audio",
+      "fix": "Swapped emit order: audio emitted first, frames follow in subsequent socket messages",
+      "invariant": "Audio socket message MUST be emitted before frame messages in every response",
+      "verified_by": "test_av_emit_order"
+    },
+    "ALIGNMENT_PARTIAL_001": {
+      "_type": "lesson",
+      "_name": "ALIGNMENT_PARTIAL_001",
+      "_source": "flows.know",
+      "date": "2026-02-01",
+      "severity": "warning",
+      "in": "USER_MESSAGE_FLOW.generate_speech",
+      "what": "Last 2-3 phonemes of sentence had wrong lip shape",
+      "why": "Animation started before ElevenLabs alignment API returned final phonemes",
+      "fix": "Added completion check — animation pipeline only starts after alignment.is_complete == true",
+      "invariant": "Phoneme alignment MUST have is_complete == true before AnimationRenderer.selectLipSyncSprites()",
+      "verified_by": "test_alignment_complete_before_animate"
+    },
+    "CACHE_BEFORE_AUDIO": {
+      "_type": "invariant",
+      "_name": "CACHE_BEFORE_AUDIO",
+      "_source": "flows.know",
+      "rule": "OverlayCache must be empty before any audio starts playing",
+      "applies_to": [
+        "FrontendHandler",
+        "AnimationRenderer"
+      ],
+      "enforced_by": "test_cache_clear_before_audio",
+      "severity": "critical"
+    },
+    "AUDIO_BEFORE_FRAMES": {
+      "_type": "invariant",
+      "_name": "AUDIO_BEFORE_FRAMES",
+      "_source": "flows.know",
+      "rule": "Audio socket message must be emitted before any frame messages",
+      "applies_to": [
+        "AnimationRenderer"
+      ],
+      "enforced_by": "test_av_emit_order",
+      "severity": "critical"
+    },
+    "test_cache_clear_before_audio": {
+      "_type": "test",
+      "_name": "test_cache_clear_before_audio",
+      "_source": "flows.know",
+      "validates": "CACHE_RACE_001.invariant",
+      "type": "integration",
+      "location": "tests/test_sync.py:42",
+      "status": "passing",
+      "last_run": "2026-02-20"
+    },
+    "test_av_emit_order": {
+      "_type": "test",
+      "_name": "test_av_emit_order",
+      "_source": "flows.know",
+      "validates": "AV_DESYNC_001.invariant",
+      "type": "integration",
+      "location": "tests/test_sync.py:89",
+      "status": "passing",
+      "last_run": "2026-02-20"
+    },
+    "test_alignment_complete_before_animate": {
+      "_type": "test",
+      "_name": "test_alignment_complete_before_animate",
+      "_source": "flows.know",
+      "validates": "ALIGNMENT_PARTIAL_001.invariant",
+      "type": "integration",
+      "location": "tests/test_tts.py:31",
+      "status": "passing",
+      "last_run": "2026-02-19"
+    },
+    "test_sentence_rules_passing": {
+      "_type": "test",
+      "_name": "test_sentence_rules_passing",
+      "_source": "flows.know",
+      "validates": "LIP_SYNC_PIPELINE",
+      "type": "e2e",
+      "location": "tests/test_lip_sync.py:1",
+      "status": "pending",
+      "last_run": "2026-02-18",
+      "description": "Full sentence viseme sequence validation — must pass before JSLT system promoted to production"
+    },
+    "AudioVideoSyncPrinciple": {
+      "_type": "concept",
+      "_name": "AudioVideoSyncPrinciple",
+      "_source": "knowledge.know",
+      "_tags": [
+        "@why(\"This principle is why the emit order in AnimationRenderer is non-negotiable, not just a convention\")"
+      ],
+      "domain": "av_perception",
+      "explains": [
+        "AnimationRenderer",
+        "FrontendHandler"
+      ],
+      "summary": "Audio is the perceptual anchor — the brain locks time to audio, not video",
+      "why_audio_first": "Human perception is audio-anchored. When audio and video are misaligned, the brain perceives video as wrong, not audio. Consequence: audio socket message MUST be emitted before frame messages.",
+      "key_values": {
+        "audio_leads_0_to_50ms": "imperceptible — brain accepts as simultaneous",
+        "audio_lags_any_amount": "immediately noticeable as 'out of sync'",
+        "video_lags_up_to_200ms": "tolerated because brain adjusts lip-read expectation"
+      },
+      "see_also": [
+        "AV_DESYNC_001",
+        "AUDIO_BEFORE_FRAMES"
+      ]
+    },
+    "AsyncCacheContention": {
+      "_type": "concept",
+      "_name": "AsyncCacheContention",
+      "_source": "knowledge.know",
+      "_tags": [
+        "@why(\"This is why clearOverlayCache MUST be awaited — not just best practice, but async mechanics guarantee wrong behavior if not awaited\")"
+      ],
+      "domain": "concurrent_state",
+      "explains": [
+        "OverlayCache",
+        "FrontendHandler"
+      ],
+      "summary": "Async cache operations can return before completion — partial state causes cross-message contamination",
+      "why_await_required": "JavaScript async functions return a Promise immediately. Without await, the caller continues while cache ops are still running. If a new message starts before the old cache is cleared, old overlay sprites bleed into the new render — visible as ghost frames from the previous message.",
+      "key_values": {
+        "partial_clear_symptom": "previous message lip shape visible for 1-3 frames at start of new message",
+        "full_clear_symptom": "clean transition, no ghost frames",
+        "detection": "add logging in clearOverlayCache() to confirm completion before returning"
+      },
+      "see_also": [
+        "CACHE_RACE_001",
+        "CACHE_BEFORE_AUDIO"
+      ]
+    },
+    "PhonemeAlignmentCompleteness": {
+      "_type": "concept",
+      "_name": "PhonemeAlignmentCompleteness",
+      "_source": "knowledge.know",
+      "domain": "speech_synthesis",
+      "explains": [
+        "TTSService",
+        "AnimationRenderer"
+      ],
+      "summary": "TTS alignment APIs stream results — final phonemes arrive last and are most likely to be cut off",
+      "why_completeness_check": "ElevenLabs streams phoneme alignment as audio is generated. The final 2-3 phonemes of a sentence arrive in the last response chunk. If animation starts on first chunk arrival, the lip sync pipeline runs without the sentence's ending — producing wrong mouth shape for the last word.",
+      "key_values": {
+        "streaming_risk": "last 2-3 phonemes of sentence",
+        "safe_start_condition": "alignment.is_complete == true (full sentence confirmed)",
+        "typical_alignment_latency": "200ms after audio generation starts"
+      },
+      "see_also": [
+        "ALIGNMENT_PARTIAL_001"
+      ]
+    },
+    "MAX_RETRY_COUNT": {
+      "_type": "constant",
+      "_name": "MAX_RETRY_COUNT",
+      "_source": "knowledge.know",
+      "value": 3,
+      "unit": "attempts",
+      "file": "src/handler.py:28",
+      "calibrates": "FrontendHandler",
+      "why": "Exponential backoff 3x = total max wait of 7 seconds (1s + 2s + 4s). Beyond 7s the user has already re-submitted the message, causing a duplicate. Below 3 the system gives up on transient network errors too early.",
+      "valid_range": "2 to 5",
+      "recalibrate_when": "p99 latency exceeds 3s (current baseline: 800ms)",
+      "derived_from": "CACHE_RACE_001"
+    },
+    "TTS_ALIGNMENT_POLL_INTERVAL_MS": {
+      "_type": "constant",
+      "_name": "TTS_ALIGNMENT_POLL_INTERVAL_MS",
+      "_source": "knowledge.know",
+      "value": 50,
+      "unit": "milliseconds",
+      "file": "src/processor.py:64",
+      "calibrates": "TTSService",
+      "why": "50ms poll interval catches alignment completion within one animation frame (33ms at 30fps). Polling faster than 33ms wastes CPU with no benefit. Polling slower than 100ms risks missing the is_complete flag and adding a full frame of desync.",
+      "valid_range": "33 to 100",
+      "recalibrate_when": "animation frame rate changes from 30fps",
+      "derived_from": "ALIGNMENT_PARTIAL_001"
+    },
+    "OVERLAY_CACHE_MAX_AGE_MS": {
+      "_type": "constant",
+      "_name": "OVERLAY_CACHE_MAX_AGE_MS",
+      "_source": "knowledge.know",
+      "value": 5000,
+      "unit": "milliseconds",
+      "file": "src/renderer.py:12",
+      "calibrates": [
+        "AnimationRenderer",
+        "OverlayCache"
+      ],
+      "why": "5 second TTL prevents stale overlay sprites from being reused if the user is idle. If a message takes longer than 5s to generate (rare: ElevenLabs timeout), the cache would contain orphaned sprites that no longer match the audio. TTL evicts them safely.",
+      "valid_range": "2000 to 10000",
+      "recalibrate_when": "ElevenLabs p99 generation latency exceeds 4s",
+      "regime": "cache_eviction"
+    },
+    "MESSAGE_PIPELINE_GUIDE": {
+      "_type": "guide",
+      "_name": "MESSAGE_PIPELINE_GUIDE",
+      "_source": "knowledge.know",
+      "_tags": [
+        "@gotcha(\"Never add caching to the TTS alignment result — alignment is request-specific and cannot be reused across messages\")"
+      ],
+      "for": "MESSAGE_PIPELINE",
+      "audience": "new_agent",
+      "entry_point": "FrontendHandler",
+      "workflow": "User submits → FrontendHandler clears state → MessageProcessor calls LLM → TTSService generates audio + phoneme alignment → AnimationRenderer composites overlays → client receives audio first, then frames",
+      "critical_first": "Socket emit order is non-negotiable: audio message BEFORE frame messages. See concept AudioVideoSyncPrinciple. This is human perception physics, not a style preference.",
+      "read_before_touching": {
+        "FrontendHandler": "concept AsyncCacheContention, lesson CACHE_RACE_001",
+        "TTSService": "concept PhonemeAlignmentCompleteness, lesson ALIGNMENT_PARTIAL_001",
+        "AnimationRenderer": "concept AudioVideoSyncPrinciple, lesson AV_DESYNC_001"
+      },
+      "see_first": [
+        "AudioVideoSyncPrinciple",
+        "AsyncCacheContention",
+        "PhonemeAlignmentCompleteness"
+      ],
+      "mock_mode": "Set env.MOCK_MODE=true to bypass ElevenLabs and LLM. Flow branches to mock_response step. Zero cost, full animation pipeline still runs."
+    },
+    "SocketEventBus": {
+      "_type": "entity",
+      "_name": "SocketEventBus",
+      "_source": "src\\handler.py",
+      "_tags": [
+        "@why(\"Centralizing emits makes AV_DESYNC_001 invariant easy to enforce in one place\")"
+      ],
+      "type": "singleton",
+      "blueprint": "USER_MESSAGE_FLOW",
+      "file": "src/handler.py:15",
+      "description": "Central Socket.IO event bus — all emits go through here"
+    },
+    "NO_DIRECT_EMIT": {
+      "_type": "invariant",
+      "_name": "NO_DIRECT_EMIT",
+      "_source": "src\\handler.py",
+      "rule": "All socket emits must go through SocketEventBus — never call socket.emit() directly",
+      "applies_to": [
+        "AnimationRenderer",
+        "MessageProcessor",
+        "TTSService"
+      ],
+      "enforced_by": "test_no_direct_emit",
+      "severity": "warning",
+      "file": "src\\handler.py:1"
+    },
+    "test_no_direct_emit": {
+      "_type": "test",
+      "_name": "test_no_direct_emit",
+      "_source": "src\\handler.py",
+      "validates": "NO_DIRECT_EMIT",
+      "type": "unit",
+      "location": "src/handler.py:60",
+      "status": "passing",
+      "last_run": "2026-02-20",
+      "file": "src\\handler.py:1"
+    }
+  },
+  "edges": [
+    {
+      "from": "MESSAGE_PIPELINE",
+      "to": "FrontendHandler",
+      "to_full": "FrontendHandler",
+      "type": "CONTAINS",
+      "via": "contains"
+    },
+    {
+      "from": "MESSAGE_PIPELINE",
+      "to": "MessageProcessor",
+      "to_full": "MessageProcessor",
+      "type": "CONTAINS",
+      "via": "contains"
+    },
+    {
+      "from": "MESSAGE_PIPELINE",
+      "to": "TTSService",
+      "to_full": "TTSService",
+      "type": "CONTAINS",
+      "via": "contains"
+    },
+    {
+      "from": "MESSAGE_PIPELINE",
+      "to": "AnimationRenderer",
+      "to_full": "AnimationRenderer",
+      "type": "CONTAINS",
+      "via": "contains"
+    },
+    {
+      "from": "FrontendHandler",
+      "to": "USER_MESSAGE_FLOW",
+      "to_full": "USER_MESSAGE_FLOW.cleanup",
+      "type": "IMPLEMENTS",
+      "via": "implements"
+    },
+    {
+      "from": "FrontendHandler",
+      "to": "MESSAGE_PIPELINE",
+      "to_full": "MESSAGE_PIPELINE",
+      "type": "BELONGS_TO",
+      "via": "blueprint"
+    },
+    {
+      "from": "MessageProcessor",
+      "to": "USER_MESSAGE_FLOW",
+      "to_full": "USER_MESSAGE_FLOW.process",
+      "type": "IMPLEMENTS",
+      "via": "implements"
+    },
+    {
+      "from": "MessageProcessor",
+      "to": "MESSAGE_PIPELINE",
+      "to_full": "MESSAGE_PIPELINE",
+      "type": "BELONGS_TO",
+      "via": "blueprint"
+    },
+    {
+      "from": "TTSService",
+      "to": "ElevenLabsAPI",
+      "to_full": "ElevenLabsAPI",
+      "type": "DEPENDS_ON",
+      "via": "depends_on"
+    },
+    {
+      "from": "TTSService",
+      "to": "MESSAGE_PIPELINE",
+      "to_full": "MESSAGE_PIPELINE",
+      "type": "BELONGS_TO",
+      "via": "blueprint"
+    },
+    {
+      "from": "AnimationRenderer",
+      "to": "OverlayCache",
+      "to_full": "OverlayCache",
+      "type": "DEPENDS_ON",
+      "via": "depends_on"
+    },
+    {
+      "from": "AnimationRenderer",
+      "to": "LipSyncSprites",
+      "to_full": "LipSyncSprites",
+      "type": "DEPENDS_ON",
+      "via": "depends_on"
+    },
+    {
+      "from": "AnimationRenderer",
+      "to": "MESSAGE_PIPELINE",
+      "to_full": "MESSAGE_PIPELINE",
+      "type": "BELONGS_TO",
+      "via": "blueprint"
+    },
+    {
+      "from": "OverlayCache",
+      "to": "MESSAGE_PIPELINE",
+      "to_full": "MESSAGE_PIPELINE",
+      "type": "BELONGS_TO",
+      "via": "blueprint"
+    },
+    {
+      "from": "LipSyncSprites",
+      "to": "LIP_SYNC_PIPELINE",
+      "to_full": "LIP_SYNC_PIPELINE",
+      "type": "BELONGS_TO",
+      "via": "blueprint"
+    },
+    {
+      "from": "USER_MESSAGE_FLOW",
+      "to": "UserSubmitsMessage",
+      "to_full": "UserSubmitsMessage",
+      "type": "TRIGGERED_BY",
+      "via": "trigger"
+    },
+    {
+      "from": "USER_MESSAGE_FLOW",
+      "to": "FrontendHandler",
+      "to_full": "FrontendHandler",
+      "type": "STEP_ACTOR",
+      "via": "USER_MESSAGE_FLOW.cleanup"
+    },
+    {
+      "from": "USER_MESSAGE_FLOW",
+      "to": "MessageProcessor",
+      "to_full": "MessageProcessor",
+      "type": "STEP_ACTOR",
+      "via": "USER_MESSAGE_FLOW.process"
+    },
+    {
+      "from": "USER_MESSAGE_FLOW",
+      "to": "MessageProcessor",
+      "to_full": "MessageProcessor",
+      "type": "STEP_ACTOR",
+      "via": "USER_MESSAGE_FLOW.mock_response"
+    },
+    {
+      "from": "USER_MESSAGE_FLOW",
+      "to": "TTSService",
+      "to_full": "TTSService",
+      "type": "STEP_ACTOR",
+      "via": "USER_MESSAGE_FLOW.generate_speech"
+    },
+    {
+      "from": "USER_MESSAGE_FLOW",
+      "to": "AnimationRenderer",
+      "to_full": "AnimationRenderer",
+      "type": "STEP_ACTOR",
+      "via": "USER_MESSAGE_FLOW.animate"
+    },
+    {
+      "from": "CACHE_RACE_001",
+      "to": "test_cache_clear_before_audio",
+      "to_full": "test_cache_clear_before_audio",
+      "type": "VERIFIED_BY",
+      "via": "verified_by"
+    },
+    {
+      "from": "CACHE_RACE_001",
+      "to": "USER_MESSAGE_FLOW",
+      "to_full": "USER_MESSAGE_FLOW.cleanup",
+      "type": "LESSON_IN",
+      "via": "in"
+    },
+    {
+      "from": "AV_DESYNC_001",
+      "to": "test_av_emit_order",
+      "to_full": "test_av_emit_order",
+      "type": "VERIFIED_BY",
+      "via": "verified_by"
+    },
+    {
+      "from": "AV_DESYNC_001",
+      "to": "USER_MESSAGE_FLOW",
+      "to_full": "USER_MESSAGE_FLOW.animate",
+      "type": "LESSON_IN",
+      "via": "in"
+    },
+    {
+      "from": "ALIGNMENT_PARTIAL_001",
+      "to": "test_alignment_complete_before_animate",
+      "to_full": "test_alignment_complete_before_animate",
+      "type": "VERIFIED_BY",
+      "via": "verified_by"
+    },
+    {
+      "from": "ALIGNMENT_PARTIAL_001",
+      "to": "USER_MESSAGE_FLOW",
+      "to_full": "USER_MESSAGE_FLOW.generate_speech",
+      "type": "LESSON_IN",
+      "via": "in"
+    },
+    {
+      "from": "test_cache_clear_before_audio",
+      "to": "CACHE_RACE_001",
+      "to_full": "CACHE_RACE_001.invariant",
+      "type": "VALIDATES",
+      "via": "validates"
+    },
+    {
+      "from": "test_av_emit_order",
+      "to": "AV_DESYNC_001",
+      "to_full": "AV_DESYNC_001.invariant",
+      "type": "VALIDATES",
+      "via": "validates"
+    },
+    {
+      "from": "test_alignment_complete_before_animate",
+      "to": "ALIGNMENT_PARTIAL_001",
+      "to_full": "ALIGNMENT_PARTIAL_001.invariant",
+      "type": "VALIDATES",
+      "via": "validates"
+    },
+    {
+      "from": "test_sentence_rules_passing",
+      "to": "LIP_SYNC_PIPELINE",
+      "to_full": "LIP_SYNC_PIPELINE",
+      "type": "VALIDATES",
+      "via": "validates"
+    },
+    {
+      "from": "AudioVideoSyncPrinciple",
+      "to": "AnimationRenderer",
+      "to_full": "AnimationRenderer",
+      "type": "UNDERPINS",
+      "via": "explains"
+    },
+    {
+      "from": "AudioVideoSyncPrinciple",
+      "to": "FrontendHandler",
+      "to_full": "FrontendHandler",
+      "type": "UNDERPINS",
+      "via": "explains"
+    },
+    {
+      "from": "AudioVideoSyncPrinciple",
+      "to": "AV_DESYNC_001",
+      "to_full": "AV_DESYNC_001",
+      "type": "SEE_ALSO",
+      "via": "see_also"
+    },
+    {
+      "from": "AudioVideoSyncPrinciple",
+      "to": "AUDIO_BEFORE_FRAMES",
+      "to_full": "AUDIO_BEFORE_FRAMES",
+      "type": "SEE_ALSO",
+      "via": "see_also"
+    },
+    {
+      "from": "AsyncCacheContention",
+      "to": "OverlayCache",
+      "to_full": "OverlayCache",
+      "type": "UNDERPINS",
+      "via": "explains"
+    },
+    {
+      "from": "AsyncCacheContention",
+      "to": "FrontendHandler",
+      "to_full": "FrontendHandler",
+      "type": "UNDERPINS",
+      "via": "explains"
+    },
+    {
+      "from": "AsyncCacheContention",
+      "to": "CACHE_RACE_001",
+      "to_full": "CACHE_RACE_001",
+      "type": "SEE_ALSO",
+      "via": "see_also"
+    },
+    {
+      "from": "AsyncCacheContention",
+      "to": "CACHE_BEFORE_AUDIO",
+      "to_full": "CACHE_BEFORE_AUDIO",
+      "type": "SEE_ALSO",
+      "via": "see_also"
+    },
+    {
+      "from": "PhonemeAlignmentCompleteness",
+      "to": "TTSService",
+      "to_full": "TTSService",
+      "type": "UNDERPINS",
+      "via": "explains"
+    },
+    {
+      "from": "PhonemeAlignmentCompleteness",
+      "to": "AnimationRenderer",
+      "to_full": "AnimationRenderer",
+      "type": "UNDERPINS",
+      "via": "explains"
+    },
+    {
+      "from": "PhonemeAlignmentCompleteness",
+      "to": "ALIGNMENT_PARTIAL_001",
+      "to_full": "ALIGNMENT_PARTIAL_001",
+      "type": "SEE_ALSO",
+      "via": "see_also"
+    },
+    {
+      "from": "MAX_RETRY_COUNT",
+      "to": "FrontendHandler",
+      "to_full": "FrontendHandler",
+      "type": "CALIBRATES",
+      "via": "calibrates"
+    },
+    {
+      "from": "MAX_RETRY_COUNT",
+      "to": "CACHE_RACE_001",
+      "to_full": "CACHE_RACE_001",
+      "type": "DERIVED_FROM",
+      "via": "derived_from"
+    },
+    {
+      "from": "TTS_ALIGNMENT_POLL_INTERVAL_MS",
+      "to": "TTSService",
+      "to_full": "TTSService",
+      "type": "CALIBRATES",
+      "via": "calibrates"
+    },
+    {
+      "from": "TTS_ALIGNMENT_POLL_INTERVAL_MS",
+      "to": "ALIGNMENT_PARTIAL_001",
+      "to_full": "ALIGNMENT_PARTIAL_001",
+      "type": "DERIVED_FROM",
+      "via": "derived_from"
+    },
+    {
+      "from": "OVERLAY_CACHE_MAX_AGE_MS",
+      "to": "AnimationRenderer",
+      "to_full": "AnimationRenderer",
+      "type": "CALIBRATES",
+      "via": "calibrates"
+    },
+    {
+      "from": "OVERLAY_CACHE_MAX_AGE_MS",
+      "to": "OverlayCache",
+      "to_full": "OverlayCache",
+      "type": "CALIBRATES",
+      "via": "calibrates"
+    },
+    {
+      "from": "MESSAGE_PIPELINE_GUIDE",
+      "to": "MESSAGE_PIPELINE",
+      "to_full": "MESSAGE_PIPELINE",
+      "type": "ORIENTS",
+      "via": "for"
+    },
+    {
+      "from": "MESSAGE_PIPELINE_GUIDE",
+      "to": "AudioVideoSyncPrinciple",
+      "to_full": "AudioVideoSyncPrinciple",
+      "type": "SEE_FIRST",
+      "via": "see_first"
+    },
+    {
+      "from": "MESSAGE_PIPELINE_GUIDE",
+      "to": "AsyncCacheContention",
+      "to_full": "AsyncCacheContention",
+      "type": "SEE_FIRST",
+      "via": "see_first"
+    },
+    {
+      "from": "MESSAGE_PIPELINE_GUIDE",
+      "to": "PhonemeAlignmentCompleteness",
+      "to_full": "PhonemeAlignmentCompleteness",
+      "type": "SEE_FIRST",
+      "via": "see_first"
+    },
+    {
+      "from": "SocketEventBus",
+      "to": "USER_MESSAGE_FLOW",
+      "to_full": "USER_MESSAGE_FLOW",
+      "type": "BELONGS_TO",
+      "via": "blueprint"
+    },
+    {
+      "from": "test_no_direct_emit",
+      "to": "NO_DIRECT_EMIT",
+      "to_full": "NO_DIRECT_EMIT",
+      "type": "VALIDATES",
+      "via": "validates"
+    }
+  ],
+  "by_type": {
+    "blueprint": [
+      "MESSAGE_PIPELINE",
+      "LIP_SYNC_PIPELINE"
+    ],
+    "entity": [
+      "UserSubmitsMessage",
+      "FrontendHandler",
+      "MessageProcessor",
+      "TTSService",
+      "AnimationRenderer",
+      "ElevenLabsAPI",
+      "OverlayCache",
+      "LipSyncSprites",
+      "SocketEventBus"
+    ],
+    "flow": [
+      "USER_MESSAGE_FLOW"
+    ],
+    "decision": [
+      "TRANSPORT_PROTOCOL",
+      "TTS_PROVIDER",
+      "LIP_SYNC_AXIS_SYSTEM"
+    ],
+    "lesson": [
+      "CACHE_RACE_001",
+      "AV_DESYNC_001",
+      "ALIGNMENT_PARTIAL_001"
+    ],
+    "invariant": [
+      "CACHE_BEFORE_AUDIO",
+      "AUDIO_BEFORE_FRAMES",
+      "NO_DIRECT_EMIT"
+    ],
+    "test": [
+      "test_cache_clear_before_audio",
+      "test_av_emit_order",
+      "test_alignment_complete_before_animate",
+      "test_sentence_rules_passing",
+      "test_no_direct_emit"
+    ],
+    "concept": [
+      "AudioVideoSyncPrinciple",
+      "AsyncCacheContention",
+      "PhonemeAlignmentCompleteness"
+    ],
+    "constant": [
+      "MAX_RETRY_COUNT",
+      "TTS_ALIGNMENT_POLL_INTERVAL_MS",
+      "OVERLAY_CACHE_MAX_AGE_MS"
+    ],
+    "guide": [
+      "MESSAGE_PIPELINE_GUIDE"
+    ]
+  },
+  "by_blueprint": {
+    "MESSAGE_PIPELINE": [
+      "FrontendHandler",
+      "MessageProcessor",
+      "TTSService",
+      "AnimationRenderer",
+      "OverlayCache"
+    ],
+    "LIP_SYNC_PIPELINE": [
+      "LipSyncSprites"
+    ],
+    "USER_MESSAGE_FLOW": [
+      "SocketEventBus"
+    ]
+  },
+  "by_source": {
+    "flows.know": [
+      "MESSAGE_PIPELINE",
+      "LIP_SYNC_PIPELINE",
+      "UserSubmitsMessage",
+      "FrontendHandler",
+      "MessageProcessor",
+      "TTSService",
+      "AnimationRenderer",
+      "ElevenLabsAPI",
+      "OverlayCache",
+      "LipSyncSprites",
+      "USER_MESSAGE_FLOW",
+      "TRANSPORT_PROTOCOL",
+      "TTS_PROVIDER",
+      "LIP_SYNC_AXIS_SYSTEM",
+      "CACHE_RACE_001",
+      "AV_DESYNC_001",
+      "ALIGNMENT_PARTIAL_001",
+      "CACHE_BEFORE_AUDIO",
+      "AUDIO_BEFORE_FRAMES",
+      "test_cache_clear_before_audio",
+      "test_av_emit_order",
+      "test_alignment_complete_before_animate",
+      "test_sentence_rules_passing"
+    ],
+    "knowledge.know": [
+      "AudioVideoSyncPrinciple",
+      "AsyncCacheContention",
+      "PhonemeAlignmentCompleteness",
+      "MAX_RETRY_COUNT",
+      "TTS_ALIGNMENT_POLL_INTERVAL_MS",
+      "OVERLAY_CACHE_MAX_AGE_MS",
+      "MESSAGE_PIPELINE_GUIDE"
+    ],
+    "src\\handler.py": [
+      "SocketEventBus",
+      "NO_DIRECT_EMIT",
+      "test_no_direct_emit"
+    ]
+  },
+  "stats": {
+    "total_nodes": 33,
+    "total_edges": 54,
+    "by_type": {
+      "blueprint": 2,
+      "entity": 9,
+      "flow": 1,
+      "decision": 3,
+      "lesson": 3,
+      "invariant": 3,
+      "test": 5,
+      "concept": 3,
+      "constant": 3,
+      "guide": 1
+    },
+    "source_files": 3
+  },
+  "auto": {
+    "entities": {
+      "SocketEventBus": {
+        "name": "SocketEventBus",
+        "type": "class",
+        "file": "src/handler.py:29",
+        "line": 29,
+        "bases": [],
+        "methods": [
+          "__init__",
+          "emit_audio_then_frames"
+        ],
+        "docstring": "Central emit bus. See invariant NO_DIRECT_EMIT.",
+        "source_lines": "class SocketEventBus:\n    \"\"\"Central emit bus. See invariant NO_DIRECT_EMIT.\"\"\"\n\n    def __init__(self, socket):\n        self.socket = socket\n        self._emit_log = []\n\n    def emit_audio_then_frames(self, audio_data, frames):\n        \"\"\"\n        Emit audio first, then frames.\n        Order enforced here — satisfies AUDIO_BEFORE_FRAMES invariant.\n        \"\"\"\n        # Audio MUST be first — see lesson AV_DESYNC_001\n        self.socket.emit('receive_audio', audio_data)\n        for frame in frames:\n            self.socket.emit('receive_frame', frame)",
+        "_source": "C:\\Users\\jaira\\Desktop\\genome\\examples\\software\\src\\handler.py"
+      },
+      "SocketEventBus.__init__": {
+        "name": "__init__",
+        "type": "function",
+        "file": "src/handler.py:32",
+        "line": 32,
+        "signature": "def __init__(self, socket)",
+        "docstring": "",
+        "source_lines": "    def __init__(self, socket):\n        self.socket = socket\n        self._emit_log = []",
+        "_source": "C:\\Users\\jaira\\Desktop\\genome\\examples\\software\\src\\handler.py",
+        "class": "SocketEventBus"
+      },
+      "SocketEventBus.emit_audio_then_frames": {
+        "name": "emit_audio_then_frames",
+        "type": "function",
+        "file": "src/handler.py:36",
+        "line": 36,
+        "signature": "def emit_audio_then_frames(self, audio_data, frames)",
+        "docstring": "Emit audio first, then frames.\nOrder enforced here — satisfies AUDIO_BEFORE_FRAMES invariant.",
+        "source_lines": "    def emit_audio_then_frames(self, audio_data, frames):\n        \"\"\"\n        Emit audio first, then frames.\n        Order enforced here — satisfies AUDIO_BEFORE_FRAMES invariant.\n        \"\"\"\n        # Audio MUST be first — see lesson AV_DESYNC_001\n        self.socket.emit('receive_audio', audio_data)\n        for frame in frames:\n            self.socket.emit('receive_frame', frame)",
+        "_source": "C:\\Users\\jaira\\Desktop\\genome\\examples\\software\\src\\handler.py",
+        "class": "SocketEventBus"
+      },
+      "test_no_direct_emit": {
+        "name": "test_no_direct_emit",
+        "type": "function",
+        "file": "src/handler.py:57",
+        "line": 57,
+        "signature": "def test_no_direct_emit()",
+        "docstring": "Verifies no module calls socket.emit() outside SocketEventBus.",
+        "source_lines": "def test_no_direct_emit():\n    \"\"\"Verifies no module calls socket.emit() outside SocketEventBus.\"\"\"\n    import ast\n    import pathlib\n    src_dir = pathlib.Path(__file__).parent\n    for py_file in src_dir.glob('**/*.py'):\n        if py_file.name == 'handler.py':\n            continue\n        tree = ast.parse(py_file.read_text())\n        for node in ast.walk(tree):\n            if isinstance(node, ast.Call):\n                if hasattr(node.func, 'attr') and node.func.attr == 'emit':\n                    if hasattr(node.func.value, 'id') and node.func.value.id == 'socket':\n                        raise AssertionError(\n                            f\"Direct socket.emit() found in {py_file} line {node.lineno}. \"\n                            f\"Use SocketEventBus. See invariant NO_DIRECT_EMIT.\"\n                        )",
+        "_source": "C:\\Users\\jaira\\Desktop\\genome\\examples\\software\\src\\handler.py"
+      }
+    },
+    "by_file": {
+      "src/handler.py": {
+        "SocketEventBus": {
+          "name": "SocketEventBus",
+          "type": "class",
+          "file": "src/handler.py:29",
+          "line": 29,
+          "bases": [],
+          "methods": [
+            "__init__",
+            "emit_audio_then_frames"
+          ],
+          "docstring": "Central emit bus. See invariant NO_DIRECT_EMIT.",
+          "source_lines": "class SocketEventBus:\n    \"\"\"Central emit bus. See invariant NO_DIRECT_EMIT.\"\"\"\n\n    def __init__(self, socket):\n        self.socket = socket\n        self._emit_log = []\n\n    def emit_audio_then_frames(self, audio_data, frames):\n        \"\"\"\n        Emit audio first, then frames.\n        Order enforced here — satisfies AUDIO_BEFORE_FRAMES invariant.\n        \"\"\"\n        # Audio MUST be first — see lesson AV_DESYNC_001\n        self.socket.emit('receive_audio', audio_data)\n        for frame in frames:\n            self.socket.emit('receive_frame', frame)",
+          "_source": "C:\\Users\\jaira\\Desktop\\genome\\examples\\software\\src\\handler.py"
+        },
+        "SocketEventBus.__init__": {
+          "name": "__init__",
+          "type": "function",
+          "file": "src/handler.py:32",
+          "line": 32,
+          "signature": "def __init__(self, socket)",
+          "docstring": "",
+          "source_lines": "    def __init__(self, socket):\n        self.socket = socket\n        self._emit_log = []",
+          "_source": "C:\\Users\\jaira\\Desktop\\genome\\examples\\software\\src\\handler.py",
+          "class": "SocketEventBus"
+        },
+        "SocketEventBus.emit_audio_then_frames": {
+          "name": "emit_audio_then_frames",
+          "type": "function",
+          "file": "src/handler.py:36",
+          "line": 36,
+          "signature": "def emit_audio_then_frames(self, audio_data, frames)",
+          "docstring": "Emit audio first, then frames.\nOrder enforced here — satisfies AUDIO_BEFORE_FRAMES invariant.",
+          "source_lines": "    def emit_audio_then_frames(self, audio_data, frames):\n        \"\"\"\n        Emit audio first, then frames.\n        Order enforced here — satisfies AUDIO_BEFORE_FRAMES invariant.\n        \"\"\"\n        # Audio MUST be first — see lesson AV_DESYNC_001\n        self.socket.emit('receive_audio', audio_data)\n        for frame in frames:\n            self.socket.emit('receive_frame', frame)",
+          "_source": "C:\\Users\\jaira\\Desktop\\genome\\examples\\software\\src\\handler.py",
+          "class": "SocketEventBus"
+        },
+        "test_no_direct_emit": {
+          "name": "test_no_direct_emit",
+          "type": "function",
+          "file": "src/handler.py:57",
+          "line": 57,
+          "signature": "def test_no_direct_emit()",
+          "docstring": "Verifies no module calls socket.emit() outside SocketEventBus.",
+          "source_lines": "def test_no_direct_emit():\n    \"\"\"Verifies no module calls socket.emit() outside SocketEventBus.\"\"\"\n    import ast\n    import pathlib\n    src_dir = pathlib.Path(__file__).parent\n    for py_file in src_dir.glob('**/*.py'):\n        if py_file.name == 'handler.py':\n            continue\n        tree = ast.parse(py_file.read_text())\n        for node in ast.walk(tree):\n            if isinstance(node, ast.Call):\n                if hasattr(node.func, 'attr') and node.func.attr == 'emit':\n                    if hasattr(node.func.value, 'id') and node.func.value.id == 'socket':\n                        raise AssertionError(\n                            f\"Direct socket.emit() found in {py_file} line {node.lineno}. \"\n                            f\"Use SocketEventBus. See invariant NO_DIRECT_EMIT.\"\n                        )",
+          "_source": "C:\\Users\\jaira\\Desktop\\genome\\examples\\software\\src\\handler.py"
+        }
+      }
+    },
+    "coverage": {
+      "src/handler.py": 4
+    },
+    "total": 4,
+    "enrichment_gaps": [
+      {
+        "name": "SocketEventBus.emit_audio_then_frames",
+        "type": "function",
+        "file": "src/handler.py:36"
+      }
+    ],
+    "gap_count": 1
+  },
+  "file_mtimes": {
+    "flows.know": "2026-02-20",
+    "knowledge.know": "2026-02-20",
+    "src/handler.py": "2026-02-20"
+  },
+  "compiled_date": "2026-02-21",
+  "tfidf_index": {
+    "df": {
+      "complete": 4,
+      "response": 3,
+      "path": 1,
+      "animated": 2,
+      "avatar": 1,
+      "user": 6,
+      "input": 1,
+      "selection": 1,
+      "lip": 5,
+      "sync": 4,
+      "driven": 1,
+      "audio": 9,
+      "sprite": 1,
+      "submits": 2,
+      "message": 9,
+      "frontend": 1,
+      "handler": 1,
+      "processor": 1,
+      "service": 1,
+      "renderer": 1,
+      "animation": 4,
+      "labs": 1,
+      "eleven": 1,
+      "overlay": 2,
+      "cache": 5,
+      "sprites": 3,
+      "round": 1,
+      "full": 3,
+      "trip": 1,
+      "real": 1,
+      "communication": 1,
+      "time": 2,
+      "server": 1,
+      "between": 1,
+      "bidirectional": 1,
+      "client": 3,
+      "alignment": 6,
+      "speech": 2,
+      "text": 1,
+      "phoneme": 4,
+      "shape": 2,
+      "system": 3,
+      "axis": 1,
+      "controlling": 1,
+      "while": 1,
+      "immediately": 1,
+      "clearoverlaycache": 1,
+      "async": 2,
+      "awaited": 1,
+      "frames": 3,
+      "empty": 2,
+      "before": 9,
+      "over": 1,
+      "handlemessage": 1,
+      "previous": 1,
+      "begins": 1,
+      "rendered": 1,
+      "still": 1,
+      "await": 1,
+      "call": 2,
+      "returned": 2,
+      "must": 7,
+      "playback": 1,
+      "frontendhandler": 2,
+      "function": 1,
+      "called": 1,
+      "added": 2,
+      "fully": 1,
+      "populated": 1,
+      "new": 1,
+      "overlaycache": 2,
+      "subsequent": 1,
+      "video": 2,
+      "first": 2,
+      "socket": 4,
+      "swapped": 1,
+      "messages": 2,
+      "neutral": 1,
+      "follow": 1,
+      "showed": 1,
+      "emitted": 2,
+      "face": 1,
+      "every": 1,
+      "frame": 3,
+      "ms": 2,
+      "animationrenderer": 3,
+      "order": 2,
+      "emit": 4,
+      "arrived": 1,
+      "sentence": 2,
+      "completion": 3,
+      "phonemes": 2,
+      "selectlipsyncsprites": 1,
+      "started": 1,
+      "pipeline": 1,
+      "final": 2,
+      "last": 2,
+      "only": 1,
+      "api": 1,
+      "starts": 2,
+      "after": 1,
+      "wrong": 1,
+      "elevenlabs": 2,
+      "true": 1,
+      "check": 1,
+      "any": 2,
+      "playing": 1,
+      "test": 5,
+      "clear": 1,
+      "av": 1,
+      "animate": 1,
+      "validation": 1,
+      "pass": 1,
+      "jslt": 1,
+      "production": 1,
+      "promoted": 1,
+      "viseme": 1,
+      "sequence": 1,
+      "passing": 1,
+      "rules": 1,
+      "locks": 1,
+      "brain": 1,
+      "perceptual": 1,
+      "anchor": 1,
+      "principle": 1,
+      "state": 2,
+      "causes": 1,
+      "contamination": 1,
+      "partial": 1,
+      "return": 1,
+      "operations": 1,
+      "contention": 1,
+      "cross": 1,
+      "cut": 1,
+      "stream": 1,
+      "tts": 1,
+      "apis": 1,
+      "completeness": 1,
+      "results": 1,
+      "most": 1,
+      "off": 1,
+      "likely": 1,
+      "arrive": 1,
+      "re": 1,
+      "max": 1,
+      "backoff": 1,
+      "duplicate": 1,
+      "total": 1,
+      "causing": 1,
+      "below": 1,
+      "gives": 1,
+      "errors": 1,
+      "transient": 1,
+      "already": 1,
+      "up": 1,
+      "network": 1,
+      "submitted": 1,
+      "too": 1,
+      "exponential": 1,
+      "beyond": 1,
+      "early": 1,
+      "seconds": 1,
+      "wait": 1,
+      "risks": 1,
+      "poll": 1,
+      "polling": 1,
+      "flag": 1,
+      "slower": 1,
+      "wastes": 1,
+      "faster": 1,
+      "adding": 1,
+      "within": 1,
+      "missing": 1,
+      "catches": 1,
+      "benefit": 1,
+      "one": 1,
+      "interval": 1,
+      "cpu": 1,
+      "desync": 1,
+      "than": 2,
+      "fps": 1,
+      "reused": 1,
+      "evicts": 1,
+      "second": 1,
+      "generate": 1,
+      "ttl": 1,
+      "idle": 1,
+      "stale": 1,
+      "them": 1,
+      "orphaned": 1,
+      "longer": 1,
+      "rare": 1,
+      "safely": 1,
+      "contain": 1,
+      "match": 1,
+      "takes": 1,
+      "prevents": 1,
+      "timeout": 1,
+      "composites": 1,
+      "clears": 1,
+      "llm": 1,
+      "calls": 1,
+      "overlays": 1,
+      "ttsservice": 1,
+      "messageprocessor": 1,
+      "receives": 1,
+      "generates": 1,
+      "here": 1,
+      "go": 2,
+      "all": 2,
+      "central": 1,
+      "io": 1,
+      "event": 1,
+      "bus": 1,
+      "emits": 2,
+      "directly": 1,
+      "socketeventbus": 1,
+      "never": 1,
+      "direct": 1
+    },
+    "total_docs": 33
+  }
+}

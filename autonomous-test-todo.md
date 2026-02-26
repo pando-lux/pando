@@ -9,10 +9,18 @@ You are the CEO/admin agent. The user is asleep. Do NOT ask questions. Fix every
 2. Only make code changes if the council/pipeline has a gap that prevents self-healing
 3. After each task: update this file, mark completed, add new tasks discovered
 4. If conversation compacts: re-read this file to remember what to do next
-5. After every task completion: `cat autonomous-test-todo.md` to check what's next
+5. After every task completion: re-read `autonomous-test-todo.md` to check what's next
 6. Run `npm run build` after any code change — zero errors required
 7. Run tests after fixes — all must pass before moving on
 8. If stuck on a task for >15 min, skip it and note the blocker
+
+**TIMEOUT RULE (CRITICAL — never run anything that can hang forever):**
+- ALWAYS use `timeout <seconds>` before any `node` command: `timeout 180 node tests/...`
+- HTTP fetch calls: ALWAYS use `AbortSignal.timeout(15000)` (15s max)
+- Node start: max 30s wait, then proceed
+- Test suites: max 180s (3 min) timeout wrapper
+- If a command times out: log the failure, move to next task, do NOT retry infinitely
+- NEVER use `run_in_background` + `TaskOutput` with long waits — use `timeout` instead
 
 ## MASTER LOOP
 
@@ -34,10 +42,11 @@ You are the CEO/admin agent. The user is asleep. Do NOT ask questions. Fix every
 - [x] 103c: Builder pipeline wired (DONE — bridge watcher + governance proposals)
 - [x] 103d-QA: QA gate in handleBridgeItem (DONE — regression suite runs before proposal)
 - [x] 103d-Push: commitAndPush before governance proposal (DONE — pushes to origin/master)
-- [ ] **A1: Run live E2E test — get 43/43 passing** (IN PROGRESS)
-- [ ] **A2: Run unit tests — get 44/44 passing**
-- [ ] **A3: Run ledger regression — all pass**
-- [ ] **A4: Commit all Phase 103d changes**
+- [x] **A1: Run live E2E test — 43/43 PASSED**
+- [x] **A2: Run unit tests — 44/44 PASSED**
+- [x] **A3: Run ledger regression — ALL PASSED**
+- [x] **A4: Committed as 575f2fdb — Phase 103d: QA gate + commit/push**
+- [x] **A5: Fixed commitAndPush side effect — unit test was committing to real repo (soft reset + clean commit)**
 
 ## PHASE B: Council Self-Healing Test
 

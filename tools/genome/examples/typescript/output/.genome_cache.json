@@ -1,0 +1,290 @@
+{
+  "version": 1,
+  "files": {
+    "architecture.know": {
+      "mtime": 1771601694.3954067,
+      "nodes": [
+        {
+          "_type": "blueprint",
+          "_name": "TASK_API",
+          "_source": "architecture.know",
+          "description": "REST API for creating, updating, and completing tasks",
+          "status": "active",
+          "contains": [
+            "TaskController",
+            "TaskService",
+            "TaskStore",
+            "EventBus"
+          ]
+        },
+        {
+          "_type": "blueprint",
+          "_name": "NOTIFICATION_SYSTEM",
+          "_source": "architecture.know",
+          "description": "Event-driven notification pipeline \u2014 reacts to task changes",
+          "status": "active",
+          "contains": [
+            "EventBus",
+            "NotificationService"
+          ]
+        },
+        {
+          "_type": "entity",
+          "_name": "UserSubmitsTask",
+          "_source": "architecture.know",
+          "type": "event",
+          "status": "active",
+          "description": "Entry point \u2014 user submits a new task via the API"
+        },
+        {
+          "_type": "entity",
+          "_name": "TaskController",
+          "_source": "architecture.know",
+          "type": "class",
+          "blueprint": "TASK_API",
+          "file": "src/controller.ts:10",
+          "status": "active",
+          "depends_on": [
+            "TaskService",
+            "EventBus"
+          ],
+          "description": "Express route handler for /api/tasks. Validates input, delegates to TaskService, emits events via EventBus."
+        },
+        {
+          "_type": "entity",
+          "_name": "TaskService",
+          "_source": "architecture.know",
+          "type": "class",
+          "blueprint": "TASK_API",
+          "file": "src/service.ts:8",
+          "status": "active",
+          "depends_on": [
+            "TaskStore"
+          ],
+          "description": "Business logic layer. Enforces rules (max tasks per user, deadline validation). Returns domain objects, not HTTP responses."
+        },
+        {
+          "_type": "entity",
+          "_name": "TaskStore",
+          "_source": "architecture.know",
+          "type": "class",
+          "blueprint": "TASK_API",
+          "file": "src/store.ts:7",
+          "status": "active",
+          "description": "In-memory task storage with Map. Provides CRUD + query by status/assignee."
+        },
+        {
+          "_type": "entity",
+          "_name": "EventBus",
+          "_source": "architecture.know",
+          "type": "class",
+          "blueprint": "TASK_API",
+          "file": "src/events.ts:3",
+          "status": "active",
+          "description": "Type-safe publish/subscribe event bus. Emits TaskCreated, TaskCompleted, TaskDeleted events."
+        },
+        {
+          "_type": "entity",
+          "_name": "NotificationService",
+          "_source": "architecture.know",
+          "type": "class",
+          "blueprint": "NOTIFICATION_SYSTEM",
+          "file": "src/notifications.ts:4",
+          "status": "active",
+          "depends_on": [
+            "EventBus"
+          ],
+          "description": "Subscribes to task events and sends notifications. Currently logs to console, designed for email/webhook extension."
+        },
+        {
+          "_type": "flow",
+          "_name": "CREATE_TASK_FLOW",
+          "_source": "architecture.know",
+          "_steps": [
+            {
+              "_name": "validate",
+              "_target": "process",
+              "_tags": [
+                "@gotcha(\"Must check task limit BEFORE creating \u2014 TaskService.createTask throws if limit exceeded\")"
+              ],
+              "actor": "TaskController",
+              "does": [
+                "validate_input",
+                "check_auth"
+              ],
+              "_next": "process"
+            },
+            {
+              "_name": "process",
+              "_target": "notify",
+              "actor": "TaskService",
+              "does": [
+                "enforce_rules",
+                "persist_task"
+              ],
+              "_next": "notify"
+            },
+            {
+              "_name": "notify",
+              "_target": "done",
+              "actor": "EventBus",
+              "does": [
+                "emit_task_created",
+                "trigger_notifications"
+              ],
+              "_next": "done"
+            }
+          ],
+          "trigger": "UserSubmitsTask"
+        },
+        {
+          "_type": "decision",
+          "_name": "TypeSafeEvents",
+          "_source": "architecture.know",
+          "_options": [
+            {
+              "_name": "GenericEventBus",
+              "_target": "chosen",
+              "reason": "EventBus<EventMap> with a mapped type interface ensures emit() and on() share the same payload type per event name. Compile-time safety, zero runtime cost.",
+              "evidence": "src/events.ts demonstrates the pattern with TaskEventMap",
+              "tradeoffs": [
+                "requires_central_event_map",
+                "verbose_generics"
+              ],
+              "_status": "chosen"
+            },
+            {
+              "_name": "StringEvents",
+              "_target": "rejected",
+              "reason": "Untyped string events (bus.emit('task:created', data)) have no compile-time safety. Payload mismatches only caught at runtime.",
+              "tradeoffs": [
+                "no_type_safety",
+                "easy_to_mistype_event_names"
+              ],
+              "_status": "rejected"
+            }
+          ],
+          "problem": "How to enforce type safety on event payloads across publishers and subscribers?",
+          "context": [
+            "typescript",
+            "event_driven"
+          ],
+          "revisit_when": "project moves to a framework with built-in typed events (e.g., tRPC subscriptions)"
+        },
+        {
+          "_type": "lesson",
+          "_name": "STORE_MAP_ORDERING",
+          "_source": "architecture.know",
+          "date": "2026-02-20",
+          "severity": "warning",
+          "in": "TaskStore",
+          "what": "Tasks returned by getByStatus() were in insertion order, not creation date order",
+          "why": "JavaScript Map preserves insertion order, which matches creation order only if tasks are never updated. Updates that delete+re-insert change the order.",
+          "fix": "Added explicit sort by createdAt after Map.values() collection",
+          "invariant": "All query methods on TaskStore must sort results by createdAt descending",
+          "verified_by": "test_store_ordering"
+        },
+        {
+          "_type": "test",
+          "_name": "test_store_ordering",
+          "_source": "architecture.know",
+          "validates": "STORE_MAP_ORDERING",
+          "type": "unit",
+          "location": "src/store.test.ts:1",
+          "status": "passing",
+          "last_run": "2026-02-20",
+          "description": "Verify getByStatus returns tasks sorted by createdAt descending after updates"
+        },
+        {
+          "_type": "test",
+          "_name": "test_event_type_safety",
+          "_source": "architecture.know",
+          "validates": "TypeSafeEvents",
+          "type": "unit",
+          "location": "src/events.test.ts:1",
+          "status": "passing",
+          "last_run": "2026-02-20",
+          "description": "Verify EventBus enforces correct payload types at compile time"
+        },
+        {
+          "_type": "constant",
+          "_name": "MAX_TASKS_PER_USER",
+          "_source": "architecture.know",
+          "value": 100,
+          "unit": "tasks",
+          "file": "src/service.ts:3",
+          "calibrates": "TaskService",
+          "why": "100 is the practical limit for a single user dashboard. Above 100, UI pagination becomes mandatory and query performance degrades on the in-memory store.",
+          "valid_range": "50 to 500",
+          "recalibrate_when": "storage moves from in-memory Map to a database with pagination"
+        },
+        {
+          "_type": "guide",
+          "_name": "TASK_API_GUIDE",
+          "_source": "architecture.know",
+          "for": "TASK_API",
+          "audience": "new_agent",
+          "entry_point": "TaskController",
+          "workflow": "Request \u2192 TaskController validates \u2192 TaskService enforces rules \u2192 TaskStore persists \u2192 EventBus emits \u2192 NotificationService reacts",
+          "critical_first": "All mutations go through TaskService, never directly to TaskStore. The service layer enforces business rules (task limits, deadline validation). Bypassing it creates invalid state.",
+          "read_before_touching": {
+            "TaskController": "lesson STORE_MAP_ORDERING, decision TypeSafeEvents",
+            "TaskService": "constant MAX_TASKS_PER_USER",
+            "EventBus": "decision TypeSafeEvents \u2014 understand the generic pattern before adding events"
+          },
+          "see_first": [
+            "TypeSafeEvents",
+            "STORE_MAP_ORDERING"
+          ]
+        }
+      ]
+    },
+    "src/controller.ts": {
+      "mtime": 1771601660.817688,
+      "nodes": []
+    },
+    "src/events.ts": {
+      "mtime": 1771601622.7381487,
+      "nodes": [
+        {
+          "_type": "entity",
+          "_name": "TaskEventMap",
+          "_source": "src\\events.ts",
+          "type": "interface",
+          "blueprint": "TASK_API",
+          "description": "Central event map \u2014 all event names and their payload types defined here. Adding a new event requires adding it to this interface.",
+          "file": "src\\events.ts:1"
+        }
+      ]
+    },
+    "src/notifications.ts": {
+      "mtime": 1771601667.7354996,
+      "nodes": []
+    },
+    "src/service.ts": {
+      "mtime": 1771601652.3692255,
+      "nodes": []
+    },
+    "src/store.ts": {
+      "mtime": 1771601641.9613187,
+      "nodes": [
+        {
+          "_type": "lesson",
+          "_name": "STORE_MAP_DELETE_REINSERT",
+          "_source": "src\\store.ts",
+          "date": "2026-02-20",
+          "severity": "info",
+          "in": "TaskStore",
+          "what": "Map.delete + Map.set changes iteration order \u2014 updates must re-sort",
+          "why": "JavaScript Map preserves insertion order. Deleting and re-inserting a key moves it to the end.",
+          "fix": "All query methods sort by createdAt before returning",
+          "file": "src\\store.ts:1"
+        }
+      ]
+    },
+    "src/types.ts": {
+      "mtime": 1771601631.2368388,
+      "nodes": []
+    }
+  }
+}
