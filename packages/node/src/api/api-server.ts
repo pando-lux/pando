@@ -248,7 +248,8 @@ export class ApiServer {
 
     // Add a preHandler that checks rate limits for configured routes
     this.fastify.addHook('onRequest', async (request: any, reply: any) => {
-      const urlPath = request.url.split('?')[0];
+      // Strip version prefix (/v1/, /v2/, etc.) — RATE_LIMITS keys don't include it
+      const urlPath = request.url.split('?')[0].replace(/^\/v\d+/, '');
       const key = `${request.method} ${urlPath}`;
       let limiter = this.rateLimiters.get(key);
       // Check parametric thread route: POST /tasks/<id>/thread
