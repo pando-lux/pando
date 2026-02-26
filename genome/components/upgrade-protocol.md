@@ -19,7 +19,7 @@ exposes:
   - findByGovernanceId(governanceId) — lookup by governance ID
   - TOPIC_UPGRADES — GossipSub topic ('pando/upgrades')
 rules: []
-last_verified: 2026-02-25
+last_verified: 2026-02-26 (INFRA-07 E2E verified: governance upgrade flow — both EC2 nodes pulled, built, restarted)
 ---
 
 # Upgrade Protocol
@@ -28,7 +28,7 @@ last_verified: 2026-02-25
 Simple self-upgrade for the Pando network. Governance approves → commit hash broadcasts via GossipSub → all nodes `git pull` → verify hash → build → restart.
 
 ## How It Works
-- `createUpgradeProposal(description)` creates a governance proposal with the current commit hash. No diffs, no patches. Governance votes on the description + hash.
+- `createUpgradeProposal(description)` creates a governance proposal with the **remote** `origin/master` SHA — not local HEAD. It runs `git fetch origin master` first, then uses `git rev-parse --short origin/master` as the `commitHash`. This ensures the proposal targets new remote code that nodes haven't pulled yet. If fetch fails, it falls back to local HEAD with a warning. **Critical**: if local HEAD is used (old behavior), nodes that are already at that commit short-circuit with "Already at target version" and never pull new code.
 - When governance approves (auto-approve in dev mode ≤8 peers, or supermajority vote in live mode), `onUpgradeApproved` fires.
 - The proposing node calls `pullAndUpgrade()` locally, then broadcasts a `upgrade_available` notification via GossipSub `pando/upgrades` topic.
 - All receiving nodes call `pullAndUpgrade(commitHash)`: `git fetch origin master` → verify `origin/master` matches the governance-approved hash → `git reset --hard origin/master` → `npm run build` → restart (exit code 75).
@@ -39,10 +39,12 @@ Simple self-upgrade for the Pando network. Governance approves → commit hash b
 
 ## Gotchas
 - **Phase 82:** Replaced the Phase 73 patch-distribution system (base64 diffs via GossipSub, `git apply`, canary monitoring) with simple `git pull` + hash verification. All canary, rollout, and patch code deleted.
+- **`createUpgradeProposal` must target remote HEAD**: Uses `git fetch origin master` + `git rev-parse --short origin/master`. If it used local `git rev-parse HEAD` (old behavior), all nodes would see "Already at target version" and never upgrade. Fixed in INFRA-07 (commit `da7bfa13`).
 - `POST /upgrade` endpoint in api-server.ts does the same git-pull logic independently — useful for manual upgrades without governance.
 - Hash verification is optional: if no commit hash in the governance payload, nodes just pull latest.
 - Build timeout is 180 seconds. If your build takes longer, the upgrade will fail.
 - **Process supervisors**: Lightsail uses PM2, EC2 uses systemd (`pando-node.service`). Both auto-restart on exit code 75. The `pando` user on EC2 has shell `/bin/false` (security) which prevents PM2 daemon — hence systemd.
+- **Dev mode auto-approve**: `activePeers = getPeerCount() + 1`. If `activePeers <= 8` (threshold), proposal auto-approves instantly. EC2-2 with 1 peer: 2 ≤ 8 → auto-approves. EC2-1 with 8+ peers: 9 > 8 → does NOT auto-approve. Set `upgradeAutoApproveThreshold` in governance config for different environments.
 
 ## Key Files
 - `packages/node/src/upgrade-protocol.ts` — UpgradeProtocol class
