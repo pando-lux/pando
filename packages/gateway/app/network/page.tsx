@@ -33,6 +33,17 @@ interface RequestReplyStats {
   avgLatencyMs: number;
 }
 
+interface CapabilityProfile {
+  peerId: string;
+  schemaVersion: number;
+  updatedAt: number;
+  linkedUser?: { username: string } | null;
+  credentialAccess?: boolean;
+  storageBackend?: string;
+  publicAddress?: string;
+  capabilities: Record<string, boolean>;
+}
+
 export default function NetworkPage() {
   const [status, setStatus] = useState<Status | null>(null);
   const [peers, setPeers] = useState<Peer[]>([]);
@@ -41,20 +52,23 @@ export default function NetworkPage() {
   const [reputations, setReputations] = useState<ReputationRecord[]>([]);
   const [profileStats, setProfileStats] = useState<ProfileSyncStats | null>(null);
   const [rrStats, setRrStats] = useState<RequestReplyStats | null>(null);
+  const [capProfiles, setCapProfiles] = useState<CapabilityProfile[]>([]);
 
   const fetchData = useCallback(async () => {
-    const [s, p, rep, prof, rr] = await Promise.all([
+    const [s, p, rep, prof, rr, cap] = await Promise.all([
       fetch("/api/status").then(r => r.json()).catch(() => null),
       fetch("/api/peers").then(r => r.json()).catch(() => ({ peers: [] })),
       fetch("/api/reputation/peers").then(r => r.json()).catch(() => null),
       Promise.resolve(null), // profiles/shared API removed in Phase 27
       fetch("/api/request-reply/stats").then(r => r.json()).catch(() => null),
+      fetch("/api/capabilities/network").then(r => r.json()).catch(() => ({ profiles: [] })),
     ]);
     if (s) setStatus(s);
     if (p?.peers) setPeers(p.peers);
     if (rep?.reputations) setReputations(rep.reputations);
     if (prof) setProfileStats(prof);
     if (rr) setRrStats(rr);
+    if (cap?.profiles) setCapProfiles(cap.profiles);
   }, []);
 
   useEffect(() => {
@@ -92,10 +106,21 @@ export default function NetworkPage() {
         <h1 className="text-2xl font-bold text-neutral-900 dark:text-neutral-100">Network</h1>
 
         {/* Stats */}
-        <div className="grid grid-cols-3 gap-4">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
           <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4">
             <p className="text-xs text-neutral-600 dark:text-neutral-500 mb-1">Connected Peers</p>
             <p className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">{status?.peers ?? "\u2014"}</p>
+          </div>
+          <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4">
+            <p className="text-xs text-neutral-600 dark:text-neutral-500 mb-1">Known Nodes</p>
+            <p className="text-xl font-semibold text-neutral-900 dark:text-neutral-100">
+              {capProfiles.length > 0 ? capProfiles.length : (status?.peers ?? "\u2014")}
+            </p>
+            {capProfiles.length > 0 && (
+              <p className="text-[10px] text-neutral-500 mt-1">
+                {capProfiles.filter(p => p.storageBackend === 'mongodb').length} compute · {capProfiles.filter(p => p.storageBackend !== 'mongodb').length} relay
+              </p>
+            )}
           </div>
           <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4">
             <p className="text-xs text-neutral-600 dark:text-neutral-500 mb-1">Total Supply</p>
@@ -188,6 +213,72 @@ export default function NetworkPage() {
             </div>
           )}
         </div>
+
+        {/* Network Capability Map */}
+        {capProfiles.length > 0 && (
+          <div className="bg-white dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-neutral-300 dark:border-neutral-800 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">Network Capability Map</h2>
+              <span className="text-xs text-neutral-500">{capProfiles.length} known nodes</span>
+            </div>
+            <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
+              <div className="hidden sm:grid grid-cols-12 gap-2 px-4 py-2 text-xs text-neutral-500 font-medium">
+                <div className="col-span-3">Node</div>
+                <div className="col-span-2">Role</div>
+                <div className="col-span-5">Capabilities</div>
+                <div className="col-span-2 text-right">Updated</div>
+              </div>
+              {[...capProfiles]
+                .sort((a, b) => {
+                  // Compute nodes first, then by most recently updated
+                  const aCompute = a.storageBackend === 'mongodb' ? 1 : 0;
+                  const bCompute = b.storageBackend === 'mongodb' ? 1 : 0;
+                  if (aCompute !== bCompute) return bCompute - aCompute;
+                  return b.updatedAt - a.updatedAt;
+                })
+                .map(p => {
+                  const isCompute = p.storageBackend === 'mongodb';
+                  const caps = Object.entries(p.capabilities || {})
+                    .filter(([, v]) => v)
+                    .map(([k]) => k)
+                    .filter(k => k !== 'relay' && k !== 'index' && k !== 'validator'); // show interesting caps
+                  return (
+                    <div key={p.peerId} className="grid grid-cols-1 sm:grid-cols-12 gap-1 sm:gap-2 px-4 py-2.5 text-xs hover:bg-neutral-100 dark:hover:bg-neutral-800/50 transition">
+                      <div className="sm:col-span-3 font-mono text-neutral-700 dark:text-neutral-300 truncate">
+                        {p.peerId.slice(0, 12)}…
+                        {p.linkedUser?.username && (
+                          <span className="ml-1 text-amber-500">@{p.linkedUser.username}</span>
+                        )}
+                        {p.publicAddress && (
+                          <span className="block text-neutral-400 text-[10px]">{p.publicAddress}</span>
+                        )}
+                      </div>
+                      <div className="sm:col-span-2 flex items-start gap-1 flex-wrap">
+                        {isCompute ? (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400">compute</span>
+                        ) : (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">relay</span>
+                        )}
+                        {p.credentialAccess && (
+                          <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-400">keys</span>
+                        )}
+                      </div>
+                      <div className="sm:col-span-5 flex items-start gap-1 flex-wrap">
+                        {caps.map(cap => (
+                          <span key={cap} className="px-1.5 py-0.5 rounded text-[10px] bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">
+                            {cap.replace('_', ' ')}
+                          </span>
+                        ))}
+                      </div>
+                      <div className="sm:col-span-2 text-right text-neutral-500">
+                        {p.updatedAt ? relTime(p.updatedAt) : '—'}
+                      </div>
+                    </div>
+                  );
+                })}
+            </div>
+          </div>
+        )}
 
         {/* Peers table */}
         <div className="bg-white dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl overflow-hidden">
