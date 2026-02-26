@@ -86,6 +86,10 @@
 | **105** | **Council Growth Engine** — Council daily reflection gains a second output: one growth action proposal per week when network is healthy. Council drafts the actual outreach message. Governance votes before any public posting. Network grows itself when ready. See spec below. | Phase 101 | Pending |
 | **106** | **Decentralization Milestone Protocol** — Automatic Layer 0 governance power transitions based on unique human operator count. Baked into kernel — not governable. Defines when Jai's node stops having special weight. See `genome/rules/decentralization-milestones.md`. | Phase 50 | Pending |
 | **107** | **Genome Knowledge Layer** — Wire the Genome compiled knowledge graph system into Pando. Migrate Pando's own 75 TypeScript files. Wire Genome MCP into agent spawning. Add genome queries to Council reflection. Add migrate step to deploy pipeline. Replace Phase 103 GenomeAgent with Genome's built-in record/reflect system. See spec below. | Phase 101 | **DO SOON** |
+| **109** | **Contributed Resource Validation** — Auto-validate contributed credentials at contribution time. Spawns a short-lived Validator agent: tests S3 bucket r/w, MongoDB connection, API key call. Marks resource HEALTHY or INVALID immediately. Contributor earns Lux only on HEALTHY. Closes the gap where broken keys sit silent until a project fails. See spec below. | Phase 55 done | Pending |
+| **110** | **Governance Credential Scoping** — `CredentialStore.issueScopedToken(agentId, resourceId, taskId, ttlMs, scopedOps[])`. Governance proposal type `credential_authorization` — governance writes time-limited, task-scoped authorization. Agent receives a scoped token, not the raw key. Token expires automatically. Audit log to council minutes. This is the key missing piece for autonomous infra repair. See spec below. | Phase 109 | Pending |
+| **111** | **DevOps Agent** — New agent template (`genome/templates/devops.md`) wired with SSH and AWS CLI via scoped credentials from Phase 110. Can restart systemd/PM2 services, fix nginx configs, clear disk, check process health. Credentials never stored in agent workspace — pulled from CredentialStore per-task, expire after 30 min. See spec below. | Phase 110 | Pending |
+| **112** | **Council Infrastructure Repair Loop** — HealthMonitor alert → Council classifies repair type → governance fast-tracks approval → DevOps agent spawned with scoped credentials → executes fix → reports back → Council logs. Closes the loop: Pando fixes its own infrastructure without human intervention. See spec below. | Phase 111 | Pending |
 
 ---
 
@@ -585,6 +589,355 @@ This wires the PreToolUse hook — before every Edit/Write, the agent automatica
 - [ ] Council reflection prompt includes open_audits output
 - [ ] App deployed via pipeline has output/graph.json in its deployed directory
 - [ ] `genome.py verify` blocks a governance proposal that breaks a documented invariant
+
+---
+
+## Phase 109 — Contributed Resource Validation (SPEC READY)
+
+> **Status:** Not started. Builds entirely on existing infrastructure (AgentManager, CredentialStore, ResourceRegistry). No new primitives needed.
+> **Why this matters:** today, contributed keys are never verified. They sit in CredentialStore silently broken until a project fails and a user gets a confusing error. The S3 key `51909cbe` was broken for weeks — only discovered during an INFRA-03 test. Every broken key is wasted capacity that the network thinks it has but doesn't.
+
+### The Problem
+
+When an operator runs `/contribute aws AKID/secret`, Pando:
+1. Encrypts the key in CredentialStore ✓
+2. Registers it in ResourceRegistry ✓
+3. Awards contributor Lux ✓
+4. **Never verifies it actually works** ✗
+
+Broken keys cause silent failures downstream. Projects fail at deploy time with cryptic AWS errors instead of "your key doesn't work."
+
+### The Fix
+
+A **Validator agent** spawned at contribution time, with a 5-minute scoped token and a single job: verify the key works.
+
+### Resource Validation Profiles
+
+| Resource Type | Validator Tests | Pass Criteria |
+|---|---|---|
+| `aws` (S3) | Create temp bucket → upload 1KB object → read it back → delete both | HTTP 200 on read; cleanup succeeds |
+| `aws` (EC2) | `DescribeInstances` with no filters | HTTP 200, no auth error |
+| `mongodb` | Connect → write `{_id: 'pando-validate', ts: Date.now()}` to `pando_health` → read it → delete it | Round-trip <5s, no auth error |
+| `openai` / `anthropic` / `gemini` | Single minimal API call (cheapest model, 5-token prompt: "Reply: ok") | HTTP 200, non-empty response |
+
+### Implementation Tasks
+
+**Task 1: `platform/resource-validator.ts`** — new file
+```typescript
+class ResourceValidator {
+  async validate(resourceId: string, type: string, scopedToken: ScopedToken): Promise<ValidationResult> {
+    // Fetch credentials using scoped token (read-only, 5-min TTL)
+    const creds = await credentialStore.readWithScopedToken(scopedToken);
+    // Run the validation profile for this resource type
+    const profile = VALIDATION_PROFILES[type];
+    return await profile.test(creds);
+  }
+}
+```
+
+**Task 2: Wire into `POST /resources/register`**
+- After saving to CredentialStore + ResourceRegistry, spawn Validator agent with 5-min read-only token
+- Validator runs test, calls `POST /resources/:id/health { status: 'healthy' | 'invalid', reason? }`
+- ResourceRegistry updates the record
+- If INVALID: return warning to contributor (resource saved but marked invalid), DO NOT award Lux yet
+- If HEALTHY: award contributor Lux (moved from registration time to validation time)
+
+**Task 3: Periodic re-validation**
+- Every 6 hours, re-validate all `healthy` resources (credentials expire, keys rotate)
+- If a previously healthy resource fails: mark DEGRADED, fire HealthMonitor alert, notify contributor
+- After 3 consecutive fails: mark INVALID, suspend from marketplace
+
+**Task 4: Gateway UX**
+- Resources page shows health badge (🟢 Healthy / 🟡 Validating / 🔴 Invalid)
+- Invalid resources show the validation error message
+- Re-validate button triggers on-demand validation
+
+### Test Bar
+- [ ] Contribute a known-good AWS key → Validator passes → resource marked HEALTHY, Lux awarded
+- [ ] Contribute a wrong key → Validator fails → resource marked INVALID, clear error shown, no Lux
+- [ ] Periodic re-validation runs → broken key that was once healthy gets marked DEGRADED
+- [ ] Marketplace only shows HEALTHY resources (not INVALID or VALIDATING)
+
+---
+
+## Phase 110 — Governance Credential Scoping (SPEC READY)
+
+> **Status:** Not started. Depends on Phase 109 (validated credentials). This is the **core missing piece** for autonomous infrastructure repair — without it, AI agents can never safely use contributed credentials.
+> **The principle:** humans give consent at contribution time. Governance authorizes specific uses. AI executes within that authorization. No human needs to be online.
+
+### The Problem
+
+Today, contributed credentials live in CredentialStore. Only the node that owns the resource can use it. There is no way for governance to say "Agent X is allowed to use Resource Y for Task Z for the next 30 minutes."
+
+This blocks all autonomous infra repair. If a node goes down and governance votes to fix it, the DevOps agent needs an SSH key — but there's no mechanism to get it a key safely.
+
+### The Architecture: Scoped Tokens
+
+```
+Human contributes key → CredentialStore (encrypted, at rest, no use yet)
+                                │
+                    Governance votes to authorize use
+                                │
+              CredentialStore.issueScopedToken(agentId, resourceId, taskId, ttlMs, allowedOps)
+                                │
+                    Token issued — contains:
+                      - agentId (who can use this)
+                      - resourceId (which key)
+                      - taskId (which governance-approved task)
+                      - expiresAt (wall clock)
+                      - allowedOps: ['s3:PutObject', 's3:GetObject'] | ['ssh:exec:restart'] | etc.
+                                │
+                    Agent calls CredentialStore.readWithScopedToken(token)
+                    CredentialStore validates: agent ID matches, task ID matches, not expired, op in allowedOps
+                                │
+                    Agent uses credential for ONLY the allowed operation
+                    After TTL: token invalid, further reads rejected
+```
+
+### New Governance Proposal Type: `credential_authorization`
+
+```typescript
+interface CredentialAuthorizationProposal {
+  type: 'credential_authorization';
+  resourceId: string;           // which contributed key to authorize
+  agentRole: 'devops' | 'validator' | 'deployer';
+  taskId: string;               // links to the governance-approved task
+  ttlMs: number;                // max duration (hard cap: 3600000ms = 1 hour)
+  allowedOps: string[];         // scoped operation list
+  rationale: string;            // why this is needed
+  auditLevel: 'standard' | 'high'; // high = every call logged to council minutes
+}
+```
+
+Governance tier for credential authorization:
+- **SSH key use** → Tier 2 (kernel-level change, 80% quorum)
+- **AWS credential use** → Tier 3 (51% quorum, 48h window)
+- **Read-only credential use** (validation) → Tier 4 (code review only — validation is inherently safe)
+
+### Implementation Tasks
+
+**Task 1: `ScopedToken` type in `packages/shared/src/types.ts`**
+```typescript
+interface ScopedToken {
+  tokenId: string;           // UUID
+  agentId: string;           // which agent may use this
+  resourceId: string;        // which resource
+  taskId: string;            // which governance task authorized this
+  expiresAt: number;         // Unix ms
+  allowedOps: string[];      // e.g. ['s3:PutObject', 'ssh:exec:systemctl restart pando-node']
+  issuedAt: number;
+  issuerPeerId: string;      // which node issued this token
+}
+```
+
+**Task 2: `issueScopedToken()` + `readWithScopedToken()` in `CredentialStore`**
+- `issueScopedToken(params)` → checks resource exists, governance proposal ID valid, issues token, persists to `scoped_tokens` collection
+- `readWithScopedToken(token)` → validates all fields, returns raw credential bytes only if valid, logs access to audit trail
+- After `expiresAt`: reject any read, log attempted access
+
+**Task 3: `credential_authorization` governance proposal type**
+- Add to `kernel/governance.ts` `handleDecision()` path
+- On approval: call `credentialStore.issueScopedToken(proposal.authorizationParams)`
+- On rejection: log denial
+- Token issuance is the ONLY governance-triggered credential access path
+
+**Task 4: Audit log → council minutes**
+- Every `readWithScopedToken()` call appends to `~/.pando/council/credential-audit.log`:
+  `{ timestamp, agentId, resourceId, taskId, op, result: 'success'|'denied'|'expired' }`
+- Council reflection prompt includes last 24h of credential audit entries
+- High-audit-level resources: every call also fires a HealthMonitor event
+
+### Test Bar
+- [ ] `issueScopedToken()` creates a token that `readWithScopedToken()` accepts for allowed ops
+- [ ] Expired token rejected (test with `ttlMs: 1000`)
+- [ ] Wrong agent ID rejected — agent B cannot use token issued to agent A
+- [ ] Disallowed op rejected — token for `s3:GetObject` cannot be used for `s3:DeleteBucket`
+- [ ] Governance `credential_authorization` proposal approved → token auto-issued to nominated agent
+- [ ] Audit log populated after every access
+
+---
+
+## Phase 111 — DevOps Agent (SPEC READY)
+
+> **Status:** Not started. Depends on Phase 110 (scoped tokens).
+> **Why this matters:** code fixes are not the only thing that breaks. Services crash. Disks fill. Nginx configs drift. The DevOps agent is the autonomous hands that execute what governance approves.
+
+### The Agent
+
+A specialized agent template (`genome/templates/devops.md`) with:
+- **Role:** "You fix infrastructure. You have SSH access and AWS CLI access via scoped credentials. You do exactly what the governance-approved task says. You do not improvise."
+- **Tools:** Shell (restricted to specific repair commands), CredentialStore (read via scoped token), reporting back to Council
+- **No improvisation rule:** if the approved task says "restart pando-node.service on EC2-1", that's all it does. It does not also "check other services" or "do a quick cleanup." Scope creep in DevOps agents is a security risk.
+
+### Repair Command Set (allowedOps for SSH)
+
+```typescript
+const SAFE_REPAIR_OPS = [
+  'ssh:exec:systemctl restart pando-node',
+  'ssh:exec:systemctl status pando-node',
+  'ssh:exec:pm2 restart pando-node',
+  'ssh:exec:pm2 status',
+  'ssh:exec:df -h',                    // check disk space
+  'ssh:exec:free -m',                  // check memory
+  'ssh:exec:nginx -t',                 // validate nginx config
+  'ssh:exec:nginx -s reload',          // reload nginx (not restart)
+  'ssh:exec:journalctl -n 100 --no-pager -u pando-node',  // read logs
+];
+```
+
+Anything outside `SAFE_REPAIR_OPS` requires a new governance vote with explicit justification.
+
+### How Credentials Reach the Agent
+
+```
+1. Governance approves repair task + credential_authorization proposal
+2. CredentialStore issues ScopedToken to DevOps agent (TTL: 30 min)
+3. AgentManager spawns DevOps agent, passes token reference (NOT raw key)
+4. DevOps agent calls CredentialStore.readWithScopedToken(token) when it needs the key
+5. CredentialStore returns raw SSH key bytes (temp file written to agent's secure workspace)
+6. Agent connects via SSH, executes approved commands
+7. After task complete: agent reports back, temp key file deleted, token becomes unusable
+```
+
+The raw key is NEVER stored in the agent's CLAUDE.md or workspace permanently. It exists as a temp file only for the duration of the SSH session.
+
+### Implementation Tasks
+
+**Task 1: `genome/templates/devops.md`** — new agent template
+- Role definition: what it is and is not allowed to do
+- Tool usage: how to read scoped credentials, how to SSH
+- Strict no-improvisation rule in the template
+- Report format: what happened, what commands ran, what the output was, success/fail
+
+**Task 2: DevOps agent spawn in `core/agent-manager.ts`**
+- Add `role: 'devops'` as a valid agent role
+- When spawning: inject `scopedToken` reference into agent context
+- Agent workspace gets `devops-tools/` directory with helper scripts:
+  - `ssh-repair.sh <host> <op>` — validates op against allowedOps, executes, logs
+  - `aws-repair.sh <service> <op>` — same for AWS CLI
+
+**Task 3: Temp key file management**
+- When agent calls `readWithScopedToken()`, CredentialStore writes key to `${agentWorkspace}/.secure/key.pem` with `chmod 600`
+- `.secure/` is excluded from all logs and workspace snapshots
+- After `spawnAgent()` completes: `core/agent-manager.ts` deletes `.secure/` unconditionally
+
+### Test Bar
+- [ ] DevOps agent spawned with a scoped SSH token → reads key → SSH connects → runs `systemctl status pando-node` → reports back
+- [ ] Agent attempts an op not in `allowedOps` → blocked by SSH helper script → error logged
+- [ ] After task: `.secure/key.pem` deleted, scoped token expired
+- [ ] Council receives repair report in minutes log
+
+---
+
+## Phase 112 — Council Infrastructure Repair Loop (SPEC READY)
+
+> **Status:** Not started. Depends on Phases 109-111. This is the **complete autonomous repair loop** — from problem detection to fix execution, with no human in the loop.
+> **The big picture:** humans contributed keys. Governance authorizes their use. AI executes. The human's consent is baked in at contribution time: "I'm giving this key to the network for legitimate, governance-approved infrastructure tasks."
+
+### The Full Loop
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                   AUTONOMOUS REPAIR LOOP                     │
+│                                                              │
+│  HealthMonitor                                               │
+│    ↓ detects alert (node down, high disk, service crash)     │
+│                                                              │
+│  Council (runDailyReflection or on-alert trigger)           │
+│    ↓ classifies: is this fixable? what type of fix?         │
+│    ↓ drafts repair proposal (specific commands, rationale)  │
+│                                                              │
+│  Governance                                                  │
+│    ↓ fast-track vote (repair tier — see table below)        │
+│    ↓ on approval: issues scoped credential token            │
+│                                                              │
+│  DevOps Agent                                                │
+│    ↓ spawned with scoped token + approved command list      │
+│    ↓ executes fix (SSH + AWS CLI)                           │
+│    ↓ reports: what ran, what output, success/fail           │
+│                                                              │
+│  Council                                                     │
+│    ↓ receives report                                         │
+│    ↓ logs to council-minutes.md                             │
+│    ↓ if fail: escalates to human (HealthMonitor alert)      │
+│    ↓ if success: HealthMonitor alert cleared                 │
+└─────────────────────────────────────────────────────────────┘
+```
+
+### Repair Tiers (governance fast-track)
+
+| Repair Type | Example | Governance Tier | Vote Window |
+|---|---|---|---|
+| **Service restart** | `systemctl restart pando-node` | Tier 4 (code review) | Instant if Ring 3 passes |
+| **Config reload** | `nginx -s reload` after config fix | Tier 3 | 48h |
+| **Disk cleanup** | Delete old log files (not data) | Tier 3 | 48h |
+| **New instance provision** | Launch replacement EC2 | Tier 2 | 72h |
+| **Credential rotation** | Revoke + re-contribute key | Tier 2 | 72h |
+| **Network config change** | VPC, security group changes | Tier 1 | 7 days |
+
+Service restarts are Tier 4 because: (1) they are reversible — the service comes back on its own if it doesn't work, (2) they touch no data, (3) HealthMonitor already monitors the result.
+
+### Council Repair Classification
+
+Council AI receives HealthMonitor alert context and classifies:
+
+```
+ALERT: pando-node service on EC2-1 (54.82.241.132) has been down for 15 minutes.
+Last known state: RUNNING. systemd exit code: 1 (abnormal exit).
+Recent log tail: [OOM killer killed pando-node]
+
+Council analysis:
+- Root cause: OOM kill (memory exhaustion)
+- Fix type: service restart + memory monitoring
+- Immediate action: restart pando-node.service
+- Follow-up: propose memory limit increase via governance
+- Risk: LOW (restart is reversible, no data loss expected)
+- Credential needed: SSH key for EC2-1 (resource ID: 'ec2-1-ssh-key')
+- Recommended tier: Tier 4 (instant)
+```
+
+### The "What Humans Can't Afford Not To Have" Argument
+
+Without this loop:
+- Node crashes at 3am → nobody knows for hours
+- Human wakes up → SSH in → restart → back to sleep
+- Same crash at 4am → repeat
+
+With this loop:
+- Node crashes at 3am → HealthMonitor detects in 60s → Council votes (Tier 4, instant) → DevOps agent restarts → back online in 2-3 minutes
+- Council logs: "EC2-1 OOM at 03:14 UTC. Restarted at 03:16. Root cause: 1GB memory limit. Proposed governance vote to increase limit."
+- Human wakes up → reads council minutes → follows up on the memory proposal
+
+This is not replacing humans. It is making the 3am restart not be a human's job.
+
+### Implementation Tasks
+
+**Task 1: HealthMonitor alert → Council trigger**
+- Add `onAlert(callback)` to `kernel/monitor.ts`
+- In `platform/council.ts`: register `monitor.onAlert(this.handleInfraAlert.bind(this))`
+- `handleInfraAlert(alert)` → classify repair type → draft governance proposal
+
+**Task 2: `classifyRepair()` in `platform/council.ts`**
+- Takes HealthMonitor alert + recent logs
+- Calls AI (via AIBackendRegistry) with classification prompt
+- Returns `RepairPlan { repairType, commands, credentialId, rationale, tier }`
+
+**Task 3: Auto-submit repair proposals**
+- Council auto-submits Tier 4 repair proposals (instant approval path)
+- Tier 3+ proposals go to standard governance queue with Council's rationale
+- Each proposal includes the full `RepairPlan` as payload
+
+**Task 4: Repair result tracking**
+- After DevOps agent reports: Council calls `HealthMonitor.clearAlert(alertId)` on success
+- On failure: Council escalates — fires a higher-severity alert, adds to open issues in Genome
+- Council minutes include repair history: "3 auto-repairs in last 7 days, 2 success, 1 escalated"
+
+### Test Bar
+- [ ] Manually trigger a HealthMonitor CRITICAL alert → Council classifies repair within 60s
+- [ ] Tier 4 repair proposal auto-approved → DevOps agent spawned → fix executed → alert cleared
+- [ ] Tier 3 repair proposal enters governance queue with Council rationale
+- [ ] Council minutes show repair history after 3 auto-repairs
+- [ ] Escalation works: DevOps agent fails → HealthMonitor alert upgraded to CRITICAL + human notification
 
 ---
 

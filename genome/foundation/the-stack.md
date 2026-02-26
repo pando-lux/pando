@@ -1190,6 +1190,123 @@ Agent workspaces (not a layer — ephemeral, sandboxed, outside all layer rules)
 
 ---
 
+## Autonomous Infrastructure Repair Model
+
+*Added 2026-02-26. This section defines how Pando fixes its own infrastructure without human intervention. It answers: how does Claude get credentials? Who authorizes it? What can it do?*
+
+### The Core Principle
+
+**Humans give consent once, at contribution time. Governance authorizes specific uses. AI executes within that authorization. No human needs to be online.**
+
+When an operator runs `/contribute aws AKID/secret`, they are saying: "I'm giving this key to the network for legitimate, governance-approved tasks." They are not handing it directly to an AI — they are registering it for use under governance control. The governance system is the authorization layer between contributed keys and agent execution.
+
+### The Four-Component Loop
+
+```
+HealthMonitor
+  │ detects: node down, disk full, service crash, broken credential
+  ↓
+Council
+  │ classifies: is this fixable? what commands? what credential?
+  │ drafts repair proposal with full rationale
+  ↓
+Governance
+  │ votes on repair (Tier 4 instant for restart, Tier 3+ for config changes)
+  │ on approval: issues scoped credential token (not the raw key)
+  ↓
+DevOps Agent
+  │ receives scoped token + approved command list (not improvised)
+  │ reads raw credential from CredentialStore (temp, per-task)
+  │ executes exactly what governance approved
+  │ reports back to Council
+  ↓
+Council
+    logs result, clears alert on success, escalates to human on failure
+```
+
+Nothing in this loop bypasses governance. The DevOps agent cannot do anything governance didn't approve. The token it receives only works for the specific approved operation, for the specific approved duration.
+
+### Credential Scoping Architecture
+
+Raw credentials NEVER go to agents directly. Instead:
+
+```
+Contributed key → CredentialStore (encrypted at rest, no direct agent access)
+                                │
+             Governance approves: "Agent X may use key Y for task Z"
+                                │
+             CredentialStore.issueScopedToken({
+               agentId,
+               resourceId,
+               taskId,
+               expiresAt: now + ttlMs,  // max 1 hour
+               allowedOps: ['ssh:exec:systemctl restart pando-node']
+             })
+                                │
+             Agent receives token reference (not the key)
+             Agent calls readWithScopedToken(token)
+             CredentialStore validates: agent ID, task ID, TTL, op in allowedOps
+                                │
+             Raw key bytes returned ONLY if all checks pass
+             Written to agent workspace as temp file, chmod 600
+             Deleted unconditionally after agent completes
+```
+
+This is the same model as AWS IAM temporary credentials — time-limited, scoped, audited — but governed by Pando's council instead of AWS IAM.
+
+### Repair Governance Tiers
+
+| Repair Type | Tier | Vote Window | Rationale |
+|---|---|---|---|
+| Service restart (systemctl/pm2) | 4 — Code review | Instant | Reversible, no data, HealthMonitor confirms result |
+| Config reload (nginx -s reload) | 3 — 51% quorum | 48h | Config changes have persistent effect |
+| Disk cleanup (log rotation only) | 3 — 51% quorum | 48h | Deletion is irreversible |
+| New instance provision | 2 — 80% quorum | 72h | Creates new infrastructure, ongoing cost |
+| Credential rotation | 2 — 80% quorum | 72h | Security-critical |
+| Network/VPC/security group change | 1 — 90% quorum | 7 days | Could isolate nodes from network |
+
+Tier 4 repairs (restarts) are safe for instant approval because: (a) the service recovers on its own if the restart doesn't help, (b) no data is touched, (c) HealthMonitor immediately verifies the result.
+
+### What AI Can NOT Do (Hard Limits)
+
+These are enforced by the scoped token `allowedOps` — they are never in any pre-approved list and require explicit Tier 1/2 governance:
+
+- Access to raw MongoDB credentials (read or write user data)
+- Delete any S3 bucket or its contents
+- Modify SSH authorized_keys files
+- Change IAM permissions or create new AWS credentials
+- Access node identity files (`~/.pando/identity.json`, `session.json`)
+- Modify guardrails.ts or governance.ts (kernel files — these are never in any repair proposal)
+
+### Contributed Resource Validation
+
+A separate but related concern: contributed credentials should be validated immediately on contribution, not discovered broken at deploy time.
+
+**At contribution time:**
+1. Validator agent spawned with 5-min read-only scoped token
+2. Runs the validation profile for the resource type (S3 r/w test, MongoDB ping, API call)
+3. Marks resource HEALTHY or INVALID
+4. Lux awarded only on HEALTHY (not on registration)
+
+**Ongoing:**
+- Re-validate every 6 hours
+- 3 consecutive failures → mark INVALID, suspend from marketplace, alert contributor
+
+This ensures the network's resource catalog reflects what actually works, not just what was contributed.
+
+### Human Fallback
+
+The autonomous repair loop is NOT "humans are removed." It is "the 3am restart is not a human's job."
+
+Every repair is logged to council-minutes.md with full detail: what failed, what was run, what the output was, success or failure. If the DevOps agent fails:
+- HealthMonitor alert escalates to CRITICAL
+- Council minutes record the failure and the error
+- A human reads the morning report and handles what the AI couldn't
+
+The AI handles the obvious, reversible, low-risk fixes autonomously. Anything that requires judgment, new infrastructure, or carries risk stays in governance with a human-readable audit trail.
+
+---
+
 ## Growth Scenarios — What Needs to Evolve
 
 | Scale | What the architecture needs |
