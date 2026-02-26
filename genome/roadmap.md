@@ -1118,9 +1118,11 @@ UPDATE gateway:
 
 ---
 
-**Phase 27-F: Cross-Node (DEFERRED)**
+**Phase 27-F: Cross-Node Agent Execution (DEFERRED — low priority)**
 
-Not built now. Architecture supports it (UUID agent IDs, nodeId fields, HTTP comms).
+Agents currently only execute on the node they're spawned on. A manager on EC2-1 cannot spawn a worker that runs on EC2-2. Everything else is already cross-node (storage, deploy, governance, task routing via P2P).
+
+Architecture already supports it (UUID agent IDs, nodeId fields, HTTP comms, ResourceRouter). The remaining work is: agent spawn request forwarded via P2P to a remote node, with the bridge queue event routed back. Low priority — in practice manager + workers run on same node. Revisit when scaling beyond 5 nodes and agent workload distribution becomes a bottleneck.
 
 ---
 
@@ -1580,17 +1582,18 @@ but the genome ensures consistency across all 1000 parallel workers.
 
 Without the genome, 1000 agents would step on each other, duplicate work, break dependencies, and produce incoherent output. With the genome, each agent knows exactly what exists, what it can depend on, what rules to follow, and where its work fits in the whole.
 
-### Phase 27-G: Graceful Node Restart (PRIORITY — blocks agent autonomy)
+### Phase 27-G: Graceful Node Restart — DONE
 
-**Problem discovered 2026-02-20:** When a CEO agent or pipeline needs to restart a node (after code changes, config updates, or crash recovery), the restart flow is fragile and gets stuck. Multiple orphan node.exe processes accumulate, ports stay occupied, and agents waste 5-10 minutes fighting process management instead of doing real work. This is the #1 bottleneck for autonomous agent operations.
+**Originally planned 2026-02-20.** Resolved organically through later phases without explicit phase work.
 
-**Root cause:** No process supervisor, no PID tracking, no graceful restart API. The node binds to a port and there's no clean way to tell it "shut down and restart with new code."
+**What was built:**
+- `exit(75)` restart signal — node exits with code 75, PM2/systemd catches it and relaunches. Implemented in `kernel-api.ts`, `tui.ts`, `index.ts`, `cli.ts`.
+- `restart-reason.ts` (kernel/) — persists why restart happened, read on next startup
+- `POST /upgrade` — triggers graceful drain (waits up to 5 min for in-flight work) then `process.exit(75)`
+- PM2 (`ecosystem.config.cjs`) + systemd on EC2 — process supervision on all production nodes
+- `crash-guard.ts` (kernel/) — detects crash loops, delays restart on repeated failures
 
-**Solution (4 parts):**
-1. **PID file** (`~/.pando/node.pid`) — written on startup, checked before bind. If stale PID exists, kill it before starting.
-2. **`POST /restart` API endpoint** — graceful shutdown: close all connections, flush state, then `process.exit(75)` (restart code). External supervisor catches exit code 75 and relaunches.
-3. **Port pre-check** — before `listen()`, check if port is occupied. If yes, read PID file and kill the old process. If no PID file, fail with clear error.
-4. **PM2 integration** — `ecosystem.config.cjs` already exists. Auto-detect if running under PM2 and use `pm2 restart` instead of process.exit. `scripts/setup-pm2.sh` already sets this up for Linux.
+**The original Windows orphan-process problem** is irrelevant on production nodes. PID file approach was replaced by the simpler and more reliable exit(75) + supervisor pattern.
 
 **Already have:** `ecosystem.config.cjs`, `scripts/setup-pm2.sh`, `scripts/setup-pm2.ps1`, crash-guard.ts (detects crash loops), restart-reason.ts (tracks why restart happened), heartbeat.json (last-alive timestamp). Just need to wire them together into a reliable restart flow.
 
