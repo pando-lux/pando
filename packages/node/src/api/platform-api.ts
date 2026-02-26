@@ -370,7 +370,13 @@ export async function registerPlatformRoutes(
 
       // Build request — create project, update thread, route to manager
       if (!getAM() || !hasClaudeCodeAuth()) {
-        const noAgentReply = 'No AI-capable nodes available. Ask a node operator to enable Claude Code.';
+        // Phase 98: Try P2P routing to a shareCompute peer before returning error
+        const p2pResult = await node.routeClaudeTaskP2P?.(plaintextForProcessing);
+        if (p2pResult) {
+          threadStore.addMessage(id, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' });
+          return { status: 'ok', threadId: id, reply: p2pResult.output, tier: 'simple', routedTo: p2pResult.executedBy };
+        }
+        const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
         threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
         return { status: 'ok', threadId: id, reply: noAgentReply, tier: 'simple' };
       }
