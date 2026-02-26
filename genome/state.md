@@ -1,6 +1,6 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-26 (INFRA-07 upgrade-protocol fix deployed — da7bfa1)
+> Last updated: 2026-02-26 (pre-launch test run complete — GW-04/05/06/07/09/10/11 tested; 3 bugs fixed: a29ce486 encryption guard, 20d9c4c6 rate limiter, 130f96a1 Smart mode multi-turn)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
 
 ## Overnight sprint (2026-02-26) — continuing
@@ -13,7 +13,7 @@ v2.1-v2.5 + Phase 53.7 + Phase 53.8 + Phase 68.4 + Ledger Explorer + Node Setup 
 
 | Node | IP | Status | Peers | StorageBackend | CredentialAccess | Supervisor | Uptime |
 |---|---|---|---|---|---|---|---|
-| EC2-1 (compute) | 54.82.241.132 | **ONLINE** | 8 | **mongodb** | true | **systemd** | Continuous |
+| EC2-1 (compute) | 54.82.241.132 | **ONLINE** | 2 | **mongodb** | true | **systemd** | Continuous |
 | EC2-2 (compute) | 34.201.82.126 | **ONLINE** | 1+ | **mongodb** | true | **systemd** | Continuous |
 | LS-1 (relay) | 54.145.144.221 | **DOWN** | -- | **p2p** | false | PM2 | Machine unreachable |
 | LS-2 (untrusted) | 3.237.175.38 | **ONLINE** | 1+ | **p2p** | false | PM2 | Continuous |

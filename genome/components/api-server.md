@@ -28,7 +28,7 @@ exposes:
   - GET /chat/threads/:id — get thread with messages (cache + async fallback for cross-node)
   - DELETE /chat/threads/:id — delete a thread and its messages
   - PATCH /chat/threads/:id — update thread metadata (projectId, type)
-  - POST /chat/threads/:id/message — send message to thread (quick-tier detection + bridge routing)
+  - POST /chat/threads/:id/message — send message to thread. tier=simple: doorman stateless reply. tier=medium: doormanChat with full conversation history (multi-turn, ~$0.001). tier=complex/build: routes to project manager. Rate limited at 30/window (PANDO_RATE_CHAT_THREAD).
   - POST /tasks — create task
   - POST /tasks/:id/approve — approve task
   - GET /tasks — list tasks
@@ -104,7 +104,7 @@ Fastify HTTP API server for the Pando node. Exposes node operations over HTTP so
 - The API server holds a reference to the full `PandoNode` instance — it has access to all subsystems, which means a bug in any endpoint handler could theoretically affect node state.
 - `/health` endpoint now consults HealthMonitor for actual health state (peer count, alert severity) instead of hardcoding "healthy". Returns degraded/unhealthy when monitor detects problems.
 - A custom content type parser accepts empty JSON bodies (`application/json` with zero-length payload). This fixes endpoints like `POST /tasks/:id/approve` that are called with no body.
-- **Doorman (Phase 68.3)**: `doormanClassify(message)` handles first-contact routing. Keyword patterns (balance, status, peers, help) get instant local responses. Ambiguous messages go to OpenAI gpt-4o-mini for classification (~$0.001). Build requests create a project + spawn per-project manager. Messages with a `projectId` skip the doorman entirely and route to the project manager.
+- **Doorman (Phase 68.3)**: Two doorman methods: (1) `doormanClassify(message)` — stateless single-turn classification. Keyword patterns (balance, status, peers, help) get instant local responses. Ambiguous messages go to OpenAI gpt-4o-mini for classification (~$0.001). Build requests create a project + spawn per-project manager. Messages with a `projectId` skip the doorman entirely. (2) `doormanChat(message, history)` — multi-turn Smart mode chat. Passes last 20 messages as conversation history to OpenAI gpt-4o-mini. Called when client sends tier=medium. Returns tier:'medium' so the gateway UI shows the correct badge. Added 2026-02-26 (commit 130f96a1).
 - **Phase 83 — 503 guards are defense-in-depth**: After P2PStorageBackend, every node has a StorageBackend (direct or proxied). The `if (!threadStore) return 503` and `if (!projectStore) return 503` guards remain as safety nets but should never trigger in normal operation.
 - **Auth bypass must strip version prefix**: The `onRequest` hook sees the full URL including `/v1/` prefix (e.g., `/v1/auth/guest`). The bypass check strips the version prefix first: `urlPath.replace(/^\/v\d+/, '')` before `startsWith('/auth/')`. Forgetting this causes auth endpoints to require operator token. Verified fixed: commit `b8e17b57`.
 - **Gateway `PANDO_API_TOKEN` is for admin ops only**: Chat, auth, and project routes are public. A remote gateway (Vercel, AWS) does NOT need `PANDO_API_TOKEN` to serve users. It only needs it for admin operations. If you see 403s on `/chat/threads` from a gateway, the route was accidentally added to the protected set — check the auth bypass list.
