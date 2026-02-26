@@ -588,6 +588,143 @@ This wires the PreToolUse hook — before every Edit/Write, the agent automatica
 
 ---
 
+## Phase 108 — Personal Always-On Cloud Node (SPEC READY)
+
+> **Status:** Conceptual spec complete. Builds on existing CloudInstanceManager + tripwire provisioning infrastructure already built in Phase 64a. Two distinct work items: (1) P2P RemoteExec primitive, (2) personal provisioning UX. Neither requires new infrastructure — both extend existing systems.
+> **Strategic doc:** `docs/pando/03-strategy/market-analysis.md` Direction 23 — full GTM analysis, pros/cons, honest constraints.
+
+### The Gap
+
+A Pando node is powerful when your laptop is open. Close it — the node dies, Lux stops earning, tasks stop running. Users who want persistent AI must keep their machine on. This is the single biggest friction point after initial install.
+
+**The fix:** auto-provision a personal EC2 instance when a user contributes AWS credentials. Same mechanism as Phase 64a compute provisioning, but personal use. The cloud node earns 24/7. When the laptop is also on, the two nodes cooperate via P2P.
+
+### The 2 Tasks
+
+**Task 1: P2P RemoteExec Primitive**
+
+Allow same-owner nodes to execute terminal commands on each other via the existing P2P request-reply system. This replaces any need for SSH.
+
+```typescript
+// In kernel/network.ts — register handler on receiving node (laptop):
+network.handle('pando/remote-exec', async (message: SignedMessage) => {
+  // Auth: only accept from same-owner peers (verified by userId match)
+  const senderUserId = await getUserIdForPeer(message.fromPeerId);
+  if (senderUserId !== this.currentUserId) {
+    return { error: 'Unauthorized: sender is not an owned peer' };
+  }
+
+  // Guardrails check: respect protected paths
+  if (guardrails.isProtectedCommand(message.payload.command)) {
+    return { error: 'Guardrails: command blocked' };
+  }
+
+  // Execute
+  const result = await exec(message.payload.command, {
+    cwd: message.payload.cwd ?? process.env.HOME,
+    timeout: message.payload.timeoutMs ?? 30000
+  });
+
+  return {
+    stdout: result.stdout,
+    stderr: result.stderr,
+    exitCode: result.code
+  };
+});
+
+// On the requesting node (EC2) — send the request:
+const result = await requestReply.send(laptopPeerId, 'pando/remote-exec', {
+  command: 'ls ~/Documents',
+  cwd: process.env.HOME
+});
+```
+
+**Why this is better than SSH:**
+- No SSH daemon on laptop. No open ports. No firewall config.
+- Already authenticated (Ed25519 identity). Already encrypted (Noise protocol).
+- Works behind NAT — P2P connection already exists, no inbound config needed.
+- Ownership-verified at the application level — same-userId check, not just same-keypair.
+
+HTTP API endpoint to expose this to agents:
+```
+POST /v1/peers/:peerId/exec
+Body: { command: string, cwd?: string, timeoutMs?: number }
+Auth: Bearer token + must be an owned peer
+Returns: { stdout, stderr, exitCode }
+```
+
+**Task 2: Personal Node Provisioning UX**
+
+In the TUI, extend `/contribute aws` flow:
+
+```typescript
+// After AWS credentials are validated and compute capability is confirmed:
+const wantsPersonalNode = await prompt(
+  'Do you want a personal always-on node? (~$5/month to AWS, set up automatically)'
+);
+
+if (wantsPersonalNode) {
+  // Reuse CloudInstanceManager with personal=true flag
+  const instance = await cloudInstanceManager.launchPersonalNode({
+    awsCredentials: contributedCredentials,
+    personal: true,        // tags instance as personal, not compute
+    userData: personalNodeBootstrap,  // same bootstrap, different config
+  });
+
+  logger.info(`Personal node launched: ${instance.publicIp}`);
+  logger.info('Connecting to your new always-on node...');
+
+  // Bootstrap the personal node to connect to the current node
+  // It auto-joins the P2P network and discovers owned peers
+}
+```
+
+Personal node bootstrap config differences from compute nodes:
+- `PERSONAL_OWNER_PEER_ID` env var — knows who owns it
+- `ACCEPT_REMOTE_EXEC_FROM` = owner's peerId only (no other nodes)
+- Same tripwire security as compute nodes
+- Does NOT need `CREDENTIAL_MASTER_KEY` (not a trusted compute node)
+- Earns Lux from uptime epochs + available compute contributions
+
+### What This Enables
+
+**When laptop is ON:**
+- EC2 node + laptop node are P2P connected and owned by same user
+- Claude Code agent on EC2 can call `/v1/peers/<laptopPeerId>/exec` → runs any command on laptop
+- Agent running on cloud has full access to local files, local terminal, local apps
+- Seamless: user submits task from phone → EC2 coordinates → laptops executes → result returns
+
+**When laptop is OFF:**
+- EC2 earns Lux 24/7 (uptime epochs)
+- Runs tasks that use internet infrastructure (S3, MongoDB, GitHub, deployed apps)
+- User accesses their AI from phone → EC2 handles it
+- Local file access is not available (laptop is off — this is expected, not a bug)
+
+### Honest Constraints
+
+- AWS account required — developer/technical-user audience for Phase 1
+- Trust barrier: users must give AWS credentials to Pando (some will, majority won't until network has proven track record)
+- Local file access only works when laptop is on — do not over-promise
+- Phase 2 version: Pando hosts the node (user pays Pando in Lux, no AWS account needed) — design toward this
+
+### GTM Frame
+
+> "Your AI pays for its own server."
+
+Node earns Lux. Lux has utility. Framing: not "pay for infrastructure" but "invest in a node that earns." $5/month to AWS, offset by Lux earnings as network grows. This is the strongest passive-income / viral framing in the product.
+
+### Test Bar
+- [ ] `/contribute aws` in TUI offers personal node option after credential validation
+- [ ] Personal EC2 launches and joins P2P network within 5 minutes
+- [ ] Personal node appears in `/peers` on laptop node as connected peer
+- [ ] `POST /v1/peers/<personalNodePeerId>/exec` with `{ command: 'whoami' }` returns laptop username
+- [ ] Unauthorized peer (different userId) exec request returns 401
+- [ ] Protected commands (rm -rf, system paths) return Guardrails block
+- [ ] Personal node earns Lux uptime epochs when laptop is off
+- [ ] SSH is NOT required at any step
+
+---
+
 ## Later TODO
 
 - ~~**Auto-deploy on governance approval**~~ — **DONE (Phase 73).** Governance-approved upgrades propagate via GossipSub `pando/upgrades` topic. All nodes auto-apply, build, health check, restart. Auto-approve when <4 active peers.
