@@ -33,6 +33,63 @@ import { getPrivateKeyFromIdentity, type NodeIdentity } from '@pando/shared';
 import type { Libp2p } from 'libp2p';
 import type { Connection, Stream } from '@libp2p/interface';
 
+// @know
+// entity PandoNetwork {
+//   type: module
+//   blueprint: P2P_KERNEL
+//   status: active
+//   description: "Core P2P networking layer built on libp2p with TCP+Noise encryption, Yamux muxing, mDNS/bootstrap discovery, GossipSub pub/sub, and circuit relay support."
+//   depends_on: [SharedTypes]
+//   @gotcha("GossipSub topic subscriptions are deduplicated — subscribing twice to the same topic is a no-op. All topic listeners are cleaned up in stop() to prevent leaks on restart.")
+//   @gotcha("Known peers are persisted to ~/.pando/known-peers.json with 7-day TTL and 50-peer cap. On startup, known peers are re-dialed automatically.")
+//   @gotcha("Peer exchange includes peerStore announce addresses (public IPs from identify protocol), not just connection addresses. This is critical for NAT/VPC traversal.")
+//   @gotcha("Agent message payload limit is 256KB (increased from 8KB) to support P2P storage proxy responses containing large project/thread data.")
+//   @why("announce addresses are configured via PUBLIC_IP env var on cloud nodes — required because 0.0.0.0 bind address is not externally reachable behind NAT/VPC.")
+//   @why("updateKnownPeer is delayed 3s after connect to allow the identify protocol to populate peerStore with announce addresses.")
+// }
+// @end
+
+// @know
+// lesson IPV6_GATEWAY_FAILURE {
+//   in: PandoNetwork
+//   what: "Gateway connections fail when using 'localhost'"
+//   why: "Node.js may resolve localhost to ::1 (IPv6) which libp2p/Fastify may not bind"
+//   fix: "Always use 127.0.0.1 instead of localhost for local connections"
+//   severity: warning
+//   date: "2026-02"
+// }
+// @end
+
+// @know
+// lesson ED25519_PUBKEY_FROM_PEERID {
+//   in: PandoNetwork
+//   what: "Cross-node auth failed because ledger stored 'remote-peer' as public key"
+//   why: "Remote nodes registered with placeholder public key, making signature verification impossible"
+//   fix: "Extract public key from peerId string via peerIdFromString().publicKey — no ledger lookup needed"
+//   severity: warning
+//   date: "2026-02"
+// }
+// @end
+
+// @know
+// lesson VPC_INTERNAL_IP_LEAK {
+//   in: PandoNetwork
+//   what: "Peer exchange shared internal VPC IPs (172.31.x.x) that external nodes could not dial"
+//   why: "EC2 nodes in the same VPC connect via internal IPs. connection.remoteAddr returns the internal IP, not the public announce address."
+//   fix: "getConnectedPeerAddresses() and updateKnownPeer() now also query libp2p peerStore for announce addresses (public IPs from identify protocol). AWS IMDS auto-detects public IP on cloud nodes."
+//   severity: critical
+//   date: "2026-02"
+// }
+// @end
+
+// @know
+// invariant GOSSIPSUB_DEDUP {
+//   rule: "Each GossipSub topic must only be subscribed once per PandoNetwork instance — subscribedTopics Set enforces this"
+//   applies_to: [PandoNetwork]
+//   severity: warning
+// }
+// @end
+
 export type MessageHandler = (message: PandoMessage, peerId: string) => void;
 export type PeerHandler = (peerId: string) => void;
 

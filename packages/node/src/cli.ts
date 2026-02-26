@@ -12,6 +12,31 @@ import { homedir } from 'node:os';
 import { writeFileSync, mkdirSync, existsSync, cpSync, rmSync, readFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
 
+// @know
+// entity CliEntryPoint {
+//   type: module
+//   blueprint: NODE_CORE
+//   status: active
+//   description: "Non-interactive CLI entry point: parses flags, initializes PandoNode with MongoDB/storage backend, sets up file logging, crash guard, port pre-check, post-deploy health checks, and heartbeat reporting."
+//   depends_on: [PandoNode, FileLogger, QaRunner, SharedCrypto]
+//   @gotcha("Session-aware: tries loadSession() first for encrypted identities. If session.json exists, the node starts with that identity without prompting for password.")
+//   @gotcha("Port pre-check: if API port is occupied, CLI attempts to shut down the existing instance via POST /admin/shutdown before failing.")
+//   @gotcha("RESTART_EXIT_CODE = 75 — PM2/systemd/start-node.bat restarts the process when it exits with this code.")
+//   @gotcha("MSYS2 path normalization: /c/Users/... is converted to C:\\Users\\... on Windows because path.join mishandles MSYS2 paths.")
+//   @why("DEFAULT_BOOTSTRAPS contains 3 nodes (LS-1, EC2-1, EC2-2) for mesh connectivity — ensures new nodes connect to at least 2 bootstrap peers.")
+//   @why("Public IP auto-detection uses AWS IMDS v1 (http://169.254.169.254/latest/meta-data/public-ipv4) with 2s timeout — works on EC2 and Lightsail, silently skips elsewhere.")
+// }
+//
+// lesson PORT_PRECHECK {
+//   in: CliEntryPoint
+//   what: "Node failed to start because previous instance still held the API port"
+//   why: "PM2 restart or crash left the old process running, and Fastify's listen() fails immediately on EADDRINUSE"
+//   fix: "Added port pre-check that attempts graceful shutdown of existing instance via /admin/shutdown API, waits up to 15s for port release"
+//   severity: warning
+//   date: "2026-02"
+// }
+// @end
+
 /**
  * Check if a TCP port is currently in use by attempting a connection.
  * Returns true if something is listening on the port.

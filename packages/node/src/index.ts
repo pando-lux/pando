@@ -8,6 +8,8 @@
 //   @gotcha("PandoNode is a GOD OBJECT with 50+ private fields — each subsystem is nullable and initialized conditionally during start(). Always null-check before use.")
 //   @gotcha("detectClaudeCode() has a 3-second timeout — on slow systems (Windows especially) this can delay startup.")
 //   @gotcha("Daily emission cap (500 Lux) is tracked in-memory (dailyEmissions) and reset by date string comparison — restarting the node resets the counter.")
+//   @gotcha("Peer exchange runs at 5s after each peer connect, plus 30s and 90s after boot. It shares addresses from getConnectedPeerAddresses() which includes peerStore announce addresses for NAT/VPC traversal.")
+//   @gotcha("Governance re-sync runs every 5 min to catch missed votes/decisions in thin GossipSub meshes (<6 peers).")
 //   @why("Subsystems are initialized in layered order: kernel (network, ledger, sync) -> core (agents, storage) -> platform (scheduler, resources). This matches the import boundary rule.")
 // }
 // @end

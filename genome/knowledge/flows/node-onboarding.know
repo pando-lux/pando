@@ -1,0 +1,52 @@
+flow NodeOnboarding {
+  summary: "How a new node joins the Pando network. Install, start, create identity, optionally login as operator, connect to peers, sync ledger, receive genesis allocation, and become fully operational."
+  trigger: NodeStart
+
+  step install -> start {
+    actor: CLI
+    what: "Clone repo, npm install, npm run build. Or use launcher: start-node.command (Mac) / start-node.bat (Windows)."
+  }
+
+  step start -> identity {
+    actor: TUI
+    what: "node packages/node/dist/cli.js --port 4001. Or double-click launcher. Node process starts running."
+  }
+
+  step identity -> operator_login {
+    actor: TUI
+    what: "TUI silently auto-creates identity on first run (no prompts). Ed25519 keypair generated, encrypted with password (PBKDF2 + AES-256-GCM). Stored in ~/.pando/identities/{peerId}.json. Session cached in ~/.pando/session.json."
+    @gotcha("On subsequent runs, auto-loads existing identity. Only prompts for password if identity is encrypted.")
+  }
+
+  step operator_login -> connect {
+    actor: TUI
+    what: "TUI checks for ~/.pando/operator-session.json (auto-login). If found and valid: restores operator state. If not found: node runs as relay-only (no rewards). Operator can /login or /register at any time. On login, node registers itself under user account via POST /auth/me/nodes."
+    @gotcha("Without operator login, node earns no Lux rewards. It operates as relay-only.")
+  }
+
+  step connect -> peer_exchange {
+    actor: PandoNetwork
+    what: "If --bootstrap provided: connect to known peer. If no bootstrap: mDNS discovers local peers. Known-peers from previous sessions are dialed automatically. Auto-connects to EC2 bootstrap by default."
+  }
+
+  step peer_exchange -> ledger_sync {
+    actor: PandoNode
+    what: "5s after first peer connects: receives PEER_EXCHANGE with addresses of other nodes in the network. Dials them to form a full mesh. Re-exchange at 30s and 90s catches late-connecting peers. See flow PeerExchange."
+    @gotcha("Nodes behind NAT (home Windows/Mac) connect outbound to cloud nodes. Cloud nodes cannot dial back to NAT nodes. This is expected.")
+  }
+
+  step ledger_sync -> genesis_allocation {
+    actor: LedgerSync
+    what: "LedgerSync requests missing transactions from peers. GossipSub subscribes to all topics. Transactions applied in order until consistent with network state."
+  }
+
+  step genesis_allocation -> ready {
+    actor: PandoLedger
+    what: "First-time node registration: receives genesis Lux. Early multiplier: accounts 1-100 get 5x, 101-1000 get 3x, 1001-10000 get 2x."
+  }
+
+  step ready -> done {
+    actor: PandoNode
+    what: "API server listening on --api-port (default 4000). P2P listening on --port. Optional: start gateway, scheduler (--scheduler), monitor (--monitor). Full node operational."
+  }
+}

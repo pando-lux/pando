@@ -1,3 +1,24 @@
+// @know
+// entity SharedTypes {
+//   type: module
+//   blueprint: SHARED_LAYER
+//   status: active
+//   description: "All shared types, interfaces, enums, and constants used across every Pando package — identity, messages, transactions, governance, agents, capabilities, and economics."
+//   depends_on: []
+//   @gotcha("MESSAGE_VERSION = 1 — must be incremented when envelope format changes, or P2P messages will be silently dropped by peers on different versions.")
+//   @gotcha("OperationalMode 1/2/3 maps to local-only / P2P / full (P2P + internet infra). Mode 1 must always be available offline.")
+//   @gotcha("LUX_HARD_CAP = 10,000,000,000 — this constant is the single source of truth for the Lux supply ceiling, checked in TransactionStore.emit().")
+//   @gotcha("MessageType.PEER_EXCHANGE is handled in PandoNode (index.ts), not PandoNetwork — it's an application-level protocol, not a kernel primitive.")
+//   @why("NodeHealth tracks per-layer boot status (kernel/core/platform) so the node can degrade gracefully instead of crashing entirely.")
+// }
+//
+// invariant HARD_CAP_IMMUTABLE {
+//   rule: "LUX_HARD_CAP (10 billion) must never be changed without Tier 1 governance vote (90% quorum + 30-day migration)"
+//   applies_to: [SharedTypes, TransactionStore]
+//   severity: critical
+// }
+// @end
+
 export interface NodeIdentity {
   peerId: string;
   publicKey: Uint8Array;

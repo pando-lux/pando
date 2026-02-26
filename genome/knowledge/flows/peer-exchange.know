@@ -1,0 +1,58 @@
+flow PeerExchange {
+  summary: "Peer exchange protocol — nodes share peer addresses on connect so new nodes can form a full mesh without a central hub. Replaces the need for a relay/bootstrap hub."
+  trigger: PeerConnect
+
+  step connect -> identify {
+    actor: PandoNetwork
+    what: "New peer connects via bootstrap or known-peers dial. libp2p identify protocol runs automatically, exchanging listen/announce addresses. Announce addresses (public IPs) are stored in the peerStore."
+    @gotcha("identify protocol takes 1-3s to complete. updateKnownPeer is delayed 3s to ensure peerStore has announce addresses before persisting.")
+  }
+
+  step identify -> save_known {
+    actor: PandoNetwork
+    what: "updateKnownPeer() saves both connection addresses AND peerStore announce addresses to ~/.pando/known-peers.json. This ensures public IPs are persisted even when the actual TCP connection uses internal/VPC IPs."
+    @gotcha("EC2 nodes in the same VPC connect via internal IPs (172.31.x.x). Without peerStore addresses, known-peers would only store internal IPs that external nodes cannot dial.")
+  }
+
+  step save_known -> exchange {
+    actor: PandoNode
+    what: "5s after connect: node sends PEER_EXCHANGE message to the new peer. Payload contains all connected peers' addresses (connection addrs + known-peers + peerStore announce addrs). Filtered to exclude the recipient's own address."
+  }
+
+  step exchange -> dial_new {
+    actor: PandoNode
+    what: "Receiving node parses peer list, skips already-connected peers, tries to dial each unknown peer using the shared addresses. Tries all addresses for each peer until one works."
+    @gotcha("Nodes behind NAT (home Windows/Mac) cannot be dialed from cloud nodes. They connect outbound. This is expected — peer exchange helps them discover cloud nodes, not the other way around.")
+  }
+
+  step dial_new -> re_exchange {
+    actor: PandoNode
+    what: "Delayed re-exchange at 30s and 90s after boot broadcasts the full peer list to all connected peers. This catches peers that connected after the initial 5s exchange window."
+  }
+
+  step re_exchange -> full_mesh {
+    actor: PandoNetwork
+    what: "Combined with known-peers persistence (7-day TTL, 50-peer cap), peer exchange ensures full mesh formation within ~90s of boot. On restart, known-peers are dialed immediately, providing instant reconnection."
+  }
+}
+
+flow GovernanceReSync {
+  summary: "Periodic governance re-sync — every 5 minutes, nodes request governance state from a random peer. Safety net for thin GossipSub meshes where votes/decisions may not propagate."
+  trigger: Timer
+
+  step timer -> pick_peer {
+    actor: PandoNode
+    what: "Every 5 minutes, select a random connected peer."
+  }
+
+  step pick_peer -> request_sync {
+    actor: GovernanceSync
+    what: "Request governance catch-up from the selected peer. Peer sends all proposals/votes/decisions the requesting node hasn't seen."
+    @gotcha("With fewer than 6 peers, GossipSub mesh may be too thin for reliable message propagation. This timer ensures governance decisions reach all nodes regardless.")
+  }
+
+  step request_sync -> apply {
+    actor: GovernanceSync
+    what: "Apply received governance state. This catches upgrade proposals, votes, and decisions that were missed via GossipSub."
+  }
+}
