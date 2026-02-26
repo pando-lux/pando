@@ -1887,6 +1887,7 @@ export async function registerPlatformRoutes(
         visibility?: string;
         budgetLimit?: number;
         tier?: number;
+        repoUrl?: string;
       };
 
       const updates: any = {};
@@ -1896,6 +1897,7 @@ export async function registerPlatformRoutes(
       if (body.visibility !== undefined) updates.visibility = body.visibility;
       if (body.budgetLimit !== undefined) updates.budgetLimit = body.budgetLimit;
       if (body.tier !== undefined) updates.tier = body.tier;
+      if (body.repoUrl !== undefined) updates.repoUrl = body.repoUrl;
 
       const project = await ps.updateProject(id, updates);
       if (!project) return reply.code(404).send({ error: 'Project not found' });

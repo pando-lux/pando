@@ -158,6 +158,8 @@ export default function ProjectsPage() {
   const [settingsType, setSettingsType] = useState("");
   const [settingsVisibility, setSettingsVisibility] = useState("");
   const [settingsBudgetLimit, setSettingsBudgetLimit] = useState(0);
+  const [settingsRepoUrl, setSettingsRepoUrl] = useState("");
+  const [settingsTier, setSettingsTier] = useState(1);
   const [settingsSaving, setSettingsSaving] = useState(false);
   const [settingsMsg, setSettingsMsg] = useState<{ ok?: boolean; text: string } | null>(null);
 
@@ -296,6 +298,8 @@ export default function ProjectsPage() {
         setSettingsType(proj.type);
         setSettingsVisibility(proj.visibility || "collaborators");
         setSettingsBudgetLimit(proj.budgetLimit || 100);
+        setSettingsRepoUrl(proj.repoUrl || "");
+        setSettingsTier(proj.tier || 1);
       }
 
       try {
@@ -366,6 +370,8 @@ export default function ProjectsPage() {
           type: settingsType,
           visibility: settingsVisibility,
           budgetLimit: settingsBudgetLimit,
+          repoUrl: settingsRepoUrl.trim() || undefined,
+          tier: settingsTier,
         }),
       });
       if (res.ok) {
@@ -1142,6 +1148,30 @@ export default function ProjectsPage() {
                                       className="w-28 bg-neutral-100 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-1.5 text-sm text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
                                     />
                                   </div>
+                                  <div className="flex flex-col gap-1">
+                                    <label className="text-[10px] text-neutral-500 uppercase tracking-wider">Deploy Tier</label>
+                                    <select
+                                      value={settingsTier}
+                                      onChange={(e) => setSettingsTier(Number(e.target.value))}
+                                      className="bg-neutral-100 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-1.5 text-sm text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+                                    >
+                                      <option value={1}>Tier 1 (Static)</option>
+                                      <option value={2}>Tier 2 (Server)</option>
+                                    </select>
+                                  </div>
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-[10px] text-neutral-500 uppercase tracking-wider">
+                                    GitHub Repo URL{" "}
+                                    <span className="normal-case opacity-60">(enables Deploy button)</span>
+                                  </label>
+                                  <input
+                                    type="url"
+                                    value={settingsRepoUrl}
+                                    onChange={(e) => setSettingsRepoUrl(e.target.value)}
+                                    placeholder="https://github.com/pando-lux/my-app"
+                                    className="bg-neutral-100 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-1.5 text-sm text-neutral-900 dark:text-neutral-100 placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50 font-mono"
+                                  />
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <button

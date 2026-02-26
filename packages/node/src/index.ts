@@ -2142,11 +2142,12 @@ location /apps/${projectId}/ {
       this.nodeHealth.core = 'healthy';
     }
 
-    // Platform health: api-server failed → failed; explicit service failures → degraded
-    // Skipped services (due to node mode / no Claude Code) do NOT count as degraded.
+    // Platform health: api-server failed → failed; thread-store degraded → degraded.
+    // Scheduler and monitor are only ever 'ok' | 'skipped' (never 'failed'),
+    // so skipped services do NOT cause degraded status.
     if (s['api-server'] === 'failed') {
       this.nodeHealth.platform = 'failed';
-    } else if (s['thread-store'] === 'degraded' || s['scheduler'] === 'failed' || s['monitor'] === 'failed') {
+    } else if (s['thread-store'] === 'degraded') {
       this.nodeHealth.platform = 'degraded';
     } else {
       this.nodeHealth.platform = 'healthy';
