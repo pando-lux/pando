@@ -81,6 +81,10 @@
 | **100** | myNodes Routing Tier — same-user nodes preferred before network peers. `linkedUser` auth on P2P routes. `/contribute claude-code myNodes\|network` scope | Phase 99 | Pending |
 | **101** | **Council Self-Healing Loop** — close the gap between "Council proposes" and "Council fixes". Wire AI call in `runDailyReflection()`, add `spawnFixAgent()`, Tier 4 auto-approval in governance, patch application in UpgradeProtocol. See `the-stack.md` Council section for full wiring spec. | Phase 50 done | Pending |
 | **102** | **Adversarial QA Loop** — Three-ring QA model. Ring 3 = fresh-context adversarial agent with no code knowledge, hostile framing, micro-agent per flow, evidence required for every verdict. QA Memory Agent (persistent, accumulates failure history). Council must pass Ring 3 before any governance auto-approval. See `the-stack.md` QA Architecture section + `genome/templates/qa-adversarial.md`. | Phase 101 | Pending |
+| **103** | **Genome Evolution** — After every completed project, a Genome Agent analyses outcomes (QA results, build time, failure patterns) and updates the Learned Lessons sections in agent templates. Makes every future agent spawn smarter. See spec below. | Phase 102 | Pending |
+| **104** | **Agent Economic Autonomy** — Agents earn a Lux sub-budget from completed tasks. Can spend from that budget to hire child agents (researcher, reviewer) without user intervention. Agents become economic actors, not just cost centres. See spec below. | Phase 103 | Pending |
+| **105** | **Council Growth Engine** — Council daily reflection gains a second output: one growth action proposal per week when network is healthy. Council drafts the actual outreach message. Governance votes before any public posting. Network grows itself when ready. See spec below. | Phase 101 | Pending |
+| **106** | **Decentralization Milestone Protocol** — Automatic Layer 0 governance power transitions based on unique human operator count. Baked into kernel — not governable. Defines when Jai's node stops having special weight. See `genome/rules/decentralization-milestones.md`. | Phase 50 | Pending |
 
 ---
 
@@ -235,6 +239,231 @@ const STANDARD_FLOWS = [
 - [ ] QA Memory Agent records the failure. Next run injects historical failure into adversarial agent briefing.
 - [ ] Council upgrade flow: patch with failing Ring 3 does NOT reach governance
 - [ ] Patch with passing Ring 3: governance proposal includes `ring3Results` evidence
+
+---
+
+## Phase 103 — Genome Evolution (SPEC READY)
+
+> **Status:** Not started. Depends on Phase 102 (QA Memory Agent is the first piece of this pattern).
+> **Why this matters:** the system does not currently get smarter from experience. A builder that made the same mistake three times has no memory of it on the fourth task. Genome Evolution closes this. Every project makes every future agent better.
+
+### The Idea
+
+Agent templates have a `## Learned Lessons` section that starts empty. It is never written to systematically. Genome Evolution makes this section grow over time — automatically, from real project outcomes.
+
+### What the Genome Agent Does
+
+After every project reaches `completed` status in AgentManager, the Genome Agent is spawned with:
+- The builder's workspace logs
+- The QA ring results (what passed, what failed, what edge cases triggered)
+- The manager's project-state.md
+- The time spent per phase
+- Any Council minutes generated during the project
+
+It produces: specific, actionable entries for the `Learned Lessons` sections of whichever templates were involved. It does NOT rewrite principles — it only appends to `Learned Lessons`.
+
+Example output:
+```markdown
+## Learned Lessons
+- [2026-03-15] P2P storage proxy: always test with nodes on DIFFERENT machines.
+  Same-machine tests pass but cross-machine tests fail due to localhost routing.
+  Source: project pando-node-mgr, Ring 3 failure #3.
+- [2026-03-20] Auth flows: JWT expiry edge case — test with a token that expires
+  mid-request. Caused regression twice. Set test token TTL to 1 second in tests.
+```
+
+### Implementation Tasks
+
+**Task 1: `platform/genome-agent.ts`** — new file
+- Triggered by `AgentManager` when `project.status === 'completed'`
+- Spawns once per project with `role: 'genome'` (new template needed: `genome/templates/genome.md`)
+- Reads workspace + QA results → produces Learned Lessons entries
+- Appends entries to the relevant template files in `genome/templates/`
+
+**Task 2: `genome/templates/genome.md`** — new agent template
+- Role: "You read project outcomes and write Learned Lessons. You never write principles. You only write what you learned from THIS project."
+- Input: project logs, QA results, time data
+- Output: specific entries with date, which flow failed, what the edge case was, which template to update
+
+**Task 3: Hook in `core/agent-manager.ts`**
+- When a project's root manager reports `completed`, call `genomeAgent.analyseProject(projectId)`
+- Non-blocking — runs after the project is done, does not affect the user experience
+
+### Test Bar
+- [ ] Complete a project that has a Ring 3 failure. Genome Agent writes a Learned Lesson to the relevant template.
+- [ ] The lesson is specific (names the flow, the edge case, the date) — not generic advice.
+- [ ] Run the same project type again. The adversarial QA agent receives the historical lesson in its briefing.
+- [ ] Templates do not grow unboundedly — Genome Agent trims entries older than 90 days if `Learned Lessons` exceeds 20 entries.
+
+---
+
+## Phase 104 — Agent Economic Autonomy (SPEC READY)
+
+> **Status:** Not started. Depends on Phase 101 (Council loop) being stable.
+> **Why this matters:** currently agents are pure cost centres — users pay Lux, agents spend it. This phase makes agents economic actors. Long-term, it enables the network to sustain itself without the founder continuously topping up Lux.
+
+### The Idea
+
+When a builder agent completes a task, it earns a small Lux reward (like uptime epochs). The agent receives a `luxSubBudget` — a portion of the earned Lux that it can spend autonomously to hire child agents without user authorisation.
+
+Example:
+```
+User pays 50 Lux to build an app
+Builder completes task, earns 5 Lux sub-budget
+Builder decides: "I need better context on the auth flow"
+Builder spawns Researcher with 2 Lux from sub-budget
+Researcher returns context → Builder produces better output → earns higher reputation
+Higher reputation → more tasks assigned → more Lux earned
+```
+
+### Key Rules
+
+- `luxSubBudget` is funded only from task earnings, never from user balance
+- Agent can only spend sub-budget on child agents (not transfer to other identities)
+- Max autonomous spawn depth: 2 (agent can spawn one level of helpers — no infinite trees)
+- Sub-budget is non-transferable and expires when the agent is cleaned up
+- Law I applies: agent cannot hire agents to do anything a human could not authorize
+
+### Implementation Tasks
+
+**Task 1: `luxSubBudget` field on Agent**
+- Add `luxSubBudget: number` to agent state in `core/agent.ts`
+- Funded at task completion: `agentEarnings = taskReward * AGENT_EARNING_RATIO` (e.g., 10%)
+- Persisted in agent's `state.json`
+
+**Task 2: PaymentGate `from: 'agent'` path**
+- `core/payment-gate.ts`: add `spendFromAgentBudget(agentId, amount, purpose)` method
+- Checks `agent.luxSubBudget >= amount` before allowing autonomous spawn
+- Deducts from agent sub-budget, not from user wallet
+- Records in ledger as `agent_autonomous_spend` transaction type
+
+**Task 3: AgentManager autonomous spawn check**
+- When an agent calls `spawnAgent()` without a user-initiated request:
+  - Check `parentAgent.luxSubBudget >= estimatedCost`
+  - If yes: allow, deduct from sub-budget
+  - If no: block, agent must message parent to request user authorisation
+
+### Test Bar
+- [ ] Builder completes task → `luxSubBudget` credited with 10% of task reward
+- [ ] Builder spawns Researcher from sub-budget → PaymentGate deducts from agent budget, not user wallet
+- [ ] Agent with zero sub-budget cannot spawn autonomously
+- [ ] Sub-budget spend appears in ledger as distinct transaction type
+- [ ] Governance proposal: set `AGENT_EARNING_RATIO` (default 10%) — changeable by Tier 3 vote
+
+---
+
+## Phase 105 — Council Growth Engine (SPEC READY)
+
+> **Status:** Not started. Depends on Phase 101 (Council AI call activated).
+> **Why this matters:** the Council currently only looks inward (maintenance, bugs, parameters). It has the best view of network health of any actor in the system. It should use that view to decide when and how to grow — not wait for a human to remember to post in r/selfhosted.
+
+### The Idea
+
+Council `runDailyReflection()` has two outputs today (after Phase 101):
+- Output A: governance proposals (maintenance, bugs, parameters)
+
+Phase 105 adds:
+- Output B: one growth action proposal per week (when health criteria are met)
+
+A growth action proposal:
+```typescript
+{
+  type: 'growth_action',
+  tier: 3,                           // requires 51% quorum — human vote before posting
+  channel: 'reddit/r/selfhosted',
+  draftMessage: string,              // Council writes the actual message
+  rationale: string,                 // why the network is ready to grow now
+  healthSnapshot: NetworkHealthData, // evidence: node count, ring3PassRate, uptime
+}
+```
+
+### Health Criteria (Council only proposes growth when ALL met)
+
+```typescript
+const readyToGrow = (
+  networkState.nodeCount >= MIN_NODES_BEFORE_GROWTH &&   // default: 10
+  networkState.ring3PassRate >= 0.95 &&                  // 95% of Ring 3 tests passing
+  networkState.nodeChurnRate7d <= 0.10 &&                // <10% churn in last 7 days
+  daysSinceLastGrowthProposal >= 7                       // max 1 proposal per week
+);
+```
+
+All thresholds are governance-adjustable (Tier 3 vote). The logic itself is not.
+
+### Council Prompt Addition
+
+Add to the daily reflection prompt (after Phase 101 wires the AI call):
+```
+## Growth Assessment
+Current network: ${nodeCount} nodes, ${ring3PassRate}% Ring 3 pass rate, ${churnRate}% 7-day churn.
+Growth criteria met: ${readyToGrow ? 'YES' : 'NO — reason: ' + growthBlockReason}
+
+${readyToGrow ? `
+You may propose ONE growth action this week.
+Growth action = a specific community post to attract new node operators.
+Draft the actual message. Be honest about what Pando is. Do not hype.
+Target audience: self-hosters, local AI users, open source developers.
+Format: { channel, draftMessage (max 300 words), rationale }
+` : 'Do not propose growth this cycle.'}
+```
+
+### Implementation Tasks
+
+**Task 1:** Add growth criteria evaluation to `council.ts` `tick()` method
+**Task 2:** Add growth output to the reflection prompt (Council AI writes the draft)
+**Task 3:** Add `growth_action` proposal type to `kernel/governance.ts`
+**Task 4:** Add posting execution agent — spawned after governance approves growth proposal, posts to specified channel via contributed API credentials (Reddit API key, etc.) with human-in-the-loop gate (Tier 3 vote IS the gate)
+
+### Test Bar
+- [ ] Network below threshold: Council does not propose growth
+- [ ] Network above threshold: Council proposes growth with a drafted message
+- [ ] Governance votes to approve → posting agent spawned, drafts confirmed post
+- [ ] Governance votes to reject → Council logs rejection, waits another week before re-evaluating
+
+---
+
+## Phase 106 — Decentralization Milestone Protocol (SPEC READY)
+
+> **Status:** Not started. Rules file created: `genome/rules/decentralization-milestones.md`.
+> **Why this matters:** without this, "decentralized" is a promise, not an architectural guarantee. Early on, quorum is Jai's nodes voting. This protocol defines when that changes — automatically, with no governance vote required. It is Layer 0 because governance cannot be trusted to decentralize itself.
+
+### The Thresholds
+
+See `genome/rules/decentralization-milestones.md` for the full spec. Summary:
+
+| Operators | Mode | What changes |
+|---|---|---|
+| < 10 | Bootstrap | Founder node has Tier 1-2 veto. Acknowledged. |
+| ≥ 10 | Emerging | Veto drops. Standard quorum. Council diversity rule kicks in. |
+| ≥ 100 | Established | No single operator > 15% total reputation weight. |
+| ≥ 1000 | Decentralized | Founder node is just a node. No special weight. |
+
+### Implementation
+
+The milestone evaluation runs in `kernel/governance.ts` — before every vote is tallied.
+
+```typescript
+function getEffectiveVotingWeight(peerId: string, rawWeight: number): number {
+  const milestone = getCurrentMilestone(uniqueOperatorCount);
+  if (milestone === 'bootstrap' && peerId === FOUNDER_NODE_ID) {
+    return rawWeight;  // founder weight normal during bootstrap
+  }
+  if (milestone === 'established') {
+    const totalWeight = getTotalNetworkWeight();
+    return Math.min(rawWeight, totalWeight * 0.15);  // cap at 15%
+  }
+  return rawWeight;
+}
+```
+
+`FOUNDER_NODE_ID` is set in `kernel/governance.ts` at genesis. It cannot be changed without a Tier 1 governance vote (90% quorum + migration window).
+
+### Test Bar
+- [ ] Bootstrap mode: founder node can veto Tier 2 proposal, standard node cannot
+- [ ] 10 operators joined: veto no longer applies, governance standard quorum only
+- [ ] 100 operators: single operator above 15% gets weight capped automatically
+- [ ] Milestone transitions logged to Council minutes with timestamp
+- [ ] Milestone transitions are PUBLIC — gateway shows current decentralization level
 
 ---
 
