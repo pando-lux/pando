@@ -5,7 +5,7 @@
 
 ## Overnight sprint (2026-02-26) — continuing
 
-v2.1-v2.5 + Phase 53.7 + Phase 53.8 + Phase 68.4 + Ledger Explorer + Node Setup + 18/18 smoke tests all complete and deployed.
+v2.1-v2.5 + Phase 53.7 + Phase 53.8 + Phase 68.4 + Ledger Explorer + Node Setup + Phase 89 (Dev Hub) + Phase 90 (Install Script) + 18/18 smoke tests all complete and deployed.
 
 **Production alert**: Resource health checker found S3 resource `51909cbe` is UNHEALTHY — "The AWS Access Key Id you provided does not exist in our records." EC2-1 health check data confirms the S3 credentials contributed are invalid. Jai: re-contribute S3 credentials.
 
@@ -27,7 +27,7 @@ v2.1-v2.5 + Phase 53.7 + Phase 53.8 + Phase 68.4 + Ledger Explorer + Node Setup 
 
 **Overnight sprint continuing (2026-02-26).**
 
-All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88**, **53.7**, **53.8**, **68.4** COMPLETE. v2.1-v2.5 architecture complete. See "What's next" below for priorities.
+All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88**, **89**, **90**, **53.7**, **53.8**, **68.4** COMPLETE. v2.1-v2.5 architecture complete. See "What's next" below for priorities.
 
 **Phase 53.8: Resource Health Monitoring — COMPLETE (2026-02-26)**
 - ✅ `packages/node/src/platform/resource-health.ts` — ResourceHealthChecker class

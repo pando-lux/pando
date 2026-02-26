@@ -1,15 +1,18 @@
 # Pando Roadmap
 
-> Last updated: 2026-02-25
-> All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, **86** COMPLETE except Phase 14 (Universal Onboarding — deferred). Phase 53.7-53.9 remaining.
-> **Phase 86 DONE:** JWT Auth — Stateless Cross-Node Authentication. Self-verifying JWT tokens signed by Ed25519 keys. Any node verifies any token via `peerIdFromString().publicKey.verify()`. No DB lookup needed. 11/11 cross-node tests. 5-node network (2 EC2 + 2 Lightsail + 1 Windows) all upgraded via `/upgrade` endpoint.
-> **Phase 83 DONE:** Network Hardening — P2PStorageBackend + Two-Tier Trust. Untrusted nodes proxy all storage via P2P. Lightsail runs as untrusted (storageBackend=p2p, no MongoDB). EC2 as trusted compute (systemd, MongoDB, master key). 18/18 E2E tests passing, zero intervention. 5 bugs fixed (peer wait, crash guard, payload limit, cache staleness, deferred loading).
+> Last updated: 2026-02-26
+> All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, 88, **89**, **90** COMPLETE. Phase 53.7, 53.8, 68.4 COMPLETE. Phase 53.9 deferred. Phase 14 (Universal Onboarding) deferred. v2.1-v2.5 architecture complete.
+> **Phase 90 DONE:** One-line install script — `curl -fsSL .../install.sh | bash`. Checks Node.js 18+, clones pando-lux/pando, npm install + build, starts node with bootstrap peer. Node-setup page updated with prominent one-liner section.
+> **Phase 89 DONE:** Developer Hub — `/dev` page. Live stats, quick start commands, 4 code example tabs, 12 expandable API endpoints with request/response examples, architecture overview. NavBar: Dev link.
+> **Phase 88 DONE:** Auto-detect tier from code at deploy time. `detectTierFromCode(appDir)` inspects package.json at the compute node. Doorman's tier is a hint; compute node's detection is authoritative.
+> **Phase 87 DONE:** P2P Deploy Discovery — replaced CloudInstanceManager with CapabilityProfile. Deploy/undeploy routes via P2P to compute peers with mongodb storageBackend. `deployPeerId` on project record.
+> **Phase 86 DONE:** JWT Auth — Stateless Cross-Node Authentication. Self-verifying JWT tokens signed by Ed25519 keys. Any node verifies any token via `peerIdFromString().publicKey.verify()`. No DB lookup needed. 11/11 cross-node tests.
+> **Phase 83 DONE:** Network Hardening — P2PStorageBackend + Two-Tier Trust. Untrusted nodes proxy all storage via P2P. Lightsail runs as untrusted (storageBackend=p2p, no MongoDB). EC2 as trusted compute (systemd, MongoDB, master key). 18/18 E2E tests passing, zero intervention.
 > **Phase 82 DONE:** Simple Self-Upgrade — replaced complex patch-distribution system with `git pull` + hash verification. Governance approves → commit hash broadcasts via GossipSub → all nodes pull + verify + build + restart. Deleted ~850 lines of canary/rollout/patch code.
 > **Phase 80 DONE:** Production App Hosting — nginx reverse proxy, PM2, persistent port registry, undeploy endpoint. Full E2E verified.
-> **Phase 79 DONE:** Deploy Pipeline E2E Fixes — 22/22 zero-intervention tests.
 > **Phase 70 DONE:** Unified App Platform — unified deploy endpoint, GitHub push via resource PAT, EC2 URL fix, S3 URL fix, auto-assign code_repository, tier storage, credential stripping from agents. Fixes 8 of 18 E2E gaps.
 > **Phase 69 DONE:** Secure Credential Architecture — two-tier trust (EC2 compute = trusted, user nodes = untrusted). CredentialStore (MongoDB + master key), ResourceRegistry rewritten as metadata-only, P2P ai-query routing. Old envelope encryption removed.
-> **Phase 68: Launch Readiness — 68.1-68.3 DONE, 68.4 REMAINING.** 68.1 Collection Namespace Isolation (DONE), 68.2 GitHub Push Identity (DONE), 68.3 Doorman/OpenAI Router (DONE), 68.4 Returning User Routing (NOT STARTED). Legacy cleanup DONE. See "Phase 68" section below.
+> **Phase 68: Launch Readiness — ALL DONE.** 68.1 Collection Namespace Isolation (DONE), 68.2 GitHub Push Identity (DONE), 68.3 Doorman/OpenAI Router (DONE), 68.4 Returning User Routing (DONE — gateway chat shows "Your Projects" sidebar). Legacy cleanup DONE. See "Phase 68" section below.
 > **Phase 67 DONE:** Self-Upgrading Network + Tier 2 E2E. P2P upgrade handler, env var injection, manager stale-memory fix, compute instance context injection. Full Tier 2 E2E verified.
 > **Phase 65 DONE:** Secure App Hosting E2E — S3 (Tier 1) and EC2 (Tier 2) verified. Test app uses MongoDB through Resource Proxy without seeing credentials.
 > **Phase 64a DONE + E2E TESTED:** CloudInstanceManager launches locked-down EC2 instances from contributed AWS creds. No SSH, tripwire-protected, bootstraps from public repo, joins P2P network automatically.
