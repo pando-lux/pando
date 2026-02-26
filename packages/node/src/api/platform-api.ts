@@ -350,6 +350,29 @@ export async function registerPlatformRoutes(
       }
 
       // No projectId — use doorman
+      // Smart tier (medium): use multi-turn chat with conversation history
+      if (tier === 'medium') {
+        const allMessages = await threadStore.getMessagesAsync(id);
+        const recentMessages = allMessages
+          .filter((m: any) => m.role === 'user' || m.role === 'assistant')
+          .filter((m: any) => !m.encrypted) // only use decrypted messages for context
+          .slice(0, -1) // exclude the message we just added (last item)
+          .slice(-20) // cap to last 20 for context window
+          .map((m: any) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+        const smartReply = await deps.doormanChat(plaintextForProcessing, recentMessages);
+        if (isEncrypted && threadMeta?.encryptionKeys) {
+          try {
+            const encReply = await deps.encryptOutgoingMessage(smartReply, threadMeta, encryptedThreadKey);
+            threadStore.addMessage(id, { role: 'assistant', content: encReply.ciphertext, timestamp: Date.now(), tier: 'medium', encrypted: true, nonce: encReply.nonce });
+            return { status: 'ok', threadId: id, reply: encReply.ciphertext, tier: 'medium', encrypted: true, nonce: encReply.nonce };
+          } catch (err: any) {
+            console.warn(`[api] Failed to encrypt smart reply: ${err.message}`);
+          }
+        }
+        threadStore.addMessage(id, { role: 'assistant', content: smartReply, timestamp: Date.now(), tier: 'medium' });
+        return { status: 'ok', threadId: id, reply: smartReply, tier: 'medium' };
+      }
+
       const classification = await deps.doormanClassify(plaintextForProcessing);
 
       if (classification.intent === 'simple' || classification.intent === 'question') {

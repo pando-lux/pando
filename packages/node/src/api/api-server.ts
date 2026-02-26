@@ -305,6 +305,7 @@ export class ApiServer {
       addSSEClient: (reply) => this.sseClients.add(reply),
       removeSSEClient: (reply) => this.sseClients.delete(reply),
       doormanClassify: (msg) => this.doormanClassify(msg),
+      doormanChat: (msg, history) => this.doormanChat(msg, history),
       decryptIncomingMessage: (ct, n, tm, etk) => this.decryptIncomingMessage(ct, n, tm, etk),
       encryptOutgoingMessage: (pt, tm, etk) => this.encryptOutgoingMessage(pt, tm, etk),
     };
@@ -550,6 +551,41 @@ Be friendly and helpful. Keep answers short.`
     }
 
     return { intent: 'question', response: `I'm Pando, an AI network that builds software. I can help you build apps, check your balance, or answer questions. Try "build me a todo app" to get started!` };
+  }
+
+  /**
+   * Multi-turn Smart chat — sends full conversation history to OpenAI.
+   * Used when the client selects "Smart" tier (medium) for general conversation.
+   * Falls back to a canned response if no AI key is available.
+   */
+  private async doormanChat(message: string, history: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<string> {
+    const registry = this.node.getResourceRegistry();
+    if (registry) {
+      const aiKey = await registry.getActiveAiKey();
+      if (aiKey && aiKey.provider === 'openai') {
+        try {
+          const messages = [
+            { role: 'system', content: 'You are a helpful AI assistant on the Pando network. Answer questions clearly and concisely. You can help with general questions, coding, analysis, and more.' },
+            ...history.slice(-10), // last 10 messages for context window
+            { role: 'user', content: message },
+          ];
+          const res = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${aiKey.key}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ model: 'gpt-4o-mini', messages, max_tokens: 512, temperature: 0.7 }),
+            signal: AbortSignal.timeout(12000),
+          });
+          if (res.ok) {
+            const data = await res.json() as any;
+            const reply = data?.choices?.[0]?.message?.content?.trim();
+            if (reply) return reply;
+          }
+        } catch (err: any) {
+          console.log(`[doorman] Smart chat failed: ${err.message}`);
+        }
+      }
+    }
+    return `I'd love to help, but no AI key is available right now. Try contributing an OpenAI key with /contribute openai.`;
   }
 
   // ── Doorman helper methods ──────
