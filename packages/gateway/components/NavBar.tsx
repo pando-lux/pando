@@ -22,6 +22,7 @@ const links = [
   { href: "/capacity", label: "Capacity" },
   { href: "/council", label: "Council" },
   { href: "/explore", label: "Explore" },
+  { href: "/dev", label: "Dev" },
 ];
 
 function truncatePeerId(peerId: string): string {
