@@ -74,10 +74,57 @@
 
 | Phase | Goal | Depends On | Status |
 |---|---|---|---|
-| **96** | Three-Tier Architecture — `LocalCapabilityStore`, split detection from sharing | None | Pending |
-| **97** | Opt-In Commands — `/contribute claude-code`, `/revoke`, `shareCompute` flag | Phase 96 | Pending |
-| **98** | P2P Task Routing — gateway → EC2 → P2P → Claude node (home nodes now viable) | Phase 97 | Pending |
-| **99** | Dynamic Discovery — NodePool self-populates from P2P, no hardcoded seeds | Phase 97 | Pending |
+| **96** | Three-Tier Architecture — `LocalCapabilityStore`, split detection from sharing | None | **COMPLETE** |
+| **97** | Opt-In Commands — `/contribute claude-code`, `/revoke`, `shareCompute` flag | Phase 96 | **COMPLETE** |
+| **98** | P2P Task Routing — gateway → EC2 → P2P → Claude node (home nodes now viable) | Phase 97 | **COMPLETE** |
+| **99** | Dynamic Discovery — NodePool self-populates from P2P, no hardcoded seeds | Phase 97 | **COMPLETE** |
+| **100** | myNodes Routing Tier — same-user nodes preferred before network peers. `linkedUser` auth on P2P routes. `/contribute claude-code myNodes\|network` scope | Phase 99 | Pending |
+| **101** | **Council Self-Healing Loop** — close the gap between "Council proposes" and "Council fixes". Wire AI call in `runDailyReflection()`, add `spawnFixAgent()`, Tier 4 auto-approval in governance, patch application in UpgradeProtocol. See `the-stack.md` Council section for full wiring spec. | Phase 50 done | Pending |
+
+---
+
+## Phase 101 — Council Self-Healing Loop (SPEC READY)
+
+> **Status:** Not started. All infrastructure exists. Pure wiring.
+> **Effort:** ~4 focused tasks. Each is independent and can be done in any order.
+> **Why this matters:** closes the loop from "bugs reported → AI fixes → deployed" without human intervention.
+
+### The Gap
+
+`platform/council.ts` assembles a daily reflection prompt from network state + genome state + council minutes. The AI call at the bottom of `runDailyReflection()` is **stubbed** — it returns hardcoded text instead of calling Claude Code. Everything after that (spawning a fix agent, submitting a governance proposal, auto-approval, patch deploy) is not wired.
+
+### The 4 Tasks
+
+**Task 1: Activate AI call in `platform/council.ts`**
+- Replace the stub return in `runDailyReflection()` (~line 252)
+- Use `this.node.getAIBackendRegistry?.()?.getBestBackend()` to get the AI backend
+- Call `backend.run({ prompt, sessionId: undefined, workDir: this.councilDir })`
+- Parse the response text into `ReflectionResult` (summary, proposals[], minutesEntry)
+- The prompt already tells the AI to format as council minutes — parse that format
+
+**Task 2: Add `spawnFixAgent()` to `platform/council.ts`**
+- When AI response includes a bug fix recommendation, Council spawns a builder agent
+- Call `this.node.getAgentManager()?.spawnAgent({ role: 'builder', context: issueDescription + relevantFiles, projectId: 'pando-node' })`
+- Agent reports back via `POST /v1/agents/:id/report` with patch content
+- Council receives the report and proceeds to Task 3
+
+**Task 3: Tier 4 auto-approval in `kernel/governance.ts`**
+- Add auto-approval logic: if `proposal.tier === 4` AND `proposal.testResults.allPassing === true` AND age >= 24h → auto-approve
+- Proposal payload must include: `{ type: 'code_fix', tier: 4, patch: string, testResults: { allPassing: boolean, summary: string }, agentId: string }`
+- Only applies to Tier 4 (Layer 3-4 code changes). Tier 3 and above still requires quorum vote.
+
+**Task 4: Patch application in `core/upgrade-protocol.ts`**
+- Add `applyPatch(patch: string): Promise<void>` alongside existing `gitPull()` path
+- `git apply --check <patchfile>` first (dry run). If clean: `git apply <patchfile>`
+- Then execute existing build → QaRunner → restart flow
+- Governance approval handler: if `proposal.type === 'code_fix'` call `applyPatch()` instead of `gitPull()`
+
+### Test Bar (before marking complete)
+- [ ] Council reflection runs and produces real AI output (screenshot council-minutes.md)
+- [ ] A test bug description spawns a builder agent and it produces a patch
+- [ ] Tier 4 proposal auto-approves after 24h with passing tests (verify in governance log)
+- [ ] Patch applies cleanly, build passes, node restarts successfully
+- [ ] Full regression suite (18/18) passes after patch apply
 
 ---
 
