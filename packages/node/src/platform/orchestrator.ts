@@ -310,7 +310,7 @@ export class Orchestrator {
             console.log(`[Orchestrator ${this.orchestratorId}] Builder done → spawning QA tester`);
           }
 
-          // Self-sustaining loop: tester done → commit if PASS
+          // Self-sustaining loop: tester done → commit if PASS → propose upgrade
           if (workerRole === 'tester') {
             const summary = (payload.summary || '').toLowerCase();
             if (summary.includes('pass') || summary.includes('success') || summary.includes('verified') || summary.includes('correct')) {
@@ -319,11 +319,17 @@ export class Orchestrator {
                 type: 'commit_code',
                 message: `[council] Auto-commit after QA pass — ${payload.summary?.slice(0, 80) || 'verified'}`,
               });
+              // Propose upgrade → governance auto-approves → broadcast to all nodes
+              actions.push({
+                type: 'propose_upgrade',
+                title: 'Council code update',
+                description: payload.summary?.slice(0, 200) || 'QA-verified code change',
+              });
               actions.push({
                 type: 'respond_to_user',
-                message: `Task complete. Builder finished, QA passed, code committed.`,
+                message: `Task complete. Builder finished, QA passed, code committed, upgrade proposed to governance.`,
               });
-              console.log(`[Orchestrator ${this.orchestratorId}] QA PASS → committing code`);
+              console.log(`[Orchestrator ${this.orchestratorId}] QA PASS → commit + propose upgrade`);
             } else {
               // QA failed — need AI to decide next step (Tier 2 on next tick)
               // Store the failure as a directive for the next tick

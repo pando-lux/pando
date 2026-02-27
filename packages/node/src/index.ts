@@ -2596,12 +2596,14 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       workerPool: this.workerPool,
       orgManager: this.orgManager,
       aiRegistry: this.aiBackendRegistry,
-      onPropose: this.governance ? async (title, description) => {
-        await this.governance!.createProposal(
-          title,
-          description,
-        );
-      } : undefined,
+      onPropose: this.upgradeProtocol ? async (title, description) => {
+        // Use upgrade protocol to create proposal with commit hash + auto-approve chain
+        // This triggers: governance auto-approve (≤8 peers) → pullAndUpgrade → broadcast to all nodes
+        await this.upgradeProtocol!.createUpgradeProposal(`${title}: ${description}`);
+      } : (this.governance ? async (title, description) => {
+        // Fallback: plain governance proposal (no upgrade chain)
+        await this.governance!.createProposal(title, description);
+      } : undefined),
       onCommit: async (message) => {
         try {
           const { execSync } = await import('node:child_process');
