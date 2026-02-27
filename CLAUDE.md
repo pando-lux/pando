@@ -243,6 +243,31 @@ packages/node/src/
 
 **Import boundary rule:** kernel/ → only kernel + @pando/*. core/ → kernel + @pando/*. platform/ → core + kernel + @pando/*. Never upward.
 
+
+## The Self-Sustaining Loop (Core Goal)
+
+The entire system exists to reach ONE goal: self-sustaining operation without human intervention.
+
+### The Loop
+1. **Input** arrives (user message, admin directive, health alert, or council's own reflection)
+2. **Council thinks** (real Claude Code via AIBackendRegistry) -- decides what needs doing
+3. **Council spawns builder** (real Claude Code agent with builder template)
+4. **Builder works** -- reads code, writes fixes, runs own tests, reports completion
+5. **Council spawns QA tester** (real Claude Code agent with tester template) -- INDEPENDENT, does NOT trust builder
+6. **QA tests** -- reads changes, tests like a human, gives PASS/FAIL with evidence
+7. **If QA fails** -- Council sends failure details back to builder -- retry (max 3 attempts)
+8. **If QA passes** -- Council commits, pushes, creates governance proposal
+9. **Governance approves** (auto-approve in dev mode, full vote in production)
+10. **All nodes upgrade** -- pull from git, build, restart via GossipSub broadcast
+11. **Loop continues** with next issue
+
+### Rules
+- **No stubs.** Every agent (council, builder, QA) uses real Claude Code.
+- **No mocks in production code.** Dev mode only differs in governance strictness (auto-approve).
+- **QA is unbiased.** The tester agent gets ONLY the task description and code diff.
+- **Docs stay updated.** Every code change updates genome docs in the same session.
+- **The genome is the shared brain.** All agents read genome/. Single source of truth.
+
 ## System Architecture
 
 Subsystem deep-dives: **`genome/components/`**
