@@ -177,10 +177,25 @@ export class Orchestrator {
         // Tier 1: deterministic actions
         actions = this.deterministic(board, agent);
       } else {
-        // Tier 2: call AI for judgment
-        console.log(`[Orchestrator ${this.orchestratorId}] Calling AI...`);
-        actions = await this.callAI(board, agent);
-        console.log(`[Orchestrator ${this.orchestratorId}] AI returned ${actions.length} action(s): ${actions.map(a => a.type).join(', ') || 'none'}`);
+        // Change 1: Memory pressure guard — dissolve idle workers and skip AI if heap > 500MB
+        const heapUsed = process.memoryUsage().heapUsed;
+        const heapMB = Math.round(heapUsed / (1024 * 1024));
+        if (heapUsed > 524288000) {
+          console.warn(`[Orchestrator ${this.orchestratorId}] Memory pressure detected (heap: ${heapMB}mb), skipping AI tick`);
+          this.dissolveIdleWorkers();
+          return;
+        }
+
+        // Change 3: Startup stabilization guard — skip AI for first 120 seconds
+        if (uptimeSec < 120) {
+          console.log(`[Orchestrator ${this.orchestratorId}] Node stabilizing, skipping AI tick (uptime: ${uptimeSec}s)`);
+          // Skip AI this tick; actions remain empty
+        } else {
+          // Tier 2: call AI for judgment
+          console.log(`[Orchestrator ${this.orchestratorId}] Calling AI...`);
+          actions = await this.callAI(board, agent);
+          console.log(`[Orchestrator ${this.orchestratorId}] AI returned ${actions.length} action(s): ${actions.map(a => a.type).join(', ') || 'none'}`);
+        }
       }
 
       // 3. Execute actions
@@ -212,6 +227,8 @@ export class Orchestrator {
       ];
       if (allMessageIds.length > 0) {
         this.deps.messageBus.markRead(allMessageIds);
+        // Change 4: Update lastActivityAt (stored in lastReportAt) when messages are processed
+        this.deps.db.updateAgent(this.orchestratorId, { lastReportAt: new Date().toISOString() });
       }
 
       // 5. Log the tick
@@ -657,6 +674,8 @@ export class Orchestrator {
           workspaceDir: agent.workspaceDir || undefined,  // Phase 104: project workspace
         });
         console.log(`[Orchestrator ${this.orchestratorId}] Spawned ${action.role} worker: ${workerId}`);
+        // Change 4: Update lastActivityAt when spawning workers (for idle orchestrator detection)
+        this.deps.db.updateAgent(this.orchestratorId, { lastReportAt: new Date().toISOString() });
         break;
       }
 
@@ -811,6 +830,27 @@ export class Orchestrator {
   }
 
   // =========================================================================
+  // Memory pressure helpers
+  // =========================================================================
+
+  /**
+   * Change 1: Dissolve workers with no active task (called under memory pressure).
+   */
+  private dissolveIdleWorkers(): void {
+    const workers = this.deps.db.getActiveWorkers(this.orchestratorId);
+    let killed = 0;
+    for (const worker of workers) {
+      if (!worker.currentTaskId) {
+        this.deps.workerPool.kill(worker.id);
+        killed++;
+      }
+    }
+    if (killed > 0) {
+      console.log(`[Orchestrator ${this.orchestratorId}] Dissolved ${killed} idle worker(s) due to memory pressure`);
+    }
+  }
+
+  // =========================================================================
   // Health Monitoring (Tier 1 — deterministic, no AI call)
   // =========================================================================
 
@@ -925,6 +965,27 @@ export class Orchestrator {
 
     if (dissolved > 0) {
       console.log(`[Orchestrator ${this.orchestratorId}] Self-check: dissolved ${dissolved} stale orchestrator(s)`);
+    }
+
+    // Change 4: Dissolve idle project orchestrators (no workers, no activity > 10 minutes)
+    // lastReportAt is repurposed as lastActivityAt for orchestrators (updated on message receive / worker spawn)
+    const tenMinAgo = new Date(Date.now() - 600000).toISOString();
+    let idleProjectsDissolved = 0;
+    for (const orch of allOrchestrators) {
+      if (orch.id === this.orchestratorId) continue;
+      if (orch.role !== 'user_project') continue;
+      const orchWorkers = this.deps.db.getActiveWorkers(orch.id);
+      if (orchWorkers.length > 0) continue;
+      // Use lastReportAt as lastActivityAt; fall back to createdAt for orchestrators that never processed messages
+      const lastActivity = orch.lastReportAt || orch.createdAt;
+      if (lastActivity < tenMinAgo) {
+        console.log(`[Orchestrator ${this.orchestratorId}] Dissolving idle project orchestrator ${orch.id} (no workers, no activity for >10min, lastActivity=${lastActivity})`);
+        this.deps.orgManager.dissolve(orch.id);
+        idleProjectsDissolved++;
+      }
+    }
+    if (idleProjectsDissolved > 0) {
+      console.log(`[Orchestrator ${this.orchestratorId}] Self-check: dissolved ${idleProjectsDissolved} idle project orchestrator(s)`);
     }
 
     // OOM prevention if RSS > 1.5GB
