@@ -142,6 +142,8 @@ export class Council {
   private requestLog: RequestLogEntry[] = [];
   private directives: FounderDirective[] = [];
   private pendingHealthAlerts: string[] = [];
+  private pendingHumanAlerts: string[] = [];   // alerts requiring founder/human action
+  private humanActionPath: string = '';
   private councilAgentId: string | null = null;
   private activeTasks: ActiveTask[] = [];
 
@@ -153,6 +155,7 @@ export class Council {
     this.minutesPath = join(this.councilDir, 'council-minutes.md');
     this.promptPath = join(this.councilDir, 'last-prompt.md');
     this.networkStatePath = join(this.councilDir, 'network-state.md');
+    this.humanActionPath = join(this.councilDir, 'human-action-needed.md');
     this.chatHistoryPath = join(this.councilDir, 'chat-history.json');
     this.requestLogPath = join(this.councilDir, 'request-log.json');
     this.directivesPath = join(this.councilDir, 'directives.json');
@@ -271,6 +274,9 @@ export class Council {
     const healthAlerts = this.pendingHealthAlerts.length > 0
       ? this.pendingHealthAlerts.join('\n')
       : '(no pending alerts)';
+    const humanActionAlerts = this.pendingHumanAlerts.length > 0
+      ? this.pendingHumanAlerts.join('\n')
+      : null;
 
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10);
@@ -297,7 +303,7 @@ ${founderDirectives}
 
 ## Health Alerts
 ${healthAlerts}
-
+${humanActionAlerts ? `\n## REQUIRES_HUMAN_ACTION\nThe following issues CANNOT be self-healed and require founder intervention:\n${humanActionAlerts}\n` : ''}
 ## Instructions
 You are a member of the Pando Network Council — a group of top-reputation AI-capable nodes.
 Reflect on the current state and propose improvements.
@@ -353,6 +359,7 @@ Be concrete. If everything is healthy, say so — do not invent problems.`;
 
           // Clear health alerts after processing
           this.pendingHealthAlerts = [];
+          this.pendingHumanAlerts = [];
         } else {
           console.warn(`[council] AI reflection returned empty result — skipping`);
           return null;
@@ -546,7 +553,7 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(30_000),
       });
 
       if (res.ok) {
@@ -586,7 +593,7 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
       const res = await fetch(`http://127.0.0.1:${apiPort}/v1/agents/spawn`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body), signal: AbortSignal.timeout(15_000),
+        body: JSON.stringify(body), signal: AbortSignal.timeout(30_000),
       });
       if (res.ok) {
         const data = await res.json() as any;
@@ -956,13 +963,90 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
     return [...this.directives];
   }
 
+  getLastReflectionAt(): number { return this.state.lastDailyReflection || 0; }
+
   // ── Health Alerts ─────────────────────────────────────────────────────────
 
-  handleHealthAlert(alert: string): void {
-    this.pendingHealthAlerts.push(`[${new Date().toISOString()}] ${alert}`);
-    // Keep max 50 pending alerts
+  handleHealthAlert(alert: string | { severity?: string; type?: string; message?: string; firstSeen?: number }): void {
+    const ts = new Date().toISOString();
+    const alertStr = typeof alert === 'string'
+      ? alert
+      : `[${alert.severity || 'medium'}] ${alert.message || alert.type || 'unknown'}`;
+
+    this.pendingHealthAlerts.push(`[${ts}] ${alertStr}`);
     if (this.pendingHealthAlerts.length > 50) {
       this.pendingHealthAlerts = this.pendingHealthAlerts.slice(-50);
+    }
+
+    // Classify whether this requires human action (cannot be self-healed)
+    if (this.classifyRequiresHuman(alert)) {
+      this.pendingHumanAlerts.push(`[${ts}] ${alertStr}`);
+      if (this.pendingHumanAlerts.length > 50) {
+        this.pendingHumanAlerts = this.pendingHumanAlerts.slice(-50);
+      }
+      this.writeHumanActionFile();
+    }
+  }
+
+  /**
+   * Classify whether an alert requires human/founder action.
+   * Returns true for issues that cannot be self-healed by the network.
+   */
+  private classifyRequiresHuman(alert: string | { severity?: string; type?: string; message?: string; firstSeen?: number }): boolean {
+    const now = Date.now();
+    const ONE_HOUR = 60 * 60 * 1000;
+    const ONE_DAY = 24 * ONE_HOUR;
+
+    if (typeof alert === 'string') {
+      const lower = alert.toLowerCase();
+      if (lower.includes('credential') || lower.includes('auth') || lower.includes('invalid') || lower.includes('unauthorized')) {
+        return true;
+      }
+      return false;
+    }
+
+    const { severity, type, message, firstSeen } = alert;
+    const lower = (message || type || '').toLowerCase();
+
+    // No peers for more than 1 hour — network isolation, needs human intervention
+    if (type === 'no_peers' && firstSeen && (now - firstSeen) > ONE_HOUR) {
+      return true;
+    }
+
+    // Credential/auth errors always need human action
+    if (lower.includes('credential') || lower.includes('auth') || lower.includes('invalid') || lower.includes('unauthorized')) {
+      return true;
+    }
+
+    // Critical alerts persisting for more than 24 hours
+    if (severity === 'critical' && firstSeen && (now - firstSeen) > ONE_DAY) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Write human-action-needed.md with current pending human alerts.
+   * This file signals to the founder that manual intervention is required.
+   */
+  private writeHumanActionFile(): void {
+    try {
+      if (this.pendingHumanAlerts.length === 0) return;
+      const lines = [
+        '# REQUIRES_HUMAN_ACTION',
+        '',
+        'The following infrastructure issues cannot be self-healed and require founder intervention:',
+        '',
+        ...this.pendingHumanAlerts.map(a => `- ${a}`),
+        '',
+        `Last updated: ${new Date().toISOString()}`,
+        '',
+      ];
+      writeFileSync(this.humanActionPath, lines.join('\\n'), 'utf-8');
+      console.log(`[council] REQUIRES_HUMAN_ACTION: ${this.pendingHumanAlerts.length} issue(s) written to ${this.humanActionPath}`);
+    } catch (err: any) {
+      console.error(`[council] Failed to write human-action file: ${err.message}`);
     }
   }
 

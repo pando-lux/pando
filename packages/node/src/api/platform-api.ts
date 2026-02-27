@@ -3905,6 +3905,22 @@ export async function registerPlatformRoutes(
       return { directives: council.getFounderDirectives() };
     });
 
+    // GET /council/health — council health summary
+    fastify.get('/council/health', async (_request: any, reply: any) => {
+      const council = node.getCouncil();
+      if (!council) {
+        return reply.code(503).send({ error: 'Council system not initialized' });
+      }
+      const memberCount = council.getCouncil().members.length;
+      const lastReflectionTs = council.getLastReflectionAt();
+      const lastReflectionAt = lastReflectionTs ? new Date(lastReflectionTs).toISOString() : null;
+      const activeTasks = council.getActiveTasks();
+      const hasActiveTasks = activeTasks.some(t => t.stage !== 'done' && t.stage !== 'failed');
+      const status: 'active' | 'idle' = hasActiveTasks ? 'active' : 'idle';
+      return { memberCount, lastReflectionAt, status };
+    });
+
+
     // ── Phase 51: Infrastructure Awareness ──────────────────────────────────
 
     // GET /capabilities/infrastructure — what infrastructure agents/apps can use

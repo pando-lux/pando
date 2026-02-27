@@ -2614,7 +2614,7 @@ location /apps/${projectId}/ {
       console.error('[agents] AgentManager failed to start:', err.message);
     });
 
-    // Wire health monitor alerts to agent manager
+    // Wire health monitor alerts to agent manager and council
     if (this.monitor) {
       this.monitor.onAlert((alert) => {
         if (this.agentManager) {
@@ -2626,8 +2626,12 @@ location /apps/${projectId}/ {
             priority: alert.severity === 'critical' ? 'critical' : 'normal',
           } as any);
         }
+        // Forward to council for REQUIRES_HUMAN_ACTION classification
+        if (this.council) {
+          this.council.handleHealthAlert(alert);
+        }
       });
-      console.log('[agents] Health monitor wired to agent manager');
+      console.log('[agents] Health monitor wired to agent manager and council');
     }
 
     console.log('[agents] Agent system started.');
