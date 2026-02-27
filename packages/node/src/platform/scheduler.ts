@@ -6,7 +6,7 @@
  *   - Manages the approved-task queue
  *   - Tracks basic metrics (totalProcessed, totalSucceeded, totalFailed)
  *   - Emits task:completed / task:failed events
- *   - Provides a bridge queue reference for forwarding results
+ *   - Task results flow via EventEmitter events (task:completed, task:failed)
  *   - Handles parent/child cascade completion logic
  *   - Recovers orphaned tasks on startup
  *   - Auto-archives old tasks
@@ -23,7 +23,7 @@ import type { CapabilityRegistry } from './capability-registry.js';
 import type { ResourceRouter } from './resource-router.js';
 import type { ResourceMeter } from './resource-meter.js';
 import { NodeCapability } from '@pando/shared';
-import type { BridgeQueue } from '../core/bridge-queue.js';
+
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -87,7 +87,7 @@ export class Scheduler extends EventEmitter {
   private config: SchedulerConfig;
   private taskQueue: TaskQueue;
   private fileRegistry: FileRegistry | null = null;
-  private bridgeQueue: BridgeQueue | null = null;
+  // bridgeQueue removed — task results flow via EventEmitter → MessageBus
   private claudePath: string;
   private dataDir: string;
 
@@ -152,18 +152,11 @@ export class Scheduler extends EventEmitter {
   }
 
   /**
-   * Set the BridgeQueue so the Scheduler can enqueue task results for the Manager.
+   * Get the BridgeQueue reference — REMOVED. Task results flow via EventEmitter.
+   * @deprecated — left as stub for any external callers. Returns null always.
    */
-  setBridgeQueue(queue: BridgeQueue): void {
-    this.bridgeQueue = queue;
-    console.log('[scheduler] BridgeQueue attached');
-  }
-
-  /**
-   * Get the BridgeQueue reference (null if not wired yet).
-   */
-  getBridgeQueue(): BridgeQueue | null {
-    return this.bridgeQueue;
+  getBridgeQueue(): null {
+    return null;
   }
 
   /**
@@ -573,23 +566,7 @@ export class Scheduler extends EventEmitter {
       }
     }
 
-    // Enqueue task failure to Bridge Queue for Manager review
-    try {
-      if (this.bridgeQueue && task) {
-        const managerId = task.managerId || 'pando-node-mgr';
-        this.bridgeQueue.enqueue(managerId, {
-          type: 'task_failed',
-          source: 'scheduler',
-          payload: {
-            taskId,
-            result: { stdout: error.slice(0, 4000), exitCode: 1 },
-          },
-          priority: 'normal',
-        });
-      }
-    } catch (bridgeErr: any) {
-      console.error(`[scheduler] Failed to enqueue task_failed to bridge for ${taskId.slice(0, 8)}: ${bridgeErr.message}`);
-    }
+    // Task failure flows via EventEmitter 'task:failed' → MessageBus (wired in index.ts)
 
     this.fireResultCallback(taskId, false, error);
   }

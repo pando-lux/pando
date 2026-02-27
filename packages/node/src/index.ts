@@ -4,7 +4,7 @@
 //   blueprint: NODE_CORE
 //   status: active
 //   description: "Main PandoNode class that wires together all subsystems (kernel, core, platform layers), manages startup/shutdown lifecycle, and exposes getters for every subsystem."
-//   depends_on: [PandoNetwork, PandoLedger, ApiServer, LedgerSync, GovernanceSync, AgentManager, Scheduler, HealthMonitor, Guardrails, EmissionWitness, SecurityMonitor, CapabilityRegistry, ResourceRegistry, StorageBackend]
+//   depends_on: [PandoNetwork, PandoLedger, ApiServer, LedgerSync, GovernanceSync, Orchestrator, Scheduler, HealthMonitor, Guardrails, EmissionWitness, SecurityMonitor, CapabilityRegistry, ResourceRegistry, StorageBackend]
 //   @gotcha("PandoNode is a GOD OBJECT with 50+ private fields — each subsystem is nullable and initialized conditionally during start(). Always null-check before use.")
 //   @gotcha("detectClaudeCode() has a 3-second timeout — on slow systems (Windows especially) this can delay startup.")
 //   @gotcha("Daily emission cap (500 Lux) is tracked in-memory (dailyEmissions) and reset by date string comparison — restarting the node resets the counter.")
@@ -1964,7 +1964,7 @@ location /apps/${projectId}/ {
 
     });
 
-    // Start AgentManager — only in 'full' mode (needs Claude Code).
+    // Start agent system (Orchestrator + WorkerPool) — only in 'full' mode (needs Claude Code).
     // 'compute' and 'relay' modes skip agents (cloud instances don't have Claude Code).
     if (this.config.nodeMode !== 'compute' && this.config.nodeMode !== 'relay') {
       this.startAgentSystem();

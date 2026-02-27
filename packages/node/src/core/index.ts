@@ -14,15 +14,7 @@ export { AIBackendRegistry } from './ai-backend-registry.js';
 export { ClaudeBackend, detectClaudePath } from './ai-backend-claude.js';
 export { OllamaBackend } from './ai-backend-ollama.js';
 
-// Agent system
-export { Agent } from './agent.js';
-export type { AgentConfig, AgentState, AgentMemory, AgentRole, AgentStatus, AgentLimits, AgentEventResult } from './agent.js';
-
-export { AgentManager } from './agent-manager.js';
-export type { AgentManagerConfig, SpawnAgentConfig, AgentTreeNode } from './agent-manager.js';
-
-export { BridgeQueue } from './bridge-queue.js';
-export type { BridgeItem, BridgeItemType, BridgePriority } from './bridge-queue.js';
+// Legacy agent system removed — replaced by AgentDatabase + MessageBus + WorkerPool + OrgManager + Orchestrator
 
 // Storage
 export type { StorageBackend } from './storage-backend.js';

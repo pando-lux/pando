@@ -5,7 +5,7 @@
  * and other tools can interact with the node without reading
  * the DB directly.
  *
- * Phase 27: Uses AgentManager for all agent/chat routing.
+ * Phase 27+: Uses Orchestrator/MessageBus for agent/chat routing.
  * Agent tool endpoints registered via registerAgentRoutes().
  */
 
