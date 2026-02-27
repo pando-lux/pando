@@ -219,7 +219,7 @@ export class Orchestrator {
     const directives = this.deps.db.getDirectives(this.orchestratorId);
 
     return {
-      pendingTasks: 0,  // TODO: query tasks table when wired
+      pendingTasks: this.deps.db.listAgents({ parentId: this.orchestratorId, status: 'pending' }).length,
       activeTasks: activeWorkers.filter(w => w.currentTaskId).length,
       activeWorkers: activeWorkers.length,
       maxWorkers: agent.maxWorkers,
@@ -272,10 +272,13 @@ export class Orchestrator {
   private deterministic(board: BoardState, agent: AgentIdentity): OrchestratorAction[] {
     const actions: OrchestratorAction[] = [];
 
-    // Handle worker completions
+    // Handle worker completions — drive the self-sustaining loop
     for (const report of board.workerReports) {
       try {
         const payload = JSON.parse(report.payload);
+        const workerAgent = this.deps.db.getAgent(report.senderId);
+        const workerRole = workerAgent?.role || 'unknown';
+
         if (payload.status === 'done') {
           // Record any suggestions as potential lessons
           if (payload.suggestions?.length) {
@@ -291,6 +294,43 @@ export class Orchestrator {
 
           // Reflect on completion
           this.reflectOnCompletion(report.senderId, payload);
+
+          // Self-sustaining loop: builder done → spawn QA tester
+          if (workerRole === 'builder') {
+            const summary = payload.summary || 'Builder completed work';
+            actions.push({
+              type: 'spawn_worker',
+              role: 'tester',
+              rolePrompt: `Verify the following change:\n${summary}\n\nRun "npm run build" to confirm it compiles. Check the modified files for correctness. Report PASS or FAIL with evidence.`,
+            });
+            console.log(`[Orchestrator ${this.orchestratorId}] Builder done → spawning QA tester`);
+          }
+
+          // Self-sustaining loop: tester done → commit if PASS
+          if (workerRole === 'tester') {
+            const summary = (payload.summary || '').toLowerCase();
+            if (summary.includes('pass') || summary.includes('success') || summary.includes('verified') || summary.includes('correct')) {
+              // QA passed — commit the code
+              actions.push({
+                type: 'commit_code',
+                message: `[council] Auto-commit after QA pass — ${payload.summary?.slice(0, 80) || 'verified'}`,
+              });
+              actions.push({
+                type: 'respond_to_user',
+                message: `Task complete. Builder finished, QA passed, code committed.`,
+              });
+              console.log(`[Orchestrator ${this.orchestratorId}] QA PASS → committing code`);
+            } else {
+              // QA failed — need AI to decide next step (Tier 2 on next tick)
+              // Store the failure as a directive for the next tick
+              actions.push({
+                type: 'record_lesson',
+                lesson: `QA FAIL: ${payload.summary}`,
+                source: 'qa_failure',
+              });
+              console.log(`[Orchestrator ${this.orchestratorId}] QA FAIL — will retry on next tick via AI`);
+            }
+          }
         }
       } catch { /* skip malformed reports */ }
     }
