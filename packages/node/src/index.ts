@@ -81,7 +81,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { execSync } from 'node:child_process';
-import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 
 /** Phase 68.2: Single constant for the node-level manager ID. */
 const DEFAULT_MANAGER_ID = 'pando-node-mgr';
@@ -210,6 +210,9 @@ export class PandoNode {
 
   // v2.5: Local Environment — Envelope 1 file indexing + user memory
   private localEnv: LocalEnvironment | null = null;
+
+  // Phase 104: Live orchestrator instances (council + project orchestrators)
+  private liveOrchestrators: Map<string, Orchestrator> = new Map();
 
   // v2.3: Boot health tracking
   private nodeHealth: NodeHealth = {
@@ -2528,6 +2531,352 @@ location /apps/${projectId}/ {
   }
 
   // ----------------------------------------------------------
+  // Phase 104: Project Orchestrator Pipeline
+  // ----------------------------------------------------------
+
+  /**
+   * Ensure a project has a local workspace directory.
+   * New projects: mkdir + git init + write CLAUDE.md
+   * Returning projects with githubRepo: git clone
+   * Returns the workspace path or null on failure.
+   */
+  async ensureProjectWorkspace(projectId: string): Promise<string | null> {
+    if (!this.projectStore) return null;
+
+    const project = await this.projectStore.getProjectAsync(projectId);
+    if (!project) return null;
+
+    // If workspace already exists and directory is valid, return it
+    if (project.workspaceDir && existsSync(project.workspaceDir)) {
+      return project.workspaceDir;
+    }
+
+    const dataDir = this.config.dataDir || join(homedir(), '.pando');
+    const wsDir = join(dataDir, 'projects', projectId);
+
+    if (!existsSync(wsDir)) {
+      mkdirSync(wsDir, { recursive: true });
+    }
+
+    const hasGitDir = existsSync(join(wsDir, '.git'));
+
+    // If project has a GitHub repo and we don't have a local clone, clone it
+    if (!hasGitDir && project.githubRepo) {
+      try {
+        const pat = await this.getGitHubPat();
+        const cloneUrl = pat
+          ? `https://x-access-token:${pat}@github.com/${project.githubRepo}.git`
+          : `https://github.com/${project.githubRepo}.git`;
+        execSync(`git clone ${cloneUrl} .`, { cwd: wsDir, timeout: 60000, stdio: 'ignore' });
+        console.log(`[project-workspace] Cloned ${project.githubRepo} into ${wsDir}`);
+      } catch (err: any) {
+        console.warn(`[project-workspace] Clone failed (using empty workspace): ${err.message?.slice(0, 100)}`);
+      }
+    }
+
+    // Ensure git is initialized
+    if (!existsSync(join(wsDir, '.git'))) {
+      try {
+        execSync('git init', { cwd: wsDir, timeout: 5000, stdio: 'ignore' });
+        console.log(`[project-workspace] Initialized git in ${wsDir}`);
+      } catch { /* non-fatal */ }
+    }
+
+    // Write initial CLAUDE.md if it doesn't exist
+    const claudeMdPath = join(wsDir, 'CLAUDE.md');
+    if (!existsSync(claudeMdPath)) {
+      const content = [
+        `# ${project.name}`,
+        '',
+        project.description || '',
+        '',
+        `Project ID: ${projectId}`,
+        `Tier: ${project.tier || 1}`,
+        `Created: ${new Date(project.createdAt).toISOString()}`,
+        '',
+        '## Build Instructions',
+        '',
+        'This project is managed by a Pando AI project manager.',
+        'Builders: write clean, working code. Run build before reporting done.',
+        'Testers: verify independently. Do NOT trust the builder.',
+      ].join('\n');
+      writeFileSync(claudeMdPath, content);
+    }
+
+    // Import team-state.json if it exists (from a previous clone)
+    const teamStatePath = join(wsDir, 'team-state.json');
+    if (existsSync(teamStatePath) && this.agentDb) {
+      try {
+        const state = JSON.parse(readFileSync(teamStatePath, 'utf-8'));
+        // Import lessons from previous team
+        if (state.lessons?.length && this.agentDb) {
+          for (const l of state.lessons) {
+            this.agentDb.addLesson({
+              orchestratorId: 'imported',
+              projectId,
+              lesson: l.lesson,
+              source: l.source || 'imported-team-state',
+              relevanceTags: [],
+              confidence: l.confidence || 0.5,
+            });
+          }
+          console.log(`[project-workspace] Imported ${state.lessons.length} lessons from team-state.json`);
+        }
+      } catch { /* non-fatal */ }
+    }
+
+    // Update project record with workspace path
+    await this.projectStore.updateProject(projectId, { workspaceDir: wsDir });
+    console.log(`[project-workspace] Workspace ready: ${wsDir}`);
+    return wsDir;
+  }
+
+  /**
+   * Get a GitHub PAT from contributed resources.
+   */
+  private async getGitHubPat(): Promise<string | null> {
+    if (!this.resourceRegistry) return null;
+    try {
+      const resources = this.resourceRegistry.getResources();
+      const ghRes = resources.find((r: any) => r.type === 'code_repository' && r.status === 'active');
+      if (!ghRes) return null;
+      // Try to get credential via P2P proxy
+      const cred = await (this as any).proxyCredentialOp?.('get', { resourceId: ghRes.id });
+      return cred?.key || null;
+    } catch { return null; }
+  }
+
+  /**
+   * Phase 104: Export team state to JSON in the project workspace.
+   * Called before each project commit.
+   */
+  private exportTeamState(projectId: string, workspaceDir: string): void {
+    if (!this.agentDb) return;
+    try {
+      const agents = this.agentDb.listAgents({ projectId });
+      const lessons = this.agentDb.getLessons(null, projectId, null, 0, 100);
+
+      const teamState = {
+        projectId,
+        exportedAt: Date.now(),
+        agents: agents.map((a: any) => ({
+          id: a.id,
+          role: a.role,
+          type: a.type,
+          status: a.status,
+          sessionId: a.sessionId || null,
+          parentId: a.parentId || null,
+          lastReportAt: a.lastReportAt || null,
+          budgetSpent: a.budgetSpent || 0,
+          createdAt: a.createdAt,
+          updatedAt: a.updatedAt,
+        })),
+        lessons: lessons.map((l: any) => ({
+          lesson: l.lesson,
+          source: l.source,
+          confidence: l.confidence,
+          timesUsed: l.timesUsed,
+        })),
+      };
+
+      writeFileSync(join(workspaceDir, 'team-state.json'), JSON.stringify(teamState, null, 2));
+    } catch (err: any) {
+      console.warn(`[project-orch] Failed to export team state: ${err.message?.slice(0, 100)}`);
+    }
+  }
+
+  /**
+   * Phase 104: Create project-scoped onCommit callback.
+   * Commits in the project workspace, then pushes to GitHub.
+   */
+  private makeProjectCommitCallback(projectId: string): (message: string) => Promise<boolean> {
+    return async (message: string) => {
+      const project = this.projectStore?.getProject(projectId);
+      const wsDir = project?.workspaceDir;
+      if (!wsDir || !existsSync(wsDir)) {
+        console.error(`[project-orch] No workspace for project ${projectId}, cannot commit`);
+        return false;
+      }
+
+      try {
+        // Export team state before committing
+        this.exportTeamState(projectId, wsDir);
+
+        // Git add, check, commit
+        execSync('git add -A', { cwd: wsDir, timeout: 10000 });
+        const status = execSync('git status --porcelain', { cwd: wsDir, encoding: 'utf-8', timeout: 5000 });
+        if (!status.trim()) {
+          console.log(`[project-orch] Nothing to commit in project ${projectId}`);
+          return false;
+        }
+        execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, { cwd: wsDir, timeout: 30000 });
+        console.log(`[project-orch] Committed in ${wsDir}: ${message}`);
+
+        // Push to GitHub via the API endpoint (non-fatal if fails)
+        try {
+          const port = this.config.apiPort;
+          const token = this.apiServer?.getToken?.() || '';
+          const pushUrl = `http://127.0.0.1:${port}/v1/projects/${projectId}/github/push`;
+          await fetch(pushUrl, {
+            method: 'POST',
+            headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+            body: JSON.stringify({ workspaceDir: wsDir }),
+            signal: AbortSignal.timeout(60000),
+          });
+          console.log(`[project-orch] Pushed to GitHub for project ${projectId}`);
+        } catch (pushErr: any) {
+          console.warn(`[project-orch] GitHub push failed (non-fatal): ${pushErr.message?.slice(0, 100)}`);
+        }
+
+        return true;
+      } catch (err: any) {
+        console.error(`[project-orch] Commit failed: ${err.message?.slice(0, 200)}`);
+        return false;
+      }
+    };
+  }
+
+  /**
+   * Phase 104: Create project-scoped onDeploy callback.
+   * Calls the deploy endpoint which handles S3 (tier 1) or PM2+nginx (tier 2).
+   */
+  private makeProjectDeployCallback(projectId: string): (projId: string) => Promise<boolean> {
+    return async (projId: string) => {
+      const project = this.projectStore?.getProject(projId || projectId);
+      const wsDir = project?.workspaceDir;
+      if (!wsDir) return false;
+
+      try {
+        const port = this.config.apiPort;
+        const token = this.apiServer?.getToken?.() || '';
+        const deployUrl = `http://127.0.0.1:${port}/v1/projects/${projId || projectId}/deploy`;
+        const res = await fetch(deployUrl, {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ workspaceDir: wsDir }),
+          signal: AbortSignal.timeout(120000),
+        });
+        if (res.ok) {
+          const data = await res.json() as any;
+          console.log(`[project-orch] Deployed project ${projId || projectId}: ${data.url || 'success'}`);
+        }
+        return res.ok;
+      } catch (err: any) {
+        console.error(`[project-orch] Deploy failed: ${err.message?.slice(0, 200)}`);
+        return false;
+      }
+    };
+  }
+
+  /**
+   * Phase 104: Instantiate a live Orchestrator from its DB record.
+   * Determines callbacks based on role (council vs project), starts tick loop.
+   */
+  instantiateOrchestrator(orchId: string): Orchestrator | null {
+    if (this.liveOrchestrators.has(orchId)) {
+      return this.liveOrchestrators.get(orchId)!;
+    }
+
+    if (!this.agentDb || !this.messageBus || !this.workerPool || !this.orgManager || !this.aiBackendRegistry) {
+      console.error(`[orchestrator] Cannot instantiate ${orchId} — agent system not ready`);
+      return null;
+    }
+
+    const agent = this.agentDb.getAgent(orchId);
+    if (!agent || agent.type !== 'orchestrator') {
+      console.error(`[orchestrator] Cannot instantiate ${orchId} — not found or not an orchestrator`);
+      return null;
+    }
+
+    const isCouncil = agent.role === 'council';
+    const projectId = agent.projectId;
+
+    let onCommit: ((message: string) => Promise<boolean>) | undefined;
+    let onDeploy: ((projId: string) => Promise<boolean>) | undefined;
+    let onPropose: ((title: string, description: string, diff?: string) => Promise<void>) | undefined;
+
+    if (isCouncil) {
+      // Council callbacks — operate on Pando repo root
+      onCommit = async (message) => {
+        try {
+          const cwd = process.cwd();
+          execSync('git add -A', { cwd, timeout: 10000 });
+          const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000 });
+          if (!status.trim()) {
+            console.log('[orchestrator] Nothing to commit');
+            return false;
+          }
+          execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, { cwd, timeout: 30000 });
+          console.log(`[orchestrator] Committed: ${message}`);
+          try {
+            execSync('git push origin master', { cwd, timeout: 30000 });
+            console.log('[orchestrator] Pushed to origin');
+          } catch (pushErr: any) {
+            console.warn('[orchestrator] Push failed (non-fatal):', pushErr.message?.slice(0, 100));
+          }
+          return true;
+        } catch (err: any) {
+          console.error('[orchestrator] Commit failed:', err.message?.slice(0, 200));
+          return false;
+        }
+      };
+      onPropose = this.upgradeProtocol ? async (title, description) => {
+        await this.upgradeProtocol!.createUpgradeProposal(`${title}: ${description}`);
+      } : (this.governance ? async (title, description) => {
+        await this.governance!.createProposal(title, description);
+      } : undefined);
+    } else if (projectId) {
+      // Project callbacks — operate on project workspace
+      onCommit = this.makeProjectCommitCallback(projectId);
+      onDeploy = this.makeProjectDeployCallback(projectId);
+    }
+
+    const orch = new Orchestrator(orchId, {
+      db: this.agentDb,
+      messageBus: this.messageBus,
+      workerPool: this.workerPool,
+      orgManager: this.orgManager,
+      aiRegistry: this.aiBackendRegistry,
+      onCommit,
+      onDeploy,
+      onPropose,
+    });
+
+    orch.start();
+    this.liveOrchestrators.set(orchId, orch);
+    console.log(`[orchestrator] Instantiated ${agent.role} orchestrator: ${orchId}` + (projectId ? ` (project ${projectId})` : ''));
+
+    return orch;
+  }
+
+  /**
+   * Phase 104: Ensure a project orchestrator is instantiated and running.
+   * Called from platform-api.ts when routing messages to project orchestrators.
+   */
+  async ensureProjectOrchestrator(projectId: string): Promise<string | null> {
+    if (!this.orgManager || !this.agentDb) return null;
+
+    // 1. Ensure workspace exists
+    await this.ensureProjectWorkspace(projectId);
+
+    // 2. Get or create the orchestrator DB record
+    const orchId = this.orgManager.getOrchestratorForProject(projectId);
+
+    // 3. Set workspace on orchestrator DB record
+    const project = this.projectStore?.getProject(projectId);
+    if (project?.workspaceDir) {
+      this.agentDb.updateAgent(orchId, { workspaceDir: project.workspaceDir });
+    }
+
+    // 4. Ensure live instance is running
+    if (!this.liveOrchestrators.has(orchId)) {
+      this.instantiateOrchestrator(orchId);
+    }
+
+    return orchId;
+  }
+
+  // ----------------------------------------------------------
   // Agent System (Phase 27 — always runs, provides chat routing + project managers)
   // ----------------------------------------------------------
 
@@ -2589,51 +2938,22 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     });
     console.log(`[agents] Council orchestrator created: ${this.councilOrchId}`);
 
-    // Start the council orchestrator's tick loop
-    this.councilOrchestrator = new Orchestrator(this.councilOrchId, {
-      db: this.agentDb,
-      messageBus: this.messageBus,
-      workerPool: this.workerPool,
-      orgManager: this.orgManager,
-      aiRegistry: this.aiBackendRegistry,
-      onPropose: this.upgradeProtocol ? async (title, description) => {
-        // Use upgrade protocol to create proposal with commit hash + auto-approve chain
-        // This triggers: governance auto-approve (≤8 peers) → pullAndUpgrade → broadcast to all nodes
-        await this.upgradeProtocol!.createUpgradeProposal(`${title}: ${description}`);
-      } : (this.governance ? async (title, description) => {
-        // Fallback: plain governance proposal (no upgrade chain)
-        await this.governance!.createProposal(title, description);
-      } : undefined),
-      onCommit: async (message) => {
-        try {
-          const { execSync } = await import('node:child_process');
-          const cwd = process.cwd();
-          // Stage all changes including new untracked files
-          execSync('git add -A', { cwd, timeout: 10000 });
-          // Check if there's anything to commit
-          const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000 });
-          if (!status.trim()) {
-            console.log('[orchestrator] Nothing to commit');
-            return false;
-          }
-          execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, { cwd, timeout: 30000 });
-          console.log(`[orchestrator] Committed: ${message}`);
-          // Push to origin (non-blocking, don't fail if push fails)
-          try {
-            execSync('git push origin master', { cwd, timeout: 30000 });
-            console.log('[orchestrator] Pushed to origin');
-          } catch (pushErr: any) {
-            console.warn('[orchestrator] Push failed (non-fatal):', pushErr.message?.slice(0, 100));
-          }
-          return true;
-        } catch (err: any) {
-          console.error('[orchestrator] Commit failed:', err.message?.slice(0, 200));
-          return false;
-        }
-      },
-    });
-    this.councilOrchestrator.start();
+    // Phase 104: Use the unified factory to instantiate the council orchestrator
+    this.councilOrchestrator = this.instantiateOrchestrator(this.councilOrchId);
     console.log('[agents] Council orchestrator tick loop started');
+
+    // Phase 104: Rehydrate persistent project orchestrators from DB
+    const activeOrchs = this.agentDb.listAgents({ type: 'orchestrator', status: 'active' });
+    for (const orch of activeOrchs) {
+      if (orch.id === this.councilOrchId) continue;
+      if (!orch.projectId) continue;
+      try {
+        this.ensureProjectOrchestrator(orch.projectId).catch(err =>
+          console.warn(`[agents] Rehydration failed for project ${orch.projectId}: ${err.message}`)
+        );
+      } catch { /* non-fatal */ }
+    }
+    console.log(`[agents] Checked ${activeOrchs.filter(o => o.id !== this.councilOrchId && o.projectId).length} project orchestrator(s) for rehydration`);
 
     // Wire to API server
     if (this.apiServer) {
@@ -2846,10 +3166,12 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
    * Stop the Agent System and release resources.
    */
   stopAgentSystem(): void {
-    if (this.councilOrchestrator) {
-      this.councilOrchestrator.stop();
-      this.councilOrchestrator = null;
+    // Phase 104: Stop ALL live orchestrators (council + project)
+    for (const [, orch] of this.liveOrchestrators) {
+      orch.stop();
     }
+    this.liveOrchestrators.clear();
+    this.councilOrchestrator = null;
     if (this.workerPool) {
       this.workerPool.cleanup();
     }
@@ -3309,10 +3631,12 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       this.networkState.stop();
       this.networkState = null;
     }
-    if (this.councilOrchestrator) {
-      this.councilOrchestrator.stop();
-      this.councilOrchestrator = null;
+    // Phase 104: Stop ALL live orchestrators (council + project)
+    for (const [, orch] of this.liveOrchestrators) {
+      orch.stop();
     }
+    this.liveOrchestrators.clear();
+    this.councilOrchestrator = null;
     this.stopMonitor();
     this.stopScheduler();
     if (this.upgradeProtocol) {

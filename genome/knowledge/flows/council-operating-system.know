@@ -105,3 +105,17 @@ decision SQLITE_OVER_MEMORY {
   why: "Crash recovery. Single source of truth. WAL mode handles concurrent reads. No more scattered state files."
   date: "2026-02-27"
 }
+
+decision PROJECT_ORCHESTRATOR_PIPELINE {
+  context: "Phase 104. Council orchestrator worked for Pando infra. User app builds (build me X) created project in DB but no live orchestrator was spawned — dead end."
+  choice: "Same Orchestrator class for both council and projects. Factory method instantiateOrchestrator() determines callbacks based on role. Project orchestrators get onCommit (git in workspace → GitHub push) and onDeploy (S3/PM2+nginx). Workers run in project workspace dir, not Pando repo root."
+  why: "Council is just Pando's own project manager. No special-casing. Same tick loop, same AI brain, same QA cycle. Only callbacks differ."
+  date: "2026-02-27"
+}
+
+decision TEAM_STATE_IN_PROJECT {
+  context: "Phase 104. Need project team hierarchy and worker states to be portable and transparent."
+  choice: "Export team-state.json to project workspace on every commit. Contains agent list (roles, sessions, status), lessons. Gets pushed to GitHub with project code."
+  why: "SQLite is structured and queryable. JSON export travels with the project repo. New node clones and reads it. Users see team structure in GitHub for transparency."
+  date: "2026-02-27"
+}

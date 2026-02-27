@@ -550,6 +550,7 @@ export class Orchestrator {
           scope: agent.scope as any,
           fileScope: action.fileScope,
           rolePrompt: action.rolePrompt,
+          workspaceDir: agent.workspaceDir || undefined,  // Phase 104: project workspace
         });
         console.log(`[Orchestrator ${this.orchestratorId}] Spawned ${action.role} worker: ${workerId}`);
         break;

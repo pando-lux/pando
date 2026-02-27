@@ -265,6 +265,13 @@ export class ProjectStore {
         this.db.exec("ALTER TABLE projects ADD COLUMN api_key TEXT");
         console.log('[project-store] Migration: added api_key column to projects');
       }
+
+      // Migration: add workspace_dir column (Phase 104)
+      const hasWorkspaceDir = cols.some((c: any) => c.name === 'workspace_dir');
+      if (!hasWorkspaceDir) {
+        this.db.exec("ALTER TABLE projects ADD COLUMN workspace_dir TEXT DEFAULT ''");
+        console.log('[project-store] Migration: added workspace_dir column to projects');
+      }
     } catch {
       // Column may already exist
     }
@@ -600,6 +607,7 @@ export class ProjectStore {
     if (updates.notes !== undefined) { fields.push('notes = ?'); params.push(updates.notes); }
     if (updates.resources !== undefined) { fields.push('resources = ?'); params.push(JSON.stringify(updates.resources)); }
     if (updates.apiKey !== undefined) { fields.push('api_key = ?'); params.push(updates.apiKey); }
+    if (updates.workspaceDir !== undefined) { fields.push('workspace_dir = ?'); params.push(updates.workspaceDir); }
 
     if (fields.length === 0) return existing;
 
@@ -2022,6 +2030,7 @@ export class ProjectStore {
       notes: row.notes || '',
       resources,
       apiKey: row.api_key || undefined,
+      workspaceDir: row.workspace_dir || undefined,
     };
   }
 
@@ -2066,6 +2075,7 @@ export class ProjectStore {
       instanceId: r.instanceId || r.instance_id || undefined,
       githubRepo: r.githubRepo || r.github_repo || undefined,
       deployPeerId: r.deployPeerId || undefined,
+      workspaceDir: r.workspaceDir || r.workspace_dir || undefined,
     } as any;
   }
 

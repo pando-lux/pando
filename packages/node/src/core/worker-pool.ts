@@ -159,8 +159,8 @@ export class WorkerPool {
     }
 
     // Build the task prompt — include all context directly in prompt
-    // Worker runs in PROJECT ROOT (process.cwd()) so it can access the codebase
-    const projectRoot = process.cwd();
+    // Phase 104: Workers run in project workspace if set, otherwise Pando repo root
+    const projectRoot = config.workspaceDir || process.cwd();
     let taskPrompt = claudeMd;  // Full assembled context
     taskPrompt += `\n\n---\n`;
     taskPrompt += `\nYou are starting now. Your agent ID is: ${workerId}`;

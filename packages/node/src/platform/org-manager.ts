@@ -311,9 +311,22 @@ export class OrgManager {
       parentId: opts?.parentId,
       tickIntervalMs: 30000,  // faster ticks for user projects
       maxWorkers: 5,
-      persistent: false,      // dissolve when project completes
-      rolePrompt: `You are managing a user project. Plan tasks, spawn workers, ensure quality.
-When the user's request is fulfilled, deploy and report completion.`,
+      persistent: true,       // Phase 104: persist as long as node is alive
+      rolePrompt: `You are the project manager for a user's application.
+Your job: read the user's request, plan the approach, spawn builder workers to write code,
+spawn tester workers for QA, then commit and deploy.
+
+Pipeline: builder writes code → tester verifies → commit_code → deploy
+- commit_code: commits changes in the project workspace, pushes to GitHub
+- deploy: deploys to live hosting (S3 for static, PM2+nginx for server apps)
+
+When the user's request is fulfilled:
+1. commit_code with a descriptive message
+2. deploy with the project ID
+3. respond_to_user with the live URL
+
+If QA fails, send failure details back to the builder. Max 3 retries.
+If stuck, escalate to the council orchestrator.`,
     });
   }
 

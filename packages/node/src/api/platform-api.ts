@@ -27,19 +27,20 @@ export async function registerPlatformRoutes(
 ): Promise<void> {
   const { node } = deps;
 
-  /** Resolve a project ID to its orchestrator, sending a user message. */
-  function sendToOrchestrator(
+  /**
+   * Phase 104: Resolve a project ID to its orchestrator, ensuring the orchestrator
+   * is LIVE (not just a DB row), then send a user message to it.
+   */
+  async function sendToOrchestrator(
     projectId: string | undefined,
     message: string,
     extra: Record<string, unknown> = {},
-  ): boolean {
+  ): Promise<boolean> {
     const bus = getMessageBus();
-    const org = getOrgManager();
-    if (!bus || !org) return false;
+    if (!bus || !projectId) return false;
 
-    const orchId = projectId
-      ? org.getOrchestratorForProject(projectId)
-      : null;
+    // Phase 104: Ensure orchestrator is instantiated and running (not just a DB row)
+    const orchId = await node.ensureProjectOrchestrator(projectId);
     if (!orchId) return false;
 
     bus.send({
@@ -97,7 +98,7 @@ export async function registerPlatformRoutes(
           return { status: 'ok', threadId, reply: noAgentReply, tier: 'simple' };
         }
 
-        sendToOrchestrator(projectId, trimmed, { threadId, projectId });
+        await sendToOrchestrator(projectId, trimmed, { threadId, projectId });
         return { status: 'queued', threadId, message: trimmed };
       }
 
@@ -187,7 +188,7 @@ export async function registerPlatformRoutes(
 
       // Route to project orchestrator
       if (newProjectId) {
-        sendToOrchestrator(newProjectId, trimmed, { threadId, projectId: newProjectId });
+        await sendToOrchestrator(newProjectId, trimmed, { threadId, projectId: newProjectId });
       }
 
       // Return instant feedback — user knows something is happening
@@ -364,7 +365,7 @@ export async function registerPlatformRoutes(
           threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
           return { status: 'ok', threadId: id, reply: noAgentReply, tier: 'simple' };
         }
-        sendToOrchestrator(threadMeta.projectId, plaintextForProcessing, { threadId: id, projectId: threadMeta.projectId });
+        await sendToOrchestrator(threadMeta.projectId, plaintextForProcessing, { threadId: id, projectId: threadMeta.projectId });
         return { status: 'queued', threadId: id, reply: 'Message received. Processing...', tier: 'complex' };
       }
 
@@ -459,7 +460,7 @@ export async function registerPlatformRoutes(
 
       const targetProjectId = newProjectId || threadMeta?.projectId;
       if (targetProjectId) {
-        sendToOrchestrator(targetProjectId, plaintextForProcessing, { threadId: id, projectId: targetProjectId });
+        await sendToOrchestrator(targetProjectId, plaintextForProcessing, { threadId: id, projectId: targetProjectId });
       }
 
       // Return immediate response — real response comes via SSE

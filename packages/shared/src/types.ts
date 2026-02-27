@@ -1193,6 +1193,8 @@ export interface Project {
   deployPeerId?: string;
   /** Phase 70: GitHub repo name e.g. "pando-lux/app-guestbook-abc123" */
   githubRepo?: string;
+  /** Phase 104: Local workspace directory for project code */
+  workspaceDir?: string;
 }
 
 export interface ProjectCollaborator {
