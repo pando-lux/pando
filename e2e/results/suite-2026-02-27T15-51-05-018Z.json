@@ -1,0 +1,223 @@
+{
+  "category": "api",
+  "total": 11,
+  "passed": 11,
+  "failed": 0,
+  "skipped": 0,
+  "results": [
+    {
+      "scenarioId": "RegStatusEndpoint",
+      "scenarioName": "RegStatusEndpoint",
+      "status": "pass",
+      "startedAt": "2026-02-27T15:51:04.984Z",
+      "finishedAt": "2026-02-27T15:51:04.993Z",
+      "durationMs": 9,
+      "steps": [
+        {
+          "name": "GET /v1/status → 200",
+          "status": "pass",
+          "output": "Expected 200, got 200"
+        },
+        {
+          "name": "field \"peerId\" exists",
+          "status": "pass",
+          "output": "present"
+        },
+        {
+          "name": "field \"uptime\" exists",
+          "status": "pass",
+          "output": "present"
+        },
+        {
+          "name": "field \"peers\" exists",
+          "status": "pass",
+          "output": "present"
+        }
+      ],
+      "validates": "API_HEALTH"
+    },
+    {
+      "scenarioId": "RegHealthEndpoint",
+      "scenarioName": "RegHealthEndpoint",
+      "status": "pass",
+      "startedAt": "2026-02-27T15:51:04.993Z",
+      "finishedAt": "2026-02-27T15:51:04.994Z",
+      "durationMs": 1,
+      "steps": [
+        {
+          "name": "GET /v1/health → 200",
+          "status": "pass",
+          "output": "Expected 200, got 200"
+        },
+        {
+          "name": "field \"status\" exists",
+          "status": "pass",
+          "output": "present"
+        }
+      ],
+      "validates": "API_HEALTH"
+    },
+    {
+      "scenarioId": "RegPeersEndpoint",
+      "scenarioName": "RegPeersEndpoint",
+      "status": "pass",
+      "startedAt": "2026-02-27T15:51:04.994Z",
+      "finishedAt": "2026-02-27T15:51:04.996Z",
+      "durationMs": 2,
+      "steps": [
+        {
+          "name": "GET /v1/peers → 200",
+          "status": "pass",
+          "output": "Expected 200, got 200"
+        },
+        {
+          "name": "field \"peers\" exists",
+          "status": "pass",
+          "output": "present"
+        }
+      ],
+      "validates": "API_HEALTH"
+    },
+    {
+      "scenarioId": "RegWalletEndpoint",
+      "scenarioName": "RegWalletEndpoint",
+      "status": "pass",
+      "startedAt": "2026-02-27T15:51:04.996Z",
+      "finishedAt": "2026-02-27T15:51:04.997Z",
+      "durationMs": 1,
+      "steps": [
+        {
+          "name": "GET /v1/wallet → 200",
+          "status": "pass",
+          "output": "Expected 200, got 200"
+        },
+        {
+          "name": "field \"peerId\" exists",
+          "status": "pass",
+          "output": "present"
+        },
+        {
+          "name": "field \"balance\" exists",
+          "status": "pass",
+          "output": "present"
+        }
+      ],
+      "validates": "API_HEALTH"
+    },
+    {
+      "scenarioId": "RegTasksEndpoint",
+      "scenarioName": "RegTasksEndpoint",
+      "status": "pass",
+      "startedAt": "2026-02-27T15:51:04.997Z",
+      "finishedAt": "2026-02-27T15:51:05.009Z",
+      "durationMs": 12,
+      "steps": [
+        {
+          "name": "GET /v1/tasks → 200",
+          "status": "pass",
+          "output": "Expected 200, got 200"
+        }
+      ],
+      "validates": "API_HEALTH"
+    },
+    {
+      "scenarioId": "RegMonitorEndpoint",
+      "scenarioName": "RegMonitorEndpoint",
+      "status": "pass",
+      "startedAt": "2026-02-27T15:51:05.009Z",
+      "finishedAt": "2026-02-27T15:51:05.010Z",
+      "durationMs": 1,
+      "steps": [
+        {
+          "name": "GET /v1/monitor/status → 200",
+          "status": "pass",
+          "output": "Expected 200, got 200"
+        }
+      ],
+      "validates": "API_HEALTH"
+    },
+    {
+      "scenarioId": "RegTaskCreationRequiresAuth",
+      "scenarioName": "RegTaskCreationRequiresAuth",
+      "status": "pass",
+      "startedAt": "2026-02-27T15:51:05.010Z",
+      "finishedAt": "2026-02-27T15:51:05.013Z",
+      "durationMs": 3,
+      "steps": [
+        {
+          "name": "POST /v1/tasks → 401",
+          "status": "pass",
+          "output": "Expected 401, got 401"
+        }
+      ],
+      "validates": "API_AUTH_GATING"
+    },
+    {
+      "scenarioId": "RegTransferRequiresAuth",
+      "scenarioName": "RegTransferRequiresAuth",
+      "status": "pass",
+      "startedAt": "2026-02-27T15:51:05.013Z",
+      "finishedAt": "2026-02-27T15:51:05.014Z",
+      "durationMs": 1,
+      "steps": [
+        {
+          "name": "POST /v1/transfer → 401",
+          "status": "pass",
+          "output": "Expected 401, got 401"
+        }
+      ],
+      "validates": "API_AUTH_GATING"
+    },
+    {
+      "scenarioId": "RegUpgradeRequiresAuth",
+      "scenarioName": "RegUpgradeRequiresAuth",
+      "status": "pass",
+      "startedAt": "2026-02-27T15:51:05.014Z",
+      "finishedAt": "2026-02-27T15:51:05.015Z",
+      "durationMs": 1,
+      "steps": [
+        {
+          "name": "POST /v1/upgrade → 401",
+          "status": "pass",
+          "output": "Expected 401, got 401"
+        }
+      ],
+      "validates": "API_AUTH_GATING"
+    },
+    {
+      "scenarioId": "RegEmissionStats",
+      "scenarioName": "RegEmissionStats",
+      "status": "pass",
+      "startedAt": "2026-02-27T15:51:05.015Z",
+      "finishedAt": "2026-02-27T15:51:05.016Z",
+      "durationMs": 1,
+      "steps": [
+        {
+          "name": "GET /v1/emissions/stats → 200",
+          "status": "pass",
+          "output": "Expected 200, got 200"
+        }
+      ],
+      "validates": "API_HEALTH"
+    },
+    {
+      "scenarioId": "RegSecurityStats",
+      "scenarioName": "RegSecurityStats",
+      "status": "pass",
+      "startedAt": "2026-02-27T15:51:05.016Z",
+      "finishedAt": "2026-02-27T15:51:05.017Z",
+      "durationMs": 1,
+      "steps": [
+        {
+          "name": "GET /v1/security/stats → 200",
+          "status": "pass",
+          "output": "Expected 200, got 200"
+        }
+      ],
+      "validates": "API_HEALTH"
+    }
+  ],
+  "startedAt": "2026-02-27T15:51:04.984Z",
+  "finishedAt": "2026-02-27T15:51:05.017Z",
+  "durationMs": 33
+}
