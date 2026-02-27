@@ -109,7 +109,6 @@ const MAX_CHAT_HISTORY = 200;
 const MAX_REQUEST_LOG = 200;
 const BRIDGE_POLL_MS = 10_000;                       // 10s bridge queue poll
 const MAX_TASK_RETRIES = 3;
-const MAX_CONCURRENT_PIPELINES = 1;                  // only 1 builder/QA at a time
 
 // Mode-aware reflection intervals
 const REFLECTION_INTERVALS: Record<string, number> = {
@@ -147,7 +146,6 @@ export class Council {
   private humanActionPath: string = '';
   private councilAgentId: string | null = null;
   private activeTasks: ActiveTask[] = [];
-  private pendingDescriptions: { description: string; files?: string[] }[] = [];
 
   constructor(node: any, dataDir: string) {
     this.node = node;
@@ -172,17 +170,6 @@ export class Council {
     this.directives = this.loadJson(this.directivesPath, []);
     this.councilAgentId = this.state.councilAgentId || null;
     this.activeTasks = this.state.activeTasks || [];
-
-    // Clean up stale tasks from previous sessions (builder/qa stuck = node crashed)
-    const staleCount = this.activeTasks.filter(t => t.stage === 'builder' || t.stage === 'qa').length;
-    if (staleCount > 0) {
-      console.log(`[council] Cleaning ${staleCount} stale tasks from previous session`);
-      for (const t of this.activeTasks) {
-        if (t.stage === 'builder' || t.stage === 'qa') t.stage = 'failed';
-      }
-      this.state.activeTasks = this.activeTasks;
-      this.saveState();
-    }
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -452,21 +439,19 @@ Be concrete. If everything is healthy, say so — do not invent problems.`;
 
         const aiResult = await backend.execute({
           type: 'text',
-          prompt: `You are the Pando Network Council AI. You are a DECISION-MAKER, not an executor.
-
-IMPORTANT: Do NOT modify any files. Do NOT run any commands that change code. You decide what needs to happen, then delegate to builder agents.
+          prompt: `You are the Pando Network Council AI. You help manage the network.
 
 Recent conversation:
 ${recentHistory}
 
 User (${actorType}:${senderId.slice(0, 12)}): ${message}
 
-If the user is asking you to fix, build, create, add, update, or change something in the codebase, you MUST respond with ONLY this JSON (no other text):
-{"action": "spawn_builder", "description": "detailed description of what to build/fix", "response": "your message to the user explaining what you will do"}
+If the user is asking you to fix, build, or change something in the codebase, respond with JSON:
+{"action": "spawn_builder", "description": "what to build/fix", "response": "your message to user"}
 
-If the user is asking a question or wants information, respond naturally as a helpful AI council member. Keep answers concise.`,
+Otherwise, respond naturally as a helpful AI council member. Keep answers concise.`,
           context: 'council-chat',
-          options: {},
+          options: { cwd: this.getRepoRoot() },
         });
 
         if (aiResult.success && aiResult.output) {
@@ -625,23 +610,9 @@ If the user is asking a question or wants information, respond naturally as a he
   getActiveTasks(): ActiveTask[] { return [...this.activeTasks]; }
 
   /**
-   * How many pipeline slots are in use (builder running or QA running).
-   */
-  private activePipelineCount(): number {
-    return this.activeTasks.filter(t => t.stage === 'builder' || t.stage === 'qa').length;
-  }
-
-  /**
    * Fire-and-forget: spawn a builder, track as ActiveTask, log to minutes.
-   * Enforces MAX_CONCURRENT_PIPELINES — queues excess requests.
    */
   private runSelfHealingLoop(description: string, files?: string[]): void {
-    if (this.activePipelineCount() >= MAX_CONCURRENT_PIPELINES) {
-      console.log(`[council] Pipeline busy (${this.activePipelineCount()} active) — queuing: ${description.slice(0, 80)}`);
-      this.pendingDescriptions.push({ description, files });
-      return;
-    }
-
     this.spawnFixAgent(description, files).then(agentId => {
       if (agentId) {
         const task: ActiveTask = {
@@ -654,17 +625,6 @@ If the user is asking a question or wants information, respond naturally as a he
         this.appendMinutes(`## Self-Healing — ${new Date().toISOString().slice(0, 10)}\n- Spawned builder ${agentId} for: ${description.slice(0, 100)}\n- Task: ${task.taskId}\n`);
       }
     }).catch(err => { console.error(`[council] Self-healing loop error: ${err.message}`); });
-  }
-
-  /**
-   * After a task finishes (done/failed), drain the pending queue.
-   */
-  private drainPendingQueue(): void {
-    if (this.pendingDescriptions.length === 0) return;
-    if (this.activePipelineCount() >= MAX_CONCURRENT_PIPELINES) return;
-    const next = this.pendingDescriptions.shift()!;
-    console.log(`[council] Draining queue — starting: ${next.description.slice(0, 80)}`);
-    this.runSelfHealingLoop(next.description, next.files);
   }
 
   // ── Phase 102b: Builder Completion Watcher ────────────────────────────────
@@ -817,7 +777,6 @@ If the user is asking a question or wants information, respond naturally as a he
     await this.createCouncilProposal(title, desc, pushedHash || undefined);
     task.stage = 'done';
     this.persistActiveTasks();
-    this.drainPendingQueue();
   }
 
   private async handleQAFail(task: ActiveTask, failureReason: string): Promise<void> {
@@ -830,11 +789,10 @@ If the user is asking a question or wants information, respond naturally as a he
         task.stage = 'builder'; task.builderAgentId = newAgentId; task.qaAgentId = null;
         this.persistActiveTasks();
         this.appendMinutes(`## Retry — ${new Date().toISOString().slice(0, 10)}\n- Task: ${task.taskId}\n- Attempt: ${task.retryCount + 1}/${task.maxRetries}\n- New builder: ${newAgentId}\n`);
-      } else { task.stage = 'failed'; this.persistActiveTasks(); this.drainPendingQueue(); }
+      } else { task.stage = 'failed'; this.persistActiveTasks(); }
     } else {
       task.stage = 'failed'; this.persistActiveTasks();
       this.appendMinutes(`## Task Failed (Max Retries) — ${new Date().toISOString().slice(0, 10)}\n- Task: ${task.taskId}\n- Retries: ${task.retryCount}/${task.maxRetries}\n- Last QA issue: ${failureReason.slice(0, 200)}\n`);
-      this.drainPendingQueue();
     }
   }
 
@@ -844,11 +802,10 @@ If the user is asking a question or wants information, respond naturally as a he
       const retryDesc = `${task.description}\n\nPREVIOUS BUILDER FAILED: ${failureReason}\n\nRetry ${task.retryCount + 1} of ${task.maxRetries}.`;
       const newAgentId = await this.spawnFixAgent(retryDesc);
       if (newAgentId) { task.builderAgentId = newAgentId; this.persistActiveTasks(); }
-      else { task.stage = 'failed'; this.persistActiveTasks(); this.drainPendingQueue(); }
+      else { task.stage = 'failed'; this.persistActiveTasks(); }
     } else {
       task.stage = 'failed'; this.persistActiveTasks();
       this.appendMinutes(`## Task Failed (Builder) — ${new Date().toISOString().slice(0, 10)}\n- Task: ${task.taskId}\n- Retries exhausted (${task.maxRetries})\n`);
-      this.drainPendingQueue();
     }
   }
 
@@ -917,11 +874,7 @@ If the user is asking a question or wants information, respond naturally as a he
         cwd: repoDir, encoding: 'utf-8', timeout: 5_000, stdio: 'pipe',
       }).trim();
 
-      // Push current branch (not hardcoded master)
-      const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', {
-        cwd: repoDir, encoding: 'utf-8', timeout: 5_000, stdio: 'pipe',
-      }).trim();
-      execSync(`git push origin ${currentBranch}`, {
+      execSync('git push origin master', {
         cwd: repoDir, encoding: 'utf-8', timeout: 60_000,
         stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
       });

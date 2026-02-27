@@ -109,7 +109,6 @@ const MAX_CHAT_HISTORY = 200;
 const MAX_REQUEST_LOG = 200;
 const BRIDGE_POLL_MS = 10_000;                       // 10s bridge queue poll
 const MAX_TASK_RETRIES = 3;
-const MAX_CONCURRENT_PIPELINES = 1;                  // only 1 builder/QA at a time
 
 // Mode-aware reflection intervals
 const REFLECTION_INTERVALS: Record<string, number> = {
@@ -143,11 +142,8 @@ export class Council {
   private requestLog: RequestLogEntry[] = [];
   private directives: FounderDirective[] = [];
   private pendingHealthAlerts: string[] = [];
-  private pendingHumanAlerts: string[] = [];   // alerts requiring founder/human action
-  private humanActionPath: string = '';
   private councilAgentId: string | null = null;
   private activeTasks: ActiveTask[] = [];
-  private pendingDescriptions: { description: string; files?: string[] }[] = [];
 
   constructor(node: any, dataDir: string) {
     this.node = node;
@@ -157,7 +153,6 @@ export class Council {
     this.minutesPath = join(this.councilDir, 'council-minutes.md');
     this.promptPath = join(this.councilDir, 'last-prompt.md');
     this.networkStatePath = join(this.councilDir, 'network-state.md');
-    this.humanActionPath = join(this.councilDir, 'human-action-needed.md');
     this.chatHistoryPath = join(this.councilDir, 'chat-history.json');
     this.requestLogPath = join(this.councilDir, 'request-log.json');
     this.directivesPath = join(this.councilDir, 'directives.json');
@@ -172,17 +167,6 @@ export class Council {
     this.directives = this.loadJson(this.directivesPath, []);
     this.councilAgentId = this.state.councilAgentId || null;
     this.activeTasks = this.state.activeTasks || [];
-
-    // Clean up stale tasks from previous sessions (builder/qa stuck = node crashed)
-    const staleCount = this.activeTasks.filter(t => t.stage === 'builder' || t.stage === 'qa').length;
-    if (staleCount > 0) {
-      console.log(`[council] Cleaning ${staleCount} stale tasks from previous session`);
-      for (const t of this.activeTasks) {
-        if (t.stage === 'builder' || t.stage === 'qa') t.stage = 'failed';
-      }
-      this.state.activeTasks = this.activeTasks;
-      this.saveState();
-    }
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -287,9 +271,6 @@ export class Council {
     const healthAlerts = this.pendingHealthAlerts.length > 0
       ? this.pendingHealthAlerts.join('\n')
       : '(no pending alerts)';
-    const humanActionAlerts = this.pendingHumanAlerts.length > 0
-      ? this.pendingHumanAlerts.join('\n')
-      : null;
 
     const now = new Date();
     const dateStr = now.toISOString().slice(0, 10);
@@ -316,7 +297,7 @@ ${founderDirectives}
 
 ## Health Alerts
 ${healthAlerts}
-${humanActionAlerts ? `\n## REQUIRES_HUMAN_ACTION\nThe following issues CANNOT be self-healed and require founder intervention:\n${humanActionAlerts}\n` : ''}
+
 ## Instructions
 You are a member of the Pando Network Council — a group of top-reputation AI-capable nodes.
 Reflect on the current state and propose improvements.
@@ -372,18 +353,16 @@ Be concrete. If everything is healthy, say so — do not invent problems.`;
 
           // Clear health alerts after processing
           this.pendingHealthAlerts = [];
-          this.pendingHumanAlerts = [];
         } else {
-          console.warn(`[council] AI reflection returned empty result — skipping`);
-          return null;
+          result = this.stubReflectionResult(dateStr, prompt.length);
         }
       } catch (err: any) {
-        console.error(`[council] AI reflection failed: ${err.message} — skipping`);
-        return null;
+        console.error(`[council] AI reflection failed: ${err.message}`);
+        result = this.stubReflectionResult(dateStr, prompt.length);
       }
     } else {
-      console.warn(`[council] No AI backend available — reflection skipped (not ready yet)`);
-      return null;
+      console.log(`[council] No AI backend available — stub reflection`);
+      result = this.stubReflectionResult(dateStr, prompt.length);
     }
 
     // Update reflection timestamp
@@ -393,7 +372,15 @@ Be concrete. If everything is healthy, say so — do not invent problems.`;
     return result;
   }
 
-  // stubReflectionResult removed — no stubs. If AI backend is not available, reflection is skipped.
+  private stubReflectionResult(dateStr: string, promptLen: number): ReflectionResult {
+    return {
+      timestamp: Date.now(),
+      type: 'daily',
+      summary: `Daily reflection prompt assembled (${promptLen} chars). AI call pending.`,
+      proposals: [],
+      minutesEntry: `## ${dateStr} — Daily Reflection\n- Prompt assembled (${promptLen} chars), AI integration pending\n- Council: ${this.state.members.length} members\n`,
+    };
+  }
 
   private parseReflectionOutput(output: string): { summary: string; observations: string[]; proposals: any[]; actions: any[] } {
     try {
@@ -452,21 +439,19 @@ Be concrete. If everything is healthy, say so — do not invent problems.`;
 
         const aiResult = await backend.execute({
           type: 'text',
-          prompt: `You are the Pando Network Council AI. You are a DECISION-MAKER, not an executor.
-
-IMPORTANT: Do NOT modify any files. Do NOT run any commands that change code. You decide what needs to happen, then delegate to builder agents.
+          prompt: `You are the Pando Network Council AI. You help manage the network.
 
 Recent conversation:
 ${recentHistory}
 
 User (${actorType}:${senderId.slice(0, 12)}): ${message}
 
-If the user is asking you to fix, build, create, add, update, or change something in the codebase, you MUST respond with ONLY this JSON (no other text):
-{"action": "spawn_builder", "description": "detailed description of what to build/fix", "response": "your message to the user explaining what you will do"}
+If the user is asking you to fix, build, or change something in the codebase, respond with JSON:
+{"action": "spawn_builder", "description": "what to build/fix", "response": "your message to user"}
 
-If the user is asking a question or wants information, respond naturally as a helpful AI council member. Keep answers concise.`,
+Otherwise, respond naturally as a helpful AI council member. Keep answers concise.`,
           context: 'council-chat',
-          options: {},
+          options: { cwd: this.getRepoRoot() },
         });
 
         if (aiResult.success && aiResult.output) {
@@ -482,19 +467,19 @@ If the user is asking a question or wants information, respond naturally as a he
             reply = aiResult.output;
           }
         } else {
-          reply = `AI backend returned an empty response. The council cannot process this request right now.`;
+          reply = this.fallbackResponse(message);
         }
       } catch (err: any) {
         console.error(`[council] Chat AI failed: ${err.message}`);
-        reply = `AI backend error: ${err.message}. The council cannot process this request right now.`;
+        reply = this.fallbackResponse(message);
       }
     } else {
-      // No AI backend available — still handle actionable requests via builder spawning
+      // No AI backend — check for actionable keywords
       if (this.isActionableRequest(message)) {
         this.runSelfHealingLoop(message);
-        reply = `No AI backend available for chat, but I detected an actionable request. Spawning a builder agent to handle: "${message.slice(0, 80)}".`;
+        reply = `Understood. I'm spawning a builder agent to handle: "${message.slice(0, 80)}".`;
       } else {
-        reply = `No AI backend available. The council requires a Claude Code backend to respond to messages. Ensure at least one council node has shareCompute enabled.`;
+        reply = this.fallbackResponse(message);
       }
     }
 
@@ -530,7 +515,19 @@ If the user is asking a question or wants information, respond naturally as a he
     return keywords.test(message);
   }
 
-  // fallbackResponse removed — no stubs. Council requires real AI backend.
+  private fallbackResponse(message: string): string {
+    const lower = message.toLowerCase();
+    if (/status|health/.test(lower)) {
+      const network = this.node.getNetwork?.();
+      const peers = network?.getPeerCount() ?? 0;
+      return `Network has ${peers} peer(s) connected. Council has ${this.state.members.length} member(s). Use /status for full details.`;
+    }
+    if (/council|members/.test(lower)) {
+      const members = this.state.members.map(m => m.peerId.slice(0, 12)).join(', ');
+      return `Council members: [${members || 'none selected'}]. Next rotation: ${new Date(this.state.rotatesAt).toISOString().slice(0, 10)}.`;
+    }
+    return 'I\'m the Pando Network Council. I can help manage the network, spawn builders, and create governance proposals. What do you need?';
+  }
 
   getChatHistory(): CouncilChatMessage[] {
     return [...this.chatHistory];
@@ -555,10 +552,11 @@ If the user is asking a question or wants information, respond naturally as a he
       projectId: 'council-fix',
       description: `[Council] ${description}`,
       parentId: this.councilAgentId || null,
-      taskContext: files && files.length > 0
-        ? `Task: ${description}\n\nFiles to examine: ${files.join(', ')}`
-        : `Task: ${description}`,
     };
+
+    if (files && files.length > 0) {
+      body.taskContext = `Files to examine: ${files.join(', ')}`;
+    }
 
     try {
       const res = await fetch(`http://127.0.0.1:${apiPort}/v1/agents/spawn`, {
@@ -568,7 +566,7 @@ If the user is asking a question or wants information, respond naturally as a he
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(body),
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(15_000),
       });
 
       if (res.ok) {
@@ -608,7 +606,7 @@ If the user is asking a question or wants information, respond naturally as a he
       const res = await fetch(`http://127.0.0.1:${apiPort}/v1/agents/spawn`, {
         method: 'POST',
         headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(body), signal: AbortSignal.timeout(30_000),
+        body: JSON.stringify(body), signal: AbortSignal.timeout(15_000),
       });
       if (res.ok) {
         const data = await res.json() as any;
@@ -625,23 +623,9 @@ If the user is asking a question or wants information, respond naturally as a he
   getActiveTasks(): ActiveTask[] { return [...this.activeTasks]; }
 
   /**
-   * How many pipeline slots are in use (builder running or QA running).
-   */
-  private activePipelineCount(): number {
-    return this.activeTasks.filter(t => t.stage === 'builder' || t.stage === 'qa').length;
-  }
-
-  /**
    * Fire-and-forget: spawn a builder, track as ActiveTask, log to minutes.
-   * Enforces MAX_CONCURRENT_PIPELINES — queues excess requests.
    */
   private runSelfHealingLoop(description: string, files?: string[]): void {
-    if (this.activePipelineCount() >= MAX_CONCURRENT_PIPELINES) {
-      console.log(`[council] Pipeline busy (${this.activePipelineCount()} active) — queuing: ${description.slice(0, 80)}`);
-      this.pendingDescriptions.push({ description, files });
-      return;
-    }
-
     this.spawnFixAgent(description, files).then(agentId => {
       if (agentId) {
         const task: ActiveTask = {
@@ -656,23 +640,10 @@ If the user is asking a question or wants information, respond naturally as a he
     }).catch(err => { console.error(`[council] Self-healing loop error: ${err.message}`); });
   }
 
-  /**
-   * After a task finishes (done/failed), drain the pending queue.
-   */
-  private drainPendingQueue(): void {
-    if (this.pendingDescriptions.length === 0) return;
-    if (this.activePipelineCount() >= MAX_CONCURRENT_PIPELINES) return;
-    const next = this.pendingDescriptions.shift()!;
-    console.log(`[council] Draining queue — starting: ${next.description.slice(0, 80)}`);
-    this.runSelfHealingLoop(next.description, next.files);
-  }
-
   // ── Phase 102b: Builder Completion Watcher ────────────────────────────────
 
   /**
    * Register a virtual "researcher" agent for the council so it gets a bridge queue.
-   * Also registers a bridge interceptor so task_completed/task_failed events
-   * are routed directly to the council instead of to a Claude session.
    */
   async registerCouncilAgent(): Promise<void> {
     if (this.councilAgentId) return;
@@ -685,19 +656,13 @@ If the user is asking a question or wants information, respond naturally as a he
         role: 'researcher',
         parentId: null,
         projectId: 'council',
-        description: 'Council virtual agent — receives builder completion reports',
+        description: 'Council virtual agent for bridge routing',
       });
       if (agentId) {
         this.councilAgentId = agentId;
         this.state.councilAgentId = agentId;
         this.saveState();
         console.log(`[council] Registered council agent: ${agentId}`);
-
-        // Register bridge interceptor: task_completed/task_failed go to council, not to Claude session
-        agentManager.registerBridgeInterceptor(agentId, async (item: any) => {
-          await this.handleBridgeItem(item);
-        });
-        console.log(`[council] Bridge interceptor registered for ${agentId}`);
       }
     } catch (err: any) {
       console.error(`[council] Failed to register council agent: ${err.message}`);
@@ -705,20 +670,27 @@ If the user is asking a question or wants information, respond naturally as a he
   }
 
   /**
-   * Start the bridge watcher. With the interceptor pattern, this is now a
-   * fallback poll for any items that might not be intercepted (e.g. worker_message).
+   * Start polling the bridge queue for builder completion events.
    */
   startBridgeWatcher(): void {
-    const agentManager = this.node.getAgentManager?.();
-    if (!agentManager || !this.councilAgentId) return;
+    const bridge = this.node.getAgentManager?.()?.getBridge?.();
+    if (!bridge || !this.councilAgentId) return;
 
-    // If council agent already existed from a previous session, re-register the interceptor
-    if (!agentManager.getBridge()) return;
-    agentManager.registerBridgeInterceptor(this.councilAgentId, async (item: any) => {
-      await this.handleBridgeItem(item);
-    });
+    this.bridgeWatcherTimer = setInterval(() => {
+      if (!this.councilAgentId) return;
+      if (bridge.isEmpty(this.councilAgentId)) return;
+      if (bridge.isManagerBusy?.(this.councilAgentId)) return;
 
-    console.log('[council] Bridge watcher started (interceptor-based)');
+      const item = bridge.dequeue(this.councilAgentId);
+      if (!item) return;
+
+      this.handleBridgeItem(item).catch(err => {
+        console.error(`[council] Bridge item handling failed: ${err.message}`);
+      });
+    }, BRIDGE_POLL_MS);
+
+    if (this.bridgeWatcherTimer.unref) this.bridgeWatcherTimer.unref();
+    console.log('[council] Bridge watcher started');
   }
 
   private async handleBridgeItem(item: any): Promise<void> {
@@ -765,26 +737,28 @@ If the user is asking a question or wants information, respond naturally as a he
     task.builderSummary = summary;
     this.appendMinutes(`## Builder Completed — ${new Date().toISOString().slice(0, 10)}\n- Agent: ${task.builderAgentId}\n- Task: ${task.taskId}\n- Summary: ${summary.slice(0, 200)}\n`);
 
-    // Advisory pre-check: log regression suite results but don't block pipeline.
-    // The regression suite tests the RUNNING node's HTTP endpoints — it doesn't
-    // validate the builder's source changes. The real QA gate is the QA tester agent.
+    // Optional fast pre-check: run regression suite to catch obvious crashes
     const regressionSuite = this.node.getRegressionSuite?.();
     if (regressionSuite) {
       try {
+        console.log(`[council] Running fast pre-check (regression suite) before QA agent...`);
         const qaResult = await regressionSuite.runAll();
-        console.log(`[council] Advisory pre-check: ${qaResult.passed}/${qaResult.total} passed (${qaResult.duration}ms)`);
-      } catch (err: any) { console.warn(`[council] Pre-check error (non-blocking): ${err.message}`); }
+        const peerCount = this.node.getNetwork?.()?.getPeerCount?.() ?? 0;
+        const maxFailures = peerCount < 3 ? Math.max(1, Math.floor(qaResult.total * 0.1)) : 0;
+        const preCheckPass = qaResult.failed <= maxFailures;
+        console.log(`[council] Pre-check: ${qaResult.passed}/${qaResult.total} passed (${qaResult.duration}ms)`);
+        if (!preCheckPass) {
+          console.warn(`[council] Pre-check FAILED — skipping QA agent, retrying builder`);
+          await this.handleQAFail(task, `Regression pre-check failed: ${qaResult.failed}/${qaResult.total} tests failing`);
+          return;
+        }
+      } catch (err: any) { console.warn(`[council] Pre-check error: ${err.message} — proceeding to QA agent`); }
     }
 
-    // Spawn real QA tester agent — the actual gate
     task.stage = 'qa';
     const qaAgentId = await this.spawnQAAgent(task.description, summary);
     if (qaAgentId) { task.qaAgentId = qaAgentId; this.persistActiveTasks(); }
-    else {
-      // QA agent couldn't spawn — proceed to commit + governance directly
-      console.warn('[council] QA agent spawn failed — proceeding to commit and governance');
-      await this.handleQAPass(task);
-    }
+    else { console.warn('[council] QA agent spawn failed — using pre-check result'); await this.handleQAPass(task); }
   }
 
   private async handleQACompletion(task: ActiveTask, summary: string, _details: string): Promise<void> {
@@ -817,7 +791,6 @@ If the user is asking a question or wants information, respond naturally as a he
     await this.createCouncilProposal(title, desc, pushedHash || undefined);
     task.stage = 'done';
     this.persistActiveTasks();
-    this.drainPendingQueue();
   }
 
   private async handleQAFail(task: ActiveTask, failureReason: string): Promise<void> {
@@ -830,11 +803,10 @@ If the user is asking a question or wants information, respond naturally as a he
         task.stage = 'builder'; task.builderAgentId = newAgentId; task.qaAgentId = null;
         this.persistActiveTasks();
         this.appendMinutes(`## Retry — ${new Date().toISOString().slice(0, 10)}\n- Task: ${task.taskId}\n- Attempt: ${task.retryCount + 1}/${task.maxRetries}\n- New builder: ${newAgentId}\n`);
-      } else { task.stage = 'failed'; this.persistActiveTasks(); this.drainPendingQueue(); }
+      } else { task.stage = 'failed'; this.persistActiveTasks(); }
     } else {
       task.stage = 'failed'; this.persistActiveTasks();
       this.appendMinutes(`## Task Failed (Max Retries) — ${new Date().toISOString().slice(0, 10)}\n- Task: ${task.taskId}\n- Retries: ${task.retryCount}/${task.maxRetries}\n- Last QA issue: ${failureReason.slice(0, 200)}\n`);
-      this.drainPendingQueue();
     }
   }
 
@@ -844,11 +816,10 @@ If the user is asking a question or wants information, respond naturally as a he
       const retryDesc = `${task.description}\n\nPREVIOUS BUILDER FAILED: ${failureReason}\n\nRetry ${task.retryCount + 1} of ${task.maxRetries}.`;
       const newAgentId = await this.spawnFixAgent(retryDesc);
       if (newAgentId) { task.builderAgentId = newAgentId; this.persistActiveTasks(); }
-      else { task.stage = 'failed'; this.persistActiveTasks(); this.drainPendingQueue(); }
+      else { task.stage = 'failed'; this.persistActiveTasks(); }
     } else {
       task.stage = 'failed'; this.persistActiveTasks();
       this.appendMinutes(`## Task Failed (Builder) — ${new Date().toISOString().slice(0, 10)}\n- Task: ${task.taskId}\n- Retries exhausted (${task.maxRetries})\n`);
-      this.drainPendingQueue();
     }
   }
 
@@ -917,11 +888,7 @@ If the user is asking a question or wants information, respond naturally as a he
         cwd: repoDir, encoding: 'utf-8', timeout: 5_000, stdio: 'pipe',
       }).trim();
 
-      // Push current branch (not hardcoded master)
-      const currentBranch = execSync('git rev-parse --abbrev-ref HEAD', {
-        cwd: repoDir, encoding: 'utf-8', timeout: 5_000, stdio: 'pipe',
-      }).trim();
-      execSync(`git push origin ${currentBranch}`, {
+      execSync('git push origin master', {
         cwd: repoDir, encoding: 'utf-8', timeout: 60_000,
         stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
       });
@@ -1009,90 +976,13 @@ If the user is asking a question or wants information, respond naturally as a he
     return [...this.directives];
   }
 
-  getLastReflectionAt(): number { return this.state.lastDailyReflection || 0; }
-
   // ── Health Alerts ─────────────────────────────────────────────────────────
 
-  handleHealthAlert(alert: string | { severity?: string; type?: string; message?: string; firstSeen?: number }): void {
-    const ts = new Date().toISOString();
-    const alertStr = typeof alert === 'string'
-      ? alert
-      : `[${alert.severity || 'medium'}] ${alert.message || alert.type || 'unknown'}`;
-
-    this.pendingHealthAlerts.push(`[${ts}] ${alertStr}`);
+  handleHealthAlert(alert: string): void {
+    this.pendingHealthAlerts.push(`[${new Date().toISOString()}] ${alert}`);
+    // Keep max 50 pending alerts
     if (this.pendingHealthAlerts.length > 50) {
       this.pendingHealthAlerts = this.pendingHealthAlerts.slice(-50);
-    }
-
-    // Classify whether this requires human action (cannot be self-healed)
-    if (this.classifyRequiresHuman(alert)) {
-      this.pendingHumanAlerts.push(`[${ts}] ${alertStr}`);
-      if (this.pendingHumanAlerts.length > 50) {
-        this.pendingHumanAlerts = this.pendingHumanAlerts.slice(-50);
-      }
-      this.writeHumanActionFile();
-    }
-  }
-
-  /**
-   * Classify whether an alert requires human/founder action.
-   * Returns true for issues that cannot be self-healed by the network.
-   */
-  private classifyRequiresHuman(alert: string | { severity?: string; type?: string; message?: string; firstSeen?: number }): boolean {
-    const now = Date.now();
-    const ONE_HOUR = 60 * 60 * 1000;
-    const ONE_DAY = 24 * ONE_HOUR;
-
-    if (typeof alert === 'string') {
-      const lower = alert.toLowerCase();
-      if (lower.includes('credential') || lower.includes('auth') || lower.includes('invalid') || lower.includes('unauthorized')) {
-        return true;
-      }
-      return false;
-    }
-
-    const { severity, type, message, firstSeen } = alert;
-    const lower = (message || type || '').toLowerCase();
-
-    // No peers for more than 1 hour — network isolation, needs human intervention
-    if (type === 'no_peers' && firstSeen && (now - firstSeen) > ONE_HOUR) {
-      return true;
-    }
-
-    // Credential/auth errors always need human action
-    if (lower.includes('credential') || lower.includes('auth') || lower.includes('invalid') || lower.includes('unauthorized')) {
-      return true;
-    }
-
-    // Critical alerts persisting for more than 24 hours
-    if (severity === 'critical' && firstSeen && (now - firstSeen) > ONE_DAY) {
-      return true;
-    }
-
-    return false;
-  }
-
-  /**
-   * Write human-action-needed.md with current pending human alerts.
-   * This file signals to the founder that manual intervention is required.
-   */
-  private writeHumanActionFile(): void {
-    try {
-      if (this.pendingHumanAlerts.length === 0) return;
-      const lines = [
-        '# REQUIRES_HUMAN_ACTION',
-        '',
-        'The following infrastructure issues cannot be self-healed and require founder intervention:',
-        '',
-        ...this.pendingHumanAlerts.map(a => `- ${a}`),
-        '',
-        `Last updated: ${new Date().toISOString()}`,
-        '',
-      ];
-      writeFileSync(this.humanActionPath, lines.join('\\n'), 'utf-8');
-      console.log(`[council] REQUIRES_HUMAN_ACTION: ${this.pendingHumanAlerts.length} issue(s) written to ${this.humanActionPath}`);
-    } catch (err: any) {
-      console.error(`[council] Failed to write human-action file: ${err.message}`);
     }
   }
 
@@ -1115,10 +1005,8 @@ If the user is asking a question or wants information, respond naturally as a he
     }, checkInterval);
     if (this.timer.unref) this.timer.unref();
 
-    // Delay initial tick to allow AI backend detection to complete (takes ~5s for `where claude`)
-    setTimeout(() => {
-      this.tick();
-    }, 10_000);
+    // Run initial tick
+    this.tick();
 
     // Register council agent and start bridge watcher (delayed — AgentManager starts after council)
     setTimeout(() => {
