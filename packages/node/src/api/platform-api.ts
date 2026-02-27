@@ -3785,13 +3785,18 @@ export async function registerPlatformRoutes(
       const hosting = node.getHostingService?.();
       const errors: string[] = [];
 
-      // Always use the direct S3 website URL for validation — the stored deploymentUrl
-      // may be a gateway proxy URL. Apps are deployed as 'public' to the S3 website endpoint.
-      const s3Bucket = process.env.PANDO_S3_BUCKET || 'pando-deployments';
-      const s3Region = 'us-east-1';
-      let url = `http://${s3Bucket}.s3-website-${s3Region}.amazonaws.com/public/${id}/index.html`;
-      // Fallback to stored URL if S3 URL doesn't work
-      const fallbackUrl = project.deploymentUrl || '';
+      // Determine validation URL based on project tier
+      const projectTier = (project as any).tier || 1;
+      let url: string;
+      if (projectTier === 2 && project.deploymentUrl) {
+        // Tier 2: PM2+nginx — use the stored deployment URL directly
+        url = project.deploymentUrl;
+      } else {
+        // Tier 1: S3 static — construct the S3 website URL
+        const s3Bucket = process.env.PANDO_S3_BUCKET || 'pando-deployments';
+        const s3Region = 'us-east-1';
+        url = `http://${s3Bucket}.s3-website-${s3Region}.amazonaws.com/public/${id}/index.html`;
+      }
 
       // Check 1: URL responds
       let urlResponds = false;
@@ -3835,11 +3840,18 @@ export async function registerPlatformRoutes(
         }
       }
 
-      if (!gatewayInjected && urlResponds) errors.push('PANDO_GATEWAY_URL not found in HTML');
-      if (!apiKeyInjected && urlResponds) errors.push('PANDO_PROJECT_API_KEY not found in HTML');
+      // Gateway/API key injection only expected for Tier 1 static sites (HTML served from S3)
+      // Tier 2 server apps handle their own responses — injection checks don't apply
+      if (projectTier === 1) {
+        if (!gatewayInjected && urlResponds) errors.push('PANDO_GATEWAY_URL not found in HTML');
+        if (!apiKeyInjected && urlResponds) errors.push('PANDO_PROJECT_API_KEY not found in HTML');
+      }
 
       const checks = { urlResponds, gatewayInjected, apiKeyInjected, resourceProxyWorks };
-      const healthy = Object.values(checks).every(Boolean);
+      // Tier 1: all checks must pass. Tier 2: only URL + resource proxy matter.
+      const healthy = projectTier === 2
+        ? urlResponds && resourceProxyWorks
+        : Object.values(checks).every(Boolean);
 
       return { healthy, url, checks, errors };
     });
