@@ -1728,22 +1728,25 @@ location /apps/${projectId}/ {
     console.log('[content-layer] ContentRegistry, ContentPublisher, ContentMaintenance initialized');
 
     // Phase 57: ThreadStore + data loading — only with StorageBackend
+    // IMPORTANT: Data loading is non-blocking so API starts fast. P2P storage timeouts
+    // (15s each) would otherwise block API startup for minutes on slow networks.
     if (this.storageBackend) {
-      try {
-        this.threadStore = new ThreadStore(this.storageBackend);
-        await this.threadStore.loadFromBackend();
-
-        if (this.projectStore) await this.projectStore.loadFromBackend();
-        if (this.revenueEngine) await this.revenueEngine.loadFromBackend();
-        if (this.contributionTracker) await this.contributionTracker.loadFromBackend();
-
-        this._p2pDataLoaded = true;
-        console.log('[data] User data stores initialized (storage-backed)');
-      } catch (err: any) {
-        // Phase 83: P2PStorageBackend may fail if no compute peers yet — non-fatal
-        // Will retry via deferred loading when first peer connects
-        console.warn(`[data] Backend load failed (will retry when peers connect): ${err.message}`);
-      }
+      this.threadStore = new ThreadStore(this.storageBackend);
+      // Fire and forget — data loads in background, retries via deferred loading on peer connect
+      (async () => {
+        try {
+          await this.threadStore!.loadFromBackend();
+          if (this.projectStore) await this.projectStore.loadFromBackend();
+          if (this.revenueEngine) await (this.revenueEngine as any).loadFromBackend();
+          if (this.contributionTracker) await (this.contributionTracker as any).loadFromBackend();
+          this._p2pDataLoaded = true;
+          console.log('[data] User data stores initialized (storage-backed)');
+        } catch (err: any) {
+          // Phase 83: P2PStorageBackend may fail if no compute peers yet — non-fatal
+          // Will retry via deferred loading when first peer connects
+          console.warn(`[data] Backend load failed (will retry when peers connect): ${err.message}`);
+        }
+      })();
     } else {
       console.log('[data] No StorageBackend — user data features disabled (P2P features still work)');
     }
@@ -1814,7 +1817,8 @@ location /apps/${projectId}/ {
 
     // Phase 64: Cloud Instance Manager — EC2 compute node lifecycle
     this.cloudInstanceManager = new CloudInstanceManager(this);
-    await this.cloudInstanceManager.init();
+    this.cloudInstanceManager.init().catch((err: any) =>
+      console.warn(`[cloud-instances] Init failed (non-fatal): ${err.message}`));
 
     // Phase 50: Network State Aggregator — hourly snapshot for council reflection
     this.networkState = new NetworkState(this, dataDir);
@@ -1833,7 +1837,9 @@ location /apps/${projectId}/ {
 
     // Start HTTP API
     this.apiServer = new ApiServer(this);
-    await this.apiServer.start({ port: this.config.apiPort, host: '::' });
+    // Windows: '::' hangs on some systems, use '0.0.0.0' directly. Linux: '::' for dual-stack.
+    const apiHost = process.platform === 'win32' ? '0.0.0.0' : '::';
+    await this.apiServer.start({ port: this.config.apiPort, host: apiHost });
 
     // Wire SSE real-time event push — transactions and governance events
     this.sync.onTransaction((tx) => {
