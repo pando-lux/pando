@@ -544,7 +544,7 @@ export class AgentDatabase {
     this.db.prepare('DELETE FROM agent_identity WHERE id = ?').run(id);
   }
 
-  listAgents(filter?: { type?: AgentType; status?: AgentStatus; parentId?: string; projectId?: string; nodeId?: string }): AgentIdentity[] {
+  listAgents(filter?: { type?: AgentType; status?: AgentStatus; parentId?: string; projectId?: string; nodeId?: string; role?: string }): AgentIdentity[] {
     let sql = 'SELECT * FROM agent_identity WHERE 1=1';
     const params: any[] = [];
 
@@ -553,6 +553,7 @@ export class AgentDatabase {
     if (filter?.parentId) { sql += ' AND parent_id = ?'; params.push(filter.parentId); }
     if (filter?.projectId) { sql += ' AND project_id = ?'; params.push(filter.projectId); }
     if (filter?.nodeId) { sql += ' AND node_id = ?'; params.push(filter.nodeId); }
+    if (filter?.role) { sql += ' AND role = ?'; params.push(filter.role); }
 
     sql += ' ORDER BY created_at DESC';
     return this.db.prepare(sql).all(...params).map(rowToIdentity);

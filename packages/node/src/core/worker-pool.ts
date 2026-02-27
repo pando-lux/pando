@@ -113,43 +113,70 @@ export class WorkerPool {
   }
 
   /**
-   * Spawn a new Claude Code worker process.
+   * Spawn or resume a Claude Code worker process.
+   * Checks for existing workers with same role + orchestrator that have a session.
+   * If found, resumes the existing worker instead of creating a new one.
    */
   async spawn(config: WorkerConfig): Promise<string> {
-    const workerId = `worker-${config.role}-${randomUUID().slice(0, 8)}`;
+    // ── Check for existing worker to resume ──────────────────────────────
+    let workerId: string;
+    let resumeSessionId: string | undefined;
+    let workspaceDir: string;
+    let agent: AgentIdentity;
 
-    // Create workspace
-    const workspaceDir = config.workspaceDir || join(this.dataDir, 'agents', workerId);
-    if (!existsSync(workspaceDir)) {
-      mkdirSync(workspaceDir, { recursive: true });
+    const existing = this.findResumableWorker(config);
+
+    if (existing) {
+      // Resume existing worker — preserve session context
+      workerId = existing.id;
+      resumeSessionId = existing.sessionId || undefined;
+      workspaceDir = existing.workspaceDir || join(this.dataDir, 'agents', workerId);
+
+      // Update worker with new task
+      this.db.updateAgent(workerId, {
+        status: 'spawning',
+        currentTaskId: config.taskId || null,
+        rolePrompt: config.rolePrompt || existing.rolePrompt || null,
+      });
+      agent = this.db.getAgent(workerId)!;
+
+      console.log(`[WorkerPool] Resuming ${config.role} worker ${workerId} (session: ${resumeSessionId?.slice(0, 8) || 'none'})`);
+    } else {
+      // Create fresh worker
+      workerId = `worker-${config.role}-${randomUUID().slice(0, 8)}`;
+      workspaceDir = config.workspaceDir || join(this.dataDir, 'agents', workerId);
+      if (!existsSync(workspaceDir)) {
+        mkdirSync(workspaceDir, { recursive: true });
+      }
+
+      agent = this.db.createAgent({
+        id: workerId,
+        role: config.role,
+        type: 'worker' as AgentType,
+        scope: config.scope || 'private',
+        parentId: config.orchestratorId,
+        nodeId: config.nodeId || null,
+        status: 'spawning',
+        authority: config.authority ? JSON.stringify(config.authority) : null,
+        fileScope: config.fileScope ? JSON.stringify(config.fileScope) : null,
+        budgetLimit: config.budgetLimit ?? 50,
+        projectId: config.projectId || null,
+        workspaceDir,
+        currentTaskId: config.taskId || null,
+        rolePrompt: config.rolePrompt || DEFAULT_ROLE_PROMPTS[config.role] || null,
+        contextVersion: null,
+        sessionId: null,
+        pid: null,
+        persistent: false,
+        tickIntervalMs: null,
+        lastTickAt: null,
+        maxWorkers: 0,
+        maxChildren: 0,
+        lastReportAt: null,
+      });
+
+      console.log(`[WorkerPool] Creating fresh ${config.role} worker ${workerId}`);
     }
-
-    // Register in database
-    const agent = this.db.createAgent({
-      id: workerId,
-      role: config.role,
-      type: 'worker' as AgentType,
-      scope: config.scope || 'private',
-      parentId: config.orchestratorId,
-      nodeId: config.nodeId || null,
-      status: 'spawning',
-      authority: config.authority ? JSON.stringify(config.authority) : null,
-      fileScope: config.fileScope ? JSON.stringify(config.fileScope) : null,
-      budgetLimit: config.budgetLimit ?? 50,
-      projectId: config.projectId || null,
-      workspaceDir,
-      currentTaskId: config.taskId || null,
-      rolePrompt: config.rolePrompt || DEFAULT_ROLE_PROMPTS[config.role] || null,
-      contextVersion: null,
-      sessionId: null,
-      pid: null,
-      persistent: false,
-      tickIntervalMs: null,
-      lastTickAt: null,
-      maxWorkers: 0,
-      maxChildren: 0,
-      lastReportAt: null,
-    });
 
     // Assemble context and write CLAUDE.md
     const claudeMd = this.assembleContext(agent);
@@ -162,21 +189,41 @@ export class WorkerPool {
       throw new Error('No AI backend available (Claude Code not found)');
     }
 
-    // Build the task prompt — include all context directly in prompt
-    // Worker runs in PROJECT ROOT (process.cwd()) so it can access the codebase
+    // Build the task prompt
+    // For resumed workers: shorter prompt (they already know the codebase)
+    // For fresh workers: full context in prompt
     const projectRoot = process.cwd();
-    let taskPrompt = claudeMd;  // Full assembled context
-    taskPrompt += `\n\n---\n`;
-    taskPrompt += `\nYou are starting now. Your agent ID is: ${workerId}`;
-    taskPrompt += `\nProject root: ${projectRoot}`;
-    taskPrompt += `\nScratch workspace: ${workspaceDir}`;
-    if (config.taskId) {
-      taskPrompt += `\nTask ID: ${config.taskId}`;
+    let taskPrompt: string;
+
+    if (resumeSessionId) {
+      // Resumed worker — they already have context. Just give them the new task.
+      taskPrompt = `You are continuing your work. Your agent ID is: ${workerId}\n`;
+      taskPrompt += `Project root: ${projectRoot}\n`;
+      taskPrompt += `Scratch workspace: ${workspaceDir}\n`;
+      if (config.taskId) {
+        taskPrompt += `New task ID: ${config.taskId}\n`;
+      }
+      taskPrompt += `\n## New Task\n`;
+      taskPrompt += config.rolePrompt || DEFAULT_ROLE_PROMPTS[config.role] || 'Complete the assigned task.';
+      taskPrompt += `\n\nWhen you finish, report via HTTP:\n`;
+      taskPrompt += `curl -s -X POST http://localhost:${this.apiPort}/v1/worker/${workerId}/report -H "Content-Type: application/json" --data-raw '{"status":"done","summary":"<what you did>","filesChanged":["list","of","files"]}'\n`;
+      taskPrompt += `\nIMPORTANT: The build MUST pass (npm run build) before you report "done".\n`;
+      taskPrompt += `Start working now.`;
+    } else {
+      // Fresh worker — full context
+      taskPrompt = claudeMd;
+      taskPrompt += `\n\n---\n`;
+      taskPrompt += `\nYou are starting now. Your agent ID is: ${workerId}`;
+      taskPrompt += `\nProject root: ${projectRoot}`;
+      taskPrompt += `\nScratch workspace: ${workspaceDir}`;
+      if (config.taskId) {
+        taskPrompt += `\nTask ID: ${config.taskId}`;
+      }
+      taskPrompt += `\n\nWhen you finish, report via HTTP:`;
+      taskPrompt += `\ncurl -s -X POST http://localhost:${this.apiPort}/v1/worker/${workerId}/report -H "Content-Type: application/json" --data-raw '{"status":"done","summary":"<what you did>","filesChanged":["list","of","files"]}'`;
+      taskPrompt += `\n\nIMPORTANT: The build MUST pass (npm run build) before you report "done".`;
+      taskPrompt += `\nStart working now.`;
     }
-    taskPrompt += `\n\nWhen you finish, report via HTTP:`;
-    taskPrompt += `\ncurl -s -X POST http://localhost:${this.apiPort}/v1/worker/${workerId}/report -H "Content-Type: application/json" --data-raw '{"status":"done","summary":"<what you did>","filesChanged":["list","of","files"]}'`;
-    taskPrompt += `\n\nIMPORTANT: The build MUST pass (npm run build) before you report "done".`;
-    taskPrompt += `\nStart working now.`;
 
     // Clone backend for per-worker callbacks
     const claudeBackend = backend as any;
@@ -187,10 +234,11 @@ export class WorkerPool {
       this.db.updateAgent(workerId, { pid, status: 'active' });
     };
 
-    // Start Claude Code process in project root (not workspace)
+    // Start Claude Code process — with session resume if available
     const resultPromise = backend.execute({
       type: 'code',
       prompt: taskPrompt,
+      sessionId: resumeSessionId,
       options: { cwd: projectRoot },
     });
 
@@ -354,6 +402,38 @@ export class WorkerPool {
     }
 
     return 'fresh';
+  }
+
+  /**
+   * Find an existing worker that can be resumed for this config.
+   * Matches by: same role + same orchestrator + has a session + not currently active.
+   * Prefers workers with matching projectId. Returns null if no resumable worker found.
+   */
+  private findResumableWorker(config: WorkerConfig): AgentIdentity | null {
+    // Find completed/idle workers under this orchestrator with same role
+    const candidates = this.db.listAgents({
+      parentId: config.orchestratorId,
+      type: 'worker' as AgentType,
+      role: config.role,
+    }).filter(w =>
+      // Must have a session to resume
+      w.sessionId &&
+      // Must not be currently running
+      !this.activeProcesses.has(w.id) &&
+      // Must be in a resumable state (done, idle, or failed — not actively spawning/running)
+      ['done', 'idle', 'failed'].includes(w.status)
+    );
+
+    if (candidates.length === 0) return null;
+
+    // Prefer workers from the same project
+    if (config.projectId) {
+      const sameProject = candidates.find(w => w.projectId === config.projectId);
+      if (sameProject) return sameProject;
+    }
+
+    // Otherwise return most recent worker with a session
+    return candidates[0]; // listAgents returns DESC by created_at
   }
 
   /**
