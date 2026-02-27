@@ -495,10 +495,9 @@ export class AgentDatabase {
   }
 
   /**
-   * Mark all non-persistent active/spawning agents as 'failed' on startup.
-   * This handles stale agents left from previous node runs.
-   * Persistent orchestrators get reset to 'pending' so they can be re-created cleanly.
-   * Returns the number of agents cleaned up.
+   * Clean up stale agents on startup. Key principle: PRESERVE persistent
+   * orchestrators and their workers (session IDs, accumulated knowledge).
+   * Only reset statuses so they can be rehydrated — never delete.
    */
   cleanupStaleAgents(): number {
     const now = new Date().toISOString();
@@ -509,33 +508,28 @@ export class AgentDatabase {
       WHERE persistent = 0 AND status IN ('active', 'spawning', 'idle')
     `).run(now);
 
-    // Delete persistent orchestrators and their children from previous runs
-    // Must delete children first due to FOREIGN KEY (parent_id) constraint
-    const orchIds = this.db.prepare(`
-      SELECT id FROM agent_identity WHERE type = 'orchestrator' AND persistent = 1
-    `).all().map((r: any) => r.id);
+    // Persistent orchestrators: reset to 'pending' (will be rehydrated on boot)
+    // DO NOT delete — they carry project association and identity
+    const r2 = this.db.prepare(`
+      UPDATE agent_identity SET status = 'pending', pid = NULL, updated_at = ?
+      WHERE type = 'orchestrator' AND persistent = 1 AND status IN ('active', 'spawning')
+    `).run(now);
 
-    let r2Changes = 0;
-    for (const orchId of orchIds) {
-      // Delete children (workers) first
-      const childResult = this.db.prepare(`
-        DELETE FROM agent_identity WHERE parent_id = ?
-      `).run(orchId);
-      r2Changes += childResult.changes || 0;
-      // Then delete the orchestrator
-      const orchResult = this.db.prepare(`
-        DELETE FROM agent_identity WHERE id = ?
-      `).run(orchId);
-      r2Changes += orchResult.changes || 0;
-    }
+    // Workers under persistent orchestrators: reset active/spawning to 'done'
+    // PRESERVE session_id — this is the key to session resume across restarts
+    const r3 = this.db.prepare(`
+      UPDATE agent_identity SET status = 'done', pid = NULL, updated_at = ?
+      WHERE type = 'worker' AND status IN ('active', 'spawning')
+      AND parent_id IN (SELECT id FROM agent_identity WHERE type = 'orchestrator' AND persistent = 1)
+    `).run(now);
 
-    // Clean unread messages for deleted agents
+    // Clean unread messages for truly dead agents (failed non-persistent)
     this.db.prepare(`
       DELETE FROM message_inbox WHERE read_at IS NULL
-      AND recipient_id NOT IN (SELECT id FROM agent_identity WHERE status IN ('active', 'spawning', 'idle', 'pending'))
+      AND recipient_id NOT IN (SELECT id FROM agent_identity)
     `).run();
 
-    return (r1.changes || 0) + r2Changes;
+    return (r1.changes || 0) + (r2.changes || 0) + (r3.changes || 0);
   }
 
   getAgent(id: string): AgentIdentity | null {

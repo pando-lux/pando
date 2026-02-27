@@ -3033,29 +3033,39 @@ location /apps/${projectId}/ {
     this.orgManager = new OrgManager(this.agentDb, this.workerPool, this.messageBus);
     console.log('[agents] OrgManager initialized');
 
-    // Create and start the council orchestrator (top-level, manages the network)
-    this.councilOrchId = this.orgManager.createOrchestrator({
-      role: 'council',
-      level: 0,
-      scope: 'public',
-      tickIntervalMs: 60000,
-      maxWorkers: 10,
-      maxChildren: 5,
-      persistent: true,
-      nodeId: this.identity?.peerId || undefined,
-      rolePrompt: `You are the council orchestrator for a Pando node.
+    // Find existing council orchestrator (survives restarts) or create new
+    const existingCouncil = this.agentDb.listAgents({ role: 'council', type: 'orchestrator' })
+      .find(a => a.status === 'pending' || a.status === 'active');
+    if (existingCouncil) {
+      this.councilOrchId = existingCouncil.id;
+      this.agentDb.updateAgent(existingCouncil.id, { status: 'active' });
+      console.log(`[agents] Council orchestrator rehydrated: ${this.councilOrchId}`);
+    } else {
+      this.councilOrchId = this.orgManager.createOrchestrator({
+        role: 'council',
+        level: 0,
+        scope: 'public',
+        tickIntervalMs: 60000,
+        maxWorkers: 10,
+        maxChildren: 5,
+        persistent: true,
+        nodeId: this.identity?.peerId || undefined,
+        rolePrompt: `You are the council orchestrator for a Pando node.
 Your job: monitor the network, handle user requests (routed from project orchestrators),
 respond to health alerts, and manage the self-sustaining loop (build → QA → governance → upgrade).
 In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for tasks.`,
-    });
-    console.log(`[agents] Council orchestrator created: ${this.councilOrchId}`);
+      });
+      console.log(`[agents] Council orchestrator created: ${this.councilOrchId}`);
+    }
 
     // Phase 104: Use the unified factory to instantiate the council orchestrator
     this.councilOrchestrator = this.instantiateOrchestrator(this.councilOrchId);
     console.log('[agents] Council orchestrator tick loop started');
 
     // Phase 104: Rehydrate persistent project orchestrators from DB
-    const activeOrchs = this.agentDb.listAgents({ type: 'orchestrator', status: 'active' });
+    // Check both 'active' and 'pending' (pending = survived restart, needs reactivation)
+    const activeOrchs = this.agentDb.listAgents({ type: 'orchestrator' })
+      .filter(o => o.status === 'active' || o.status === 'pending');
     for (const orch of activeOrchs) {
       if (orch.id === this.councilOrchId) continue;
       if (!orch.projectId) continue;

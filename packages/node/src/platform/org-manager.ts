@@ -313,11 +313,17 @@ export class OrgManager {
    * Find or create a project orchestrator.
    */
   getOrchestratorForProject(projectId: string, opts?: { scope?: AgentScope; parentId?: string }): string {
-    // Check if one already exists
+    // Check if one already exists (active or pending from restart)
     const existing = this.db.listAgents({ projectId, type: 'orchestrator' })
-      .find(a => a.status === 'active');
+      .find(a => a.status === 'active' || a.status === 'pending');
 
-    if (existing) return existing.id;
+    if (existing) {
+      // Reactivate if pending (survived restart)
+      if (existing.status === 'pending') {
+        this.db.updateAgent(existing.id, { status: 'active' });
+      }
+      return existing.id;
+    }
 
     // Create a new project orchestrator
     return this.createOrchestrator({
