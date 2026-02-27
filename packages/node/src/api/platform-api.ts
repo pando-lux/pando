@@ -1465,6 +1465,51 @@ export async function registerPlatformRoutes(
       return { available: true, result: suite.getLastResult() };
     });
 
+    // ── Scenario Runner API ──────────────────────────────────────
+
+    // GET /scenarios — List all test scenarios from genome graph
+    fastify.get('/scenarios', async () => {
+      const runner = node.getScenarioRunner();
+      if (!runner) return { available: false, scenarios: [] };
+      const scenarios = runner.loadScenarios();
+      return {
+        available: true,
+        total: scenarios.length,
+        scenarios: scenarios.map(s => ({
+          name: s._name,
+          description: s.description,
+          category: s.category,
+          type: s.type,
+          automatable: s.automatable === 'true' || s.automatable === true,
+          status: s.status,
+          validates: s.validates,
+        })),
+      };
+    });
+
+    // POST /scenarios/run — Run test scenarios (optional category filter)
+    fastify.post('/scenarios/run', async (request: any, reply: any) => {
+      if (!requireAuth(request, reply)) return;
+      const runner = node.getScenarioRunner();
+      if (!runner) return reply.code(503).send({ error: 'Scenario runner not available' });
+      const { category } = (request.body || {}) as { category?: string };
+      let result;
+      if (category) {
+        result = await runner.runCategory(category);
+      } else {
+        result = await runner.runAll();
+      }
+      runner.saveResults(result as any);
+      return result;
+    });
+
+    // GET /scenarios/status — Last scenario run results
+    fastify.get('/scenarios/status', async () => {
+      const runner = node.getScenarioRunner();
+      if (!runner) return { available: false, result: null };
+      return { available: true, result: runner.getLastResult() };
+    });
+
     // ── Payment Gate API (Phase 18.6) ──────────────────────────────
 
     // POST /payment/estimate — Estimate cost for a task description

@@ -95,13 +95,25 @@ Design: "Thin Agent, Thick Orchestrator" — deterministic tick loop that calls 
 |---|---|---|
 | **AgentDatabase** | `platform/agent-database.ts` | SQLite storage for agents, messages, lessons, reflections, tick logs. Single source of truth. |
 | **Orchestrator** | `platform/orchestrator.ts` | Deterministic tick loop. Tier 1 (deterministic) or Tier 2 (AI judgment). Same class at every hierarchy level. |
-| **WorkerPool** | `core/worker-pool.ts` | Spawn/kill Claude Code workers. Workers run in project root with full tool access. |
+| **WorkerPool** | `core/worker-pool.ts` | Spawn/resume Claude Code workers. Workers persist sessions — resumed for related tasks, rotated when domain changes. |
 | **MessageBus** | `core/message-bus.ts` | SQLite-backed persistent message routing. Priority, type-based, sender validation. |
 | **OrgManager** | `platform/org-manager.ts` | Hierarchy: create/dissolve orchestrators, route messages, authority inheritance. |
 | **AIBackendRegistry** | `core/ai-backend-registry.ts` | Pluggable AI backends. ClaudeBackend has `noTools` mode for orchestrator brain (no file access). |
 
+| **GenomeBridge** | `platform/genome-bridge.ts` | Reads compiled genome knowledge graph (`output/graph.json`). Provides `contextForTask()` — architecture context injected into worker CLAUDE.md and council AI prompts. |
+| **ScenarioRunner** | `platform/scenario-runner.ts` | Reads test scenarios from genome graph. Executes API regression tests via fetch. Wired into self-sustaining loop after upgrade. |
+
+### Genome knowledge system
+The genome is a knowledge graph compiled from `.know` files. Test scenarios live in `genome/knowledge/scenarios/*.know` (64 test nodes). Compile: `python tools/genome/genome.py compile .` → `output/graph.json`. GenomeBridge reads the compiled graph at runtime — zero Python dependency for agents.
+
+### Claude Code as a network resource
+Claude Code is a **contributed resource**, not a node requirement. Most nodes won't have it. The network discovers which nodes have Claude Code via CapabilityProfile (`shareCompute: true`, `sharedCapabilities: ["claude-code"]`). The council runs on whichever node has Claude Code available — it doesn't matter which one. `/contribute claude-code` makes a node available for AI work.
+
+### Worker persistence
+**ALL workers are persistent team members** — builders, testers, reviewers, researchers, devops. Every role resumes when possible. On first spawn: fresh session. On every subsequent spawn for the same role + orchestrator: `--continue --resume <sessionId>`. Session IDs are saved to SQLite. Resumed workers get a short task prompt (they already know the codebase). Fresh workers get full CLAUDE.md context. Workers are only fresh when no prior session exists for that role. Lessons extracted from each session also accumulate in SQLite and get injected into future workers as a safety net.
+
 ### Key principle
-**State lives in SQLite, not in AI conversation.** Orchestrators are deterministic code (setInterval) that call AI in short bursts. Workers are disposable Claude Code processes. Every tick is logged. Lessons accumulate across runs.
+**State lives in SQLite, not in AI conversation.** Orchestrators are deterministic code (setInterval) that call AI in short bursts. Every tick is logged. Lessons and worker sessions persist across runs.
 
 ## How to Build and Run
 
@@ -165,6 +177,9 @@ Key endpoints:
 - `GET /v1/network/capabilities` — all node capabilities across network
 - `POST /v1/projects/:id/deploy` — deploy app
 - `POST /v1/projects/:id/undeploy` — remove deployed app
+- `GET /v1/scenarios` — list test scenarios from genome graph
+- `POST /v1/scenarios/run` — run scenario tests (optional `?category=api`)
+- `GET /v1/scenarios/status` — last scenario run results
 
 ## TUI Commands
 
@@ -232,7 +247,7 @@ Witness-based emission — peers must attest that work happened before Lux is mi
 | **Entry** | `index.ts`, `cli.ts`, `tui.ts` |
 | **Kernel** | `kernel/network.ts` (libp2p), `kernel/governance.ts`, `kernel/monitor.ts`, `kernel/guardrails.ts`, `kernel/sync.ts`, `kernel/reputation.ts`, `kernel/emission-witness.ts`, `kernel/security-monitor.ts` |
 | **Core** | `core/ai-backend-claude.ts`, `core/ai-backend-registry.ts`, `core/storage-backend.ts`, `core/deploy-manager.ts`, `core/upgrade-protocol.ts`, `core/payment-gate.ts`, `core/request-reply.ts` |
-| **Platform** | `platform/agent-tools.ts` (HTTP API), `platform/resource-router.ts`, `platform/content-registry.ts`, `platform/thread-store.ts`, `platform/capability-detector.ts` |
+| **Platform** | `platform/agent-tools.ts` (HTTP API), `platform/genome-bridge.ts` (reads compiled genome graph), `platform/scenario-runner.ts` (automated test runner from graph), `platform/resource-router.ts`, `platform/content-registry.ts`, `platform/thread-store.ts`, `platform/capability-detector.ts` |
 | **API** | `api/api-server.ts`, `api/kernel-api.ts`, `api/core-api.ts`, `api/platform-api.ts` |
 | **Agent (new)** | `platform/orchestrator.ts`, `platform/org-manager.ts`, `core/worker-pool.ts`, `core/worker-mcp.ts`, `core/message-bus.ts` |
 | **Shared** | `packages/shared/src/types.ts`, `packages/shared/src/crypto.ts` |

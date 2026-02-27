@@ -26,6 +26,8 @@ import type { MessageBus } from '../core/message-bus.js';
 import type { WorkerPool } from '../core/worker-pool.js';
 import type { OrgManager } from './org-manager.js';
 import type { AIBackendRegistry } from '../core/ai-backend-registry.js';
+import type { GenomeBridge } from './genome-bridge.js';
+import type { ScenarioRunner } from './scenario-runner.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,6 +45,10 @@ export interface OrchestratorDeps {
   onCommit?: (message: string) => Promise<boolean>;
   /** Callback to deploy */
   onDeploy?: (projectId: string) => Promise<boolean>;
+  /** Genome knowledge graph bridge for architecture context */
+  genomeBridge?: GenomeBridge;
+  /** Scenario runner for post-upgrade regression testing */
+  scenarioRunner?: ScenarioRunner;
 }
 
 export type OrchestratorAction =
@@ -58,7 +64,8 @@ export type OrchestratorAction =
   | { type: 'propose_upgrade'; title: string; description: string }
   | { type: 'commit_code'; message: string }
   | { type: 'deploy'; projectId: string }
-  | { type: 'respond_to_user'; message: string };
+  | { type: 'respond_to_user'; message: string }
+  | { type: 'run_scenarios'; category?: string };
 
 interface BoardState {
   pendingTasks: number;
@@ -326,11 +333,13 @@ export class Orchestrator {
                 title: 'Council code update',
                 description: payload.summary?.slice(0, 200) || 'QA-verified code change',
               });
+              // Run API regression scenarios after upgrade
+              actions.push({ type: 'run_scenarios', category: 'api' });
               actions.push({
                 type: 'respond_to_user',
-                message: `Task complete. Builder finished, QA passed, code committed, upgrade proposed to governance.`,
+                message: `Task complete. Builder finished, QA passed, code committed, upgrade proposed to governance, regression scenarios queued.`,
               });
-              console.log(`[Orchestrator ${this.orchestratorId}] QA PASS → commit + propose upgrade`);
+              console.log(`[Orchestrator ${this.orchestratorId}] QA PASS → commit + propose upgrade + run scenarios`);
             } else {
               // QA failed — need AI to decide next step (Tier 2 on next tick)
               // Store the failure as a directive for the next tick
@@ -461,6 +470,27 @@ export class Orchestrator {
         sections.push(`- ${d}`);
       }
       sections.push('');
+    }
+
+    // Genome architecture knowledge
+    if (this.deps.genomeBridge?.isLoaded() && board.userRequests.length > 0) {
+      const requestText = board.userRequests.map(r => {
+        try { return JSON.parse(r.payload).message || r.payload; } catch { return r.payload; }
+      }).join(' ');
+      const ctx = this.deps.genomeBridge.contextForTask({ taskDescription: requestText });
+      if (ctx) {
+        sections.push('## Architecture Knowledge');
+        sections.push(ctx);
+        sections.push('');
+      }
+      const failing = this.deps.genomeBridge.failingTests();
+      if (failing.length > 0) {
+        sections.push(`### Failing Tests (${failing.length}):`);
+        for (const t of failing) {
+          sections.push(`- ${t._name}: ${t.description || ''}`);
+        }
+        sections.push('');
+      }
     }
 
     // Role prompt
@@ -658,6 +688,37 @@ export class Orchestrator {
           payload: JSON.stringify({ message: action.message }),
           priority: 1,
         });
+        break;
+      }
+
+      case 'run_scenarios': {
+        // Run genome-based scenario tests (regression after upgrades)
+        if (this.deps.scenarioRunner) {
+          try {
+            const cat = action.category || 'api';
+            console.log(`[Orchestrator ${this.orchestratorId}] Running ${cat} scenarios...`);
+            const result = await this.deps.scenarioRunner.runCategory(cat);
+            this.deps.scenarioRunner.saveResults(result as any);
+            console.log(`[Orchestrator ${this.orchestratorId}] Scenarios: ${result.passed}/${result.total} passed, ${result.failed} failed`);
+
+            if (result.failed > 0) {
+              // Alert orchestrator about regression failures
+              this.deps.messageBus.send({
+                recipientId: this.orchestratorId,
+                senderId: 'scenario-runner',
+                senderType: 'system' as any,
+                type: 'health_alert',
+                payload: {
+                  severity: 'warning',
+                  message: `Scenario regression: ${result.failed}/${result.total} failed after upgrade`,
+                },
+                priority: 0,
+              });
+            }
+          } catch (err: any) {
+            console.error(`[Orchestrator ${this.orchestratorId}] Scenario run error:`, err.message?.slice(0, 200));
+          }
+        }
         break;
       }
     }

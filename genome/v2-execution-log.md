@@ -54,7 +54,9 @@ BRANCH: All work on v2-architecture branch.
 | v2.1: Full build pass | ✅ DONE | Zero TypeScript errors across all packages |
 | v2.1: Split api-server.ts | ✅ DONE | 7292→887 lines; kernel-api.ts (2249L), core-api.ts (370L), platform-api.ts (3882L), middleware/auth.ts |
 | v2.1: Deploy + smoke test all 5 nodes | ✅ DONE | Merged v2-architecture→master, pushed pando-lux/pando, triggered /upgrade on EC2-1, EC2-2, LS-1, LS-2, WIN |
-| E2E test scenarios | ✅ DONE | genome/flows/e2e-test-scenarios.md — 42 scenarios written by parallel agent |
+| E2E test scenarios | ✅ MIGRATED | 64 test nodes in genome/knowledge/scenarios/*.know (was: genome/flows/e2e-test-scenarios.md). Legacy file deleted. |
+| Genome → Agent context | ✅ DONE | GenomeBridge reads output/graph.json; injected into worker CLAUDE.md (Layer 6) + orchestrator AI prompts |
+| ScenarioRunner | ✅ DONE | scenario-runner.ts — reads tests from graph, executes API regression via fetch, wired into self-sustaining loop |
 | v2.2: API versioning | ✅ DONE | /v1/ prefix on all HTTP routes; MESSAGE_VERSION on P2P; gateway+MCP+tests updated; deployed to all 5 nodes |
 | v2.3: Boot sequence enforcement | ✅ DONE | NodeHealth in /v1/status: kernel/core/platform + per-step bootSteps + OperationalMode 1/2/3 |
 | v2.4: Active Tripwire | ✅ DONE | CREDENTIAL_MASTER_KEY deleted from process.env; CredentialStore.wipe(); node_compromised GossipSub; credential routing isolation |
