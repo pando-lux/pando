@@ -139,7 +139,7 @@ deploy action → POST /v1/projects/:id/deploy
 | Orchestrator (tick loop) | `packages/node/src/platform/orchestrator.ts` |
 | OrgManager (hierarchy) | `packages/node/src/platform/org-manager.ts` |
 | AgentDatabase (SQLite) | `packages/node/src/platform/agent-database.ts` |
-| WorkerPool (spawn/kill) | `packages/node/src/core/worker-pool.ts` |
+| WorkerPool (spawn/resume) | `packages/node/src/core/worker-pool.ts` |
 | MessageBus (routing) | `packages/node/src/core/message-bus.ts` |
 | Worker HTTP tools | `packages/node/src/core/worker-mcp.ts` |
 | Agent API routes | `packages/node/src/platform/agent-tools.ts` |
