@@ -92,14 +92,14 @@ const DEFAULT_MANAGER_ID = 'pando-node-mgr';
 /**
  * Phase 52.3: Detect if Claude Code CLI is installed and available in PATH.
  * Used to auto-enable the scheduler when Claude Code is present.
- * Has a 3-second timeout to avoid hanging on slow systems.
+ * Has a 10-second timeout to handle slow Windows startup.
  */
 export function detectClaudeCode(): boolean {
   try {
     if (process.platform === 'win32') {
-      execSync('where claude', { stdio: 'ignore', timeout: 3000 });
+      execSync('where claude', { stdio: 'ignore', timeout: 10000 });
     } else {
-      execSync('which claude', { stdio: 'ignore', timeout: 3000 });
+      execSync('which claude', { stdio: 'ignore', timeout: 10000 });
     }
     return true;
   } catch {

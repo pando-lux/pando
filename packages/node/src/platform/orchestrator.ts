@@ -193,8 +193,14 @@ export class Orchestrator {
         } else {
           // Tier 2: call AI for judgment
           console.log(`[Orchestrator ${this.orchestratorId}] Calling AI...`);
-          actions = await this.callAI(board, agent);
-          console.log(`[Orchestrator ${this.orchestratorId}] AI returned ${actions.length} action(s): ${actions.map(a => a.type).join(', ') || 'none'}`);
+          try {
+            actions = await this.callAI(board, agent);
+            console.log(`[Orchestrator ${this.orchestratorId}] AI returned ${actions.length} action(s): ${actions.map(a => a.type).join(', ') || 'none'}`);
+          } catch (aiErr: any) {
+            console.error(`[Orchestrator ${this.orchestratorId}] AI call failed: ${aiErr.message}`);
+            // Messages stay unread — they will be retried on the next tick
+            return;
+          }
         }
       }
 
@@ -372,31 +378,24 @@ export class Orchestrator {
   private async callAI(board: BoardState, agent: AgentIdentity): Promise<OrchestratorAction[]> {
     const backend = this.deps.aiRegistry.getBest('text-generation');
     if (!backend) {
-      console.error(`[Orchestrator ${this.orchestratorId}] No AI backend available`);
-      return [];
+      throw new Error('Claude CLI not found.');
     }
 
     // Build the AI prompt
     const prompt = this.buildAIPrompt(board, agent);
 
-    try {
-      const result = await backend.execute({
-        type: 'text',
-        prompt,
-        options: { model: 'claude-sonnet-4-6', noTools: true },
-      });
+    const result = await backend.execute({
+      type: 'text',
+      prompt,
+      options: { model: 'claude-sonnet-4-6', noTools: true },
+    });
 
-      if (!result.success || !result.output) {
-        console.error(`[Orchestrator ${this.orchestratorId}] AI call failed:`, result.error);
-        return [];
-      }
-
-      // Parse actions from AI output
-      return this.parseAIActions(result.output);
-    } catch (err) {
-      console.error(`[Orchestrator ${this.orchestratorId}] AI call error:`, err);
-      return [];
+    if (!result.success || !result.output) {
+      throw new Error(result.error ?? 'AI backend returned no output');
     }
+
+    // Parse actions from AI output
+    return this.parseAIActions(result.output);
   }
 
   private buildAIPrompt(board: BoardState, agent: AgentIdentity): string {
