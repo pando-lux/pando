@@ -631,6 +631,8 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
 
   /**
    * Register a virtual "researcher" agent for the council so it gets a bridge queue.
+   * Also registers a bridge interceptor so task_completed/task_failed events
+   * are routed directly to the council instead of to a Claude session.
    */
   async registerCouncilAgent(): Promise<void> {
     if (this.councilAgentId) return;
@@ -643,13 +645,19 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
         role: 'researcher',
         parentId: null,
         projectId: 'council',
-        description: 'Council virtual agent for bridge routing',
+        description: 'Council virtual agent — receives builder completion reports',
       });
       if (agentId) {
         this.councilAgentId = agentId;
         this.state.councilAgentId = agentId;
         this.saveState();
         console.log(`[council] Registered council agent: ${agentId}`);
+
+        // Register bridge interceptor: task_completed/task_failed go to council, not to Claude session
+        agentManager.registerBridgeInterceptor(agentId, async (item: any) => {
+          await this.handleBridgeItem(item);
+        });
+        console.log(`[council] Bridge interceptor registered for ${agentId}`);
       }
     } catch (err: any) {
       console.error(`[council] Failed to register council agent: ${err.message}`);
@@ -657,27 +665,20 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
   }
 
   /**
-   * Start polling the bridge queue for builder completion events.
+   * Start the bridge watcher. With the interceptor pattern, this is now a
+   * fallback poll for any items that might not be intercepted (e.g. worker_message).
    */
   startBridgeWatcher(): void {
-    const bridge = this.node.getAgentManager?.()?.getBridge?.();
-    if (!bridge || !this.councilAgentId) return;
+    const agentManager = this.node.getAgentManager?.();
+    if (!agentManager || !this.councilAgentId) return;
 
-    this.bridgeWatcherTimer = setInterval(() => {
-      if (!this.councilAgentId) return;
-      if (bridge.isEmpty(this.councilAgentId)) return;
-      if (bridge.isManagerBusy?.(this.councilAgentId)) return;
+    // If council agent already existed from a previous session, re-register the interceptor
+    if (!agentManager.getBridge()) return;
+    agentManager.registerBridgeInterceptor(this.councilAgentId, async (item: any) => {
+      await this.handleBridgeItem(item);
+    });
 
-      const item = bridge.dequeue(this.councilAgentId);
-      if (!item) return;
-
-      this.handleBridgeItem(item).catch(err => {
-        console.error(`[council] Bridge item handling failed: ${err.message}`);
-      });
-    }, BRIDGE_POLL_MS);
-
-    if (this.bridgeWatcherTimer.unref) this.bridgeWatcherTimer.unref();
-    console.log('[council] Bridge watcher started');
+    console.log('[council] Bridge watcher started (interceptor-based)');
   }
 
   private async handleBridgeItem(item: any): Promise<void> {

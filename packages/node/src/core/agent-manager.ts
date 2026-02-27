@@ -197,6 +197,14 @@ export class AgentManager {
   /** Cached API token (loaded lazily from ~/.pando/api-token). */
   private cachedApiToken: string | null = null;
 
+  /**
+   * Bridge item interceptors: agentId → callback.
+   * When a bridge item arrives for a registered agentId, the callback is invoked
+   * INSTEAD of normal agent processing. Used by the council to intercept
+   * task_completed/task_failed events from builder/QA agents.
+   */
+  private readonly bridgeInterceptors: Map<string, (item: any) => Promise<void>> = new Map();
+
   constructor(config: AgentManagerConfig) {
     this.config = config;
     this.dataDir = config.dataDir || join(homedir(), '.pando');
@@ -523,7 +531,7 @@ export class AgentManager {
       } catch {}
     }
 
-    // Optionally start session with initial task
+    // Optionally start session with initial task (fire-and-forget so spawn returns immediately)
     if (config.taskContext) {
       // v2.5: Prepend user memory context if available (Envelope 1 — local only)
       let taskPrompt = config.taskContext;
@@ -535,10 +543,16 @@ export class AgentManager {
           }
         } catch { /* non-fatal — proceed without memory */ }
       }
-      const result = await agent.startSession(taskPrompt);
-      if (!result.success) {
-        console.warn(`[agent-manager] Initial session for ${agent.id} failed: ${result.output.slice(0, 200)}`);
-      }
+      // Start session in background — don't block the spawn response.
+      // Claude Code sessions take minutes; callers need the agentId immediately.
+      const capturedPrompt = taskPrompt;
+      agent.startSession(capturedPrompt).then((result) => {
+        if (!result.success) {
+          console.warn(`[agent-manager] Initial session for ${agent.id} failed: ${result.output.slice(0, 200)}`);
+        }
+      }).catch((err: any) => {
+        console.error(`[agent-manager] Session start error for ${agent.id}: ${err.message}`);
+      });
     }
 
     return agent.id;
@@ -669,6 +683,17 @@ export class AgentManager {
    */
   getBridge(): BridgeQueue {
     return this.bridge;
+  }
+
+  /**
+   * Register a bridge item interceptor for a specific agentId.
+   * When bridge items arrive for this agent, the callback is invoked
+   * instead of normal agent processing.
+   * Used by the Council to intercept task_completed/task_failed from builders/QA.
+   */
+  registerBridgeInterceptor(agentId: string, callback: (item: any) => Promise<void>): void {
+    this.bridgeInterceptors.set(agentId, callback);
+    console.log(`[agent-manager] Registered bridge interceptor for ${agentId}`);
   }
 
   /**
@@ -838,6 +863,18 @@ export class AgentManager {
     // Dequeue next item
     const item = this.bridge.dequeue(managerId);
     if (!item) return;
+
+    // Check for bridge interceptor (used by Council for task_completed/task_failed events)
+    const interceptor = this.bridgeInterceptors.get(managerId);
+    if (interceptor && (item.type === 'task_completed' || item.type === 'task_failed')) {
+      console.log(`[agent-manager] Intercepted ${item.type} for ${managerId} — routing to registered handler`);
+      try {
+        await interceptor(item);
+      } catch (err: any) {
+        console.error(`[agent-manager] Bridge interceptor error for ${managerId}: ${err.message}`);
+      }
+      return;
+    }
 
     // Urgency:direct bypass — route directly to user's chat thread, skip agent processing
     if (item.payload?.urgency === 'direct' && (item.type === 'stuck' || item.type === 'user_question')) {
