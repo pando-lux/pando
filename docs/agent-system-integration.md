@@ -9,22 +9,28 @@
 ## FOR IMPLEMENTING AGENTS: READ THIS FIRST
 
 ### What this document is
-A complete mapping of how the brainstormed orchestrator architecture (from `orchestrator-architecture.md`) integrates into the existing Pando codebase. It answers: what stays, what changes, what's new, what gets deleted, and where files go.
+A complete mapping of how the brainstormed orchestrator architecture (from `orchestrator-architecture.md`) integrates into the existing Pando codebase. It answers: what stays, what changes, what's new, what gets deleted, and where files go. It also defines the Unified Agent Identity model, context assembly, session persistence, security model, communication patterns, and self-healing growth loop.
 
 ### Table of contents
-- **Part 1** (line ~50): Current system audit — every existing component, what it does, what's wrong with it
-- **Part 2** (line ~220): What stays untouched — solid infrastructure that doesn't need changing
-- **Part 3** (line ~310): What changes — existing code that gets refactored
-- **Part 4** (line ~480): What's new — components that don't exist yet
+- **Part 1** (line ~60): Current system audit — every existing component, what it does, what's wrong with it
+- **Part 2** (line ~230): What stays untouched — solid infrastructure that doesn't need changing
+- **Part 3** (line ~320): What changes — existing code that gets refactored
+- **Part 4** (line ~490): What's new — components that don't exist yet
 - **Part 5** (line ~650): The split — how agent-manager.ts (2,097 lines) becomes 3 focused modules
-- **Part 6** (line ~780): Private vs public agents — user projects vs network council
-- **Part 7** (line ~880): Gateway integration — how the user-facing flow changes
-- **Part 8** (line ~950): P2P distribution — which node runs which orchestrator
-- **Part 9** (line ~1050): Migration path — how to transition without breaking the live network
-- **Part 10** (line ~1130): Open questions for further brainstorming
+- **Part 6** (line ~770): Private vs public agents — user projects vs network council
+- **Part 7** (line ~900): Gateway integration — how the user-facing flow changes
+- **Part 8** (line ~990): P2P distribution — which node runs which orchestrator
+- **Part 9** (line ~1100): Unified Agent Identity — one record per agent, single source of truth
+- **Part 10** (line ~1310): Context Assembly & Session Persistence — how workers get their brain
+- **Part 11** (line ~1550): The Agent Spectrum — from single worker to organizational scale
+- **Part 12** (line ~1670): Security Model — 3-layer defense, authority enforcement, message signing
+- **Part 13** (line ~1890): Communication Patterns — the only 4 allowed communication paths
+- **Part 14** (line ~2010): Self-Healing & Growth — reflection, lessons, institutional memory
+- **Part 15** (line ~2240): Migration path — how to transition without breaking the live network
+- **Part 16** (line ~2340): Resolved decisions & remaining open questions
 
 ### The one-paragraph summary
-Pando already has 80% of what's needed — P2P networking, governance, task database, agent primitives, AI backend, capability profiles. The problem is a single 1,234-line file (council.ts) that puts orchestration logic inside an AI conversation, and a 2,097-line file (agent-manager.ts) that tries to be 6 systems at once. The fix: add an Orchestrator layer on top (from the companion doc), split agent-manager into 3 focused modules (WorkerPool, OrgManager, MessageBus), and replace council.ts with a deterministic tick loop that calls AI in short bursts. Everything below the orchestration layer — networking, governance, storage, the worker primitive — stays.
+Pando already has 80% of what's needed — P2P networking, governance, task database, agent primitives, AI backend, capability profiles. The problem is a single 1,234-line file (council.ts) that puts orchestration logic inside an AI conversation, and a 2,097-line file (agent-manager.ts) that tries to be 6 systems at once. The fix: add an Orchestrator layer on top (from the companion doc), split agent-manager into 3 focused modules (WorkerPool, OrgManager, MessageBus), replace council.ts with a deterministic tick loop that calls AI in short bursts, and unify all agent identity/context/lifecycle under a single SQLite-backed system. Everything below the orchestration layer — networking, governance, storage, the worker primitive — stays.
 
 ---
 
@@ -202,9 +208,11 @@ CREATE TABLE message_inbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     recipient_id TEXT NOT NULL,      -- orchestrator ID
     sender_id TEXT NOT NULL,         -- who sent it
+    sender_type TEXT NOT NULL,       -- 'worker', 'orchestrator', 'user', 'system'
     type TEXT NOT NULL,              -- 'worker_report', 'health_alert', 'cross_team', 'user_request', 'directive'
     payload TEXT NOT NULL,           -- JSON
     priority INTEGER DEFAULT 1,     -- 0=critical, 1=normal, 2=low
+    signature TEXT,                  -- Ed25519 signature (required for cross-node messages)
     created_at TEXT NOT NULL,
     read_at TEXT,                    -- NULL = unread
     INDEX idx_inbox_recipient (recipient_id, read_at, priority)
@@ -217,6 +225,7 @@ CREATE TABLE message_inbox (
 - Cross-team messages routed through OrgManager
 - Queryable — "show me all unread messages for QA dept"
 - Read receipts — orchestrator marks as read after processing
+- Signed messages for cross-node communication
 
 ### 3.4 agent.ts (1,280 lines) → SIMPLIFIED
 
@@ -235,7 +244,7 @@ CREATE TABLE message_inbox (
 Worker (refactored from agent.ts)
 ├── id, role, workspace
 ├── Claude Code process management (spawn, kill, resume)
-├── MCP tool server (get_my_task, report_progress)
+├── MCP tool server (get_my_task, report_progress, get_my_identity)
 ├── Budget tracking
 └── That's it. No orchestration logic.
 ```
@@ -264,97 +273,7 @@ Worker (refactored from agent.ts)
 
 ### 3.6 task-queue.ts / task-database.ts → EXTENDED
 
-**New tables added to existing SQLite database:**
-
-```sql
--- Orchestrator registry
-CREATE TABLE orchestrators (
-    id TEXT PRIMARY KEY,
-    parent_id TEXT,                   -- NULL = top-level (council)
-    role TEXT NOT NULL,               -- 'council', 'engineering', 'qa', 'user_project'
-    level INTEGER NOT NULL,           -- 0=council, 1=dept, 2=team
-    status TEXT DEFAULT 'active',     -- 'active', 'idle', 'dissolved'
-    config TEXT,                      -- JSON: tick_interval, max_workers, role_prompt
-    last_tick_at TEXT,
-    created_at TEXT NOT NULL,
-    FOREIGN KEY (parent_id) REFERENCES orchestrators(id)
-);
-
--- Task board (extends existing tasks table with orchestrator_id)
--- ALTER TABLE tasks ADD COLUMN orchestrator_id TEXT REFERENCES orchestrators(id);
--- ALTER TABLE tasks ADD COLUMN worker_id TEXT;
--- ALTER TABLE tasks ADD COLUMN file_scope TEXT;  -- assigned files (prevent overlap)
-
--- Message inbox (replaces bridge-queue.ts)
-CREATE TABLE message_inbox (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    recipient_id TEXT NOT NULL,
-    sender_id TEXT NOT NULL,
-    type TEXT NOT NULL,
-    payload TEXT NOT NULL,
-    priority INTEGER DEFAULT 1,
-    created_at TEXT NOT NULL,
-    read_at TEXT
-);
-
--- Tick log (replaces council-minutes.md)
-CREATE TABLE tick_log (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    orchestrator_id TEXT NOT NULL,
-    tick_number INTEGER NOT NULL,
-    tier INTEGER NOT NULL,           -- 1=deterministic, 2=AI judgment
-    board_snapshot TEXT,             -- JSON: what the board looked like
-    ai_input TEXT,                   -- what was sent to AI (if tier 2)
-    ai_output TEXT,                  -- what AI returned (if tier 2)
-    actions_taken TEXT,              -- JSON: actions executed
-    duration_ms INTEGER,
-    created_at TEXT NOT NULL
-);
-
--- Lessons (institutional memory)
-CREATE TABLE lessons (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    orchestrator_id TEXT NOT NULL,
-    lesson TEXT NOT NULL,
-    source TEXT,                     -- 'qa_failure', 'build_error', 'timeout', etc.
-    created_at TEXT NOT NULL
-);
-
--- Org knowledge (cross-team learnings)
-CREATE TABLE org_knowledge (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    category TEXT NOT NULL,          -- 'architecture', 'debugging', 'patterns'
-    knowledge TEXT NOT NULL,
-    source TEXT,
-    created_at TEXT NOT NULL
-);
-
--- Worker registry (replaces in-memory agent registry)
-CREATE TABLE workers (
-    id TEXT PRIMARY KEY,
-    orchestrator_id TEXT NOT NULL,
-    role TEXT NOT NULL,              -- 'builder', 'tester', 'reviewer'
-    status TEXT DEFAULT 'spawning',  -- 'spawning', 'active', 'idle', 'done', 'failed'
-    pid INTEGER,                     -- OS process ID
-    session_id TEXT,                 -- Claude Code session ID
-    workspace_dir TEXT,
-    task_id TEXT,                    -- current task assignment
-    budget_spent REAL DEFAULT 0,
-    budget_limit REAL DEFAULT 50,
-    last_report_at TEXT,
-    spawned_at TEXT NOT NULL,
-    FOREIGN KEY (orchestrator_id) REFERENCES orchestrators(id)
-);
-
--- Founder directives (replaces directives.json)
-CREATE TABLE directives (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    content TEXT NOT NULL,
-    added_by TEXT NOT NULL,
-    active INTEGER DEFAULT 1,
-    created_at TEXT NOT NULL
-);
-```
+See Part 9 for the unified schema that replaces scattered tables.
 
 ---
 
@@ -424,22 +343,22 @@ Extracted from agent-manager.ts. Does ONE thing: manage Claude Code processes.
 WorkerPool
 ├── spawn(config: WorkerConfig): Promise<string>
 │   ├── Create workspace directory
-│   ├── Write CLAUDE.md (simplified — just role template + MCP config)
+│   ├── Write CLAUDE.md (simplified — assembled by assembleContext())
 │   ├── Start Claude Code process
-│   ├── Start MCP tool server (get_my_task, report_progress)
-│   ├── Register in SQLite workers table
+│   ├── Start MCP tool server (get_my_task, report_progress, get_my_identity)
+│   ├── Register in SQLite agent_identity table
 │   └── Return worker ID
 │
 ├── kill(workerId: string): void
 │   ├── SIGTERM the Claude Code process
-│   ├── Update workers table: status = 'done' or 'failed'
+│   ├── Update agent_identity table: status = 'done' or 'failed'
 │   └── Archive workspace (if configured)
 │
 ├── getStatus(workerId: string): WorkerStatus
-│   └── Read from workers table
+│   └── Read from agent_identity table
 │
 ├── listActive(): WorkerStatus[]
-│   └── SELECT * FROM workers WHERE status IN ('active', 'spawning')
+│   └── SELECT * FROM agent_identity WHERE status IN ('active', 'spawning') AND type = 'worker'
 │
 └── cleanup(): void
     └── Kill orphaned processes, archive old workspaces
@@ -464,7 +383,7 @@ Manages the hierarchy tree. Creates/dissolves orchestrators.
 ```
 OrgManager
 ├── createOrchestrator(config): string
-│   ├── Insert into orchestrators table
+│   ├── Insert into agent_identity table (type='orchestrator')
 │   ├── Create tick interval (setInterval)
 │   ├── Return orchestrator ID
 │   └── Wire health alert routing
@@ -473,17 +392,18 @@ OrgManager
 │   ├── Stop tick interval
 │   ├── Kill all workers owned by this orchestrator
 │   ├── Move lessons to org_knowledge (institutional memory)
-│   ├── Update orchestrators table: status = 'dissolved'
+│   ├── Update agent_identity table: status = 'dissolved'
 │   └── Reassign orphaned tasks to parent
 │
 ├── getTree(): OrgTree
 │   └── SELECT with recursive CTE for full hierarchy
 │
 ├── routeMessage(from, to, message): void
+│   ├── Validate sender has authority to message recipient
 │   ├── If same orchestrator: direct insert to inbox
 │   ├── If parent/child: direct insert to inbox
 │   ├── If cross-team: route through common ancestor
-│   └── If cross-node: P2P via RequestReplyManager
+│   └── If cross-node: P2P via RequestReplyManager (signed)
 │
 ├── selectCouncil(): string[]
 │   └── Same logic as current council.ts: top 3 reputation nodes with Claude Code
@@ -496,26 +416,31 @@ OrgManager
 
 **Location:** `packages/node/src/core/worker-mcp.ts`
 
-The worker's lifeline. 2 tools that survive any context compaction.
+The worker's lifeline. 3 tools that survive any context compaction.
 
 ```
 MCP Server (per worker)
 ├── get_my_task()
-│   ├── Read current assignment from workers table
+│   ├── Read current assignment from agent_identity table
 │   ├── Read task details from tasks table
 │   ├── Return: { taskId, description, files, deadline, orchestratorNotes }
 │   └── Worker calls this whenever it's confused or context-compacted
 │
-└── report_progress(status, summary, files_changed?)
-    ├── Insert into message_inbox for worker's orchestrator
-    ├── Update workers.last_report_at
-    ├── If status == 'done': update task status, trigger orchestrator tick
-    ├── If status == 'stuck': orchestrator sees this on next tick, decides action
-    └── If status == 'question': orchestrator reads question, AI decides answer
+├── report_progress(status, summary, files_changed?, difficulties?, suggestions?)
+│   ├── Insert into message_inbox for worker's orchestrator
+│   ├── Update agent_identity.last_report_at
+│   ├── If status == 'done': update task status, trigger orchestrator tick
+│   ├── If status == 'stuck': orchestrator sees this on next tick, decides action
+│   └── If status == 'question': orchestrator reads question, AI decides answer
+│
+└── get_my_identity()
+    ├── Read from agent_identity table
+    ├── Return: { id, role, scope, parentId, authority, projectId, budget }
+    └── Worker calls this to understand who it is and what it's allowed to do
 ```
 
 **Why this is critical:**
-Even if a worker's Claude Code session gets fully context-compacted and forgets everything — it still has MCP tools. When it calls `get_my_task()`, it gets its full task description back. It can continue working without any conversation history.
+Even if a worker's Claude Code session gets fully context-compacted and forgets everything — it still has MCP tools. When it calls `get_my_task()`, it gets its full task description back. When it calls `get_my_identity()`, it knows exactly who it is, what it can do, and who it reports to. It can continue working without any conversation history.
 
 ### 4.5 SQLite MessageBus (new, replaces bridge-queue.ts)
 
@@ -525,7 +450,8 @@ Persistent message routing. Replaces in-memory bridge queue.
 
 ```
 MessageBus
-├── send(recipientId, type, payload, priority?): void
+├── send(recipientId, senderId, senderType, type, payload, priority?): void
+│   ├── Validate sender authority (see Part 12)
 │   └── INSERT INTO message_inbox
 │
 ├── read(recipientId, limit?): Message[]
@@ -551,7 +477,7 @@ The current agent-manager.ts has 2,097 lines doing 6 things. Here's exactly how 
 
 | Responsibility | Current (agent-manager.ts) | New Home | Why |
 |---|---|---|---|
-| **Agent registry** (spawn, track, lookup) | Lines ~100-400 | **WorkerPool** (worker-pool.ts) + **SQLite workers table** | Registry moves to DB. WorkerPool just manages processes. |
+| **Agent registry** (spawn, track, lookup) | Lines ~100-400 | **WorkerPool** (worker-pool.ts) + **SQLite agent_identity table** | Registry moves to DB. WorkerPool just manages processes. |
 | **Bridge queue watcher** (event dispatch) | Lines ~400-900 | **Orchestrator.tick()** reads inbox from SQLite | No more event-driven dispatch. Orchestrator polls its board/inbox each tick. |
 | **Project registry** (access control) | Lines ~900-1100 | **OrgManager** | Project orchestrators replace project agents. Access control on orchestrator level. |
 | **Cleanup sweep** (lifecycle: active→idle→archived→dead) | Lines ~1100-1400 | **Orchestrator.tick()** manages worker lifecycle | Orchestrator knows when workers are done. No need for separate sweep. |
@@ -651,11 +577,11 @@ HealthMonitor alert → MessageBus (inbox for council orchestrator)
 |---|---|---|
 | `POST /v1/chat/message` | → BridgeQueue → project agent | → MessageBus → project orchestrator |
 | `GET /v1/chat/history` | → ThreadStore (unchanged) | → ThreadStore (unchanged) |
-| `GET /v1/agents/tree` | → agent-manager in-memory registry | → SQLite `SELECT * FROM orchestrators` + `workers` |
+| `GET /v1/agents/tree` | → agent-manager in-memory registry | → SQLite `SELECT * FROM agent_identity` |
 | `POST /v1/agents/spawn` | → agent-manager.spawnAgent() | → OrgManager.createOrchestrator() or WorkerPool.spawn() |
 | `POST /v1/agents/:id/report` | → BridgeQueue event | → MessageBus insert |
 | `GET /v1/scheduler/tasks` | → scheduler.getStatus() | → SQLite `SELECT * FROM tasks` |
-| `GET /v1/council` | → council.getState() | → SQLite `SELECT * FROM orchestrators WHERE role='council'` |
+| `GET /v1/council` | → council.getState() | → SQLite `SELECT * FROM agent_identity WHERE role='council'` |
 | `POST /v1/council/message` | → council.handleMessage() | → MessageBus insert (council inbox) |
 | `GET /v1/events` (SSE) | → api-server pushEvent() | → Same mechanism, but fed by orchestrator actions |
 
@@ -713,7 +639,989 @@ If primary goes down:
 
 ---
 
-## Part 9: Migration Path
+## Part 9: Unified Agent Identity
+
+### The problem with 15 scattered systems
+
+Today, an agent's identity is assembled from 15 different sources:
+
+1. `agent-manager.ts` in-memory registry (who exists)
+2. `agent.ts` class fields (state, budget, workspace)
+3. `bridge-queue.ts` subscriptions (who gets messages)
+4. `CLAUDE.md` Layer 1: system rules
+5. `CLAUDE.md` Layer 2: project context
+6. `CLAUDE.md` Layer 3: standing directives
+7. `CLAUDE.md` Layer 4: immediate task
+8. Template files (`genome/templates/*.md`) — role definitions
+9. `project-state.md` in workspace — project memory
+10. `.claude/settings.json` — tool permissions
+11. `session.json` — Claude Code session ID
+12. `scheduler.ts` task assignments
+13. `directives.json` — standing directives
+14. `council.ts` active task state machine
+15. Genome knowledge files — architectural knowledge
+
+No single place to answer: "Who is this agent? What does it know? What's it doing? Who does it report to?"
+
+### The solution: one table, one record, one truth
+
+**Every agent — worker or orchestrator — gets a single row in the `agent_identity` table.**
+
+```sql
+CREATE TABLE agent_identity (
+    -- Core identity
+    id TEXT PRIMARY KEY,                  -- unique agent ID
+    role TEXT NOT NULL,                   -- 'builder', 'tester', 'council', 'engineering', etc.
+    type TEXT NOT NULL,                   -- 'worker' or 'orchestrator'
+    scope TEXT NOT NULL DEFAULT 'private', -- 'private' (user only) or 'public' (network)
+    parent_id TEXT,                       -- who this agent reports to (NULL = top-level)
+    node_id TEXT,                         -- which node runs this agent
+    status TEXT DEFAULT 'pending',        -- 'pending', 'spawning', 'active', 'idle', 'done', 'failed', 'dissolved'
+
+    -- Authority & security
+    authority TEXT,                       -- JSON: what this agent can do (see Part 12)
+    file_scope TEXT,                      -- assigned files (prevent merge conflicts)
+    budget_spent REAL DEFAULT 0,
+    budget_limit REAL DEFAULT 50,
+
+    -- Context
+    project_id TEXT,                      -- which project this agent works on
+    workspace_dir TEXT,                   -- filesystem path to workspace
+    current_task_id TEXT,                 -- what task is currently assigned
+    role_prompt TEXT,                     -- the AI prompt that defines this agent's behavior
+    context_version TEXT,                 -- hash of last assembled context (for cache invalidation)
+
+    -- Session & process
+    session_id TEXT,                      -- Claude Code session ID (for resume/rotate)
+    pid INTEGER,                         -- OS process ID (workers only)
+    persistent INTEGER DEFAULT 0,        -- 1 = survive across tasks (orchestrators)
+
+    -- Orchestrator-specific
+    tick_interval_ms INTEGER,            -- how often to tick (orchestrators only)
+    last_tick_at TEXT,
+    max_workers INTEGER DEFAULT 10,
+    max_children INTEGER DEFAULT 5,
+
+    -- Worker-specific
+    last_report_at TEXT,
+
+    -- Timestamps
+    created_at TEXT NOT NULL,
+    updated_at TEXT,
+    FOREIGN KEY (parent_id) REFERENCES agent_identity(id)
+);
+
+-- Indexes
+CREATE INDEX idx_identity_parent ON agent_identity(parent_id);
+CREATE INDEX idx_identity_project ON agent_identity(project_id);
+CREATE INDEX idx_identity_status ON agent_identity(status, type);
+CREATE INDEX idx_identity_node ON agent_identity(node_id);
+```
+
+### What this replaces
+
+| Old source | Now lives in |
+|---|---|
+| agent-manager in-memory registry | `agent_identity` table |
+| agent.ts class fields | `agent_identity` table |
+| bridge-queue subscriptions | `message_inbox.recipient_id` → `agent_identity.id` |
+| CLAUDE.md layers 1-4 | `assembleContext()` reads from agent_identity + tasks + lessons |
+| Template files | `agent_identity.role_prompt` (short version — not 365 lines) |
+| project-state.md | Tasks table + lessons table (queryable, not a markdown file) |
+| session.json | `agent_identity.session_id` |
+| scheduler task assignments | `agent_identity.current_task_id` |
+| directives.json | `directives` table |
+| council active tasks | Tasks table with `orchestrator_id` |
+
+### The full unified schema
+
+```sql
+-- Agent identity (replaces 15 scattered sources)
+-- See above
+
+-- Tasks (extends existing, adds orchestrator ownership)
+CREATE TABLE tasks (
+    id TEXT PRIMARY KEY,
+    orchestrator_id TEXT REFERENCES agent_identity(id),
+    worker_id TEXT REFERENCES agent_identity(id),
+    title TEXT NOT NULL,
+    description TEXT,
+    status TEXT DEFAULT 'pending',       -- 'pending', 'assigned', 'in_progress', 'qa', 'done', 'failed'
+    priority INTEGER DEFAULT 1,
+    file_scope TEXT,                      -- JSON array of assigned files
+    parent_task_id TEXT,
+    attempt_number INTEGER DEFAULT 1,
+    max_attempts INTEGER DEFAULT 3,
+    created_at TEXT NOT NULL,
+    updated_at TEXT
+);
+
+-- Message inbox (replaces bridge-queue.ts)
+CREATE TABLE message_inbox (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    recipient_id TEXT NOT NULL REFERENCES agent_identity(id),
+    sender_id TEXT NOT NULL,
+    sender_type TEXT NOT NULL,           -- 'worker', 'orchestrator', 'user', 'system'
+    type TEXT NOT NULL,
+    payload TEXT NOT NULL,               -- JSON
+    priority INTEGER DEFAULT 1,
+    signature TEXT,                       -- Ed25519 for cross-node
+    created_at TEXT NOT NULL,
+    read_at TEXT
+);
+CREATE INDEX idx_inbox_recipient ON message_inbox(recipient_id, read_at, priority);
+
+-- Tick log (replaces council-minutes.md)
+CREATE TABLE tick_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    orchestrator_id TEXT NOT NULL REFERENCES agent_identity(id),
+    tick_number INTEGER NOT NULL,
+    tier INTEGER NOT NULL,               -- 1=deterministic, 2=AI judgment
+    board_snapshot TEXT,                  -- JSON
+    ai_input TEXT,
+    ai_output TEXT,
+    actions_taken TEXT,                   -- JSON
+    duration_ms INTEGER,
+    created_at TEXT NOT NULL
+);
+
+-- Lessons (per-orchestrator learning)
+CREATE TABLE lessons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    orchestrator_id TEXT NOT NULL REFERENCES agent_identity(id),
+    project_id TEXT,
+    lesson TEXT NOT NULL,
+    source TEXT,                          -- 'qa_failure', 'build_error', 'timeout', 'worker_suggestion'
+    relevance_tags TEXT,                  -- JSON array: ['builder', 'testing', 'deployment']
+    times_used INTEGER DEFAULT 0,
+    confidence REAL DEFAULT 1.0,         -- 0.0-1.0, decreases if lesson leads to failures
+    created_at TEXT NOT NULL,
+    last_used_at TEXT
+);
+CREATE INDEX idx_lessons_orch ON lessons(orchestrator_id);
+CREATE INDEX idx_lessons_project ON lessons(project_id);
+
+-- Org knowledge (cross-team, institutional memory)
+CREATE TABLE org_knowledge (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    category TEXT NOT NULL,              -- 'architecture', 'debugging', 'patterns', 'deployment'
+    knowledge TEXT NOT NULL,
+    source TEXT,                          -- which orchestrator/project produced this
+    relevance_tags TEXT,                  -- JSON array
+    times_used INTEGER DEFAULT 0,
+    confidence REAL DEFAULT 1.0,
+    created_at TEXT NOT NULL,
+    last_used_at TEXT
+);
+
+-- Directives (founder/admin instructions to orchestrators)
+CREATE TABLE directives (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    target_id TEXT,                       -- orchestrator ID, or NULL for all
+    content TEXT NOT NULL,
+    added_by TEXT NOT NULL,
+    active INTEGER DEFAULT 1,
+    created_at TEXT NOT NULL
+);
+
+-- Reflection log (self-healing growth records)
+CREATE TABLE reflections (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    orchestrator_id TEXT NOT NULL REFERENCES agent_identity(id),
+    level TEXT NOT NULL,                 -- 'task', 'project', 'pattern', 'organization'
+    trigger TEXT NOT NULL,               -- 'task_complete', 'task_failed', 'project_complete', 'weekly_review'
+    input_summary TEXT,                  -- what was analyzed
+    output TEXT NOT NULL,                -- AI reflection output (lessons extracted)
+    lessons_created INTEGER DEFAULT 0,   -- how many lessons were recorded
+    created_at TEXT NOT NULL
+);
+```
+
+---
+
+## Part 10: Context Assembly & Session Persistence
+
+### The problem
+
+Today, a worker's context is assembled from many scattered places, and the assembly logic is spread across agent.ts, agent-manager.ts, and template files. There's no single function that answers: "Given this agent, what CLAUDE.md should it get?"
+
+### The solution: assembleContext()
+
+One function. Takes an agent ID. Returns everything needed to start (or resume) a worker.
+
+```typescript
+async function assembleContext(agentId: string): Promise<AssembledContext> {
+    const identity = db.get('SELECT * FROM agent_identity WHERE id = ?', agentId);
+
+    // Layer 1: Role template (now ~50 lines, not 365)
+    const template = loadTemplate(identity.role);
+    // Templates are short — just the role description and behavioral rules.
+    // No project context, no task details, no instructions about other agents.
+
+    // Layer 2: Project context (if applicable)
+    let projectContext = '';
+    if (identity.project_id) {
+        const project = db.get('SELECT * FROM projects WHERE id = ?', identity.project_id);
+        const recentTasks = db.all(
+            'SELECT * FROM tasks WHERE project_id = ? ORDER BY updated_at DESC LIMIT 10',
+            identity.project_id
+        );
+        projectContext = formatProjectState(project, recentTasks);
+    }
+
+    // Layer 3: Task context (current assignment + previous attempts)
+    let taskContext = '';
+    if (identity.current_task_id) {
+        const task = db.get('SELECT * FROM tasks WHERE id = ?', identity.current_task_id);
+        const previousAttempts = db.all(
+            'SELECT * FROM task_attempts WHERE task_id = ? ORDER BY attempt_number',
+            identity.current_task_id
+        );
+        taskContext = formatTaskContext(task, previousAttempts);
+    }
+
+    // Layer 4: Memory + directives (institutional knowledge)
+    const lessons = db.all(
+        `SELECT * FROM lessons
+         WHERE (orchestrator_id = ? OR project_id = ?)
+         AND confidence > 0.5
+         ORDER BY times_used DESC, created_at DESC LIMIT 10`,
+        identity.parent_id, identity.project_id
+    );
+    const orgKnowledge = db.all(
+        `SELECT * FROM org_knowledge
+         WHERE relevance_tags LIKE ?
+         ORDER BY times_used DESC LIMIT 5`,
+        `%${identity.role}%`
+    );
+    const directives = db.all(
+        `SELECT * FROM directives
+         WHERE active = 1 AND (target_id = ? OR target_id IS NULL)`,
+        agentId
+    );
+
+    // Layer 5: Authority (what this agent can and cannot do)
+    const authority = JSON.parse(identity.authority || '{}');
+
+    // Assemble final CLAUDE.md
+    const claudeMd = [
+        `# You are a Pando ${identity.role}`,
+        `Agent ID: ${identity.id}`,
+        `Scope: ${identity.scope}`,
+        `Reports to: ${identity.parent_id}`,
+        '',
+        '## Your Role',
+        template,
+        '',
+        '## Authority',
+        formatAuthority(authority),
+        '',
+        projectContext ? `## Project State\n${projectContext}` : '',
+        taskContext ? `## Current Task\n${taskContext}` : '',
+        '',
+        '## Lessons from Previous Work',
+        formatLessons(lessons, orgKnowledge),
+        '',
+        directives.length ? `## Directives\n${formatDirectives(directives)}` : '',
+        '',
+        '## Tools Available',
+        '- `get_my_task()` — get your current task assignment (call this if you forget what you\'re doing)',
+        '- `report_progress(status, summary)` — report to your orchestrator',
+        '- `get_my_identity()` — see who you are and what you can do',
+    ].filter(Boolean).join('\n');
+
+    // Determine session strategy
+    const sessionStrategy = determineSessionStrategy(identity);
+
+    // MCP config for this worker
+    const mcpConfig = {
+        tools: ['get_my_task', 'report_progress', 'get_my_identity'],
+        endpoint: `http://localhost:${mcpPort}/worker/${identity.id}`,
+    };
+
+    return { claudeMd, mcpConfig, sessionStrategy };
+}
+```
+
+### Session persistence strategy
+
+The orchestrator decides the session strategy for each worker. Three options:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                SESSION STRATEGY TREE                     │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  Is this the same project as last time?                │
+│  ├── NO → FRESH START                                   │
+│  │   New session, new workspace, clean slate            │
+│  │                                                      │
+│  └── YES → Is the worker continuing the same task?     │
+│       ├── YES → RESUME                                  │
+│       │   Same session ID, same workspace               │
+│       │   claude -p --continue --resume <sessionId>     │
+│       │   Context might be partially compacted           │
+│       │   MCP tools provide safety net                  │
+│       │                                                  │
+│       └── NO (new task, same project) → ROTATE          │
+│           New session, SAME workspace                    │
+│           Fresh context but all project files present    │
+│           Worker reads project state via MCP tools       │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Decision logic:**
+```typescript
+function determineSessionStrategy(identity: AgentIdentity): SessionStrategy {
+    if (!identity.session_id) return 'fresh';
+
+    const lastTask = db.get(
+        'SELECT * FROM tasks WHERE worker_id = ? ORDER BY updated_at DESC LIMIT 1',
+        identity.id
+    );
+
+    // Same task, still in progress → resume
+    if (lastTask && lastTask.id === identity.current_task_id && lastTask.status === 'in_progress') {
+        return 'resume';
+    }
+
+    // Different task but same project → rotate (new session, keep workspace)
+    if (lastTask && lastTask.project_id === identity.project_id) {
+        return 'rotate';
+    }
+
+    // Different project entirely → fresh start
+    return 'fresh';
+}
+```
+
+### Private user scenario walkthrough
+
+**Day 1: User wants a bakery website**
+
+```
+1. User sends "build me a bakery website" via gateway
+2. POST /v1/chat/message → MessageBus (no orchestrator exists yet)
+3. OrgManager creates project orchestrator:
+   INSERT INTO agent_identity (id, role, type, scope, project_id, ...)
+   VALUES ('orch-bakery-123', 'user_project', 'orchestrator', 'private', 'proj-bakery', ...)
+4. Orchestrator tick #1:
+   - Reads inbox: "user wants a bakery website"
+   - Tier 2 (needs AI): calls AI with user request
+   - AI returns: [create_task("design homepage"), create_task("build menu page"), spawn_worker("builder")]
+   - Executes actions
+5. WorkerPool.spawn() called:
+   - Creates workspace: ~/.pando/agents/worker-builder-456/
+   - assembleContext('worker-builder-456') builds CLAUDE.md
+   - Starts Claude Code with MCP tools
+   - Worker starts building
+6. Worker builds, calls report_progress('in_progress', 'homepage done, starting menu page')
+7. Worker calls report_progress('done', 'bakery site complete', ['index.html', 'menu.html'])
+8. Orchestrator tick #N:
+   - Reads inbox: worker reported done
+   - Tier 2: calls AI: "builder says done. What next?"
+   - AI returns: [spawn_worker("tester"), assign_task("test bakery site")]
+   - QA worker tests, reports pass
+   - Orchestrator deploys via DeployManager
+   - Sends result to user via MessageBus → SSE
+```
+
+**Day 2: User comes back, wants to add online ordering**
+
+```
+1. User sends "add online ordering to my bakery site" via gateway
+2. MessageBus routes to existing project orchestrator (orch-bakery-123)
+3. Orchestrator tick:
+   - Reads inbox: "add online ordering"
+   - Reads board: project tasks from yesterday, lessons from yesterday's build
+   - Tier 2: AI plans the addition, aware of existing codebase via project context
+   - Spawns builder worker with ROTATE session strategy
+     (new session, same workspace — all yesterday's files still there)
+4. Worker gets CLAUDE.md with:
+   - Project state: "Bakery site deployed. Pages: index.html, menu.html"
+   - Lessons: "Used Tailwind for styling, vanilla JS for interactivity"
+   - Task: "Add online ordering system"
+5. Worker builds on existing code seamlessly
+6. Same test → deploy cycle
+```
+
+**The key insight:** The workspace persists. The project context is in SQLite. The lessons are queryable. Even though the Claude Code session from yesterday is gone, the worker has everything it needs to continue.
+
+---
+
+## Part 11: The Agent Spectrum
+
+### Same primitives, any scale
+
+The architecture supports everything from a single inline task to a full organizational hierarchy. Here's the spectrum:
+
+```
+SCALE 0: Inline Task
+────────────────────
+One AI call. No worker. No orchestrator.
+Example: "What's 2+2?"
+Implementation: Direct AI call, return result.
+Components used: ai-backend-claude.ts only.
+
+SCALE 1: Single Worker
+──────────────────────
+One worker, no orchestrator overhead.
+Example: "Fix this typo in index.html"
+Implementation: WorkerPool.spawn() directly.
+No tick loop needed — simple fire-and-forget.
+Components used: WorkerPool + Worker MCP.
+
+SCALE 2: Orchestrator + Workers
+───────────────────────────────
+One orchestrator managing 2-5 workers.
+Example: "Build me a todo app"
+Implementation: Project orchestrator with builder + tester workers.
+Components used: Orchestrator + WorkerPool + Worker MCP + MessageBus.
+
+SCALE 3: Department Hierarchy
+─────────────────────────────
+Parent orchestrator with child orchestrators.
+Example: "Refactor the authentication system"
+Implementation: Engineering orchestrator → frontend team + backend team + QA team.
+Components used: All of the above + OrgManager.
+
+SCALE 4: Full Organization
+──────────────────────────
+Council → departments → teams → workers.
+Example: Pando self-maintenance (the current council use case).
+Implementation: Council orchestrator → Engineering + QA + Operations + Finance.
+Components used: Everything.
+
+SCALE 5: Multi-Organization
+───────────────────────────
+Multiple independent organizations, potentially across nodes.
+Example: Future — multiple projects with dedicated teams, CEO spawning a consulting org for a complex task.
+Implementation: Multiple org trees, P2P coordination.
+Components used: Everything + P2P org-message handler.
+```
+
+### What makes this work
+
+**Same primitives at every scale.** An Orchestrator is an Orchestrator whether it's managing the entire network or building a landing page. A Worker is a Worker whether it's fixing a typo or implementing a payment system. The `assembleContext()` function, the `agent_identity` table, the `message_inbox`, the `tasks` table — all reused.
+
+**Scale emerges from composition, not new code.** You don't need different systems for different scales. You just compose more orchestrators and workers.
+
+### Net code impact
+
+```
+NEW CODE:
+  orchestrator.ts          ~500 lines
+  worker-pool.ts           ~200 lines
+  worker-mcp.ts            ~100 lines
+  message-bus.ts           ~150 lines
+  org-manager.ts           ~250 lines
+  ─────────────────────────────────
+  Total new:             ~1,200 lines
+
+DELETED CODE:
+  council.ts             -1,234 lines
+  agent-manager.ts       -2,097 lines
+  bridge-queue.ts          -267 lines
+  scheduler.ts             -852 lines
+  ─────────────────────────────────
+  Total deleted:         -4,450 lines
+
+NET CHANGE:              -3,250 lines
+```
+
+**We're deleting 3x more than we're writing.** That's how you know the design is right.
+
+---
+
+## Part 12: Security Model — 3-Layer Defense
+
+### The threat model
+
+Agents are AI processes with real capabilities — they can read/write files, execute commands, access APIs, and communicate with other agents. A compromised or misbehaving agent could:
+- Access data it shouldn't see (other users' projects, credentials)
+- Manipulate other agents into doing unauthorized work
+- Escalate its own privileges by talking to a higher-level agent
+- Poison the institutional memory (lessons) to corrupt future work
+
+### Layer 1: Communication Boundaries
+
+**Who can talk to whom — enforced by MessageBus before message insertion.**
+
+```
+┌──────────────────────────────────────────────────────┐
+│              ALLOWED COMMUNICATION PATHS              │
+├──────────────────────────────────────────────────────┤
+│                                                      │
+│  Worker → Parent Orchestrator     ✓  ALWAYS          │
+│  (via MCP report_progress)                           │
+│                                                      │
+│  Orchestrator → Own Workers       ✓  ALWAYS          │
+│  (via task assignment, kill)                         │
+│                                                      │
+│  Orchestrator → Parent Orch       ✓  ALWAYS          │
+│  (escalation, reporting)                             │
+│                                                      │
+│  Orchestrator → Child Orch        ✓  ALWAYS          │
+│  (delegation, directives)                            │
+│                                                      │
+│  Orchestrator → Sibling Orch      ✓  WITH REASON     │
+│  (cross-team: routed through common parent)          │
+│                                                      │
+│  User → Project Orchestrator      ✓  IF AUTHORIZED   │
+│  (owner of project only)                             │
+│                                                      │
+│  Worker → Worker                  ✗  NEVER           │
+│  Worker → Non-parent Orch         ✗  NEVER           │
+│  Worker → User                    ✗  NEVER (via orch)│
+│  External → Any Agent             ✗  NEVER           │
+│                                                      │
+└──────────────────────────────────────────────────────┘
+```
+
+**Enforcement:** The `MessageBus.send()` function validates every message before insertion:
+
+```typescript
+function validateMessage(senderId: string, recipientId: string, senderType: string): boolean {
+    const sender = db.get('SELECT * FROM agent_identity WHERE id = ?', senderId);
+    const recipient = db.get('SELECT * FROM agent_identity WHERE id = ?', recipientId);
+
+    // Workers can ONLY talk to their parent orchestrator
+    if (sender.type === 'worker') {
+        return recipient.id === sender.parent_id;
+    }
+
+    // Orchestrators can talk to: parent, children, siblings (same parent)
+    if (sender.type === 'orchestrator') {
+        if (recipient.id === sender.parent_id) return true;    // parent
+        if (recipient.parent_id === sender.id) return true;    // child
+        if (recipient.parent_id === sender.parent_id) return true;  // sibling
+        return false;
+    }
+
+    // Users can only message their own project orchestrator
+    if (senderType === 'user') {
+        return recipient.project_id && recipient.scope === 'private';
+    }
+
+    return false;
+}
+```
+
+### Layer 2: Authority Enforcement
+
+**What each agent can do — defined in the `authority` JSON field.**
+
+Every agent has an `authority` field that defines its capabilities. Authority inherits downward and can only **narrow**, never **widen**.
+
+```typescript
+interface AgentAuthority {
+    // File system access
+    files: {
+        read: string[];      // glob patterns: ['src/components/**', 'package.json']
+        write: string[];     // glob patterns: ['src/components/**']
+        forbidden: string[]; // absolute deny: ['**/.env', '**/credentials*', 'kernel/**']
+    };
+
+    // Command execution
+    commands: {
+        allowed: string[];   // ['npm test', 'npm run build', 'npx playwright*']
+        forbidden: string[]; // ['rm -rf', 'sudo*', 'curl*', 'wget*']
+    };
+
+    // API access
+    api: {
+        endpoints: string[]; // which node API endpoints this agent can call
+        external: boolean;   // can it make external HTTP requests?
+    };
+
+    // Agent management
+    agents: {
+        canSpawn: boolean;       // can create child agents?
+        canKill: boolean;        // can kill workers?
+        maxWorkers: number;
+        maxBudget: number;       // total Lux this agent can spend
+    };
+
+    // Data access
+    data: {
+        projects: string[];      // which project IDs this agent can access
+        credentials: boolean;    // can access credential store? (almost always false)
+    };
+}
+```
+
+**Authority inheritance:**
+
+```
+Council Orchestrator
+  authority: { files: { write: ['**'] }, agents: { canSpawn: true, maxBudget: 1000 } }
+    │
+    ├── Engineering Orchestrator
+    │   authority: { files: { write: ['packages/**'] }, agents: { canSpawn: true, maxBudget: 500 } }
+    │     │
+    │     └── Builder Worker
+    │         authority: { files: { write: ['packages/node/src/api/**'] }, agents: { canSpawn: false } }
+    │         (further narrowed: only the specific files for this task)
+    │
+    └── QA Orchestrator
+        authority: { files: { write: [] }, commands: { allowed: ['npm test*'] } }
+          │
+          └── Tester Worker
+              authority: { files: { read: ['**'], write: [] }, commands: { allowed: ['npm test'] } }
+              (read-only — testers don't modify code)
+```
+
+**Key rule:** A parent can NEVER grant a child more authority than it has itself. The `createOrchestrator()` and `spawn()` functions enforce this:
+
+```typescript
+function narrowAuthority(parentAuth: AgentAuthority, childAuth: Partial<AgentAuthority>): AgentAuthority {
+    return {
+        files: {
+            read: intersectGlobs(parentAuth.files.read, childAuth.files?.read || parentAuth.files.read),
+            write: intersectGlobs(parentAuth.files.write, childAuth.files?.write || parentAuth.files.write),
+            forbidden: [...parentAuth.files.forbidden, ...(childAuth.files?.forbidden || [])],
+        },
+        commands: {
+            allowed: intersect(parentAuth.commands.allowed, childAuth.commands?.allowed || parentAuth.commands.allowed),
+            forbidden: [...parentAuth.commands.forbidden, ...(childAuth.commands?.forbidden || [])],
+        },
+        agents: {
+            canSpawn: parentAuth.agents.canSpawn && (childAuth.agents?.canSpawn ?? false),
+            maxBudget: Math.min(parentAuth.agents.maxBudget, childAuth.agents?.maxBudget || parentAuth.agents.maxBudget),
+            maxWorkers: Math.min(parentAuth.agents.maxWorkers, childAuth.agents?.maxWorkers || parentAuth.agents.maxWorkers),
+        },
+        // ... similar for api, data
+    };
+}
+```
+
+### Layer 3: Message Signing (Cross-Node)
+
+For messages that cross node boundaries (P2P), Ed25519 signatures are required.
+
+```
+Sending node:
+1. Serialize message payload
+2. Sign with node's Ed25519 private key
+3. Include signature in message_inbox.signature field
+4. Send via P2P handler 'pando/org-message'
+
+Receiving node:
+1. Extract sender's public key from peerId
+2. Verify signature against payload
+3. Reject if invalid
+4. Insert into local message_inbox if valid
+```
+
+**Same mechanism as existing P2P message signing in `network.ts`.** No new crypto needed.
+
+### Poisoned lessons defense
+
+The institutional memory (lessons table) is a potential attack vector. A malicious agent could insert bad lessons that corrupt future workers.
+
+**Defense:**
+1. **Only orchestrators write to the lessons table.** Workers suggest lessons via `report_progress(suggestions: [...])`, but the orchestrator's AI reviews them before recording.
+2. **Confidence scoring.** Each lesson has a `confidence` field (0.0-1.0). If a lesson is used and the resulting task fails, confidence drops. Low-confidence lessons are excluded from `assembleContext()`.
+3. **Source tracking.** Every lesson records which orchestrator/project created it. If a pattern of bad lessons traces to one source, the entire source can be quarantined.
+4. **Human review gate.** Lessons promoted to `org_knowledge` (cross-team) require a reflection review by a higher-level orchestrator before becoming broadly available.
+
+---
+
+## Part 13: Communication Patterns — The Only 4 Paths
+
+### Why only 4 patterns
+
+Unrestricted agent-to-agent communication is chaos. Every agent can message every other agent? That's how you get:
+- Workers going rogue (asking other workers to help, bypassing orchestrator)
+- Orchestrators stepping on each other (two orchestrators assigning the same file)
+- Message storms (broadcast to 100 agents = 100 responses = 10,000 follow-ups)
+- Lost accountability (who authorized this action?)
+
+### The 4 allowed patterns
+
+```
+PATTERN 1: Worker → Parent Orchestrator (REPORTING)
+────────────────────────────────────────────────────
+How: MCP tool report_progress()
+What: Status updates, completion reports, questions, difficulties, suggestions
+When: Worker decides (on progress, on completion, when stuck)
+Direction: Always upward
+Example: Builder calls report_progress('done', 'homepage complete', files: ['index.html'])
+
+PATTERN 2: Orchestrator → Own Worker (DIRECTING)
+────────────────────────────────────────────────
+How: Task assignment via SQLite + kill signal via WorkerPool
+What: Task assignments, context updates, termination
+When: Orchestrator decides during tick()
+Direction: Always downward
+Example: Orchestrator assigns new task, or kills worker that's over budget
+
+PATTERN 3: Orchestrator → Orchestrator (COORDINATING)
+─────────────────────────────────────────────────────
+How: MessageBus.send() (parent↔child, sibling↔sibling via common parent)
+What: Task delegation, status reports, cross-team requests, escalations
+When: Orchestrator decides during tick()
+Direction: Up (escalate), down (delegate), or sideways (cross-team via parent)
+Example: Engineering orch tells QA orch "build ready for testing"
+
+PATTERN 4: User → Project Orchestrator (REQUESTING)
+───────────────────────────────────────────────────
+How: HTTP API → MessageBus insert
+What: New requests, feedback on results, project modifications
+When: User sends via gateway
+Direction: Inward (external → system boundary)
+Example: User sends "add a contact page" via chat
+```
+
+### What's explicitly NOT allowed
+
+| Pattern | Why Blocked |
+|---|---|
+| Worker → Worker | No coordination without orchestrator knowledge. Prevents rogue collaboration. |
+| Worker → Non-parent Orch | Workers don't know about other orchestrators. Prevents privilege escalation. |
+| Worker → User directly | All user communication goes through the project orchestrator. Prevents unfiltered output. |
+| External → Any Agent | All external input enters through HTTP API → MessageBus. No direct agent access. |
+| Orchestrator → Unrelated Orch | Cross-team messages must route through common ancestor. Prevents shadow hierarchies. |
+
+### Message format
+
+All messages through the system use a consistent format:
+
+```typescript
+interface AgentMessage {
+    id: number;                  // auto-increment
+    sender_id: string;           // agent_identity.id
+    sender_type: 'worker' | 'orchestrator' | 'user' | 'system';
+    recipient_id: string;        // agent_identity.id
+    type: string;                // categorizes the message
+    payload: {
+        // Pattern 1 (worker reports):
+        status?: 'in_progress' | 'done' | 'stuck' | 'question' | 'failed';
+        summary?: string;
+        files_changed?: string[];
+        difficulties?: string[];  // what was hard
+        suggestions?: string[];   // ideas for improvement
+        error?: string;
+
+        // Pattern 2 (orchestrator directives):
+        task_id?: string;
+        action?: 'assign' | 'reassign' | 'cancel';
+        notes?: string;
+
+        // Pattern 3 (cross-team):
+        request_type?: 'delegate' | 'escalate' | 'inform' | 'request_review';
+        context?: string;
+
+        // Pattern 4 (user):
+        message?: string;
+        project_id?: string;
+    };
+    priority: 0 | 1 | 2;        // 0=critical, 1=normal, 2=low
+    signature?: string;          // Ed25519 (cross-node only)
+    created_at: string;
+    read_at?: string;
+}
+```
+
+---
+
+## Part 14: Self-Healing & Growth — The Learning Loop
+
+### How the system gets smarter over time
+
+This is the core differentiator. Most AI agent systems are stateless — every new task starts from zero. Pando's orchestrator system accumulates institutional knowledge:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   THE GROWTH LOOP                        │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  1. Worker does task                                    │
+│     └── Reports difficulties + suggestions via MCP      │
+│                                                         │
+│  2. Orchestrator reflects on completion                 │
+│     └── AI extracts lessons from worker report           │
+│     └── Stores in lessons table with relevance tags      │
+│                                                         │
+│  3. Next worker gets context from assembleContext()     │
+│     └── Relevant lessons injected into CLAUDE.md         │
+│     └── Worker starts smarter than predecessor           │
+│                                                         │
+│  4. That worker reports back                            │
+│     └── Confirms/contradicts previous lessons            │
+│     └── Orchestrator updates confidence scores           │
+│                                                         │
+│  5. Over time: high-confidence lessons promoted          │
+│     └── lessons → org_knowledge (cross-team)             │
+│     └── Available to ALL workers across all projects     │
+│                                                         │
+│  6. System gets smarter without any human intervention  │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+### Workers report naturally (not forms)
+
+Workers don't fill out structured forms. They report through `report_progress()` with optional fields:
+
+```typescript
+// Worker calls this when done:
+report_progress({
+    status: 'done',
+    summary: 'Built the contact form with email validation',
+    files_changed: ['src/contact.html', 'src/validate.js'],
+    difficulties: [
+        'Email regex was tricky — used RFC 5322 compliant pattern',
+        'Had to install nodemailer for SMTP — added to package.json'
+    ],
+    suggestions: [
+        'Consider adding a CAPTCHA for spam prevention',
+        'The SMTP config should be in environment variables, not hardcoded'
+    ]
+});
+```
+
+The worker reports what it naturally noticed. No forced structure. The orchestrator's AI extracts lessons from this unstructured feedback.
+
+### Reflection hierarchy
+
+Reflections happen at four levels, triggered at different frequencies:
+
+```
+Level 1: TASK REFLECTION (after every task completion)
+──────────────────────────────────────────────────────
+Trigger: Worker reports 'done' or 'failed'
+Who reflects: The worker's orchestrator
+Input: Worker report + task description + outcome
+AI prompt: "This worker just completed/failed task X. What can we learn?"
+Output: 0-3 lessons stored in lessons table
+Cost: Very cheap (1 short AI call per task)
+Example lesson: "When building forms, always add client-side validation first"
+
+Level 2: PROJECT REFLECTION (when project milestone completes)
+─────────────────────────────────────────────────────────────
+Trigger: All tasks in a project phase done, or project complete
+Who reflects: The project orchestrator
+Input: All task results + all worker reports + all lessons so far
+AI prompt: "This project phase is done. What patterns do you see?"
+Output: 2-5 lessons, some promoted to org_knowledge
+Cost: Moderate (1 medium AI call per project milestone)
+Example lesson: "For e-commerce projects, always set up payment testing early"
+
+Level 3: PATTERN REFLECTION (weekly, or after 10+ tasks)
+────────────────────────────────────────────────────────
+Trigger: Time-based (weekly) or count-based (every 10 tasks)
+Who reflects: Department orchestrator (engineering, QA)
+Input: All lessons from the period, grouped by theme
+AI prompt: "Here are 10 lessons from last week. What patterns emerge?"
+Output: 1-3 high-level patterns for org_knowledge
+Cost: Moderate (1 medium AI call per week per department)
+Example pattern: "TypeScript strict mode catches 40% of bugs before testing"
+
+Level 4: ORGANIZATIONAL REFLECTION (monthly, or on major events)
+───────────────────────────────────────────────────────────────
+Trigger: Monthly review, or after major incident
+Who reflects: Council orchestrator
+Input: All org_knowledge entries, all department reports, system health metrics
+AI prompt: "Review the organization's knowledge base. What should change?"
+Output: Strategic directives, architecture decisions, process improvements
+Cost: Expensive (1 long AI call per month)
+Example output: "We should standardize on Playwright for all testing — QA failures dropped 60% after switching"
+```
+
+### Failed tasks produce the most valuable lessons
+
+When a task fails, the orchestrator does a deeper analysis:
+
+```typescript
+async function reflectOnFailure(orchestratorId: string, task: Task, workerReport: any) {
+    const previousAttempts = db.all(
+        'SELECT * FROM task_attempts WHERE task_id = ?',
+        task.id
+    );
+    const existingLessons = db.all(
+        'SELECT * FROM lessons WHERE orchestrator_id = ?',
+        orchestratorId
+    );
+
+    const aiInput = {
+        task: task.description,
+        workerReport: workerReport,
+        previousAttempts: previousAttempts,
+        existingLessons: existingLessons.map(l => l.lesson),
+        question: `This task failed ${previousAttempts.length} time(s). Analyze:
+            1. What went wrong?
+            2. Was the task description clear enough?
+            3. Did the worker have the right tools/access?
+            4. Is there a lesson we should record for future workers?
+            5. Should we change our approach or escalate?`
+    };
+
+    const reflection = await callAI(aiInput);
+
+    // Record lessons with high relevance
+    for (const lesson of reflection.lessons) {
+        db.run(
+            'INSERT INTO lessons (orchestrator_id, lesson, source, relevance_tags, confidence) VALUES (?, ?, ?, ?, ?)',
+            orchestratorId, lesson.text, 'task_failure', JSON.stringify(lesson.tags), 0.8
+        );
+    }
+
+    // Record the reflection itself
+    db.run(
+        'INSERT INTO reflections (orchestrator_id, level, trigger, input_summary, output, lessons_created) VALUES (?, ?, ?, ?, ?, ?)',
+        orchestratorId, 'task', 'task_failed',
+        `Task "${task.title}" failed after ${previousAttempts.length} attempts`,
+        JSON.stringify(reflection), reflection.lessons.length
+    );
+
+    return reflection;
+}
+```
+
+### Lesson lifecycle
+
+```
+Created → Active (injected into workers) → Confirmed/Contradicted → Matured/Deprecated
+
+1. CREATED: Orchestrator AI extracts lesson from worker report
+   confidence: 1.0, times_used: 0
+
+2. ACTIVE: Lesson included in assembleContext() for relevant workers
+   confidence: 1.0, times_used: 1+
+
+3. CONFIRMED: Worker using lesson succeeds → confidence stays high
+   confidence: 1.0, times_used: N+1
+
+4. CONTRADICTED: Worker using lesson fails → confidence drops
+   confidence: 0.6 (drop by 0.2 per failure)
+
+5. MATURED: Lesson used 10+ times with high confidence → promoted to org_knowledge
+   Becomes available to ALL workers across projects
+
+6. DEPRECATED: Confidence drops below 0.3 → excluded from assembleContext()
+   Still in DB (never deleted) but no longer injected
+```
+
+### What this means in practice
+
+After 100 tasks:
+- The system has ~200 lessons in the lessons table
+- ~30 have been promoted to org_knowledge
+- ~15 have been deprecated (bad lessons auto-filter out)
+- New workers start with 10-15 relevant lessons injected
+- Build times decrease, error rates drop, QA pass rates increase
+- All without any human writing documentation or training materials
+
+After 1,000 tasks:
+- The system effectively has "institutional expertise"
+- Common patterns are well-understood and automatically communicated
+- Rare edge cases have specific lessons that surface when relevant
+- The org_knowledge table becomes a living, self-curating knowledge base
+
+---
+
+## Part 15: Migration Path
 
 ### Phase 1: Build Orchestrator standalone (no integration)
 - New files: `orchestrator.ts`, `worker-pool.ts`, `worker-mcp.ts`, `message-bus.ts`, `org-manager.ts`
@@ -750,37 +1658,33 @@ If primary goes down:
 
 ---
 
-## Part 10: Open Questions for Further Brainstorming
+## Part 16: Resolved Decisions & Remaining Open Questions
 
-### 10.1 Worker MCP — how much state?
-Should `get_my_task()` return just the current task, or also recent conversation context? If a worker's context compacts, should MCP restore some history?
+### Resolved (from brainstorming)
 
-### 10.2 Orchestrator AI prompt templates
-What exactly does the council-level AI prompt look like vs team-level? How much context is injected per tick? Need to design exact prompts to keep AI calls fast and focused.
+| Question | Decision | Rationale |
+|---|---|---|
+| Worker MCP — how much state? | Task + identity + recent lessons. No conversation history. | MCP is a safety net, not a memory system. assembleContext() handles initial context. |
+| Worker lifetime | Configurable per-orchestrator. Default: one task = one worker. Can persist for multiple tasks in same project. | Session strategy (resume/rotate/fresh) handles this. |
+| SQLite vs separate database | Same SQLite file. agent_identity, tasks, lessons, messages all in one DB. | One transaction can span all tables. Simpler. |
+| Forms vs natural reporting | Natural reporting with optional fields. Orchestrator AI extracts structured lessons. | Workers shouldn't have reporting overhead. Let AI do the analysis. |
+| Single agent manager? | Yes: the OrgManager + Orchestrator + WorkerPool triad is the "single source of agent management." | 3 focused modules > 1 monolith. But they share the same SQLite DB = single source of truth. |
+| Security model | 3-layer: communication boundaries + authority enforcement + message signing. | Each layer is independent. Compromise one, the others still hold. |
+| Communication patterns | Only 4 paths allowed: worker↑orch, orch↓worker, orch↔orch, user→orch. | Minimizes attack surface. All paths auditable. |
+| How system learns | Reflection hierarchy: task → project → pattern → organization. Natural reporting by workers, AI extraction by orchestrators. | No overhead for workers. Learning happens automatically. |
+| Poisoned lessons | Only orchestrators write lessons. Confidence scoring. Source tracking. Human review for org_knowledge promotion. | Multiple independent defenses. |
 
-### 10.3 Tick interval tuning
-Council: 60s? 5 min? Department: 30s? Team: 10s? How aggressive should ticking be? More ticks = faster response but more AI calls = more cost.
+### Still open
 
-### 10.4 Worker lifetime
-Should workers be truly ephemeral (one task, then killed)? Or should a builder worker live for multiple tasks within a project? Session reuse saves cold-start time but risks stale context.
-
-### 10.5 SQLite vs separate database
-All orchestrator state in the same ledger.db? Or a separate orchestrator.db? Separate avoids schema conflicts but complicates transactions that span tasks + orchestrator state.
-
-### 10.6 Orchestrator-to-orchestrator learning
-When Engineering discovers a pattern (e.g., "always run lint before build"), how does that knowledge propagate to other departments? Via org_knowledge table? Via council directive?
-
-### 10.7 Human-in-the-loop for user projects
-For private user projects, should the user be able to "talk to" the orchestrator? Or only to workers? Current gateway chat goes to the project agent. Should it go to the project orchestrator's inbox?
-
-### 10.8 Cost control
-Each AI call in orchestrator.tick() costs money. If council ticks every 60s with tier 2 (AI call), that's 1,440 AI calls/day. How to budget? Tier 1/2 classification reduces this but needs tuning.
-
-### 10.9 Observability
-What does the gateway dashboard show? Real-time tick log? Worker activity? Message flow? Need to design the monitoring UX for the new system.
-
-### 10.10 Agent templates in new system
-Current templates are designed for long-running AI conversations (manager.md is 365 lines). New workers with MCP need much shorter templates. What's the minimum viable template for a builder worker?
+| # | Question | Context | Options |
+|---|---|---|---|
+| 1 | Tick interval tuning | How aggressive should each level tick? | Council: 60s vs 5min. Dept: 30s. Team: 10s. Needs testing. |
+| 2 | Orchestrator AI prompt templates | What exactly does the council-level AI prompt look like vs team-level? | Need to design exact prompts. Will emerge during Phase 1 testing. |
+| 3 | Cost control | Each Tier 2 tick = AI call. Council at 60s = 1,440/day. | Tier 1/2 classification crucial. Expected: ~80% Tier 1 (free). |
+| 4 | Observability UX | What does the gateway dashboard show? | Real-time tick log, worker activity, message flow, lesson count. Design during gateway phase. |
+| 5 | Template size | How short can role templates be with MCP? | Current: 365 lines. Target: ~50 lines. Test during Phase 1. |
+| 6 | Council hot standby sync | How do 3 council nodes stay in sync? | GossipSub (same as task sync). Need to verify latency acceptable. |
+| 7 | Cross-node orchestrator migration | What if a node goes down with active orchestrators? | Parent detects via heartbeat, recreates on different node. Tasks in SQLite survive. |
 
 ---
 
@@ -794,7 +1698,7 @@ packages/node/src/
     org-manager.ts           ← Hierarchy: create/dissolve orchestrators, route messages
   core/
     worker-pool.ts           ← Process mgmt: spawn/kill Claude Code workers
-    worker-mcp.ts            ← MCP tools: get_my_task() + report_progress()
+    worker-mcp.ts            ← MCP tools: get_my_task() + report_progress() + get_my_identity()
     message-bus.ts           ← SQLite-backed persistent message routing
 ```
 
@@ -802,7 +1706,7 @@ packages/node/src/
 ```
 packages/node/src/
   platform/
-    task-database.ts         ← Add new tables (orchestrators, message_inbox, tick_log, etc.)
+    task-database.ts         ← Add unified schema (agent_identity, message_inbox, tick_log, etc.)
     agent-tools.ts           ← Add orchestrator API routes
   api/
     platform-api.ts          ← Wire chat/projects to orchestrator
