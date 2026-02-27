@@ -510,6 +510,15 @@ function ChatPage() {
       const body: Record<string, unknown> = {};
       if (agentMode !== "auto") {
         body.tier = agentMode;
+      } else {
+        // Auto mode: detect build/creation intent client-side before encryption.
+        // Without this, encrypted messages reach the doorman as ciphertext, which
+        // fails keyword matching and incorrectly falls back to Quick/simple mode.
+        const isBuildRequest = /\b(build|create|make|develop|implement|generate|write|design)\b.*\b(app|application|website|site|tool|game|page|project|platform|service|api|server|board|dashboard|blog|shop|store|portfolio|chat|bot|program|script|component|form|interface)\b/i.test(msg);
+        if (isBuildRequest) {
+          body.tier = "complex";
+        }
+        // else: leave tier unset → backend doorman handles questions/simple queries
       }
 
       const threadKey = threadId ? cryptoMod.getThreadKey(threadId) : null;
