@@ -573,11 +573,24 @@ export class Orchestrator {
     sections.push('- Each sub-team gets its own workers, its own QA, its own lessons. You coordinate across teams.');
     sections.push('- Sub-team reports back to you. You decide when ALL teams are done before proceeding to deploy.');
     sections.push('');
+    // Council-specific pipeline: code changes go through governance
+    if (agent.role === 'council' && this.deps.onPropose) {
+      sections.push('### Council Pipeline (you are the council):');
+      sections.push('When a builder reports code changes:');
+      sections.push('- For complex changes: spawn "tester" to QA before committing.');
+      sections.push('- For trivial changes (one-line fix, color change): you may skip QA — governance will review.');
+      sections.push('- ALWAYS commit_code when a builder makes changes. Never leave code uncommitted.');
+      sections.push('- ALWAYS propose_upgrade after committing. This triggers governance + all-node upgrade.');
+      sections.push('- respond_to_user AFTER commit + propose_upgrade to confirm the change is deployed.');
+      sections.push('The minimum for any code change: builder → commit_code → propose_upgrade → respond_to_user.');
+      sections.push('');
+    }
     sections.push('### Key Decisions (use your judgment):');
+    sections.push('- Builder reports code changes? At minimum: commit_code the changes. For important changes, QA first.');
     sections.push('- Multiple workers reporting? Read ALL reports before deciding next step.');
     sections.push('- QA failed multiple times? record_lesson with the pattern, then try a different approach or escalate.');
     sections.push('- Health alert? Assess severity. Critical → spawn builder. Minor → record_lesson.');
-    sections.push('- Simple question? respond_to_user directly. Don\'t spawn a worker for chat.');
+    sections.push('- Simple question with no code needed? respond_to_user directly.');
     sections.push('- Check "Lessons Learned" above — avoid repeating past mistakes.');
     sections.push('- Nothing to do? Return [].');
     sections.push('');

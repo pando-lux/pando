@@ -109,11 +109,13 @@ export function registerAgentRoutes(
     if (!agent) return reply.code(404).send({ error: `Agent ${id} not found` });
 
     try {
+      // Route as user_request if from user/api, so orchestrators classify it as Tier 2
+      const msgType = (source === 'worker') ? 'worker_message' : 'user_request';
       bus.send({
         recipientId: id,
         senderId: source || 'api',
-        senderType: 'system',
-        type: 'worker_message',
+        senderType: source === 'worker' ? 'worker' : 'system',
+        type: msgType,
         payload: { message: content },
         priority: priority === 'critical' ? 0 : priority === 'low' ? 2 : 1,
       });
