@@ -2641,11 +2641,11 @@ location /apps/${projectId}/ {
   private async getGitHubPat(): Promise<string | null> {
     if (!this.resourceRegistry) return null;
     try {
-      const resources = this.resourceRegistry.getResources();
+      const resources = this.resourceRegistry.getAllResources();
       const ghRes = resources.find((r: any) => r.type === 'code_repository' && r.status === 'active');
       if (!ghRes) return null;
       // Try to get credential via P2P proxy
-      const cred = await (this as any).proxyCredentialOp?.('get', { resourceId: ghRes.id });
+      const cred = await (this as any).proxyCredentialOp?.('get', { resourceId: ghRes.resourceId });
       return cred?.key || null;
     } catch { return null; }
   }
@@ -2658,7 +2658,7 @@ location /apps/${projectId}/ {
     if (!this.agentDb) return;
     try {
       const agents = this.agentDb.listAgents({ projectId });
-      const lessons = this.agentDb.getLessons(null, projectId, null, 0, 100);
+      const lessons = this.agentDb.getLessons({ projectId, limit: 100 });
 
       const teamState = {
         projectId,
@@ -2719,7 +2719,11 @@ location /apps/${projectId}/ {
         // Push to GitHub via the API endpoint (non-fatal if fails)
         try {
           const port = this.config.apiPort;
-          const token = this.apiServer?.getToken?.() || '';
+          let token = '';
+          try {
+            const tokenPath = join(this.config.dataDir || join(homedir(), '.pando'), 'api-token');
+            if (existsSync(tokenPath)) token = readFileSync(tokenPath, 'utf-8').trim();
+          } catch { /* no token */ }
           const pushUrl = `http://127.0.0.1:${port}/v1/projects/${projectId}/github/push`;
           await fetch(pushUrl, {
             method: 'POST',
@@ -2752,7 +2756,11 @@ location /apps/${projectId}/ {
 
       try {
         const port = this.config.apiPort;
-        const token = this.apiServer?.getToken?.() || '';
+        let token = '';
+          try {
+            const tokenPath = join(this.config.dataDir || join(homedir(), '.pando'), 'api-token');
+            if (existsSync(tokenPath)) token = readFileSync(tokenPath, 'utf-8').trim();
+          } catch { /* no token */ }
         const deployUrl = `http://127.0.0.1:${port}/v1/projects/${projId || projectId}/deploy`;
         const res = await fetch(deployUrl, {
           method: 'POST',
