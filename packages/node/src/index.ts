@@ -37,6 +37,8 @@ import { SecurityMonitor } from './kernel/security-monitor.js';
 import { ResourceProofChallenger } from './platform/resource-proof.js';
 import { ReputationWeightedGovernance } from './platform/reputation-governance.js';
 import { ContentSafetyReviewer } from './platform/content-safety.js';
+import { GenomeBridge } from './platform/genome-bridge.js';
+import { ScenarioRunner } from './platform/scenario-runner.js';
 import { ContentRegistry } from './platform/content-registry.js';
 import { ContentPublisher } from './platform/content-publish.js';
 import { ContentMaintenance } from './platform/content-maintenance.js';
@@ -136,6 +138,8 @@ export class PandoNode {
   private resourceProofChallenger: ResourceProofChallenger | null = null;
   private reputationGovernance: ReputationWeightedGovernance | null = null;
   private contentSafetyReviewer: ContentSafetyReviewer | null = null;
+  private genomeBridge: GenomeBridge | null = null;
+  private scenarioRunner: ScenarioRunner | null = null;
   private pipelineRunner: PipelineRunner | null = null;
   private pipelineEnabled = false;
   private schedulerEnabled = false;
@@ -2559,12 +2563,37 @@ location /apps/${projectId}/ {
     this.messageBus = new MessageBus(this.agentDb);
     console.log('[agents] MessageBus initialized');
 
+    // Initialize GenomeBridge (reads compiled knowledge graph for agent context)
+    const graphPath = join(process.cwd(), 'output', 'graph.json');
+    this.genomeBridge = new GenomeBridge(graphPath);
+    if (this.genomeBridge.isLoaded()) {
+      const stats = this.genomeBridge.getStats();
+      console.log(`[agents] GenomeBridge loaded: ${stats.totalNodes} nodes, ${stats.testNodes} tests`);
+
+      // Initialize ScenarioRunner (reads test scenarios from genome graph)
+      let apiToken = '';
+      try {
+        const tokenPath = join(dataDir, 'api-token');
+        if (existsSync(tokenPath)) {
+          apiToken = readFileSync(tokenPath, 'utf-8').trim();
+        }
+      } catch { /* no token available */ }
+      this.scenarioRunner = new ScenarioRunner({
+        graphPath,
+        apiBaseUrl: `http://127.0.0.1:${this.config.apiPort}`,
+        apiToken,
+      });
+      console.log('[agents] ScenarioRunner initialized');
+    } else {
+      console.log('[agents] GenomeBridge: no graph.json found (genome context disabled)');
+    }
+
     // Initialize WorkerPool
     this.workerPool = new WorkerPool(
       this.agentDb,
       this.aiBackendRegistry,
       this.messageBus,
-      { dataDir, apiPort: this.config.apiPort },
+      { dataDir, apiPort: this.config.apiPort, genomeBridge: this.genomeBridge },
     );
     console.log('[agents] WorkerPool initialized');
 
@@ -2596,6 +2625,8 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       workerPool: this.workerPool,
       orgManager: this.orgManager,
       aiRegistry: this.aiBackendRegistry,
+      genomeBridge: this.genomeBridge || undefined,
+      scenarioRunner: this.scenarioRunner || undefined,
       onPropose: this.upgradeProtocol ? async (title, description) => {
         // Use upgrade protocol to create proposal with commit hash + auto-approve chain
         // This triggers: governance auto-approve (≤8 peers) → pullAndUpgrade → broadcast to all nodes
@@ -3257,6 +3288,10 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     return this.regressionSuite;
   }
 
+  getScenarioRunner(): ScenarioRunner | null {
+    return this.scenarioRunner;
+  }
+
   getPaymentGate(): PaymentGate | null {
     return this.paymentGate;
   }
@@ -3425,6 +3460,8 @@ export { MessageBus } from './core/message-bus.js';
 export { WorkerPool } from './core/worker-pool.js';
 export { OrgManager } from './platform/org-manager.js';
 export { Orchestrator } from './platform/orchestrator.js';
+export { GenomeBridge } from './platform/genome-bridge.js';
+export { ScenarioRunner } from './platform/scenario-runner.js';
 export { registerAgentRoutes } from './platform/agent-tools.js';
 export { Scheduler } from './platform/scheduler.js';
 export type { SchedulerConfig, SchedulerStatus, ActiveTask, TaskLifecycle } from './platform/scheduler.js';

@@ -2,7 +2,7 @@
  * Pando Network Smoke Test — v2 API (post-v2.2 /v1/ prefix)
  * Run: node tests/smoke-test.mjs
  *
- * Tests priority scenarios from genome/flows/e2e-test-scenarios.md
+ * Tests priority scenarios from genome/knowledge/scenarios/*.know (compiled to output/graph.json)
  */
 
 const TOKEN = "bd5b00bab232c33c259c2603a9991925287cf43fb1f9519c4f00c04501532127";

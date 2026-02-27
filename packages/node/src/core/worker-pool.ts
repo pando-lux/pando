@@ -28,6 +28,7 @@ import type { AIBackendRegistry } from './ai-backend-registry.js';
 import type { AIResult } from './ai-backend.js';
 import { MessageBus } from './message-bus.js';
 import { generateWorkerToolsDocs } from './worker-mcp.js';
+import type { GenomeBridge } from '../platform/genome-bridge.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -98,14 +99,17 @@ export class WorkerPool {
   private apiPort: number;
   private activeProcesses = new Map<string, { kill: () => void }>();
 
+  private genomeBridge: GenomeBridge | null = null;
+
   constructor(
     private db: AgentDatabase,
     private aiRegistry: AIBackendRegistry,
     private messageBus: MessageBus,
-    opts?: { dataDir?: string; apiPort?: number },
+    opts?: { dataDir?: string; apiPort?: number; genomeBridge?: GenomeBridge },
   ) {
     this.dataDir = opts?.dataDir || join(homedir(), '.pando');
     this.apiPort = opts?.apiPort || 4000;
+    this.genomeBridge = opts?.genomeBridge || null;
   }
 
   /**
@@ -419,6 +423,20 @@ export class WorkerPool {
     // Layer 5: Worker tools documentation
     sections.push(generateWorkerToolsDocs(agent.id, this.apiPort));
     sections.push('');
+
+    // Layer 6: Genome architecture context
+    if (this.genomeBridge?.isLoaded()) {
+      const ctx = this.genomeBridge.contextForTask({
+        taskDescription: agent.rolePrompt || '',
+        role: agent.role,
+        fileScope: agent.fileScope ? JSON.parse(agent.fileScope) : undefined,
+      });
+      if (ctx) {
+        sections.push('## Architecture Context (from Genome)');
+        sections.push(ctx);
+        sections.push('');
+      }
+    }
 
     // Build rules
     sections.push('## Build & Test');
