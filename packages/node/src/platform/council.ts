@@ -8,9 +8,10 @@
  * Phase 102b: Builder completion watcher (bridge queue polling).
  * Phase 102.5: Identity integration (RequestActor).
  * Phase 103c: Full builder → QA → governance → upgrade pipeline.
+ * Phase 103e: Real QA tester agent — independent verification, no hardcoded HTTP pings.
  *
  * State persisted in {dataDir}/council/:
- *   - council-state.json   — members, rotation, reflection timestamps
+ *   - council-state.json   — members, rotation, reflection timestamps, active tasks
  *   - council-minutes.md   — rolling log of council decisions (last 30 entries)
  *   - last-prompt.md       — most recent assembled reflection prompt
  *   - network-state.md     — written by NetworkState (read-only here)
@@ -22,7 +23,8 @@
 import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
-import type { RequestActor } from '@pando/shared';
+// RequestActor defined locally to avoid cross-package dependency
+interface RequestActor { type: string; id: string; label: string; }
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
 
@@ -56,6 +58,19 @@ export interface CouncilChatMessage {
   actorType?: string;
 }
 
+export interface ActiveTask {
+  taskId: string;
+  description: string;
+  stage: 'builder' | 'qa' | 'governance' | 'done' | 'failed';
+  builderAgentId: string | null;
+  qaAgentId: string | null;
+  retryCount: number;
+  maxRetries: number;
+  startedAt: number;
+  builderSummary?: string;
+  qaVerdict?: string;
+}
+
 interface PersistedCouncilState {
   members: CouncilMember[];
   selectedAt: number;
@@ -64,6 +79,7 @@ interface PersistedCouncilState {
   lastWeeklyReflection: number;
   lastMonthlyReflection: number;
   councilAgentId?: string;
+  activeTasks?: ActiveTask[];
 }
 
 interface RequestLogEntry {
@@ -92,6 +108,7 @@ const MAX_MINUTES_ENTRIES = 30;
 const MAX_CHAT_HISTORY = 200;
 const MAX_REQUEST_LOG = 200;
 const BRIDGE_POLL_MS = 10_000;                       // 10s bridge queue poll
+const MAX_TASK_RETRIES = 3;
 
 // Mode-aware reflection intervals
 const REFLECTION_INTERVALS: Record<string, number> = {
@@ -126,6 +143,7 @@ export class Council {
   private directives: FounderDirective[] = [];
   private pendingHealthAlerts: string[] = [];
   private councilAgentId: string | null = null;
+  private activeTasks: ActiveTask[] = [];
 
   constructor(node: any, dataDir: string) {
     this.node = node;
@@ -148,6 +166,7 @@ export class Council {
     this.requestLog = this.loadJson(this.requestLogPath, []);
     this.directives = this.loadJson(this.directivesPath, []);
     this.councilAgentId = this.state.councilAgentId || null;
+    this.activeTasks = this.state.activeTasks || [];
   }
 
   // ── Public API ──────────────────────────────────────────────────────────────
@@ -567,16 +586,58 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
   }
 
   /**
-   * Fire-and-forget: spawn a builder and log to minutes.
+   * Spawn a QA tester agent to independently verify a builder's work.
+   * The tester gets ONLY the task description and builder's summary — NOT reasoning.
+   */
+  async spawnQAAgent(taskDescription: string, builderSummary: string): Promise<string | null> {
+    const apiPort = this.node.getApiPort?.() || 4000;
+    const apiToken = this.loadApiToken();
+    if (!apiToken) { console.warn('[council] No API token — cannot spawn QA agent'); return null; }
+
+    const taskContext = `You are an independent QA tester. A builder claims to have completed the following task:\n\nTASK: ${taskDescription}\n\nThe builder reports: "${builderSummary}"\n\nDo NOT assume the fix is correct. Test from scratch. Do NOT trust the builder's claims.\nVerify the changes work by:\n1. Reading the changed code\n2. Running the build (npm run build)\n3. Running relevant tests\n4. Checking for regressions\n\nReport your verdict as the FIRST LINE of your summary:\n- "PASS: [reason]" if the changes work correctly\n- "FAIL: [specific issues found]" if there are problems\n\nBe specific about what you tested and what you found.`;
+
+    const body: Record<string, any> = {
+      role: 'tester', projectId: 'council-fix',
+      description: `[Council QA] Verify: ${taskDescription.slice(0, 100)}`,
+      parentId: this.councilAgentId || null, taskContext,
+    };
+
+    try {
+      const res = await fetch(`http://127.0.0.1:${apiPort}/v1/agents/spawn`, {
+        method: 'POST',
+        headers: { 'Authorization': `Bearer ${apiToken}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(body), signal: AbortSignal.timeout(15_000),
+      });
+      if (res.ok) {
+        const data = await res.json() as any;
+        console.log(`[council] Spawned QA tester agent: ${data.agentId}`);
+        this.appendMinutes(`## QA Tester Spawned — ${new Date().toISOString().slice(0, 10)}\n- Agent: ${data.agentId}\n- Verifying: ${taskDescription.slice(0, 100)}\n`);
+        return data.agentId;
+      } else {
+        console.error(`[council] Failed to spawn QA agent: ${res.status} ${await res.text()}`);
+        return null;
+      }
+    } catch (err: any) { console.error(`[council] QA agent spawn error: ${err.message}`); return null; }
+  }
+
+  getActiveTasks(): ActiveTask[] { return [...this.activeTasks]; }
+
+  /**
+   * Fire-and-forget: spawn a builder, track as ActiveTask, log to minutes.
    */
   private runSelfHealingLoop(description: string, files?: string[]): void {
     this.spawnFixAgent(description, files).then(agentId => {
       if (agentId) {
-        this.appendMinutes(`## Self-Healing — ${new Date().toISOString().slice(0, 10)}\n- Spawned builder ${agentId} for: ${description.slice(0, 100)}\n`);
+        const task: ActiveTask = {
+          taskId: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+          description, stage: 'builder', builderAgentId: agentId, qaAgentId: null,
+          retryCount: 0, maxRetries: MAX_TASK_RETRIES, startedAt: Date.now(),
+        };
+        this.activeTasks.push(task);
+        this.persistActiveTasks();
+        this.appendMinutes(`## Self-Healing — ${new Date().toISOString().slice(0, 10)}\n- Spawned builder ${agentId} for: ${description.slice(0, 100)}\n- Task: ${task.taskId}\n`);
       }
-    }).catch(err => {
-      console.error(`[council] Self-healing loop error: ${err.message}`);
-    });
+    }).catch(err => { console.error(`[council] Self-healing loop error: ${err.message}`); });
   }
 
   // ── Phase 102b: Builder Completion Watcher ────────────────────────────────
@@ -635,58 +696,153 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
   private async handleBridgeItem(item: any): Promise<void> {
     if (item.type === 'task_completed') {
       const { agentId, summary, details } = item.payload || {};
-      console.log(`[council] Builder ${agentId} completed: ${(summary || '').slice(0, 100)}`);
-      this.appendMinutes(`## Builder Completed — ${new Date().toISOString().slice(0, 10)}\n- Agent: ${agentId}\n- Summary: ${(summary || '').slice(0, 200)}\n`);
 
-      // ── Phase 103d: QA Gate — run regression suite before creating proposal ──
-      let qaPass = true;
-      const regressionSuite = this.node.getRegressionSuite?.();
-      if (regressionSuite) {
-        console.log(`[council] Running QA regression suite after builder ${agentId} completion...`);
-        try {
-          const qaResult = await regressionSuite.runAll();
-          // In dev mode (few peers), allow up to 10% test failures (e.g., peer-dependent tests)
-          const peerCount = this.node.getNetwork?.()?.getPeerCount?.() ?? 0;
-          const maxFailures = peerCount < 3 ? Math.max(1, Math.floor(qaResult.total * 0.1)) : 0;
-          qaPass = qaResult.failed <= maxFailures;
-          console.log(`[council] QA result: ${qaResult.passed}/${qaResult.total} passed, ${qaResult.failed} failed (threshold: ${maxFailures}, ${qaResult.duration}ms)`);
-          this.appendMinutes(`## QA Result — ${new Date().toISOString().slice(0, 10)}\n- Builder: ${agentId}\n- Result: ${qaPass ? 'PASSED' : 'FAILED'} (${qaResult.passed}/${qaResult.total}, threshold: ${maxFailures})\n`);
+      // Check if this is a QA tester reporting back
+      const qaTask = this.findTaskByQAAgent(agentId);
+      if (qaTask) { await this.handleQACompletion(qaTask, summary || '', details || ''); return; }
 
-          // Record to QA memory for historical learning
-          try {
-            const { QAMemory } = await import('./qa-memory.js');
-            const memory = new QAMemory(this.councilDir);
-            memory.addEntry({
-              flow: `builder-${agentId}-completion`,
-              verdict: qaPass ? 'PASS' : 'FAIL',
-              failureDetails: qaPass ? undefined : `${qaResult.failed}/${qaResult.total} tests failed`,
-              timestamp: Date.now(),
-              changeId: agentId,
-            });
-          } catch { /* QAMemory optional */ }
-        } catch (err: any) {
-          console.warn(`[council] QA suite error: ${err.message} — proceeding without QA`);
-        }
-      }
+      // Check if this is a tracked builder reporting back
+      const builderTask = this.findTaskByBuilderAgent(agentId);
+      if (builderTask) { await this.handleBuilderCompletion(builderTask, summary || '', details || ''); return; }
 
-      if (!qaPass) {
-        console.warn(`[council] QA FAILED — skipping governance proposal for builder ${agentId}`);
-        this.appendMinutes(`## QA Gate Blocked — ${new Date().toISOString().slice(0, 10)}\n- Builder: ${agentId}\n- Reason: Regression tests failed\n`);
-        return;
-      }
+      // Unknown agent — create a new task and treat as builder completion
+      console.log(`[council] Builder ${agentId} completed (untracked): ${(summary || '').slice(0, 100)}`);
+      const task: ActiveTask = {
+        taskId: `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        description: summary || 'Unknown task', stage: 'builder',
+        builderAgentId: agentId, qaAgentId: null,
+        retryCount: 0, maxRetries: MAX_TASK_RETRIES,
+        startedAt: Date.now(), builderSummary: summary,
+      };
+      this.activeTasks.push(task);
+      await this.handleBuilderCompletion(task, summary || '', details || '');
 
-      // ── Phase 103d: Commit + push so other nodes can pull ──
-      const pushedHash = this.commitAndPush(agentId);
-
-      // Create governance proposal for the code change
-      const title = `[Council Fix] ${(summary || '').slice(0, 80) || 'Code change'}`;
-      const qaNote = regressionSuite ? 'QA: PASSED' : 'QA: not available';
-      const description = `Builder agent ${agentId} completed a code change.\n\nSummary: ${summary}\n\nDetails: ${(details || '').slice(0, 500) || 'N/A'}\n\n${qaNote}`;
-      await this.createCouncilProposal(title, description, pushedHash || undefined);
     } else if (item.type === 'task_failed') {
-      console.error(`[council] Builder ${item.payload?.agentId} failed: ${item.payload?.summary}`);
-      this.appendMinutes(`## Builder Failed — ${new Date().toISOString().slice(0, 10)}\n- Agent: ${item.payload?.agentId || 'unknown'}\n- ${item.payload?.summary || 'Unknown failure'}\n`);
+      const { agentId, summary } = item.payload || {};
+      console.error(`[council] Agent ${agentId} failed: ${summary}`);
+
+      const builderTask = this.findTaskByBuilderAgent(agentId);
+      if (builderTask) { await this.handleBuilderFailure(builderTask, summary || 'Unknown failure'); return; }
+
+      const qaTask = this.findTaskByQAAgent(agentId);
+      if (qaTask) { await this.handleQAFail(qaTask, `QA agent crashed: ${summary || 'unknown error'}`); return; }
+
+      this.appendMinutes(`## Agent Failed — ${new Date().toISOString().slice(0, 10)}\n- Agent: ${agentId || 'unknown'}\n- ${summary || 'Unknown failure'}\n`);
     }
+  }
+
+  // ── Task Lifecycle Handlers ────────────────────────────────────────────────
+
+  private async handleBuilderCompletion(task: ActiveTask, summary: string, _details: string): Promise<void> {
+    task.builderSummary = summary;
+    this.appendMinutes(`## Builder Completed — ${new Date().toISOString().slice(0, 10)}\n- Agent: ${task.builderAgentId}\n- Task: ${task.taskId}\n- Summary: ${summary.slice(0, 200)}\n`);
+
+    // Optional fast pre-check: run regression suite to catch obvious crashes
+    const regressionSuite = this.node.getRegressionSuite?.();
+    if (regressionSuite) {
+      try {
+        console.log(`[council] Running fast pre-check (regression suite) before QA agent...`);
+        const qaResult = await regressionSuite.runAll();
+        const peerCount = this.node.getNetwork?.()?.getPeerCount?.() ?? 0;
+        const maxFailures = peerCount < 3 ? Math.max(1, Math.floor(qaResult.total * 0.1)) : 0;
+        const preCheckPass = qaResult.failed <= maxFailures;
+        console.log(`[council] Pre-check: ${qaResult.passed}/${qaResult.total} passed (${qaResult.duration}ms)`);
+        if (!preCheckPass) {
+          console.warn(`[council] Pre-check FAILED — skipping QA agent, retrying builder`);
+          await this.handleQAFail(task, `Regression pre-check failed: ${qaResult.failed}/${qaResult.total} tests failing`);
+          return;
+        }
+      } catch (err: any) { console.warn(`[council] Pre-check error: ${err.message} — proceeding to QA agent`); }
+    }
+
+    task.stage = 'qa';
+    const qaAgentId = await this.spawnQAAgent(task.description, summary);
+    if (qaAgentId) { task.qaAgentId = qaAgentId; this.persistActiveTasks(); }
+    else { console.warn('[council] QA agent spawn failed — using pre-check result'); await this.handleQAPass(task); }
+  }
+
+  private async handleQACompletion(task: ActiveTask, summary: string, _details: string): Promise<void> {
+    const verdict = this.parseQAVerdict(summary);
+    task.qaVerdict = summary;
+
+    try {
+      const { QAMemory } = await import('./qa-memory.js');
+      const memory = new QAMemory(this.councilDir);
+      memory.addEntry({
+        flow: `task-${task.taskId}-qa`, verdict: verdict.pass ? 'PASS' : 'FAIL',
+        failureDetails: verdict.pass ? undefined : verdict.reason,
+        timestamp: Date.now(), changeId: task.builderAgentId || task.taskId,
+      });
+    } catch { /* QAMemory optional */ }
+
+    this.appendMinutes(`## QA Verdict — ${new Date().toISOString().slice(0, 10)}\n- Task: ${task.taskId}\n- QA Agent: ${task.qaAgentId}\n- Verdict: ${verdict.pass ? 'PASS' : 'FAIL'}\n- Reason: ${verdict.reason.slice(0, 200)}\n`);
+
+    if (verdict.pass) { await this.handleQAPass(task); }
+    else { await this.handleQAFail(task, verdict.reason); }
+  }
+
+  private async handleQAPass(task: ActiveTask): Promise<void> {
+    console.log(`[council] QA PASSED for task ${task.taskId} — committing and creating proposal`);
+    task.stage = 'governance';
+    const pushedHash = this.commitAndPush(task.builderAgentId || undefined);
+    const title = `[Council Fix] ${task.description.slice(0, 80) || 'Code change'}`;
+    const qaNote = task.qaVerdict ? `QA Verdict: PASSED\n${task.qaVerdict.slice(0, 300)}` : 'QA: pre-check only';
+    const desc = `Builder agent ${task.builderAgentId} completed a code change.\n\nTask: ${task.description}\nBuilder Summary: ${task.builderSummary || 'N/A'}\n\n${qaNote}`;
+    await this.createCouncilProposal(title, desc, pushedHash || undefined);
+    task.stage = 'done';
+    this.persistActiveTasks();
+  }
+
+  private async handleQAFail(task: ActiveTask, failureReason: string): Promise<void> {
+    task.retryCount++;
+    console.warn(`[council] QA FAILED for task ${task.taskId} (attempt ${task.retryCount}/${task.maxRetries}): ${failureReason.slice(0, 100)}`);
+    if (task.retryCount < task.maxRetries) {
+      const retryDesc = `${task.description}\n\nPREVIOUS ATTEMPT FAILED. QA found these issues:\n${failureReason}\n\nFix these specific issues. This is retry ${task.retryCount + 1} of ${task.maxRetries}.`;
+      const newAgentId = await this.spawnFixAgent(retryDesc);
+      if (newAgentId) {
+        task.stage = 'builder'; task.builderAgentId = newAgentId; task.qaAgentId = null;
+        this.persistActiveTasks();
+        this.appendMinutes(`## Retry — ${new Date().toISOString().slice(0, 10)}\n- Task: ${task.taskId}\n- Attempt: ${task.retryCount + 1}/${task.maxRetries}\n- New builder: ${newAgentId}\n`);
+      } else { task.stage = 'failed'; this.persistActiveTasks(); }
+    } else {
+      task.stage = 'failed'; this.persistActiveTasks();
+      this.appendMinutes(`## Task Failed (Max Retries) — ${new Date().toISOString().slice(0, 10)}\n- Task: ${task.taskId}\n- Retries: ${task.retryCount}/${task.maxRetries}\n- Last QA issue: ${failureReason.slice(0, 200)}\n`);
+    }
+  }
+
+  private async handleBuilderFailure(task: ActiveTask, failureReason: string): Promise<void> {
+    task.retryCount++;
+    if (task.retryCount < task.maxRetries) {
+      const retryDesc = `${task.description}\n\nPREVIOUS BUILDER FAILED: ${failureReason}\n\nRetry ${task.retryCount + 1} of ${task.maxRetries}.`;
+      const newAgentId = await this.spawnFixAgent(retryDesc);
+      if (newAgentId) { task.builderAgentId = newAgentId; this.persistActiveTasks(); }
+      else { task.stage = 'failed'; this.persistActiveTasks(); }
+    } else {
+      task.stage = 'failed'; this.persistActiveTasks();
+      this.appendMinutes(`## Task Failed (Builder) — ${new Date().toISOString().slice(0, 10)}\n- Task: ${task.taskId}\n- Retries exhausted (${task.maxRetries})\n`);
+    }
+  }
+
+  private findTaskByBuilderAgent(agentId: string): ActiveTask | undefined {
+    return this.activeTasks.find(t => t.builderAgentId === agentId && t.stage === 'builder');
+  }
+
+  private findTaskByQAAgent(agentId: string): ActiveTask | undefined {
+    return this.activeTasks.find(t => t.qaAgentId === agentId && t.stage === 'qa');
+  }
+
+  private parseQAVerdict(summary: string): { pass: boolean; reason: string } {
+    const firstLine = (summary || '').split('\n')[0].trim();
+    if (firstLine.toUpperCase().startsWith('PASS:')) return { pass: true, reason: firstLine.slice(5).trim() };
+    if (firstLine.toUpperCase().startsWith('FAIL:')) return { pass: false, reason: firstLine.slice(5).trim() };
+    const hasFail = /\bfail(ed)?\b/i.test(summary);
+    if (hasFail) return { pass: false, reason: summary.slice(0, 200) };
+    return { pass: true, reason: `Assumed pass. Summary: ${summary.slice(0, 100)}` };
+  }
+
+  private persistActiveTasks(): void {
+    this.state.activeTasks = this.activeTasks;
+    this.saveState();
   }
 
   // ── Phase 103c-d: Commit + Push + Governance Proposal Creation ─────────────
