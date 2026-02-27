@@ -61,6 +61,13 @@ export { RevenueEngine } from './revenue-engine.js';
 export { Scheduler } from './scheduler.js';
 export type { SchedulerConfig, SchedulerStatus, ActiveTask, TaskLifecycle } from './scheduler.js';
 
+export { AgentDatabase } from './agent-database.js';
+export type {
+  AgentIdentity, AgentType, AgentScope, AgentStatus,
+  InboxMessage, MessageType, SenderType,
+  TickLogEntry, Lesson, OrgKnowledge, Directive, Reflection, ReflectionLevel,
+} from './agent-database.js';
+
 export { TaskDatabase, openTaskDatabase } from './task-database.js';
 export { TaskQueue } from './task-queue.js';
 export type { Task, TaskStatus, TaskPriority, TaskResult, TaskRoleMetadata } from './task-queue.js';
