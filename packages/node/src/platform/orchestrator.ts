@@ -323,23 +323,35 @@ export class Orchestrator {
             const summary = (payload.summary || '').toLowerCase();
             if (summary.includes('pass') || summary.includes('success') || summary.includes('verified') || summary.includes('correct')) {
               // QA passed — commit the code
+              const isProject = !!agent.projectId;
               actions.push({
                 type: 'commit_code',
-                message: `[council] Auto-commit after QA pass — ${payload.summary?.slice(0, 80) || 'verified'}`,
+                message: isProject
+                  ? `[project] Auto-commit after QA pass — ${payload.summary?.slice(0, 80) || 'verified'}`
+                  : `[council] Auto-commit after QA pass — ${payload.summary?.slice(0, 80) || 'verified'}`,
               });
-              // Propose upgrade → governance auto-approves → broadcast to all nodes
-              actions.push({
-                type: 'propose_upgrade',
-                title: 'Council code update',
-                description: payload.summary?.slice(0, 200) || 'QA-verified code change',
-              });
-              // Run API regression scenarios after upgrade
-              actions.push({ type: 'run_scenarios', category: 'api' });
-              actions.push({
-                type: 'respond_to_user',
-                message: `Task complete. Builder finished, QA passed, code committed, upgrade proposed to governance, regression scenarios queued.`,
-              });
-              console.log(`[Orchestrator ${this.orchestratorId}] QA PASS → commit + propose upgrade + run scenarios`);
+              if (isProject) {
+                // Phase 104: Project orchestrators deploy after commit
+                actions.push({ type: 'deploy', projectId: agent.projectId! });
+                actions.push({
+                  type: 'respond_to_user',
+                  message: `Task complete. Builder finished, QA passed, code committed and pushed to GitHub, deploying now.`,
+                });
+                console.log(`[Orchestrator ${this.orchestratorId}] QA PASS → commit + deploy (project ${agent.projectId})`);
+              } else {
+                // Council: propose upgrade → governance → broadcast to all nodes
+                actions.push({
+                  type: 'propose_upgrade',
+                  title: 'Council code update',
+                  description: payload.summary?.slice(0, 200) || 'QA-verified code change',
+                });
+                actions.push({ type: 'run_scenarios', category: 'api' });
+                actions.push({
+                  type: 'respond_to_user',
+                  message: `Task complete. Builder finished, QA passed, code committed, upgrade proposed to governance, regression scenarios queued.`,
+                });
+                console.log(`[Orchestrator ${this.orchestratorId}] QA PASS → commit + propose upgrade + run scenarios`);
+              }
             } else {
               // QA failed — need AI to decide next step (Tier 2 on next tick)
               // Store the failure as a directive for the next tick
