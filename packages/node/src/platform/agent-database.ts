@@ -473,11 +473,25 @@ export class AgentDatabase {
       WHERE persistent = 0 AND status IN ('active', 'spawning', 'idle')
     `).run(now);
 
-    // Delete non-persistent orchestrators from previous runs (they'll be recreated)
-    const r2 = this.db.prepare(`
-      DELETE FROM agent_identity
-      WHERE type = 'orchestrator' AND persistent = 1
-    `).run();
+    // Delete persistent orchestrators and their children from previous runs
+    // Must delete children first due to FOREIGN KEY (parent_id) constraint
+    const orchIds = this.db.prepare(`
+      SELECT id FROM agent_identity WHERE type = 'orchestrator' AND persistent = 1
+    `).all().map((r: any) => r.id);
+
+    let r2Changes = 0;
+    for (const orchId of orchIds) {
+      // Delete children (workers) first
+      const childResult = this.db.prepare(`
+        DELETE FROM agent_identity WHERE parent_id = ?
+      `).run(orchId);
+      r2Changes += childResult.changes || 0;
+      // Then delete the orchestrator
+      const orchResult = this.db.prepare(`
+        DELETE FROM agent_identity WHERE id = ?
+      `).run(orchId);
+      r2Changes += orchResult.changes || 0;
+    }
 
     // Clean unread messages for deleted agents
     this.db.prepare(`
@@ -485,7 +499,7 @@ export class AgentDatabase {
       AND recipient_id NOT IN (SELECT id FROM agent_identity WHERE status IN ('active', 'spawning', 'idle', 'pending'))
     `).run();
 
-    return (r1.changes || 0) + (r2.changes || 0);
+    return (r1.changes || 0) + r2Changes;
   }
 
   getAgent(id: string): AgentIdentity | null {

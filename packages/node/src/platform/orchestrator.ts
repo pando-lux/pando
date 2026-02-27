@@ -1,3 +1,4 @@
+// TODO: Add orchestrator-level health metrics tracking
 /**
  * Orchestrator — The deterministic tick loop at the heart of the agent system.
  *
