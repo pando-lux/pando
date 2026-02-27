@@ -447,11 +447,11 @@ export class AgentDatabase {
         ?, ?, ?
       )
     `).run(
-      id, agent.role, agent.type, agent.scope, agent.parentId, agent.nodeId, agent.status,
-      agent.authority, agent.fileScope, agent.budgetLimit,
+      id, agent.role, agent.type, agent.scope ?? 'private', agent.parentId, agent.nodeId, agent.status ?? 'pending',
+      agent.authority, agent.fileScope, agent.budgetLimit ?? 50,
       agent.projectId, agent.workspaceDir, agent.currentTaskId, agent.rolePrompt, agent.contextVersion,
       agent.sessionId, agent.pid, agent.persistent ? 1 : 0,
-      agent.tickIntervalMs, agent.lastTickAt, agent.maxWorkers, agent.maxChildren,
+      agent.tickIntervalMs, agent.lastTickAt, agent.maxWorkers ?? 10, agent.maxChildren ?? 5,
       agent.lastReportAt, now, now,
     );
 

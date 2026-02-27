@@ -193,7 +193,7 @@ export class OrgManager {
     // Kill all workers owned by this orchestrator
     const workers = this.db.getActiveWorkers(orchestratorId);
     for (const worker of workers) {
-      this.workerPool.kill(worker.id);
+      this.workerPool?.kill(worker.id);
     }
 
     // Dissolve child orchestrators recursively
