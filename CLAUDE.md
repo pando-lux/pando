@@ -66,34 +66,42 @@ packages/node/src/
 
 **Import boundary rule:** kernel → only kernel + @pando/*. core → kernel + @pando/*. platform → core + kernel + @pando/*. Never upward.
 
-## Agent Architecture (NEW — being built)
+## Agent Architecture (LIVE — E2E verified 2026-02-27)
 
-Design docs:
-- `docs/orchestrator-architecture.md` — the design (Thin Agent, Thick Orchestrator pattern)
-- `docs/agent-system-integration.md` — integration mapping (16 parts, unified identity, security, growth)
-- `docs/phase-agent-refactor.md` — execution work plan (12 steps)
+Design: "Thin Agent, Thick Orchestrator" — deterministic tick loop that calls AI only when needed.
 
-### The Self-Sustaining Loop
+### The Self-Sustaining Loop (verified end-to-end)
 
 ```
-Input arrives → Orchestrator tick → AI decides (short, stateless) → spawn worker
-→ Worker builds (Claude Code + MCP tools) → Worker reports via MCP
-→ Orchestrator spawns QA worker → QA tests independently
-→ If fail: retry (max 3) → If pass: governance proposal → all nodes upgrade
+1. User request → MessageBus → Orchestrator inbox
+2. Orchestrator tick (60s) → Tier 2 → AI call (short, stateless, no file access)
+3. AI returns action: spawn_worker(role=builder, rolePrompt="...")
+4. WorkerPool spawns Claude Code worker in project root
+5. Builder reads/writes code, runs build, reports done via HTTP
+6. Next tick → Tier 1 (deterministic): builder done → spawn QA tester
+7. QA tester independently verifies → reports PASS/FAIL
+8. Next tick → Tier 1 (deterministic):
+   - PASS → git commit + push + governance upgrade proposal (10 Lux stake)
+   - FAIL → escalate to AI on next Tier 2 tick
+9. Governance auto-approves (≤8 peers in dev) → broadcast via GossipSub
+10. All nodes: git pull → build → restart (systemd/PM2)
 ```
 
-### New agent system components
+**Idle ticks = zero cost.** When inbox is empty, tick is Tier 1 (deterministic, no AI call).
+
+### Agent system components
 
 | Component | File | Purpose |
 |---|---|---|
-| **Orchestrator** | `platform/orchestrator.ts` | Deterministic tick loop. Reads board + inbox from SQLite. Calls AI in short 1-turn bursts for judgment. Executes actions. Same class at every hierarchy level. |
-| **WorkerPool** | `core/worker-pool.ts` | Spawn/kill Claude Code workers. Manages processes, nothing else. |
-| **Worker MCP** | `core/worker-mcp.ts` | 3 tools: `get_my_task()`, `report_progress()`, `get_my_identity()`. Survives context compaction. |
-| **MessageBus** | `core/message-bus.ts` | SQLite-backed persistent message routing. Replaces in-memory bridge queue. |
+| **AgentDatabase** | `platform/agent-database.ts` | SQLite storage for agents, messages, lessons, reflections, tick logs. Single source of truth. |
+| **Orchestrator** | `platform/orchestrator.ts` | Deterministic tick loop. Tier 1 (deterministic) or Tier 2 (AI judgment). Same class at every hierarchy level. |
+| **WorkerPool** | `core/worker-pool.ts` | Spawn/kill Claude Code workers. Workers run in project root with full tool access. |
+| **MessageBus** | `core/message-bus.ts` | SQLite-backed persistent message routing. Priority, type-based, sender validation. |
 | **OrgManager** | `platform/org-manager.ts` | Hierarchy: create/dissolve orchestrators, route messages, authority inheritance. |
+| **AIBackendRegistry** | `core/ai-backend-registry.ts` | Pluggable AI backends. ClaudeBackend has `noTools` mode for orchestrator brain (no file access). |
 
 ### Key principle
-**State lives in SQLite, not in AI conversation.** Orchestrators are deterministic code (setInterval) that call AI in short bursts. Workers are disposable Claude Code processes with persistent workspaces and MCP tools.
+**State lives in SQLite, not in AI conversation.** Orchestrators are deterministic code (setInterval) that call AI in short bursts. Workers are disposable Claude Code processes. Every tick is logged. Lessons accumulate across runs.
 
 ## How to Build and Run
 
