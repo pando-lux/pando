@@ -533,11 +533,10 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
       projectId: 'council-fix',
       description: `[Council] ${description}`,
       parentId: this.councilAgentId || null,
+      taskContext: files && files.length > 0
+        ? `Task: ${description}\n\nFiles to examine: ${files.join(', ')}`
+        : `Task: ${description}`,
     };
-
-    if (files && files.length > 0) {
-      body.taskContext = `Files to examine: ${files.join(', ')}`;
-    }
 
     try {
       const res = await fetch(`http://127.0.0.1:${apiPort}/v1/agents/spawn`, {
