@@ -42,7 +42,7 @@
       "content_hash": "f82302d9"
     },
     "genome/knowledge/flows/council-operating-system.know": {
-      "mtime": 1772185934.8177521,
+      "mtime": 1772197940.5667343,
       "nodes": [
         {
           "_type": "flow",
@@ -91,10 +91,10 @@
               "_name": "tick_execute",
               "_target": "spawn_workers",
               "_tags": [
-                "@gotcha(\"Workers are stateless. They get a task, do it, report back. No persistent session. assembleContext() builds their entire world from scratch.\")"
+                "@gotcha(\"Workers are persistent team members, not disposable. Session IDs saved to SQLite. Resume workers for related tasks to preserve accumulated context. Only rotate when context is exhausted or domain changes.\")"
               ],
               "actor": "WorkerPool",
-              "what": "WorkerPool.spawn() creates a Claude Code child process. Builds CLAUDE.md from 5 layers: constitution, role prompt, authority rules, lessons, tools. Worker communicates via 3 HTTP endpoints (GET /worker/:id/task, POST /worker/:id/report, GET /worker/:id/identity).",
+              "what": "WorkerPool.spawn() creates or resumes a Claude Code child process. Builds CLAUDE.md from 6 layers: constitution, role prompt, authority rules, lessons, tools, genome context. Workers persist sessions \u2014 resumed for related tasks via SessionStrategy ('resume' for same domain, 'rotate' for new domain, 'fresh' only when no prior session). Workers communicate via 3 HTTP endpoints (GET /worker/:id/task, POST /worker/:id/report, GET /worker/:id/identity).",
               "_next": "spawn_workers"
             },
             {
@@ -161,7 +161,7 @@
           "_type": "concept",
           "_name": "WorkerPool",
           "_source": "genome\\knowledge\\flows\\council-operating-system.know",
-          "description": "Spawn/kill Claude Code worker processes. Does ONE thing: manages child_process lifecycle. assembleContext() builds 5-layer CLAUDE.md (constitution, role, authority, lessons, tools). Workers communicate via 3 HTTP endpoints, not MCP.",
+          "description": "Spawn/resume Claude Code worker processes. Manages child_process lifecycle with session persistence. assembleContext() builds 6-layer CLAUDE.md (constitution, role, authority, lessons, tools, genome context). Workers persist sessions in SQLite \u2014 resumed for related tasks, rotated when domain changes. Claude Code is a network resource: discovered via CapabilityProfile (shareCompute: true), not required on every node.",
           "defined_in": "packages/node/src/core/worker-pool.ts",
           "used_by": [
             "Orchestrator",
@@ -209,9 +209,9 @@
           "_type": "decision",
           "_name": "THIN_AGENT_THICK_ORCHESTRATOR",
           "_source": "genome\\knowledge\\flows\\council-operating-system.know",
-          "context": "Old system had thick Agent class (1,279 lines) with persistent sessions, workspace, state files. New system needed to be simpler.",
-          "choice": "Thin workers (stateless, short-lived) + thick orchestrator (deterministic tick loop, all state in SQLite)",
-          "why": "80% of orchestration is deterministic (routing, status checks). Only 20% needs AI. Persistent sessions were expensive and fragile. SQLite survives crashes.",
+          "context": "Old system had thick Agent class (1,279 lines) with complex state management. New system needed simpler orchestration with persistent workers.",
+          "choice": "Persistent workers (session resume, context preservation) + thick orchestrator (deterministic tick loop, all state in SQLite). Claude Code is a discovered network resource, not a node requirement.",
+          "why": "80% of orchestration is deterministic (routing, status checks). Only 20% needs AI. Workers persist sessions via SQLite \u2014 resumed for related tasks to preserve accumulated knowledge. Any node with Claude Code contributed (shareCompute: true) can run the council.",
           "date": "2026-02-27"
         },
         {
@@ -222,9 +222,27 @@
           "choice": "Unified SQLite database (agents.db) for all agent state, messages, lessons, reflections.",
           "why": "Crash recovery. Single source of truth. WAL mode handles concurrent reads. No more scattered state files.",
           "date": "2026-02-27"
+        },
+        {
+          "_type": "decision",
+          "_name": "CLAUDE_CODE_AS_NETWORK_RESOURCE",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "context": "Council needs Claude Code to spawn workers. Not every node has it. Originally assumed council must run on same machine as Claude Code.",
+          "choice": "Claude Code is a contributed network resource discovered via CapabilityProfile. Any node contributes via /contribute claude-code (sets shareCompute: true). Council discovers Claude Code nodes via P2P capability registry and routes work there. Council can run on ANY node that has Claude Code \u2014 doesn't matter which one.",
+          "why": "Same model as MongoDB and API keys \u2014 not every node has it, the network discovers who does. Decouples council location from resource location. Multiple nodes can have Claude Code for redundancy.",
+          "date": "2026-02-27"
+        },
+        {
+          "_type": "decision",
+          "_name": "PERSISTENT_WORKERS",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "context": "Workers were killed after each task. Next task on same codebase started from zero. Builder who just learned the storage layer gets deleted, replacement starts blind.",
+          "choice": "Workers are persistent team members. Sessions saved to SQLite (sessionId). Resume via claude --continue --resume <sessionId> for related tasks. Rotate only when context exhausted or domain changes completely.",
+          "why": "Workers accumulate valuable context \u2014 codebase understanding, file locations, gotchas discovered. Throwing this away is wasteful. Lessons in SQLite capture some knowledge, but a resumed session has the full mental model. Team members should persist.",
+          "date": "2026-02-27"
         }
       ],
-      "content_hash": "2790164e"
+      "content_hash": "1b8c8b38"
     },
     "genome/knowledge/flows/node-onboarding.know": {
       "mtime": 1772122710.7784405,
@@ -413,7 +431,7 @@
       "content_hash": "659a4eb3"
     },
     "genome/knowledge/scenarios/layer0-kernel.know": {
-      "mtime": 1772195114.2398138,
+      "mtime": 1772196919.2572353,
       "nodes": [
         {
           "_type": "test",
@@ -773,7 +791,7 @@
       "content_hash": "2c5ea9de"
     },
     "genome/knowledge/scenarios/layer1-core.know": {
-      "mtime": 1772195114.2728183,
+      "mtime": 1772196919.25824,
       "nodes": [
         {
           "_type": "test",
@@ -1210,7 +1228,7 @@
       "content_hash": "169f035c"
     },
     "genome/knowledge/scenarios/layer2-platform.know": {
-      "mtime": 1772195114.3731115,
+      "mtime": 1772196919.2592392,
       "nodes": [
         {
           "_type": "test",
@@ -1374,7 +1392,7 @@
       "content_hash": "8c1c2623"
     },
     "genome/knowledge/scenarios/layer3-security.know": {
-      "mtime": 1772193748.8194435,
+      "mtime": 1772196919.2592392,
       "nodes": [
         {
           "_type": "test",
@@ -1542,7 +1560,7 @@
       "content_hash": "a5b81438"
     },
     "genome/knowledge/scenarios/regression-api.know": {
-      "mtime": 1772193764.8934946,
+      "mtime": 1772196919.260242,
       "nodes": [
         {
           "_type": "test",
@@ -2537,7 +2555,7 @@
       "content_hash": "b6386d5e"
     },
     "packages/node/src/api/platform-api.ts": {
-      "mtime": 1772194529.658313,
+      "mtime": 1772196919.284757,
       "nodes": [],
       "content_hash": "890729c8"
     },
@@ -2681,12 +2699,12 @@
       "content_hash": "9295a6b7"
     },
     "packages/node/src/core/worker-pool.ts": {
-      "mtime": 1772194078.78501,
+      "mtime": 1772196919.2857585,
       "nodes": [],
       "content_hash": "e3fdb3e2"
     },
     "packages/node/src/index.ts": {
-      "mtime": 1772194680.497369,
+      "mtime": 1772196919.2867532,
       "nodes": [
         {
           "_type": "entity",
@@ -2931,7 +2949,7 @@
       "content_hash": "48612771"
     },
     "packages/node/src/platform/genome-bridge.ts": {
-      "mtime": 1772193964.4001203,
+      "mtime": 1772196919.287752,
       "nodes": [],
       "content_hash": "2670a79f"
     },
@@ -2951,7 +2969,7 @@
       "content_hash": "6d8b4070"
     },
     "packages/node/src/platform/orchestrator.ts": {
-      "mtime": 1772194768.085401,
+      "mtime": 1772196919.2887528,
       "nodes": [],
       "content_hash": "7059edaf"
     },
@@ -3050,7 +3068,7 @@
       "content_hash": "1ea9560b"
     },
     "packages/node/src/platform/scenario-runner.ts": {
-      "mtime": 1772194349.2406552,
+      "mtime": 1772196919.2887528,
       "nodes": [],
       "content_hash": "b76d2f6c"
     },

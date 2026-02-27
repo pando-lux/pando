@@ -95,7 +95,7 @@ Design: "Thin Agent, Thick Orchestrator" — deterministic tick loop that calls 
 |---|---|---|
 | **AgentDatabase** | `platform/agent-database.ts` | SQLite storage for agents, messages, lessons, reflections, tick logs. Single source of truth. |
 | **Orchestrator** | `platform/orchestrator.ts` | Deterministic tick loop. Tier 1 (deterministic) or Tier 2 (AI judgment). Same class at every hierarchy level. |
-| **WorkerPool** | `core/worker-pool.ts` | Spawn/kill Claude Code workers. Workers run in project root with full tool access. |
+| **WorkerPool** | `core/worker-pool.ts` | Spawn/resume Claude Code workers. Workers persist sessions — resumed for related tasks, rotated when domain changes. |
 | **MessageBus** | `core/message-bus.ts` | SQLite-backed persistent message routing. Priority, type-based, sender validation. |
 | **OrgManager** | `platform/org-manager.ts` | Hierarchy: create/dissolve orchestrators, route messages, authority inheritance. |
 | **AIBackendRegistry** | `core/ai-backend-registry.ts` | Pluggable AI backends. ClaudeBackend has `noTools` mode for orchestrator brain (no file access). |
@@ -106,8 +106,14 @@ Design: "Thin Agent, Thick Orchestrator" — deterministic tick loop that calls 
 ### Genome knowledge system
 The genome is a knowledge graph compiled from `.know` files. Test scenarios live in `genome/knowledge/scenarios/*.know` (64 test nodes). Compile: `python tools/genome/genome.py compile .` → `output/graph.json`. GenomeBridge reads the compiled graph at runtime — zero Python dependency for agents.
 
+### Claude Code as a network resource
+Claude Code is a **contributed resource**, not a node requirement. Most nodes won't have it. The network discovers which nodes have Claude Code via CapabilityProfile (`shareCompute: true`, `sharedCapabilities: ["claude-code"]`). The council runs on whichever node has Claude Code available — it doesn't matter which one. `/contribute claude-code` makes a node available for AI work.
+
+### Worker persistence
+Workers are **persistent team members**, not disposable processes. A builder who spent 20 minutes learning the storage layer should be resumed for the next storage task, not killed and replaced. Session IDs are saved to SQLite. `SessionStrategy: 'resume'` continues the same Claude Code session with full context. Workers are only rotated when context gets too large or the task domain changes completely. Lessons extracted from each session accumulate in SQLite and get injected into future workers.
+
 ### Key principle
-**State lives in SQLite, not in AI conversation.** Orchestrators are deterministic code (setInterval) that call AI in short bursts. Workers are disposable Claude Code processes. Every tick is logged. Lessons accumulate across runs.
+**State lives in SQLite, not in AI conversation.** Orchestrators are deterministic code (setInterval) that call AI in short bursts. Every tick is logged. Lessons and worker sessions persist across runs.
 
 ## How to Build and Run
 
