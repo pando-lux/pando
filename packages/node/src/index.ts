@@ -1833,7 +1833,7 @@ location /apps/${projectId}/ {
 
     // Start HTTP API
     this.apiServer = new ApiServer(this);
-    await this.apiServer.start({ port: this.config.apiPort, host: '0.0.0.0' });
+    await this.apiServer.start({ port: this.config.apiPort, host: '::' });
 
     // Wire SSE real-time event push — transactions and governance events
     this.sync.onTransaction((tx) => {
