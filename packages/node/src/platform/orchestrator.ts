@@ -29,6 +29,7 @@ import type { AIBackendRegistry } from '../core/ai-backend-registry.js';
 import type { GenomeBridge } from './genome-bridge.js';
 import type { ScenarioRunner } from './scenario-runner.js';
 import type { TemplateRegistry } from './template-registry.js';
+import type { ThreadStore } from './thread-store.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -54,6 +55,8 @@ export interface OrchestratorDeps {
   apiPort?: number;
   /** Data directory for reading api-token */
   dataDir?: string;
+  /** Thread store for writing orchestrator responses back to chat UI */
+  threadStore?: ThreadStore;
 }
 
 export type OrchestratorAction =
@@ -93,6 +96,8 @@ export class Orchestrator {
   private ticking = false;
   private stopped = false;
   private _startTime: number = 0;
+  /** Track the most recent threadId from user requests for respond_to_user */
+  private _lastThreadId: string | null = null;
 
   constructor(
     private orchestratorId: string,
@@ -267,6 +272,14 @@ export class Orchestrator {
     const userRequests = messages.filter(m => m.type === 'user_request');
     const otherMessages = messages.filter(m =>
       !['worker_report', 'health_alert', 'user_request'].includes(m.type));
+
+    // Track threadId from user requests for respond_to_user
+    for (const req of userRequests) {
+      try {
+        const payload = typeof req.payload === 'string' ? JSON.parse(req.payload) : req.payload;
+        if (payload.threadId) this._lastThreadId = payload.threadId;
+      } catch { /* ignore */ }
+    }
 
     // Get directives
     const directives = this.deps.db.getDirectives(this.orchestratorId);
@@ -716,12 +729,24 @@ export class Orchestrator {
 
       case 'respond_to_user': {
         console.log(`[Orchestrator ${this.orchestratorId}] → User: ${action.message}`);
-        // Store response as a message from the orchestrator to 'user' for API polling
+        // Write response to ThreadStore so it appears in the chat UI
+        if (this.deps.threadStore && this._lastThreadId) {
+          try {
+            this.deps.threadStore.addMessage(this._lastThreadId, {
+              role: 'assistant',
+              content: action.message,
+              timestamp: Date.now(),
+            });
+          } catch (err: any) {
+            console.warn(`[Orchestrator ${this.orchestratorId}] ThreadStore write failed: ${err.message?.slice(0, 100)}`);
+          }
+        }
+        // Also store in MessageBus for API polling fallback
         this.deps.db.sendMessage({
           recipientId: 'user',
           senderId: this.orchestratorId,
           senderType: 'orchestrator',
-          type: 'user_request',
+          type: 'worker_report',
           payload: JSON.stringify({ message: action.message }),
           priority: 1,
         });

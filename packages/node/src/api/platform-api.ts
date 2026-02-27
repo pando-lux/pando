@@ -4159,7 +4159,7 @@ export async function registerPlatformRoutes(
   // Phase 105: Agent Template CRUD
   // ==========================================================================
 
-  fastify.get('/v1/templates', async (request: any, reply: any) => {
+  fastify.get('/templates', async (request: any, reply: any) => {
     const registry = node.getTemplateRegistry();
     if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
 
@@ -4172,7 +4172,7 @@ export async function registerPlatformRoutes(
     return reply.send(registry.listTemplates(filter));
   });
 
-  fastify.get('/v1/templates/:id', async (request: any, reply: any) => {
+  fastify.get('/templates/:id', async (request: any, reply: any) => {
     const registry = node.getTemplateRegistry();
     if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
 
@@ -4181,7 +4181,7 @@ export async function registerPlatformRoutes(
     return reply.send(tmpl);
   });
 
-  fastify.post('/v1/templates', async (request: any, reply: any) => {
+  fastify.post('/templates', async (request: any, reply: any) => {
     const registry = node.getTemplateRegistry();
     if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
 
@@ -4201,7 +4201,7 @@ export async function registerPlatformRoutes(
     }
   });
 
-  fastify.put('/v1/templates/:id', async (request: any, reply: any) => {
+  fastify.put('/templates/:id', async (request: any, reply: any) => {
     const registry = node.getTemplateRegistry();
     if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
 
@@ -4210,7 +4210,7 @@ export async function registerPlatformRoutes(
     return reply.send(tmpl);
   });
 
-  fastify.delete('/v1/templates/:id', async (request: any, reply: any) => {
+  fastify.delete('/templates/:id', async (request: any, reply: any) => {
     const registry = node.getTemplateRegistry();
     if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
 

@@ -2913,6 +2913,7 @@ location /apps/${projectId}/ {
       genomeBridge: this.genomeBridge || undefined,
       scenarioRunner: this.scenarioRunner || undefined,
       templateRegistry: this.templateRegistry || undefined,
+      threadStore: this.threadStore || undefined,
       apiPort: this.config.apiPort,
       dataDir: this.config.dataDir || join(homedir(), '.pando'),
       onCommit,
