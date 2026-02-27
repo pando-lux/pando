@@ -72,9 +72,8 @@ export async function registerPlatformRoutes(
       // Resolve user identity so threads are owned by the authenticated user
       const chatUserId = (await deps.verifyUserJwt(request)) || undefined;
 
-      // If projectId is provided, skip doorman — route directly to project manager
-      if (projectId) {
-        const managerId = `project-${projectId}`;
+      // If projectId is provided, skip doorman — route directly to existing project orchestrator
+      if (projectId && typeof projectId === 'string') {
         if (threadStore) {
           threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'project', '', chatUserId);
@@ -98,8 +97,11 @@ export async function registerPlatformRoutes(
           return { status: 'ok', threadId, reply: noAgentReply, tier: 'simple' };
         }
 
-        await sendToOrchestrator(projectId, trimmed, { threadId, projectId });
-        return { status: 'queued', threadId, message: trimmed };
+        const routed = await sendToOrchestrator(projectId, trimmed, { threadId, projectId });
+        if (!routed) {
+          return reply.code(404).send({ error: `Project not found or no active orchestrator for projectId: ${projectId}` });
+        }
+        return { status: 'queued', threadId, projectId, message: trimmed };
       }
 
       // No projectId — doorman handles first contact

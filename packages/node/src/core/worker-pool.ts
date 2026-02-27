@@ -77,6 +77,8 @@ export class WorkerPool {
   private genomeBridge: GenomeBridge | null = null;
   private templateRegistry: TemplateRegistry | null = null;
 
+  private reapInterval: NodeJS.Timeout | null = null;
+
   constructor(
     private db: AgentDatabase,
     private aiRegistry: AIBackendRegistry,
@@ -87,6 +89,19 @@ export class WorkerPool {
     this.apiPort = opts?.apiPort || 4000;
     this.genomeBridge = opts?.genomeBridge || null;
     this.templateRegistry = opts?.templateRegistry || null;
+
+    // Periodically reap workers whose processes have died without reporting back
+    this.reapInterval = setInterval(() => this.cleanup(), 30_000);
+    // Allow Node.js to exit even if this interval is still running
+    this.reapInterval.unref();
+  }
+
+  /** Stop the periodic reap interval (call on node shutdown). */
+  stopReaper(): void {
+    if (this.reapInterval) {
+      clearInterval(this.reapInterval);
+      this.reapInterval = null;
+    }
   }
 
   /**
@@ -355,20 +370,32 @@ export class WorkerPool {
 
   /**
    * Clean up orphaned processes and old workspaces.
+   * Called on startup and every 30 seconds to reap dead workers.
    */
   cleanup(): void {
-    // Find workers that are active but have no running process
     const activeWorkers = this.db.listAgents({ type: 'worker', status: 'active' });
+    let reaped = 0;
     for (const worker of activeWorkers) {
       if (worker.pid && !this.activeProcesses.has(worker.id)) {
         // Check if process is actually running
+        // process.kill(pid, 0) throws ESRCH if dead, EPERM if alive-but-unpermitted
+        let alive = true;
         try {
           process.kill(worker.pid, 0);
-        } catch {
-          // Process is dead, mark as failed
-          this.db.updateAgent(worker.id, { status: 'failed' });
+        } catch (e: any) {
+          if (e.code === 'ESRCH') alive = false;
+          // EPERM = process exists but we can't signal it → still alive
+        }
+        if (!alive) {
+          this.db.updateAgent(worker.id, {
+            status: 'failed',
+          });
+          reaped++;
         }
       }
+    }
+    if (reaped > 0) {
+      console.log(`[WorkerPool] Reaped ${reaped} dead worker(s) with stale 'active' status`);
     }
   }
 

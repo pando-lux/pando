@@ -84,6 +84,7 @@ interface BoardState {
   workerReports: InboxMessage[];
   healthAlerts: InboxMessage[];
   userRequests: InboxMessage[];
+  peerDisconnects: InboxMessage[];
   directives: string[];
 }
 
@@ -98,6 +99,8 @@ export class Orchestrator {
   private _startTime: number = 0;
   /** Track the most recent threadId from user requests for respond_to_user */
   private _lastThreadId: string | null = null;
+  /** Tick counter for periodic self-check (every 10th tick) */
+  private _tickCount = 0;
 
   constructor(
     private orchestratorId: string,
@@ -155,6 +158,11 @@ export class Orchestrator {
       // 1. Read board and inbox
       const board = this.readBoard();
 
+      this._tickCount++;
+
+      // 1a. Health monitoring (always Tier 1 — deterministic, no AI call)
+      await this.runHealthMonitoring(board);
+
       // 2. Classify: Tier 1 (deterministic) or Tier 2 (AI judgment)
       const tier = this.classify(board);
 
@@ -200,6 +208,7 @@ export class Orchestrator {
         ...board.workerReports.map(m => m.id),
         ...board.healthAlerts.map(m => m.id),
         ...board.userRequests.map(m => m.id),
+        ...board.peerDisconnects.map(m => m.id),
       ];
       if (allMessageIds.length > 0) {
         this.deps.messageBus.markRead(allMessageIds);
@@ -270,8 +279,9 @@ export class Orchestrator {
     const workerReports = messages.filter(m => m.type === 'worker_report');
     const healthAlerts = messages.filter(m => m.type === 'health_alert');
     const userRequests = messages.filter(m => m.type === 'user_request');
+    const peerDisconnects = messages.filter(m => m.type === 'peer_disconnect');
     const otherMessages = messages.filter(m =>
-      !['worker_report', 'health_alert', 'user_request'].includes(m.type));
+      !['worker_report', 'health_alert', 'user_request', 'peer_disconnect'].includes(m.type));
 
     // Track threadId from user requests for respond_to_user
     for (const req of userRequests) {
@@ -293,6 +303,7 @@ export class Orchestrator {
       workerReports,
       healthAlerts,
       userRequests,
+      peerDisconnects,
       directives: directives.map(d => d.content),
     };
   }
@@ -796,6 +807,173 @@ export class Orchestrator {
         }
         break;
       }
+    }
+  }
+
+  // =========================================================================
+  // Health Monitoring (Tier 1 — deterministic, no AI call)
+  // =========================================================================
+
+  /**
+   * Run health monitoring on every tick. Always Tier 1 — no AI call.
+   * Processes health_alert and peer_disconnect messages, plus periodic self-check.
+   */
+  private async runHealthMonitoring(board: BoardState): Promise<void> {
+    // Process health_alert messages
+    for (const alertMsg of board.healthAlerts) {
+      try {
+        const payload = JSON.parse(alertMsg.payload);
+        const alertType = payload.alertType || payload.type || '';
+        const message = payload.message || alertMsg.payload;
+        const severity = payload.severity || 'info';
+
+        console.log(`[Orchestrator ${this.orchestratorId}] Health alert [${severity}] ${alertType}: ${message}`);
+
+        if (alertType === 'high_memory_usage' || message.toLowerCase().includes('memory')) {
+          await this.handleHighMemoryAlert(payload);
+        }
+      } catch { /* skip malformed */ }
+    }
+
+    // Process peer_disconnect messages
+    for (const msg of board.peerDisconnects) {
+      try {
+        const payload = JSON.parse(msg.payload);
+        const peerId = payload.peerId || payload.peer || msg.senderId;
+        console.log(`[Orchestrator ${this.orchestratorId}] Peer disconnected: ${peerId}`);
+
+        // Check if the peer was a compute node (shareCompute: true)
+        const isCompute = payload.shareCompute === true ||
+          payload.capabilities?.shareCompute === true;
+        if (isCompute) {
+          console.warn(`[Orchestrator ${this.orchestratorId}] WARNING: Compute node ${peerId} disconnected — active deployments on that node may be affected`);
+        }
+      } catch { /* skip malformed */ }
+    }
+
+    // Periodic self-check every 10th tick (~10 minutes at 60s interval)
+    if (this._tickCount > 0 && this._tickCount % 10 === 0) {
+      await this.runPeriodicSelfCheck();
+    }
+  }
+
+  /**
+   * Handle a high_memory_usage alert: dissolve idle orchestrators.
+   */
+  private async handleHighMemoryAlert(_payload: any): Promise<void> {
+    const allOrchestrators = this.deps.db.listAgents({ type: 'orchestrator', status: 'active' });
+    const allWorkers = this.deps.db.listAgents({ type: 'worker', status: 'active' });
+    console.log(`[Orchestrator ${this.orchestratorId}] High memory alert: ${allOrchestrators.length} active orchestrators, ${allWorkers.length} active workers`);
+
+    const thirtyMinAgo = new Date(Date.now() - 30 * 60 * 1000).toISOString();
+    let dissolved = 0;
+
+    for (const orch of allOrchestrators) {
+      if (orch.id === this.orchestratorId) continue; // never dissolve self
+      const workers = this.deps.db.getActiveWorkers(orch.id);
+      const isIdle = workers.length === 0 &&
+        (!orch.lastTickAt || orch.lastTickAt < thirtyMinAgo);
+
+      if (isIdle) {
+        console.log(`[Orchestrator ${this.orchestratorId}] Dissolving idle orchestrator ${orch.id} (role=${orch.role}) due to high memory`);
+        this.deps.orgManager.dissolve(orch.id);
+        dissolved++;
+      }
+    }
+
+    if (dissolved > 0) {
+      console.log(`[Orchestrator ${this.orchestratorId}] High memory: dissolved ${dissolved} idle orchestrator(s)`);
+    } else {
+      console.log(`[Orchestrator ${this.orchestratorId}] High memory: no idle orchestrators to dissolve`);
+    }
+  }
+
+  /**
+   * Periodic self-check (every 10th tick):
+   * - Log memory + worker stats
+   * - Dissolve stale orchestrators (no workers, no messages in 60 min)
+   * - Initiate OOM prevention if RSS > 1.5GB
+   */
+  private async runPeriodicSelfCheck(): Promise<void> {
+    const HIGH_MEMORY_BYTES = 1.5 * 1024 * 1024 * 1024;  // 1.5 GB RSS
+    const CRITICAL_MEMORY_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB RSS
+
+    const mem = process.memoryUsage();
+    const rssMB = Math.round(mem.rss / (1024 * 1024));
+    const myWorkers = this.deps.db.getActiveWorkers(this.orchestratorId);
+    const activeTasks = myWorkers.filter(w => w.currentTaskId).length;
+
+    console.log(`[Orchestrator ${this.orchestratorId}] Self-check (tick=${this._tickCount}): RSS=${rssMB}MB, workers=${myWorkers.length} (${activeTasks} with tasks)`);
+
+    // Find stale orchestrators: no active workers AND no tick in last 60 min
+    const sixtyMinAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    const allOrchestrators = this.deps.db.listAgents({ type: 'orchestrator', status: 'active' });
+    let dissolved = 0;
+
+    for (const orch of allOrchestrators) {
+      if (orch.id === this.orchestratorId) continue;
+      const workers = this.deps.db.getActiveWorkers(orch.id);
+      const isStale = workers.length === 0 &&
+        (!orch.lastTickAt || orch.lastTickAt < sixtyMinAgo);
+
+      if (isStale) {
+        console.log(`[Orchestrator ${this.orchestratorId}] Dissolving stale orchestrator ${orch.id} (role=${orch.role}, lastTick=${orch.lastTickAt || 'never'})`);
+        this.deps.orgManager.dissolve(orch.id);
+        dissolved++;
+      }
+    }
+
+    if (dissolved > 0) {
+      console.log(`[Orchestrator ${this.orchestratorId}] Self-check: dissolved ${dissolved} stale orchestrator(s)`);
+    }
+
+    // OOM prevention if RSS > 1.5GB
+    if (mem.rss > HIGH_MEMORY_BYTES) {
+      await this.initiateOOMPrevention(rssMB, CRITICAL_MEMORY_BYTES);
+    }
+  }
+
+  /**
+   * Graceful OOM prevention:
+   * 1. Stop idle workers
+   * 2. Dissolve orchestrators with no active work
+   * 3. Restart node if still critical (RSS > 2GB)
+   */
+  private async initiateOOMPrevention(rssMB: number, criticalBytes: number): Promise<void> {
+    console.log(`[Orchestrator ${this.orchestratorId}] OOM prevention triggered: RSS=${rssMB}MB`);
+
+    let stoppedWorkers = 0;
+    let dissolvedOrchestrators = 0;
+
+    // Step 1: stop idle workers (no active task)
+    const myWorkers = this.deps.db.getActiveWorkers(this.orchestratorId);
+    for (const worker of myWorkers) {
+      if (!worker.currentTaskId) {
+        this.deps.workerPool.kill(worker.id);
+        stoppedWorkers++;
+      }
+    }
+
+    // Step 2: dissolve orchestrators with no active work
+    const allOrchestrators = this.deps.db.listAgents({ type: 'orchestrator', status: 'active' });
+    for (const orch of allOrchestrators) {
+      if (orch.id === this.orchestratorId) continue;
+      const workers = this.deps.db.getActiveWorkers(orch.id);
+      if (workers.length === 0) {
+        this.deps.orgManager.dissolve(orch.id);
+        dissolvedOrchestrators++;
+      }
+    }
+
+    console.log(`[Orchestrator ${this.orchestratorId}] OOM prevention: dissolved ${dissolvedOrchestrators} orchestrators, stopped ${stoppedWorkers} workers`);
+
+    // Step 3: restart node if still above critical threshold after cleanup
+    const memAfter = process.memoryUsage();
+    if (memAfter.rss > criticalBytes) {
+      const rssMBAfter = Math.round(memAfter.rss / (1024 * 1024));
+      console.log(`[Orchestrator ${this.orchestratorId}] Critical OOM after cleanup: RSS=${rssMBAfter}MB — initiating node restart (exit 75)`);
+      // RESTART_EXIT_CODE=75 triggers PM2/systemd to restart the process
+      process.exit(75);
     }
   }
 

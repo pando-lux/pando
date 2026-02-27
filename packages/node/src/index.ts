@@ -2613,6 +2613,58 @@ location /apps/${projectId}/ {
       writeFileSync(claudeMdPath, content);
     }
 
+    // Bootstrap genome directory structure if it doesn't exist
+    const genomeDir = join(wsDir, 'genome');
+    if (!existsSync(genomeDir)) {
+      try {
+        mkdirSync(genomeDir, { recursive: true });
+        mkdirSync(join(genomeDir, 'rules'), { recursive: true });
+
+        writeFileSync(join(genomeDir, 'genome.yaml'), [
+          'version: 1',
+          'project: auto-bootstrapped',
+          'description: Project knowledge base',
+        ].join('\n'));
+
+        writeFileSync(join(genomeDir, 'state.md'), [
+          '# Project State',
+          '',
+          '## Status',
+          'Initialized',
+          '',
+          '## Recent Changes',
+          '(none yet)',
+        ].join('\n'));
+
+        writeFileSync(join(genomeDir, 'rules', 'deployment.md'), [
+          '# Deployment Rules',
+          '',
+          '## Tier 1 — Static Apps (S3)',
+          '- HTML/CSS/JS only apps are deployed to AWS S3 static hosting.',
+          '- Build output goes to dist/ or build/ directory.',
+          '- No server-side code.',
+          '',
+          '## Tier 2 — Server Apps (PM2 + nginx)',
+          '- Node.js or other server apps run via PM2.',
+          '- Served at /apps/<projectId>/ via nginx reverse proxy.',
+          '- App must listen on the assigned PORT environment variable.',
+          '',
+          '## CRITICAL: URL Rules',
+          '- NEVER hardcode localhost or 127.0.0.1 in client-facing code.',
+          '- Browsers: use window.location.origin or relative paths for API calls.',
+          '- Servers: bind to 0.0.0.0 (not localhost) so nginx can proxy to the process.',
+          '- WebSocket: use wss:// with window.location.host, not ws://localhost.',
+          '',
+          '## Port Assignment',
+          '- The PORT env var is set by the deployment system. Always use process.env.PORT.',
+        ].join('\n'));
+
+        console.log(`[project-workspace] Bootstrapped genome in ${genomeDir}`);
+      } catch (err: any) {
+        console.warn(`[project-workspace] Genome bootstrap failed (non-fatal): ${err.message?.slice(0, 100)}`);
+      }
+    }
+
     // Import team-state.json if it exists (from a previous clone)
     const teamStatePath = join(wsDir, 'team-state.json');
     if (existsSync(teamStatePath) && this.agentDb) {
