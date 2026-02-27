@@ -45,7 +45,7 @@ export interface OrchestratorDeps {
 }
 
 export type OrchestratorAction =
-  | { type: 'spawn_worker'; role: string; taskId?: string; fileScope?: string[] }
+  | { type: 'spawn_worker'; role: string; taskId?: string; fileScope?: string[]; rolePrompt?: string }
   | { type: 'kill_worker'; workerId: string }
   | { type: 'create_task'; title: string; description: string; priority?: number }
   | { type: 'assign_task'; taskId: string; workerId: string }
@@ -140,20 +140,25 @@ export class Orchestrator {
 
       let actions: OrchestratorAction[] = [];
 
+      const inboxSummary = `msgs=${board.messages.length} reports=${board.workerReports.length} alerts=${board.healthAlerts.length} requests=${board.userRequests.length}`;
+      console.log(`[Orchestrator ${this.orchestratorId}] Tick — Tier ${tier}, workers=${board.activeWorkers}/${board.maxWorkers}, ${inboxSummary}`);
+
       if (tier === 1) {
         // Tier 1: deterministic actions
         actions = this.deterministic(board, agent);
       } else {
         // Tier 2: call AI for judgment
+        console.log(`[Orchestrator ${this.orchestratorId}] Calling AI...`);
         actions = await this.callAI(board, agent);
+        console.log(`[Orchestrator ${this.orchestratorId}] AI returned ${actions.length} action(s): ${actions.map(a => a.type).join(', ') || 'none'}`);
       }
 
       // 3. Execute actions
       for (const action of actions) {
         try {
           await this.execute(action, agent);
-        } catch (err) {
-          console.error(`[Orchestrator ${this.orchestratorId}] action error:`, action.type, err);
+        } catch (err: any) {
+          console.error(`[Orchestrator ${this.orchestratorId}] action error (${action.type}):`, err.message?.slice(0, 200));
         }
       }
 
@@ -311,7 +316,7 @@ export class Orchestrator {
       const result = await backend.execute({
         type: 'text',
         prompt,
-        options: { model: 'claude-sonnet-4-6' },
+        options: { model: 'claude-sonnet-4-6', noTools: true },
       });
 
       if (!result.success || !result.output) {
@@ -330,8 +335,18 @@ export class Orchestrator {
   private buildAIPrompt(board: BoardState, agent: AgentIdentity): string {
     const sections: string[] = [];
 
-    sections.push(`You are the AI brain for orchestrator "${agent.role}" (${this.orchestratorId}).`);
-    sections.push(`Your job: read the current state and decide what actions to take.`);
+    sections.push(`# ROLE: Decision-maker for orchestrator "${agent.role}" (${this.orchestratorId})`);
+    sections.push('');
+    sections.push('You are a DECISION MAKER — a management brain, not an executor.');
+    sections.push('You read the current state and decide what actions to take.');
+    sections.push('You output ONLY a JSON array of action objects. Nothing else.');
+    sections.push('');
+    sections.push('## CRITICAL RULES');
+    sections.push('1. You MUST NOT read, write, or modify any files. You have NO file access.');
+    sections.push('2. You MUST NOT use any tools (Read, Edit, Write, Bash, Grep, etc.).');
+    sections.push('3. For ANY code change, you MUST use spawn_worker with role "builder".');
+    sections.push('4. For verification, spawn_worker with role "tester".');
+    sections.push('5. Output ONLY a raw JSON array. No markdown, no backticks, no explanation.');
     sections.push('');
 
     // Board state
@@ -406,25 +421,48 @@ export class Orchestrator {
 
     // Available actions
     sections.push('## Available Actions');
-    sections.push('Respond with a JSON array of actions. Each action has a "type" and relevant fields.');
-    sections.push('Available action types:');
-    sections.push('- spawn_worker: { type: "spawn_worker", role: "builder"|"tester"|"reviewer", taskId?: string, fileScope?: string[] }');
-    sections.push('- kill_worker: { type: "kill_worker", workerId: string }');
-    sections.push('- create_task: { type: "create_task", title: string, description: string, priority?: number }');
-    sections.push('- send_message: { type: "send_message", recipientId: string, message: string }');
-    sections.push('- record_lesson: { type: "record_lesson", lesson: string, source?: string }');
-    sections.push('- escalate: { type: "escalate", message: string }');
-    sections.push('- respond_to_user: { type: "respond_to_user", message: string }');
+    sections.push('');
+    sections.push('Each action is a JSON object with a "type" field. Return an array of actions.');
+    sections.push('');
+    sections.push('### For code changes (ALWAYS use these, never modify files yourself):');
+    sections.push('- spawn_worker: Spawn a Claude Code worker that can read/write files');
+    sections.push('  { "type": "spawn_worker", "role": "builder", "rolePrompt": "description of the task for the worker" }');
+    sections.push('  { "type": "spawn_worker", "role": "tester", "rolePrompt": "description of what to test" }');
+    sections.push('  { "type": "spawn_worker", "role": "reviewer", "rolePrompt": "description of what to review" }');
+    sections.push('- kill_worker: Stop a worker');
+    sections.push('  { "type": "kill_worker", "workerId": "worker-builder-abc123" }');
+    sections.push('');
+    sections.push('### For task management:');
+    sections.push('- create_task: { "type": "create_task", "title": "...", "description": "...", "priority": 1 }');
+    sections.push('- record_lesson: { "type": "record_lesson", "lesson": "...", "source": "..." }');
+    sections.push('- escalate: { "type": "escalate", "message": "..." }');
+    sections.push('');
+    sections.push('### For communication:');
+    sections.push('- respond_to_user: Reply to a user request');
+    sections.push('  { "type": "respond_to_user", "message": "your reply" }');
+    sections.push('- send_message: Message another orchestrator');
+    sections.push('  { "type": "send_message", "recipientId": "...", "message": "..." }');
     if (this.deps.onPropose) {
-      sections.push('- propose_upgrade: { type: "propose_upgrade", title: string, description: string }');
+      sections.push('');
+      sections.push('### For governance:');
+      sections.push('- propose_upgrade: { "type": "propose_upgrade", "title": "...", "description": "..." }');
     }
     if (this.deps.onCommit) {
-      sections.push('- commit_code: { type: "commit_code", message: string }');
+      sections.push('- commit_code: Commit current changes to git');
+      sections.push('  { "type": "commit_code", "message": "commit message" }');
     }
     sections.push('');
-    sections.push('If nothing needs to be done, return an empty array: []');
+    sections.push('## Decision Guide');
+    sections.push('- User asks for a code change → spawn_worker role=builder with rolePrompt describing the task');
+    sections.push('- Worker reports "done" → spawn_worker role=tester to verify the changes');
+    sections.push('- Tester reports PASS → commit_code, then optionally propose_upgrade');
+    sections.push('- Tester reports FAIL → spawn_worker role=builder with failure details');
+    sections.push('- Health alert → spawn_worker role=builder to investigate/fix');
+    sections.push('- Simple question (no code change needed) → respond_to_user with the answer');
+    sections.push('- Nothing to do → return []');
     sections.push('');
-    sections.push('IMPORTANT: Return ONLY the JSON array. No markdown, no explanation, just the array.');
+    sections.push('OUTPUT: Return ONLY a JSON array. Example: [{"type":"spawn_worker","role":"builder","rolePrompt":"Add a comment to orchestrator.ts"}]');
+    sections.push('If nothing needs to be done: []');
 
     return sections.join('\n');
   }
@@ -460,8 +498,9 @@ export class Orchestrator {
           projectId: agent.projectId || undefined,
           scope: agent.scope as any,
           fileScope: action.fileScope,
+          rolePrompt: action.rolePrompt,
         });
-        console.log(`[Orchestrator ${this.orchestratorId}] Spawned worker: ${workerId}`);
+        console.log(`[Orchestrator ${this.orchestratorId}] Spawned ${action.role} worker: ${workerId}`);
         break;
       }
 
@@ -557,8 +596,16 @@ export class Orchestrator {
       }
 
       case 'respond_to_user': {
-        // TODO: route response back to user via SSE/thread store
-        console.log(`[Orchestrator ${this.orchestratorId}] User response: ${action.message}`);
+        console.log(`[Orchestrator ${this.orchestratorId}] → User: ${action.message}`);
+        // Store response as a message from the orchestrator to 'user' for API polling
+        this.deps.db.sendMessage({
+          recipientId: 'user',
+          senderId: this.orchestratorId,
+          senderType: 'orchestrator',
+          type: 'user_request',
+          payload: JSON.stringify({ message: action.message }),
+          priority: 1,
+        });
         break;
       }
     }

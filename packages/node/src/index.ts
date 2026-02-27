@@ -2551,6 +2551,8 @@ location /apps/${projectId}/ {
 
     // Initialize unified agent database
     this.agentDb = new AgentDatabase(join(dataDir, 'agents.db'));
+    const cleaned = this.agentDb.cleanupStaleAgents();
+    if (cleaned > 0) console.log(`[agents] Cleaned ${cleaned} stale agents from previous run`);
     console.log('[agents] AgentDatabase initialized');
 
     // Initialize MessageBus
@@ -2601,9 +2603,31 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
         );
       } : undefined,
       onCommit: async (message) => {
-        // TODO: wire to DeployManager.commit()
-        console.log(`[orchestrator] Commit requested: ${message}`);
-        return true;
+        try {
+          const { execSync } = await import('node:child_process');
+          const cwd = process.cwd();
+          // Stage all modified/deleted files (not untracked)
+          execSync('git add -u', { cwd, timeout: 10000 });
+          // Check if there's anything to commit
+          const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000 });
+          if (!status.trim()) {
+            console.log('[orchestrator] Nothing to commit');
+            return false;
+          }
+          execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, { cwd, timeout: 30000 });
+          console.log(`[orchestrator] Committed: ${message}`);
+          // Push to origin (non-blocking, don't fail if push fails)
+          try {
+            execSync('git push origin master', { cwd, timeout: 30000 });
+            console.log('[orchestrator] Pushed to origin');
+          } catch (pushErr: any) {
+            console.warn('[orchestrator] Push failed (non-fatal):', pushErr.message?.slice(0, 100));
+          }
+          return true;
+        } catch (err: any) {
+          console.error('[orchestrator] Commit failed:', err.message?.slice(0, 200));
+          return false;
+        }
       },
     });
     this.councilOrchestrator.start();

@@ -458,6 +458,36 @@ export class AgentDatabase {
     return this.getAgent(id)!;
   }
 
+  /**
+   * Mark all non-persistent active/spawning agents as 'failed' on startup.
+   * This handles stale agents left from previous node runs.
+   * Persistent orchestrators get reset to 'pending' so they can be re-created cleanly.
+   * Returns the number of agents cleaned up.
+   */
+  cleanupStaleAgents(): number {
+    const now = new Date().toISOString();
+
+    // Non-persistent active/spawning agents → failed
+    const r1 = this.db.prepare(`
+      UPDATE agent_identity SET status = 'failed', updated_at = ?
+      WHERE persistent = 0 AND status IN ('active', 'spawning', 'idle')
+    `).run(now);
+
+    // Delete non-persistent orchestrators from previous runs (they'll be recreated)
+    const r2 = this.db.prepare(`
+      DELETE FROM agent_identity
+      WHERE type = 'orchestrator' AND persistent = 1
+    `).run();
+
+    // Clean unread messages for deleted agents
+    this.db.prepare(`
+      DELETE FROM message_inbox WHERE read_at IS NULL
+      AND recipient_id NOT IN (SELECT id FROM agent_identity WHERE status IN ('active', 'spawning', 'idle', 'pending'))
+    `).run();
+
+    return (r1.changes || 0) + (r2.changes || 0);
+  }
+
   getAgent(id: string): AgentIdentity | null {
     const row = this.db.prepare('SELECT * FROM agent_identity WHERE id = ?').get(id);
     return row ? rowToIdentity(row) : null;

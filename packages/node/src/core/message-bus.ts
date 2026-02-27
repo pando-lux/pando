@@ -105,9 +105,9 @@ export class MessageBus {
     }
 
     if (senderType === 'user') {
-      // Users can only message their own project orchestrator
-      if (recipient.type !== 'orchestrator' || recipient.scope !== 'private') {
-        throw new Error(`MessageBus: users can only message their project orchestrator`);
+      // Users can message any orchestrator (project or council)
+      if (recipient.type !== 'orchestrator') {
+        throw new Error(`MessageBus: users can only message orchestrators`);
       }
       return;
     }

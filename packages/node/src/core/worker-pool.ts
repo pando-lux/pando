@@ -158,14 +158,21 @@ export class WorkerPool {
       throw new Error('No AI backend available (Claude Code not found)');
     }
 
-    // Build the task prompt
-    let taskPrompt = `You are a Pando ${config.role} agent (ID: ${workerId}).`;
+    // Build the task prompt — include all context directly in prompt
+    // Worker runs in PROJECT ROOT (process.cwd()) so it can access the codebase
+    const projectRoot = process.cwd();
+    let taskPrompt = claudeMd;  // Full assembled context
+    taskPrompt += `\n\n---\n`;
+    taskPrompt += `\nYou are starting now. Your agent ID is: ${workerId}`;
+    taskPrompt += `\nProject root: ${projectRoot}`;
+    taskPrompt += `\nScratch workspace: ${workspaceDir}`;
     if (config.taskId) {
-      taskPrompt += `\n\nYour task ID is: ${config.taskId}`;
-      taskPrompt += `\nCall your task endpoint to get full details: curl http://localhost:${this.apiPort}/v1/worker/${workerId}/task`;
+      taskPrompt += `\nTask ID: ${config.taskId}`;
     }
-    taskPrompt += `\n\nRead CLAUDE.md in your workspace for your role, tools, and instructions.`;
-    taskPrompt += `\nWhen you're done, report progress: curl -X POST http://localhost:${this.apiPort}/v1/worker/${workerId}/report -H 'Content-Type: application/json' -d '{"status":"done","summary":"<what you did>"}'`;
+    taskPrompt += `\n\nWhen you finish, report via HTTP:`;
+    taskPrompt += `\ncurl -s -X POST http://localhost:${this.apiPort}/v1/worker/${workerId}/report -H "Content-Type: application/json" --data-raw '{"status":"done","summary":"<what you did>","filesChanged":["list","of","files"]}'`;
+    taskPrompt += `\n\nIMPORTANT: The build MUST pass (npm run build) before you report "done".`;
+    taskPrompt += `\nStart working now.`;
 
     // Clone backend for per-worker callbacks
     const claudeBackend = backend as any;
@@ -176,11 +183,11 @@ export class WorkerPool {
       this.db.updateAgent(workerId, { pid, status: 'active' });
     };
 
-    // Start Claude Code process
+    // Start Claude Code process in project root (not workspace)
     const resultPromise = backend.execute({
       type: 'code',
       prompt: taskPrompt,
-      options: { cwd: workspaceDir },
+      options: { cwd: projectRoot },
     });
 
     // Track the process for killing
@@ -192,6 +199,8 @@ export class WorkerPool {
         }
       },
     });
+
+    console.log(`[WorkerPool] Spawned ${config.role} worker ${workerId} in ${projectRoot}`);
 
     // Handle completion asynchronously
     resultPromise.then((result: AIResult) => {
@@ -214,7 +223,9 @@ export class WorkerPool {
         this.db.updateAgent(workerId, { budgetSpent: (currentAgent.budgetSpent || 0) + result.cost });
       }
 
-      // If worker didn't report via MCP (crashed or timed out), mark as failed
+      console.log(`[WorkerPool] Worker ${workerId} finished — success=${result.success}, cost=$${result.cost?.toFixed(4) || '0'}`);
+
+      // If worker didn't report via HTTP (crashed or timed out), auto-report
       if (currentAgent.status === 'active' || currentAgent.status === 'spawning') {
         const status = result.success ? 'done' : 'failed';
         this.db.updateAgent(workerId, { status });
@@ -227,18 +238,22 @@ export class WorkerPool {
           type: 'worker_report',
           payload: {
             status: result.success ? 'done' : 'failed',
-            summary: result.success ? 'Worker process completed' : (result.error || 'Worker process failed'),
+            summary: result.success
+              ? `Worker completed. Output: ${result.output?.slice(0, 500) || 'no output'}`
+              : (result.error || 'Worker process failed'),
             taskId: config.taskId,
-            auto: true,  // auto-generated, not from MCP call
+            auto: true,  // auto-generated, not from worker HTTP report
           },
           priority: result.success ? 1 : 0,
         });
+        console.log(`[WorkerPool] Auto-reported ${status} for worker ${workerId} to orchestrator`);
       }
     }).catch((err) => {
       claudeBackend.onProgress = onProgressOrig;
       claudeBackend.onPid = onPidOrig;
       this.activeProcesses.delete(workerId);
       this.db.updateAgent(workerId, { status: 'failed' });
+      console.error(`[WorkerPool] Worker ${workerId} crashed:`, err.message?.slice(0, 200));
     });
 
     return workerId;

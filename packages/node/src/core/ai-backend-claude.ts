@@ -74,13 +74,18 @@ export class ClaudeBackend implements AIBackend {
     const model = (task.options?.model as string) || 'claude-sonnet-4-6';
     const workingDir = task.options?.cwd as string | undefined;
 
+    const noTools = task.options?.noTools === true;
     const args = [
       '-p', task.prompt,
       '--output-format', 'stream-json',
       '--verbose',
-      '--dangerously-skip-permissions',
       '--model', model,
     ];
+    // Only grant full tool access for workers (code execution).
+    // Orchestrator brain calls use noTools=true — no file access, no tool use.
+    if (!noTools) {
+      args.push('--dangerously-skip-permissions');
+    }
 
     if (task.sessionId) {
       args.unshift('--continue', '--resume', task.sessionId);
