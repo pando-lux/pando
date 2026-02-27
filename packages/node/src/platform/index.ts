@@ -62,6 +62,9 @@ export { Scheduler } from './scheduler.js';
 export type { SchedulerConfig, SchedulerStatus, ActiveTask, TaskLifecycle } from './scheduler.js';
 
 export { AgentDatabase } from './agent-database.js';
+
+export { OrgManager, narrowAuthority } from './org-manager.js';
+export type { OrchestratorConfig, OrgTree } from './org-manager.js';
 export type {
   AgentIdentity, AgentType, AgentScope, AgentStatus,
   InboxMessage, MessageType, SenderType,
