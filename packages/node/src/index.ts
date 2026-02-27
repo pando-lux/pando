@@ -2806,8 +2806,8 @@ location /apps/${projectId}/ {
         // Export team state before committing
         this.exportTeamState(projectId, wsDir);
 
-        // Git add, check, commit
-        execSync('git add -A', { cwd: wsDir, timeout: 10000 });
+        // Git add, check, commit (exclude CLAUDE.md — it's a worker context file, not project code)
+        execSync('git add -A -- ":(exclude)CLAUDE.md"', { cwd: wsDir, timeout: 10000 });
         const status = execSync('git status --porcelain', { cwd: wsDir, encoding: 'utf-8', timeout: 5000 });
         if (!status.trim()) {
           console.log(`[project-orch] Nothing to commit in project ${projectId}`);
@@ -2878,7 +2878,7 @@ location /apps/${projectId}/ {
       onCommit = async (message) => {
         try {
           const cwd = process.cwd();
-          execSync('git add -A', { cwd, timeout: 10000 });
+          execSync('git add -A -- ":(exclude)CLAUDE.md"', { cwd, timeout: 10000 });
           const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000 });
           if (!status.trim()) {
             console.log('[orchestrator] Nothing to commit');

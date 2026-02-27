@@ -59,7 +59,7 @@ export function registerWorkerRoutes(
   // -------------------------------------------------------------------------
   // GET /v1/worker/:id/task — What should I be doing?
   // -------------------------------------------------------------------------
-  server.get<{ Params: { id: string } }>('/v1/worker/:id/task', async (request, reply) => {
+  server.get<{ Params: { id: string } }>('/worker/:id/task', async (request, reply) => {
     const db = getDb();
     const agent = db.getAgent(request.params.id);
 
@@ -132,7 +132,7 @@ export function registerWorkerRoutes(
   // -------------------------------------------------------------------------
   // POST /v1/worker/:id/report — Report progress to orchestrator
   // -------------------------------------------------------------------------
-  server.post<{ Params: { id: string }; Body: ReportProgressBody }>('/v1/worker/:id/report', async (request, reply) => {
+  server.post<{ Params: { id: string }; Body: ReportProgressBody }>('/worker/:id/report', async (request, reply) => {
     const db = getDb();
     const agent = db.getAgent(request.params.id);
 
@@ -188,7 +188,7 @@ export function registerWorkerRoutes(
   // -------------------------------------------------------------------------
   // GET /v1/worker/:id/identity — Who am I?
   // -------------------------------------------------------------------------
-  server.get<{ Params: { id: string } }>('/v1/worker/:id/identity', async (request, reply) => {
+  server.get<{ Params: { id: string } }>('/worker/:id/identity', async (request, reply) => {
     const db = getDb();
     const agent = db.getAgent(request.params.id);
 

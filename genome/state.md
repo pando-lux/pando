@@ -1,25 +1,29 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-27 (Genome as single source of truth: GenomeBridge + ScenarioRunner + 64 test scenarios in .know format. All nodes at c9ae719f.)
+> Last updated: 2026-02-27 (Self-sustaining loop E2E verified. All 5 nodes at f9a1b879.)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
 
 ## Sprint (2026-02-27)
 
-Genome integration: 64 test scenarios migrated from legacy markdown to `genome/knowledge/scenarios/*.know`. GenomeBridge reads compiled graph at runtime. Workers get architecture context in CLAUDE.md (Layer 6). Council gets genome context + failing tests in AI prompts. ScenarioRunner executes API regression from graph. Wired into self-sustaining loop (after upgrade → run regression). 10/11 API tests pass against live EC2-1 (monitor 503 = real finding).
+**Self-sustaining loop PROVEN end-to-end.** User request → council AI → spawn builder (session resume) → builder edits code → council commits → propose_upgrade → governance auto-approves → all 5 nodes pull + build + restart. Tested with gateway background color change — 3.5 minutes from request to all nodes upgraded.
 
-**Production alert**: Resource health checker found S3 resource `51909cbe` is UNHEALTHY — "The AWS Access Key Id you provided does not exist in our records." EC2-1 health check data confirms the S3 credentials contributed are invalid. Jai: re-contribute S3 credentials.
+**Session persistence PROVEN.** Workers survive node restarts. `cleanupStaleAgents()` preserves persistent orchestrators (reset to 'pending') and workers (reset to 'done', session_id kept). Builder resumed Claude Code session e08fdb60 across restart.
+
+**Phase 105 COMPLETE**: TemplateRegistry (5 built-in templates in SQLite), team-state.json v2, periodic knowledge promotion.
+
+**LS-2 recovered**: Rebooted via AWS Lightsail API, code reset to f9a1b879, PM2 running, 3 peers.
+
+**Known bug**: worker-pool assembleContext() writes CLAUDE.md to workspace dir. When council workspace = Pando repo, it overwrites the project CLAUDE.md with worker-specific context.
 
 ## Health
 
 | Node | IP | Status | Peers | StorageBackend | CredentialAccess | Supervisor | Uptime |
 |---|---|---|---|---|---|---|---|
-| EC2-1 (compute) | 54.82.241.132 | **ONLINE** | 3 | **mongodb** | true | **systemd** | Continuous |
-| EC2-2 (compute) | 34.201.82.126 | **ONLINE** | 3 | **mongodb** | true | **systemd** | Continuous |
-| LS-1 (relay) | 54.145.144.221 | **ONLINE** | 3 | **p2p** | false | PM2 | Continuous |
-| LS-2 (untrusted) | 3.237.175.38 | **DOWN** | -- | **p2p** | false | PM2 | Unreachable (SSH+HTTP timeout) |
-| Windows (dev) | 100.87.67.78:4100 | **ONLINE** | 3 | mongodb | true | Manual | Dev sessions |
-
-**LS-2 alert**: SSH + HTTP both unreachable since 2026-02-27. Machine-level issue. Needs Lightsail console check.
+| EC2-1 (compute) | 54.82.241.132 | **ONLINE** | 4 | **mongodb** | true | **systemd** | Continuous |
+| EC2-2 (compute) | 34.201.82.126 | **ONLINE** | 4 | **mongodb** | true | **systemd** | Continuous |
+| LS-1 (relay) | 54.145.144.221 | **ONLINE** | 4 | **p2p** | false | PM2 | Continuous |
+| LS-2 (untrusted) | 3.237.175.38 | **ONLINE** | 3 | **p2p** | false | PM2 | Recovered 2026-02-27 |
+| Windows (dev) | 100.87.67.78:4100 | **ONLINE** | 3 | mongodb | true | Manual | Council host |
 
 **Smoke test**: `node tests/smoke-test.mjs` → 18/18 PASS on 3-node network (LS-1 excluded)
 
