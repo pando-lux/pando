@@ -137,13 +137,13 @@ export class OrgManager {
       }
     }
 
-    // Determine level from parent
+    // Determine level from parent + enforce max depth
+    const MAX_HIERARCHY_DEPTH = 5;
     let level = config.level ?? 0;
     if (config.parentId && level === 0) {
       const parent = this.db.getAgent(config.parentId);
       if (parent && parent.tickIntervalMs !== null) {
         // Parent is an orchestrator, infer level
-        // Check how deep we are
         let depth = 0;
         let current: AgentIdentity | null = parent;
         while (current?.parentId) {
@@ -151,6 +151,21 @@ export class OrgManager {
           current = this.db.getAgent(current.parentId);
         }
         level = depth + 1;
+      }
+    }
+    if (level >= MAX_HIERARCHY_DEPTH) {
+      throw new Error(`Cannot create orchestrator: max hierarchy depth (${MAX_HIERARCHY_DEPTH}) reached at level ${level}`);
+    }
+
+    // Enforce maxChildren on parent
+    if (config.parentId) {
+      const parent = this.db.getAgent(config.parentId);
+      if (parent && parent.maxChildren) {
+        const existingChildren = this.db.getChildren(config.parentId)
+          .filter(c => c.type === 'orchestrator' && c.status === 'active');
+        if (existingChildren.length >= parent.maxChildren) {
+          throw new Error(`Cannot create orchestrator: parent ${config.parentId} already has ${existingChildren.length}/${parent.maxChildren} child orchestrators`);
+        }
       }
     }
 
@@ -178,6 +193,7 @@ export class OrgManager {
       maxWorkers: config.maxWorkers ?? 10,
       maxChildren: config.maxChildren ?? 5,
       lastReportAt: null,
+      templateId: null,
     });
 
     return orchestratorId;

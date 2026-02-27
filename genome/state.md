@@ -25,9 +25,29 @@ Genome integration: 64 test scenarios migrated from legacy markdown to `genome/k
 
 ## Current Phase
 
-**Overnight sprint continuing (2026-02-26).**
+**Sprint continuing (2026-02-27).**
 
-All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88**, **89**, **90**, **91**, **92**, **93**, **94**, **95**, **53.7**, **53.8**, **68.4** COMPLETE. v2.1-v2.5 architecture complete. See "What's next" below for priorities.
+All phases 0-35, 38, 40-70, 73, 78, 79, 80, 81, 82, 83, 86, 87, **88**, **89**, **90**, **91**, **92**, **93**, **94**, **95**, **53.7**, **53.8**, **68.4**, **103e**, **105** COMPLETE. v2.1-v2.5 architecture complete. See "What's next" below for priorities.
+
+**Phase 105: Agent Template Registry + AI-Driven Orchestration — COMPLETE (2026-02-27)**
+- TemplateRegistry class backed by `agent_templates` SQLite table in agents.db
+- 5 built-in templates seeded on boot: builder, tester, reviewer, researcher, devops (rich role prompts)
+- Custom templates via CRUD API: `GET/POST/PUT/DELETE /v1/templates`
+- `DEFAULT_ROLE_PROMPTS` deleted — all role prompts from SQLite, not hardcoded
+- WorkerPool resolves templates at spawn: `templateRegistry.resolveTemplate(role, templateId)`
+- `template_id` column on `agent_identity` — links each agent instance to its source template
+- `onDeploy` callback removed — deployment is agent-driven (devops worker calls deploy API)
+- Orchestrator AI brain is the manager: ALL worker reports go to Tier 2 (AI decides next step)
+  - No hardcoded pipeline — pipeline flow is in AI prompt as guidelines, AI decides
+  - Lessons injected into manager's own AI prompt (learns from past decisions)
+  - `create_team` action visible to AI (can spawn sub-team orchestrators for complex projects)
+  - Org-wide knowledge injected (cross-project learning)
+- OrgManager enforces max hierarchy depth (5) and max children per orchestrator
+- team-state.json v2: blueprint, stats, reflections, directives, lessons with relevanceTags
+- Import v2: handles both v1/v2, confidence decay (0.8x) for cross-node transfer
+- Periodic knowledge promotion: every 10th tick, high-confidence lessons → org_knowledge
+- **Files changed:** types.ts, agent-database.ts, template-registry.ts (NEW), worker-pool.ts, orchestrator.ts, org-manager.ts, index.ts, platform-api.ts, agent-tools.ts, platform/index.ts
+- **Genome updated:** council-operating-system.know (new decisions: TEMPLATE_REGISTRY, AGENT_DRIVEN_DEPLOYMENT)
 
 **Phase 95: Gateway UX — NavBar cleanup + Home "Your Work" section — COMPLETE (2026-02-26)**
 - ✅ NavBar: slimmed from 16 links → 5 primary (Home, Chat, Projects, Explore, Dev)

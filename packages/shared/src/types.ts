@@ -1726,17 +1726,35 @@ export interface CloudInstanceRecord {
 /**
  * AgentTemplate — the configuration that defines an agent's role and permissions.
  *
- * Capabilities are declared by the template and enforced by the sandbox.
- * For v2.1: the format exists so we never rewrite templates when the
- * marketplace is built. Enforcement (community sandbox) is post-v2.
+ * Phase 105: Templates are stored in SQLite (agent_templates table) and resolved
+ * at worker spawn time. Built-in templates are seeded on boot. Custom templates
+ * can be created via API. P2P sync via GossipSub is a future phase.
  */
 export interface AgentTemplate {
-  role: string;               // 'manager', 'builder', 'tester', 'reviewer', 'researcher', 'devops'
-  template: string;           // Markdown instructions for the agent
-  version: number;            // Template version — for marketplace update checks
+  templateId: string;          // 'builtin:builder' or UUID for custom
+  role: string;                // 'builder', 'tester', 'devops', 'marketing', etc.
+  name: string;                // Human-readable: "Pando Builder"
+  description: string;         // What this agent type does
+  rolePrompt: string;          // The actual instructions injected into CLAUDE.md
+  version: number;             // For upgrade checks — higher version wins
   capabilities: AgentCapabilityDeclaration;
-  publisherPeerId?: string;   // Who published this (set for marketplace agents)
-  requiredBackends?: string[]; // Specific AI backends needed (e.g. ['ollama'])
+  tools: ToolDeclaration[];    // Declared tools (informational for now, sandbox later)
+  publisherPeerId?: string;    // Who published this (null = builtin)
+  builtin: boolean;            // System template — cannot be deleted
+  status: 'active' | 'archived';
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * ToolDeclaration — describes a tool available to an agent template.
+ * Informational for Phase 105 (injected into CLAUDE.md). Enforcement in future phase.
+ */
+export interface ToolDeclaration {
+  type: 'http' | 'mcp' | 'script';
+  name: string;
+  description: string;
+  endpoint?: string;           // For http: API path pattern
 }
 
 export interface AgentCapabilityDeclaration {

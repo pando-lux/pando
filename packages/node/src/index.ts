@@ -38,6 +38,7 @@ import { ResourceProofChallenger } from './platform/resource-proof.js';
 import { ReputationWeightedGovernance } from './platform/reputation-governance.js';
 import { ContentSafetyReviewer } from './platform/content-safety.js';
 import { GenomeBridge } from './platform/genome-bridge.js';
+import { TemplateRegistry } from './platform/template-registry.js';
 import { ScenarioRunner } from './platform/scenario-runner.js';
 import { ContentRegistry } from './platform/content-registry.js';
 import { ContentPublisher } from './platform/content-publish.js';
@@ -139,6 +140,7 @@ export class PandoNode {
   private reputationGovernance: ReputationWeightedGovernance | null = null;
   private contentSafetyReviewer: ContentSafetyReviewer | null = null;
   private genomeBridge: GenomeBridge | null = null;
+  private templateRegistry: TemplateRegistry | null = null;
   private scenarioRunner: ScenarioRunner | null = null;
   private pipelineRunner: PipelineRunner | null = null;
   private pipelineEnabled = false;
@@ -2612,19 +2614,56 @@ location /apps/${projectId}/ {
     if (existsSync(teamStatePath) && this.agentDb) {
       try {
         const state = JSON.parse(readFileSync(teamStatePath, 'utf-8'));
-        // Import lessons from previous team
-        if (state.lessons?.length && this.agentDb) {
+        const isV2 = state.version === 2;
+
+        // Import lessons (v1 and v2)
+        if (state.lessons?.length) {
           for (const l of state.lessons) {
             this.agentDb.addLesson({
               orchestratorId: 'imported',
               projectId,
               lesson: l.lesson,
               source: l.source || 'imported-team-state',
-              relevanceTags: [],
-              confidence: l.confidence || 0.5,
+              relevanceTags: l.relevanceTags ? (typeof l.relevanceTags === 'string' ? JSON.parse(l.relevanceTags) : l.relevanceTags) : [],
+              confidence: (l.confidence || 0.5) * 0.8, // Phase 105: slight decay for cross-node transfer
             });
           }
           console.log(`[project-workspace] Imported ${state.lessons.length} lessons from team-state.json`);
+        }
+
+        // Phase 105: Import reflections (v2 only)
+        if (isV2 && state.reflections?.length) {
+          for (const r of state.reflections) {
+            this.agentDb.addReflection({
+              orchestratorId: 'imported',
+              level: r.level || 'project',
+              trigger: r.trigger || 'imported',
+              inputSummary: undefined,
+              output: r.output,
+              lessonsCreated: r.lessonsCreated || 0,
+            });
+          }
+          console.log(`[project-workspace] Imported ${state.reflections.length} reflections from team-state.json`);
+        }
+
+        // Phase 105: Import directives (v2 only)
+        if (isV2 && state.directives?.length) {
+          for (const d of state.directives) {
+            if (d.active) {
+              this.agentDb.addDirective({
+                targetId: undefined, // will be bound when orchestrator is created
+                content: d.content,
+                addedBy: d.addedBy || 'imported',
+              });
+            }
+          }
+          console.log(`[project-workspace] Imported ${state.directives.length} directives from team-state.json`);
+        }
+
+        // Phase 105: Log team stats (v2 only)
+        if (isV2 && state.team?.stats) {
+          const s = state.team.stats;
+          console.log(`[project-workspace] Previous team: ${s.totalWorkersSpawned || 0} workers spawned, $${(s.totalBudgetSpent || 0).toFixed(2)} budget spent`);
         }
       } catch { /* non-fatal */ }
     }
@@ -2658,16 +2697,70 @@ location /apps/${projectId}/ {
     if (!this.agentDb) return;
     try {
       const agents = this.agentDb.listAgents({ projectId });
-      const lessons = this.agentDb.getLessons({ projectId, limit: 100 });
+      const lessons = this.agentDb.getLessons({ projectId, limit: 50 });
+
+      // Phase 105: v2 format — includes reflections, directives, team blueprint
+      // Find the orchestrator for team blueprint
+      const orch = agents.find((a: any) => a.type === 'orchestrator');
+      const workers = agents.filter((a: any) => a.type === 'worker');
+
+      // Build team blueprint
+      const blueprint = orch ? [{
+        role: orch.role,
+        type: 'orchestrator' as const,
+        templateId: orch.templateId || null,
+        children: workers.map((w: any) => ({
+          role: w.role,
+          type: 'worker' as const,
+          templateId: w.templateId || null,
+        })),
+      }] : [];
+
+      // Calculate stats
+      const stats = {
+        totalWorkersSpawned: workers.length,
+        totalBudgetSpent: agents.reduce((sum: number, a: any) => sum + (a.budgetSpent || 0), 0),
+        firstCreated: agents.length > 0 ? agents.reduce((min: string, a: any) => a.createdAt < min ? a.createdAt : min, agents[0].createdAt) : null,
+        lastActive: agents.length > 0 ? agents.reduce((max: string, a: any) => (a.updatedAt || a.createdAt) > max ? (a.updatedAt || a.createdAt) : max, agents[0].updatedAt || agents[0].createdAt) : null,
+      };
+
+      // Get reflections (project-level, last 20)
+      let reflections: any[] = [];
+      if (orch) {
+        try {
+          reflections = this.agentDb.getReflections(orch.id, 20).map((r: any) => ({
+            level: r.level,
+            trigger: r.trigger,
+            output: r.output,
+            lessonsCreated: r.lessonsCreated,
+            createdAt: r.createdAt,
+          }));
+        } catch { /* reflections table may not have data */ }
+      }
+
+      // Get directives (active only)
+      let directives: any[] = [];
+      if (orch) {
+        try {
+          directives = this.agentDb.getDirectives(orch.id).map((d: any) => ({
+            content: d.content,
+            addedBy: d.addedBy,
+            active: d.active,
+          }));
+        } catch { /* non-fatal */ }
+      }
 
       const teamState = {
+        version: 2,
         projectId,
         exportedAt: Date.now(),
+        team: { blueprint, stats },
         agents: agents.map((a: any) => ({
           id: a.id,
           role: a.role,
           type: a.type,
           status: a.status,
+          templateId: a.templateId || null,
           sessionId: a.sessionId || null,
           parentId: a.parentId || null,
           lastReportAt: a.lastReportAt || null,
@@ -2680,7 +2773,10 @@ location /apps/${projectId}/ {
           source: l.source,
           confidence: l.confidence,
           timesUsed: l.timesUsed,
+          relevanceTags: l.relevanceTags || null,
         })),
+        reflections,
+        directives,
       };
 
       writeFileSync(join(workspaceDir, 'team-state.json'), JSON.stringify(teamState, null, 2));
@@ -2744,41 +2840,8 @@ location /apps/${projectId}/ {
     };
   }
 
-  /**
-   * Phase 104: Create project-scoped onDeploy callback.
-   * Calls the deploy endpoint which handles S3 (tier 1) or PM2+nginx (tier 2).
-   */
-  private makeProjectDeployCallback(projectId: string): (projId: string) => Promise<boolean> {
-    return async (projId: string) => {
-      const project = this.projectStore?.getProject(projId || projectId);
-      const wsDir = project?.workspaceDir;
-      if (!wsDir) return false;
-
-      try {
-        const port = this.config.apiPort;
-        let token = '';
-          try {
-            const tokenPath = join(this.config.dataDir || join(homedir(), '.pando'), 'api-token');
-            if (existsSync(tokenPath)) token = readFileSync(tokenPath, 'utf-8').trim();
-          } catch { /* no token */ }
-        const deployUrl = `http://127.0.0.1:${port}/v1/projects/${projId || projectId}/deploy`;
-        const res = await fetch(deployUrl, {
-          method: 'POST',
-          headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ workspaceDir: wsDir }),
-          signal: AbortSignal.timeout(120000),
-        });
-        if (res.ok) {
-          const data = await res.json() as any;
-          console.log(`[project-orch] Deployed project ${projId || projectId}: ${data.url || 'success'}`);
-        }
-        return res.ok;
-      } catch (err: any) {
-        console.error(`[project-orch] Deploy failed: ${err.message?.slice(0, 200)}`);
-        return false;
-      }
-    };
-  }
+  // Phase 105: makeProjectDeployCallback removed — deployment is now agent-driven.
+  // The devops agent calls POST /v1/projects/:id/deploy directly via HTTP.
 
   /**
    * Phase 104: Instantiate a live Orchestrator from its DB record.
@@ -2804,7 +2867,6 @@ location /apps/${projectId}/ {
     const projectId = agent.projectId;
 
     let onCommit: ((message: string) => Promise<boolean>) | undefined;
-    let onDeploy: ((projId: string) => Promise<boolean>) | undefined;
     let onPropose: ((title: string, description: string, diff?: string) => Promise<void>) | undefined;
 
     if (isCouncil) {
@@ -2840,7 +2902,6 @@ location /apps/${projectId}/ {
     } else if (projectId) {
       // Project callbacks — operate on project workspace
       onCommit = this.makeProjectCommitCallback(projectId);
-      onDeploy = this.makeProjectDeployCallback(projectId);
     }
 
     const orch = new Orchestrator(orchId, {
@@ -2851,8 +2912,10 @@ location /apps/${projectId}/ {
       aiRegistry: this.aiBackendRegistry,
       genomeBridge: this.genomeBridge || undefined,
       scenarioRunner: this.scenarioRunner || undefined,
+      templateRegistry: this.templateRegistry || undefined,
+      apiPort: this.config.apiPort,
+      dataDir: this.config.dataDir || join(homedir(), '.pando'),
       onCommit,
-      onDeploy,
       onPropose,
     });
 
@@ -2947,12 +3010,17 @@ location /apps/${projectId}/ {
       console.log('[agents] GenomeBridge: no graph.json found (genome context disabled)');
     }
 
+    // Phase 105: Initialize TemplateRegistry (shares agents.db)
+    this.templateRegistry = new TemplateRegistry(this.agentDb.getRawDb());
+    const tmplCount = this.templateRegistry.listTemplates().length;
+    console.log(`[agents] TemplateRegistry initialized (${tmplCount} templates)`);
+
     // Initialize WorkerPool
     this.workerPool = new WorkerPool(
       this.agentDb,
       this.aiBackendRegistry,
       this.messageBus,
-      { dataDir, apiPort: this.config.apiPort, genomeBridge: this.genomeBridge },
+      { dataDir, apiPort: this.config.apiPort, genomeBridge: this.genomeBridge, templateRegistry: this.templateRegistry },
     );
     console.log('[agents] WorkerPool initialized');
 
@@ -3255,6 +3323,10 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
 
   getOrgManager(): OrgManager | null {
     return this.orgManager;
+  }
+
+  getTemplateRegistry(): TemplateRegistry | null {
+    return this.templateRegistry;
   }
 
   getCouncilOrchId(): string | null {
@@ -3792,6 +3864,7 @@ export { MessageBus } from './core/message-bus.js';
 export { WorkerPool } from './core/worker-pool.js';
 export { OrgManager } from './platform/org-manager.js';
 export { Orchestrator } from './platform/orchestrator.js';
+export { TemplateRegistry } from './platform/template-registry.js';
 export { GenomeBridge } from './platform/genome-bridge.js';
 export { ScenarioRunner } from './platform/scenario-runner.js';
 export { registerAgentRoutes } from './platform/agent-tools.js';

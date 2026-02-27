@@ -4155,4 +4155,68 @@ export async function registerPlatformRoutes(
       return reply.send(content);
     });
 
+  // ==========================================================================
+  // Phase 105: Agent Template CRUD
+  // ==========================================================================
+
+  fastify.get('/v1/templates', async (request: any, reply: any) => {
+    const registry = node.getTemplateRegistry();
+    if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
+
+    const { role, builtin, status } = request.query || {};
+    const filter: any = {};
+    if (role) filter.role = role;
+    if (builtin !== undefined) filter.builtin = builtin === 'true';
+    if (status) filter.status = status;
+
+    return reply.send(registry.listTemplates(filter));
+  });
+
+  fastify.get('/v1/templates/:id', async (request: any, reply: any) => {
+    const registry = node.getTemplateRegistry();
+    if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
+
+    const tmpl = registry.getTemplate(request.params.id);
+    if (!tmpl) return reply.code(404).send({ error: 'Template not found' });
+    return reply.send(tmpl);
+  });
+
+  fastify.post('/v1/templates', async (request: any, reply: any) => {
+    const registry = node.getTemplateRegistry();
+    if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
+
+    const { role, name, description, rolePrompt, version, capabilities, tools, publisherPeerId } = request.body || {};
+    if (!role || !name || !rolePrompt) {
+      return reply.code(400).send({ error: 'role, name, and rolePrompt are required' });
+    }
+
+    try {
+      const tmpl = registry.createTemplate({
+        role, name, description: description || '', rolePrompt,
+        version, capabilities, tools, publisherPeerId,
+      });
+      return reply.code(201).send(tmpl);
+    } catch (err: any) {
+      return reply.code(400).send({ error: err.message });
+    }
+  });
+
+  fastify.put('/v1/templates/:id', async (request: any, reply: any) => {
+    const registry = node.getTemplateRegistry();
+    if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
+
+    const tmpl = registry.updateTemplate(request.params.id, request.body || {});
+    if (!tmpl) return reply.code(404).send({ error: 'Template not found or is a builtin (cannot modify builtins)' });
+    return reply.send(tmpl);
+  });
+
+  fastify.delete('/v1/templates/:id', async (request: any, reply: any) => {
+    const registry = node.getTemplateRegistry();
+    if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
+
+    const ok = registry.archiveTemplate(request.params.id);
+    if (!ok) return reply.code(404).send({ error: 'Template not found or is a builtin (cannot archive builtins)' });
+    return reply.send({ archived: true });
+  });
+
 }

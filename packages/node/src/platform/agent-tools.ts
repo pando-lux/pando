@@ -54,9 +54,14 @@ export function registerAgentRoutes(
     if (!role || typeof role !== 'string') {
       return reply.code(400).send({ error: 'role is required (builder|tester|reviewer|researcher|devops)' });
     }
-    const validRoles = ['builder', 'tester', 'reviewer', 'researcher', 'devops'];
-    if (!validRoles.includes(role)) {
-      return reply.code(400).send({ error: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
+    // Phase 105: Validate role against template registry (data-driven) with fallback to known roles
+    const knownRoles = ['builder', 'tester', 'reviewer', 'researcher', 'devops'];
+    if (!knownRoles.includes(role)) {
+      // Check if there's a custom template registered for this role
+      const registry = deps.getWorkerPool()?.getTemplateRegistry?.();
+      if (registry && !registry.resolveTemplate(role)) {
+        return reply.code(400).send({ error: `No template found for role "${role}". Use GET /v1/templates to see available roles.` });
+      }
     }
 
     // Resolve orchestratorId — use provided or find/create for project

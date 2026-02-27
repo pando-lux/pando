@@ -28,6 +28,7 @@ import type { OrgManager } from './org-manager.js';
 import type { AIBackendRegistry } from '../core/ai-backend-registry.js';
 import type { GenomeBridge } from './genome-bridge.js';
 import type { ScenarioRunner } from './scenario-runner.js';
+import type { TemplateRegistry } from './template-registry.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -43,16 +44,20 @@ export interface OrchestratorDeps {
   onPropose?: (title: string, description: string, diff?: string) => Promise<void>;
   /** Callback to commit code */
   onCommit?: (message: string) => Promise<boolean>;
-  /** Callback to deploy */
-  onDeploy?: (projectId: string) => Promise<boolean>;
   /** Genome knowledge graph bridge for architecture context */
   genomeBridge?: GenomeBridge;
   /** Scenario runner for post-upgrade regression testing */
   scenarioRunner?: ScenarioRunner;
+  /** Phase 105: Template registry for available roles */
+  templateRegistry?: TemplateRegistry;
+  /** API port for worker HTTP calls (deploy, validate, etc.) */
+  apiPort?: number;
+  /** Data directory for reading api-token */
+  dataDir?: string;
 }
 
 export type OrchestratorAction =
-  | { type: 'spawn_worker'; role: string; taskId?: string; fileScope?: string[]; rolePrompt?: string }
+  | { type: 'spawn_worker'; role: string; templateId?: string; taskId?: string; fileScope?: string[]; rolePrompt?: string }
   | { type: 'kill_worker'; workerId: string }
   | { type: 'create_task'; title: string; description: string; priority?: number }
   | { type: 'assign_task'; taskId: string; workerId: string }
@@ -174,7 +179,17 @@ export class Orchestrator {
         }
       }
 
-      // 4. Mark messages as read
+      // 4. Reflect on any worker completions (extract lessons)
+      for (const report of board.workerReports) {
+        try {
+          const payload = JSON.parse(report.payload);
+          if (payload.status === 'done') {
+            this.reflectOnCompletion(report.senderId, payload);
+          }
+        } catch { /* skip malformed */ }
+      }
+
+      // 5. Mark messages as read
       const allMessageIds = [
         ...board.messages.map(m => m.id),
         ...board.workerReports.map(m => m.id),
@@ -202,6 +217,32 @@ export class Orchestrator {
         actionsTaken: actions.length > 0 ? JSON.stringify(actions.map(a => a.type)) : null,
         durationMs: Date.now() - startMs,
       });
+
+      // Phase 105: Periodic knowledge promotion (every 10th tick)
+      if (tickNumber % 10 === 0) {
+        try {
+          const agent = this.deps.db.getAgent(this.orchestratorId);
+          const lessons = this.deps.db.getLessons({
+            orchestratorId: this.orchestratorId,
+            minConfidence: 0.8,
+            limit: 20,
+          });
+          for (const l of lessons) {
+            if (l.timesUsed >= 3) {
+              // Check if already in org_knowledge (dedup by text)
+              const existing = this.deps.db.getOrgKnowledge({ category: agent?.role || 'general', limit: 100 });
+              if (!existing.some(k => k.knowledge === l.lesson)) {
+                this.deps.db.addOrgKnowledge({
+                  category: agent?.role || 'general',
+                  knowledge: l.lesson,
+                  source: `promoted from ${this.orchestratorId}`,
+                  relevanceTags: l.relevanceTags ? JSON.parse(l.relevanceTags) : undefined,
+                });
+              }
+            }
+          }
+        } catch { /* non-fatal */ }
+      }
 
       // Update last tick time
       this.deps.db.updateAgent(this.orchestratorId, { lastTickAt: new Date().toISOString() });
@@ -250,10 +291,12 @@ export class Orchestrator {
   /**
    * Classify this tick as Tier 1 (deterministic, no AI call) or Tier 2 (needs AI).
    *
-   * Most ticks should be Tier 1 to save cost.
+   * Phase 105: Worker reports are ALWAYS Tier 2. The AI brain is the manager —
+   * it reads reports and decides what happens next (spawn QA, commit, deploy, retry).
+   * Only truly empty ticks are Tier 1.
    */
   private classify(board: BoardState): 1 | 2 {
-    // Tier 1: Nothing to do
+    // Tier 1: Nothing to do — empty inbox
     if (board.workerReports.length === 0 &&
         board.healthAlerts.length === 0 &&
         board.userRequests.length === 0 &&
@@ -261,19 +304,7 @@ export class Orchestrator {
       return 1;
     }
 
-    // Tier 1: Simple worker completion (all done, no failures)
-    const allDone = board.workerReports.every(r => {
-      try {
-        const payload = JSON.parse(r.payload);
-        return payload.status === 'done';
-      } catch { return false; }
-    });
-    if (board.workerReports.length > 0 && allDone &&
-        board.userRequests.length === 0 && board.healthAlerts.length === 0) {
-      return 1;
-    }
-
-    // Tier 2: Needs AI judgment
+    // Everything else: AI decides
     return 2;
   }
 
@@ -281,93 +312,16 @@ export class Orchestrator {
   // Tier 1: Deterministic actions
   // =========================================================================
 
-  private deterministic(board: BoardState, agent: AgentIdentity): OrchestratorAction[] {
-    const actions: OrchestratorAction[] = [];
-
-    // Handle worker completions — drive the self-sustaining loop
-    for (const report of board.workerReports) {
-      try {
-        const payload = JSON.parse(report.payload);
-        const workerAgent = this.deps.db.getAgent(report.senderId);
-        const workerRole = workerAgent?.role || 'unknown';
-
-        if (payload.status === 'done') {
-          // Record any suggestions as potential lessons
-          if (payload.suggestions?.length) {
-            for (const suggestion of payload.suggestions) {
-              actions.push({
-                type: 'record_lesson',
-                lesson: suggestion,
-                source: 'worker_suggestion',
-                tags: [agent.role, report.senderId],
-              });
-            }
-          }
-
-          // Reflect on completion
-          this.reflectOnCompletion(report.senderId, payload);
-
-          // Self-sustaining loop: builder done → spawn QA tester
-          if (workerRole === 'builder') {
-            const summary = payload.summary || 'Builder completed work';
-            actions.push({
-              type: 'spawn_worker',
-              role: 'tester',
-              rolePrompt: `Verify the following change:\n${summary}\n\nRun "npm run build" to confirm it compiles. Check the modified files for correctness. Report PASS or FAIL with evidence.`,
-            });
-            console.log(`[Orchestrator ${this.orchestratorId}] Builder done → spawning QA tester`);
-          }
-
-          // Self-sustaining loop: tester done → commit if PASS → propose upgrade
-          if (workerRole === 'tester') {
-            const summary = (payload.summary || '').toLowerCase();
-            if (summary.includes('pass') || summary.includes('success') || summary.includes('verified') || summary.includes('correct')) {
-              // QA passed — commit the code
-              const isProject = !!agent.projectId;
-              actions.push({
-                type: 'commit_code',
-                message: isProject
-                  ? `[project] Auto-commit after QA pass — ${payload.summary?.slice(0, 80) || 'verified'}`
-                  : `[council] Auto-commit after QA pass — ${payload.summary?.slice(0, 80) || 'verified'}`,
-              });
-              if (isProject) {
-                // Phase 104: Project orchestrators deploy after commit
-                actions.push({ type: 'deploy', projectId: agent.projectId! });
-                actions.push({
-                  type: 'respond_to_user',
-                  message: `Task complete. Builder finished, QA passed, code committed and pushed to GitHub, deploying now.`,
-                });
-                console.log(`[Orchestrator ${this.orchestratorId}] QA PASS → commit + deploy (project ${agent.projectId})`);
-              } else {
-                // Council: propose upgrade → governance → broadcast to all nodes
-                actions.push({
-                  type: 'propose_upgrade',
-                  title: 'Council code update',
-                  description: payload.summary?.slice(0, 200) || 'QA-verified code change',
-                });
-                actions.push({ type: 'run_scenarios', category: 'api' });
-                actions.push({
-                  type: 'respond_to_user',
-                  message: `Task complete. Builder finished, QA passed, code committed, upgrade proposed to governance, regression scenarios queued.`,
-                });
-                console.log(`[Orchestrator ${this.orchestratorId}] QA PASS → commit + propose upgrade + run scenarios`);
-              }
-            } else {
-              // QA failed — need AI to decide next step (Tier 2 on next tick)
-              // Store the failure as a directive for the next tick
-              actions.push({
-                type: 'record_lesson',
-                lesson: `QA FAIL: ${payload.summary}`,
-                source: 'qa_failure',
-              });
-              console.log(`[Orchestrator ${this.orchestratorId}] QA FAIL — will retry on next tick via AI`);
-            }
-          }
-        }
-      } catch { /* skip malformed reports */ }
-    }
-
-    return actions;
+  /**
+   * Tier 1: Only handles empty ticks. All real decisions go to AI (Tier 2).
+   *
+   * Phase 105: The AI brain IS the manager. It reads worker reports and decides
+   * the next step — no hardcoded pipeline. The pipeline flow (builder → QA → deploy)
+   * is described in the AI prompt as guidelines, not enforced by code.
+   */
+  private deterministic(_board: BoardState, _agent: AgentIdentity): OrchestratorAction[] {
+    // Nothing to do — empty inbox was classified as Tier 1
+    return [];
   }
 
   // =========================================================================
@@ -407,18 +361,19 @@ export class Orchestrator {
   private buildAIPrompt(board: BoardState, agent: AgentIdentity): string {
     const sections: string[] = [];
 
-    sections.push(`# ROLE: Decision-maker for orchestrator "${agent.role}" (${this.orchestratorId})`);
+    sections.push(`# ROLE: Manager for orchestrator "${agent.role}" (${this.orchestratorId})`);
     sections.push('');
-    sections.push('You are a DECISION MAKER — a management brain, not an executor.');
-    sections.push('You read the current state and decide what actions to take.');
+    sections.push('You are the MANAGER of this team. You read reports from your workers, assess the situation, and decide what happens next.');
+    sections.push('You do NOT do work yourself — you delegate to specialized workers.');
     sections.push('You output ONLY a JSON array of action objects. Nothing else.');
     sections.push('');
     sections.push('## CRITICAL RULES');
     sections.push('1. You MUST NOT read, write, or modify any files. You have NO file access.');
     sections.push('2. You MUST NOT use any tools (Read, Edit, Write, Bash, Grep, etc.).');
-    sections.push('3. For ANY code change, you MUST use spawn_worker with role "builder".');
-    sections.push('4. For verification, spawn_worker with role "tester".');
-    sections.push('5. Output ONLY a raw JSON array. No markdown, no backticks, no explanation.');
+    sections.push('3. For ANY code change, spawn a "builder" worker.');
+    sections.push('4. For verification, spawn a "tester" worker.');
+    sections.push('5. For deployment, spawn a "devops" worker.');
+    sections.push('6. Output ONLY a raw JSON array. No markdown, no backticks, no explanation.');
     sections.push('');
 
     // Board state
@@ -484,6 +439,31 @@ export class Orchestrator {
       sections.push('');
     }
 
+    // Gap 2 fix: Inject lessons into the manager's OWN prompt so it learns from past decisions
+    try {
+      const lessons = this.deps.db.getLessons({
+        orchestratorId: this.orchestratorId,
+        minConfidence: 0.5,
+        limit: 15,
+      });
+      if (lessons.length > 0) {
+        sections.push('## Lessons Learned (from past decisions)');
+        for (const l of lessons) {
+          sections.push(`- [${l.source || 'experience'}] ${l.lesson}`);
+        }
+        sections.push('');
+      }
+      // Also inject org-wide knowledge
+      const orgKnowledge = this.deps.db.getOrgKnowledge({ category: agent.role, limit: 10 });
+      if (orgKnowledge.length > 0) {
+        sections.push('## Organizational Knowledge');
+        for (const k of orgKnowledge) {
+          sections.push(`- ${k.knowledge}`);
+        }
+        sections.push('');
+      }
+    } catch { /* non-fatal */ }
+
     // Genome architecture knowledge
     if (this.deps.genomeBridge?.isLoaded() && board.userRequests.length > 0) {
       const requestText = board.userRequests.map(r => {
@@ -512,23 +492,39 @@ export class Orchestrator {
       sections.push('');
     }
 
+    // Phase 105: Available roles from TemplateRegistry
+    const availableRoles: string[] = ['builder', 'tester', 'reviewer', 'researcher', 'devops'];
+    if (this.deps.templateRegistry) {
+      const templates = this.deps.templateRegistry.listTemplates({ status: 'active' });
+      const roles = [...new Set(templates.map(t => t.role))];
+      if (roles.length > 0) availableRoles.splice(0, availableRoles.length, ...roles);
+    }
+
     // Available actions
     sections.push('## Available Actions');
     sections.push('');
     sections.push('Each action is a JSON object with a "type" field. Return an array of actions.');
     sections.push('');
-    sections.push('### For code changes (ALWAYS use these, never modify files yourself):');
-    sections.push('- spawn_worker: Spawn a Claude Code worker that can read/write files');
-    sections.push('  { "type": "spawn_worker", "role": "builder", "rolePrompt": "description of the task for the worker" }');
-    sections.push('  { "type": "spawn_worker", "role": "tester", "rolePrompt": "description of what to test" }');
-    sections.push('  { "type": "spawn_worker", "role": "reviewer", "rolePrompt": "description of what to review" }');
+    sections.push('### For spawning workers (ALWAYS use these for any real work):');
+    sections.push(`Available roles: ${availableRoles.join(', ')}`);
+    sections.push('- spawn_worker: Spawn a Claude Code worker');
+    sections.push('  { "type": "spawn_worker", "role": "<role>", "rolePrompt": "description of the task" }');
+    sections.push('  Common: role="builder" for code, role="tester" for QA, role="devops" for deployment');
     sections.push('- kill_worker: Stop a worker');
     sections.push('  { "type": "kill_worker", "workerId": "worker-builder-abc123" }');
     sections.push('');
-    sections.push('### For task management:');
-    sections.push('- create_task: { "type": "create_task", "title": "...", "description": "...", "priority": 1 }');
-    sections.push('- record_lesson: { "type": "record_lesson", "lesson": "...", "source": "..." }');
-    sections.push('- escalate: { "type": "escalate", "message": "..." }');
+    sections.push('### For team management:');
+    sections.push('- create_team: Create a child orchestrator (sub-team) for a specific domain');
+    sections.push('  { "type": "create_team", "role": "qa-team", "rolePrompt": "You manage QA for this project..." }');
+    sections.push('  Use when a task is complex enough to need its own manager (e.g., separate QA team, separate frontend team)');
+    sections.push('- dissolve_team: Remove a child orchestrator');
+    sections.push('  { "type": "dissolve_team", "orchestratorId": "orch-qa-team-abc123" }');
+    sections.push('- create_task: Track a task internally');
+    sections.push('  { "type": "create_task", "title": "...", "description": "...", "priority": 1 }');
+    sections.push('- record_lesson: Save an insight for future reference');
+    sections.push('  { "type": "record_lesson", "lesson": "...", "source": "..." }');
+    sections.push('- escalate: Escalate to your parent orchestrator');
+    sections.push('  { "type": "escalate", "message": "..." }');
     sections.push('');
     sections.push('### For communication:');
     sections.push('- respond_to_user: Reply to a user request');
@@ -545,16 +541,44 @@ export class Orchestrator {
       sections.push('  { "type": "commit_code", "message": "commit message" }');
     }
     sections.push('');
-    sections.push('## Decision Guide');
-    sections.push('- User asks for a code change → spawn_worker role=builder with rolePrompt describing the task');
-    sections.push('- Worker reports "done" → spawn_worker role=tester to verify the changes');
-    sections.push('- Tester reports PASS → commit_code, then optionally propose_upgrade');
-    sections.push('- Tester reports FAIL → spawn_worker role=builder with failure details');
-    sections.push('- Health alert → spawn_worker role=builder to investigate/fix');
-    sections.push('- Simple question (no code change needed) → respond_to_user with the answer');
-    sections.push('- Nothing to do → return []');
+    // Project context for deployment instructions
+    const apiPort = this.deps.apiPort || 4000;
+    const dataDir = this.deps.dataDir || '~/.pando';
+
+    sections.push('## Decision Guide — You Are The Manager');
     sections.push('');
-    sections.push('OUTPUT: Return ONLY a JSON array. Example: [{"type":"spawn_worker","role":"builder","rolePrompt":"Add a comment to orchestrator.ts"}]');
+    sections.push('### Standard Pipeline (build request):');
+    sections.push('1. User asks to build something → spawn "builder" with detailed rolePrompt');
+    sections.push('2. Builder reports "done" → spawn "tester" to verify (include the builder\'s summary so tester knows what to check)');
+    sections.push('3. Tester reports PASS → commit_code, then spawn "devops" to deploy');
+    sections.push('4. Tester reports FAIL → spawn "builder" again with the failure details so it can fix');
+    sections.push('5. DevOps reports deploy success → respond_to_user with the live URL');
+    sections.push('6. DevOps reports deploy failure → decide: retry devops? spawn builder to fix? escalate?');
+    sections.push('');
+    sections.push('### Scaling Up (complex projects):');
+    sections.push('- Large task with multiple parts? Use create_team to spawn a sub-team orchestrator for each domain (frontend, backend, etc.)');
+    sections.push('- Each sub-team gets its own workers, its own QA, its own lessons. You coordinate across teams.');
+    sections.push('- Sub-team reports back to you. You decide when ALL teams are done before proceeding to deploy.');
+    sections.push('');
+    sections.push('### Key Decisions (use your judgment):');
+    sections.push('- Multiple workers reporting? Read ALL reports before deciding next step.');
+    sections.push('- QA failed multiple times? record_lesson with the pattern, then try a different approach or escalate.');
+    sections.push('- Health alert? Assess severity. Critical → spawn builder. Minor → record_lesson.');
+    sections.push('- Simple question? respond_to_user directly. Don\'t spawn a worker for chat.');
+    sections.push('- Check "Lessons Learned" above — avoid repeating past mistakes.');
+    sections.push('- Nothing to do? Return [].');
+    sections.push('');
+    if (agent.projectId) {
+      sections.push('### Deployment Context (for devops worker):');
+      sections.push(`When spawning devops, include this in the rolePrompt:`);
+      sections.push(`- Project ID: ${agent.projectId}`);
+      sections.push(`- API: http://127.0.0.1:${apiPort}`);
+      sections.push(`- Deploy endpoint: POST /v1/projects/${agent.projectId}/deploy with body {"workspaceDir":"${agent.workspaceDir || ''}"}`);
+      sections.push(`- Validate endpoint: POST /v1/projects/${agent.projectId}/validate-deploy`);
+      sections.push(`- Auth token file: ${dataDir}/api-token`);
+      sections.push('');
+    }
+    sections.push('OUTPUT: Return ONLY a JSON array. Example: [{"type":"spawn_worker","role":"builder","rolePrompt":"Build a landing page with..."}]');
     sections.push('If nothing needs to be done: []');
 
     return sections.join('\n');
@@ -586,6 +610,7 @@ export class Orchestrator {
       case 'spawn_worker': {
         const workerId = await this.deps.workerPool.spawn({
           role: action.role,
+          templateId: action.templateId,               // Phase 105: template reference
           orchestratorId: this.orchestratorId,
           taskId: action.taskId,
           projectId: agent.projectId || undefined,
@@ -683,9 +708,9 @@ export class Orchestrator {
       }
 
       case 'deploy': {
-        if (this.deps.onDeploy) {
-          await this.deps.onDeploy(action.projectId);
-        }
+        // Phase 105: Deployment is now agent-driven (devops worker calls the API).
+        // This case is kept for backward compatibility but should not be used.
+        console.log(`[Orchestrator ${this.orchestratorId}] Deploy action received — deployment is now handled by devops agent`);
         break;
       }
 

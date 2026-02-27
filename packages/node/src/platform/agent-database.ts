@@ -68,6 +68,9 @@ export interface AgentIdentity {
   // Worker-specific
   lastReportAt: string | null;
 
+  // Template link (Phase 105)
+  templateId: string | null;
+
   // Timestamps
   createdAt: string;
   updatedAt: string | null;
@@ -275,6 +278,24 @@ const SCHEMA = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_reflections_orch ON reflections(orchestrator_id, created_at);
+
+  CREATE TABLE IF NOT EXISTS agent_templates (
+    template_id TEXT PRIMARY KEY,
+    role TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    role_prompt TEXT NOT NULL,
+    version INTEGER NOT NULL DEFAULT 1,
+    capabilities TEXT NOT NULL DEFAULT '{}',
+    tools TEXT NOT NULL DEFAULT '[]',
+    publisher_peer_id TEXT,
+    builtin INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'active',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_templates_role ON agent_templates(role, status);
 `;
 
 // ---------------------------------------------------------------------------
@@ -307,6 +328,7 @@ function rowToIdentity(row: any): AgentIdentity {
     maxWorkers: row.max_workers,
     maxChildren: row.max_children,
     lastReportAt: row.last_report_at,
+    templateId: row.template_id || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -411,10 +433,24 @@ export class AgentDatabase {
     this.db.pragma('journal_mode = WAL');
     this.db.pragma('foreign_keys = ON');
     this.db.exec(SCHEMA);
+
+    // Phase 105: Migrate — add template_id column to agent_identity if missing
+    try {
+      const cols = this.db.pragma('table_info(agent_identity)') as any[];
+      if (!cols.some((c: any) => c.name === 'template_id')) {
+        this.db.exec('ALTER TABLE agent_identity ADD COLUMN template_id TEXT');
+        console.log('[agents] Migrated: added template_id column to agent_identity');
+      }
+    } catch { /* column already exists or migration not needed */ }
   }
 
   close(): void {
     this.db.close();
+  }
+
+  /** Expose raw better-sqlite3 instance for TemplateRegistry (shares same db file) */
+  getRawDb(): Database.Database {
+    return this.db;
   }
 
   /** Expose raw db for transactions that span multiple methods */
@@ -437,14 +473,14 @@ export class AgentDatabase {
         project_id, workspace_dir, current_task_id, role_prompt, context_version,
         session_id, pid, persistent,
         tick_interval_ms, last_tick_at, max_workers, max_children,
-        last_report_at, created_at, updated_at
+        last_report_at, template_id, created_at, updated_at
       ) VALUES (
         ?, ?, ?, ?, ?, ?, ?,
         ?, ?, 0, ?,
         ?, ?, ?, ?, ?,
         ?, ?, ?,
         ?, ?, ?, ?,
-        ?, ?, ?
+        ?, ?, ?, ?
       )
     `).run(
       id, agent.role, agent.type, agent.scope ?? 'private', agent.parentId, agent.nodeId, agent.status ?? 'pending',
@@ -452,7 +488,7 @@ export class AgentDatabase {
       agent.projectId, agent.workspaceDir, agent.currentTaskId, agent.rolePrompt, agent.contextVersion,
       agent.sessionId, agent.pid, agent.persistent ? 1 : 0,
       agent.tickIntervalMs, agent.lastTickAt, agent.maxWorkers ?? 10, agent.maxChildren ?? 5,
-      agent.lastReportAt, now, now,
+      agent.lastReportAt, (agent as any).templateId || null, now, now,
     );
 
     return this.getAgent(id)!;
@@ -521,7 +557,7 @@ export class AgentDatabase {
       pid: 'pid', persistent: 'persistent',
       tickIntervalMs: 'tick_interval_ms', lastTickAt: 'last_tick_at',
       maxWorkers: 'max_workers', maxChildren: 'max_children',
-      lastReportAt: 'last_report_at',
+      lastReportAt: 'last_report_at', templateId: 'template_id',
     };
 
     for (const [key, val] of Object.entries(fields)) {

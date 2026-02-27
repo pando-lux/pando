@@ -29,6 +29,7 @@ import type { AIResult } from './ai-backend.js';
 import { MessageBus } from './message-bus.js';
 import { generateWorkerToolsDocs } from './worker-mcp.js';
 import type { GenomeBridge } from '../platform/genome-bridge.js';
+import type { TemplateRegistry } from '../platform/template-registry.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -37,6 +38,7 @@ import type { GenomeBridge } from '../platform/genome-bridge.js';
 export interface WorkerConfig {
   role: string;                    // 'builder', 'tester', 'reviewer', etc.
   orchestratorId: string;         // parent orchestrator
+  templateId?: string;             // Phase 105: explicit template reference
   taskId?: string;                // task to assign
   projectId?: string;             // project context
   scope?: AgentScope;             // 'private' | 'public'
@@ -64,33 +66,6 @@ export interface WorkerStatus {
 }
 
 // ---------------------------------------------------------------------------
-// Default role prompts (short — not 365-line templates)
-// ---------------------------------------------------------------------------
-
-const DEFAULT_ROLE_PROMPTS: Record<string, string> = {
-  builder: `You are a Pando builder agent. Your job is to write code that fulfills the task description.
-Read existing code before modifying. Run the build after changes. Report progress via your tools.
-When done, call report_progress with status "done" and list all files you changed.`,
-
-  tester: `You are a Pando QA tester agent. Your job is to independently verify that code changes work correctly.
-You do NOT trust the builder's claims. Test everything yourself.
-Run tests, check edge cases, verify the build passes. Report PASS or FAIL with evidence.
-When done, call report_progress with status "done" and your verdict in the summary.`,
-
-  reviewer: `You are a Pando code reviewer. Review the code changes for correctness, security, and style.
-Look for bugs, security vulnerabilities, and architectural issues.
-Report your findings via report_progress.`,
-
-  researcher: `You are a Pando researcher. Investigate the question or problem described in your task.
-Read relevant files, search the codebase, and provide a clear analysis.
-Report findings via report_progress.`,
-
-  devops: `You are a Pando devops agent. Handle deployment, infrastructure, and operations tasks.
-Be careful with destructive operations. Always verify before modifying production systems.
-Report progress via your tools.`,
-};
-
-// ---------------------------------------------------------------------------
 // WorkerPool class
 // ---------------------------------------------------------------------------
 
@@ -100,16 +75,18 @@ export class WorkerPool {
   private activeProcesses = new Map<string, { kill: () => void }>();
 
   private genomeBridge: GenomeBridge | null = null;
+  private templateRegistry: TemplateRegistry | null = null;
 
   constructor(
     private db: AgentDatabase,
     private aiRegistry: AIBackendRegistry,
     private messageBus: MessageBus,
-    opts?: { dataDir?: string; apiPort?: number; genomeBridge?: GenomeBridge },
+    opts?: { dataDir?: string; apiPort?: number; genomeBridge?: GenomeBridge; templateRegistry?: TemplateRegistry },
   ) {
     this.dataDir = opts?.dataDir || join(homedir(), '.pando');
     this.apiPort = opts?.apiPort || 4000;
     this.genomeBridge = opts?.genomeBridge || null;
+    this.templateRegistry = opts?.templateRegistry || null;
   }
 
   /**
@@ -123,6 +100,10 @@ export class WorkerPool {
     let resumeSessionId: string | undefined;
     let workspaceDir: string;
     let agent: AgentIdentity;
+
+    // Phase 105: Resolve template for this role
+    const template = this.templateRegistry?.resolveTemplate(config.role, config.templateId) || null;
+    const resolvedRolePrompt = config.rolePrompt || template?.rolePrompt || 'Complete the assigned task.';
 
     const existing = this.findResumableWorker(config);
 
@@ -163,7 +144,8 @@ export class WorkerPool {
         projectId: config.projectId || null,
         workspaceDir,
         currentTaskId: config.taskId || null,
-        rolePrompt: config.rolePrompt || DEFAULT_ROLE_PROMPTS[config.role] || null,
+        rolePrompt: resolvedRolePrompt,
+        templateId: template?.templateId || null,
         contextVersion: null,
         sessionId: null,
         pid: null,
@@ -205,7 +187,7 @@ export class WorkerPool {
         taskPrompt += `New task ID: ${config.taskId}\n`;
       }
       taskPrompt += `\n## New Task\n`;
-      taskPrompt += config.rolePrompt || DEFAULT_ROLE_PROMPTS[config.role] || 'Complete the assigned task.';
+      taskPrompt += resolvedRolePrompt;
       taskPrompt += `\n\nWhen you finish, report via HTTP:\n`;
       taskPrompt += `curl -s -X POST http://localhost:${this.apiPort}/v1/worker/${workerId}/report -H "Content-Type: application/json" --data-raw '{"status":"done","summary":"<what you did>","filesChanged":["list","of","files"]}'\n`;
       taskPrompt += `\nIMPORTANT: The build MUST pass (npm run build) before you report "done".\n`;
@@ -366,6 +348,11 @@ export class WorkerPool {
     }));
   }
 
+  /** Phase 105: Expose template registry for role validation */
+  getTemplateRegistry(): TemplateRegistry | null {
+    return this.templateRegistry;
+  }
+
   /**
    * Clean up orphaned processes and old workspaces.
    */
@@ -451,8 +438,17 @@ export class WorkerPool {
     sections.push(`Reports to: ${agent.parentId || 'none'}`);
     sections.push('');
 
-    // Layer 1: Role prompt
-    const rolePrompt = agent.rolePrompt || DEFAULT_ROLE_PROMPTS[agent.role] || 'Complete the assigned task.';
+    // Layer 1: Role prompt — from agent record, template registry, or fallback
+    let rolePrompt = agent.rolePrompt;
+    if (!rolePrompt && agent.templateId && this.templateRegistry) {
+      const tmpl = this.templateRegistry.getTemplate(agent.templateId);
+      rolePrompt = tmpl?.rolePrompt || null;
+    }
+    if (!rolePrompt && this.templateRegistry) {
+      const tmpl = this.templateRegistry.getByRole(agent.role);
+      rolePrompt = tmpl?.rolePrompt || null;
+    }
+    rolePrompt = rolePrompt || 'Complete the assigned task.';
     sections.push('## Your Role');
     sections.push(rolePrompt);
     sections.push('');

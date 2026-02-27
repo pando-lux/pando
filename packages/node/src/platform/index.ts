@@ -65,6 +65,8 @@ export { AgentDatabase } from './agent-database.js';
 export { Orchestrator } from './orchestrator.js';
 export type { OrchestratorDeps, OrchestratorAction } from './orchestrator.js';
 
+export { TemplateRegistry } from './template-registry.js';
+
 export { OrgManager, narrowAuthority } from './org-manager.js';
 export type { OrchestratorConfig, OrgTree } from './org-manager.js';
 export type {

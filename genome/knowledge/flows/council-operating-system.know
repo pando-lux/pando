@@ -30,18 +30,25 @@ flow OrchestratorSystem {
 
   step tick_execute -> spawn_workers {
     actor: WorkerPool
-    what: "WorkerPool.spawn() creates or resumes a Claude Code child process. Builds CLAUDE.md from 6 layers: constitution, role prompt, authority rules, lessons, tools, genome context. Workers persist sessions — resumed for related tasks via SessionStrategy ('resume' for same domain, 'rotate' for new domain, 'fresh' only when no prior session). Workers communicate via 3 HTTP endpoints (GET /worker/:id/task, POST /worker/:id/report, GET /worker/:id/identity)."
+    what: "WorkerPool.spawn() resolves agent template from TemplateRegistry (Phase 105), then creates or resumes a Claude Code child process. Builds CLAUDE.md from 6 layers: template role prompt, authority rules, lessons, directives, tools, genome context. Workers persist sessions — resumed for related tasks via SessionStrategy. Workers communicate via 3 HTTP endpoints (GET /worker/:id/task, POST /worker/:id/report, GET /worker/:id/identity)."
     @gotcha("Workers are persistent team members, not disposable. Session IDs saved to SQLite. Resume workers for related tasks to preserve accumulated context. Only rotate when context is exhausted or domain changes.")
+    @gotcha("Phase 105: Role prompts come from TemplateRegistry (SQLite agent_templates table), not hardcoded DEFAULT_ROLE_PROMPTS. Custom templates can be created via POST /v1/templates.")
   }
 
   step spawn_workers -> qa_cycle {
     actor: Orchestrator
-    what: "Self-sustaining loop: Orchestrator spawns builder → builder reports completion → Orchestrator spawns QA tester (independent, gets ONLY task + diff) → QA passes → governance proposal → auto-approve in dev → commit."
+    what: "Self-sustaining loop: Orchestrator spawns builder → builder reports completion → Orchestrator spawns QA tester (independent, gets ONLY task + diff) → QA passes → commit + deploy."
   }
 
-  step qa_cycle -> governance {
+  step qa_cycle -> deploy {
     actor: Orchestrator
-    what: "onPropose callback calls governance.createProposal(). In dev mode: auto-approve. Governance decisions route back via MessageBus as 'governance_decision' messages."
+    what: "QA PASS handler (Tier 1 deterministic): commit_code action → spawn devops agent. For projects: devops agent calls POST /v1/projects/:id/deploy and POST /v1/projects/:id/validate-deploy. For council: propose_upgrade → governance → broadcast to all nodes."
+    @gotcha("Phase 105: Deployment is agent-driven. No hardcoded onDeploy callback. The devops agent calls the deploy API directly and reports back.")
+  }
+
+  step deploy -> governance {
+    actor: Orchestrator
+    what: "Council only: onPropose callback calls governance.createProposal(). In dev mode: auto-approve. Governance decisions route back via MessageBus as 'governance_decision' messages."
   }
 
   step governance -> reflection {
@@ -51,13 +58,13 @@ flow OrchestratorSystem {
 }
 
 concept OrchestratorAction {
-  description: "Union type of 12 actions an orchestrator can take per tick. Returned from either deterministic() (Tier 1) or parseAIActions() (Tier 2). Each action has a 'type' discriminator."
+  description: "Union type of 13 action types an orchestrator can take per tick: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy (legacy/noop), respond_to_user, run_scenarios. Returned from deterministic() (Tier 1) or parseAIActions() (Tier 2)."
   defined_in: "packages/node/src/platform/orchestrator.ts"
   used_by: [Orchestrator]
 }
 
 concept AgentIdentity {
-  description: "Unified SQLite record for every agent (worker or orchestrator). Fields: id, role, type, scope, parentId, nodeId, status, authority (JSON), fileScope, budget, tickIntervalMs, maxWorkers, rolePrompt, sessionId, createdAt, updatedAt."
+  description: "Unified SQLite record for every agent (worker or orchestrator). Fields: id, role, type, scope, parentId, nodeId, status, authority (JSON), fileScope, budget, tickIntervalMs, maxWorkers, rolePrompt, sessionId, templateId, createdAt, updatedAt. Phase 105: templateId links agent instance to its source template."
   defined_in: "packages/node/src/platform/agent-database.ts"
   used_by: [AgentDatabase, OrgManager, WorkerPool, Orchestrator]
 }
@@ -81,9 +88,9 @@ concept OrgManager {
 }
 
 concept AgentDatabase {
-  description: "SQLite-backed storage with 7 tables: agent_identity, message_inbox, tick_log, lessons, org_knowledge, directives, reflections. Single file at ~/.pando/agents.db. WAL mode, prepared statements."
+  description: "SQLite-backed storage with 8 tables: agent_identity, agent_templates, message_inbox, tick_log, lessons, org_knowledge, directives, reflections. Single file at ~/.pando/agents.db. WAL mode, prepared statements. Phase 105: agent_templates table stores reusable role definitions."
   defined_in: "packages/node/src/platform/agent-database.ts"
-  used_by: [MessageBus, WorkerPool, OrgManager, Orchestrator, AgentTools, PlatformApi]
+  used_by: [MessageBus, WorkerPool, OrgManager, Orchestrator, AgentTools, PlatformApi, TemplateRegistry]
 }
 
 concept TierClassification {
@@ -122,14 +129,34 @@ decision PERSISTENT_WORKERS {
 
 decision PROJECT_ORCHESTRATOR_PIPELINE {
   context: "Phase 104. Council orchestrator worked for Pando infra. User app builds (build me X) created project in DB but no live orchestrator was spawned — dead end."
-  choice: "Same Orchestrator class for both council and projects. Factory method instantiateOrchestrator() determines callbacks based on role. Project orchestrators get onCommit (git in workspace → GitHub push) and onDeploy (S3/PM2+nginx). Workers run in project workspace dir, not Pando repo root."
-  why: "Council is just Pando's own project manager. No special-casing. Same tick loop, same AI brain, same QA cycle. Only callbacks differ."
+  choice: "Same Orchestrator class for both council and projects. Factory method instantiateOrchestrator() determines callbacks based on role. Project orchestrators get onCommit (git in workspace → GitHub push). Deployment is agent-driven: devops worker spawned after QA pass, calls deploy API directly. Workers run in project workspace dir, not Pando repo root."
+  why: "Council is just Pando's own project manager. No special-casing. Same tick loop, same AI brain, same QA cycle. Only callbacks differ. Deployment through agents enables intelligent decision-making (t1 vs t2, troubleshooting, validation)."
+  date: "2026-02-27"
+}
+
+decision AGENT_DRIVEN_DEPLOYMENT {
+  context: "Phase 105. Deployment was a hardcoded onDeploy callback — just a fetch() to the deploy endpoint. No intelligence, no troubleshooting, no validation."
+  choice: "Remove onDeploy callback. After QA passes, orchestrator spawns a devops worker with instructions to call POST /v1/projects/:id/deploy and POST /v1/projects/:id/validate-deploy. Devops agent reads template from TemplateRegistry, can think about the deploy, troubleshoot failures, validate post-deploy."
+  why: "A callback can't decide 'this needs nginx config changes' or 'the last deploy failed, let me check logs'. An agent can. For simple deploys: agent makes the same HTTP call the callback did. For complex deploys: agent brings intelligence. Templates allow custom devops agents for different deployment environments."
   date: "2026-02-27"
 }
 
 decision TEAM_STATE_IN_PROJECT {
   context: "Phase 104. Need project team hierarchy and worker states to be portable and transparent."
-  choice: "Export team-state.json to project workspace on every commit. Contains agent list (roles, sessions, status), lessons. Gets pushed to GitHub with project code."
-  why: "SQLite is structured and queryable. JSON export travels with the project repo. New node clones and reads it. Users see team structure in GitHub for transparency."
+  choice: "Export team-state.json v2 to project workspace on every commit. Contains: team blueprint (roles + templateIds), cumulative stats, lessons (with relevanceTags), reflections, active directives. Import on clone: lessons with 0.8x confidence decay, reflections, directives."
+  why: "SQLite is structured and queryable. JSON export travels with the project repo. New node clones and reads it. Users see team structure in GitHub for transparency. v2 format enables full knowledge portability across nodes."
   date: "2026-02-27"
+}
+
+decision TEMPLATE_REGISTRY {
+  context: "Phase 105. Agent roles were hardcoded as 5 strings in DEFAULT_ROLE_PROMPTS. Adding a new agent type (marketing, news, devops-specialist) required source code changes and redeployment."
+  choice: "TemplateRegistry class backed by agent_templates SQLite table. Built-in templates seeded on boot (builder, tester, reviewer, researcher, devops). Custom templates created via POST /v1/templates. WorkerPool resolves templates at spawn time. Each agent instance links to its source template via template_id."
+  why: "Agents are first-class network primitives. Templates are the reusable recipe; instances accumulate their own knowledge per-project. Same devops template → Facebook project learns Facebook patterns, Pando project learns Pando patterns. Schema has publisher_peer_id + version fields ready for future P2P sync and marketplace."
+  date: "2026-02-27"
+}
+
+concept TemplateRegistry {
+  description: "SQLite-backed agent template storage. Replaces hardcoded DEFAULT_ROLE_PROMPTS with data-driven templates. 5 built-in templates seeded on boot. Custom templates via API. Future: P2P sync via GossipSub."
+  defined_in: "packages/node/src/platform/template-registry.ts"
+  used_by: [WorkerPool, PandoNode, PlatformApi]
 }
