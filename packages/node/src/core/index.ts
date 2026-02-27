@@ -50,3 +50,10 @@ export { CloudInstanceManager } from './cloud-instance-manager.js';
 // P2P request/reply
 export { RequestReplyManager } from './request-reply.js';
 export type { RequestHandler, RequestReplyStats } from './request-reply.js';
+
+// New agent system
+export { MessageBus } from './message-bus.js';
+export type { SendMessageOpts } from './message-bus.js';
+
+export { registerWorkerRoutes, generateWorkerToolsDocs } from './worker-mcp.js';
+export type { WorkerTaskResponse, WorkerIdentityResponse, ReportProgressBody } from './worker-mcp.js';
