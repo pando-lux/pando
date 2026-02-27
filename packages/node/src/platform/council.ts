@@ -354,15 +354,16 @@ Be concrete. If everything is healthy, say so — do not invent problems.`;
           // Clear health alerts after processing
           this.pendingHealthAlerts = [];
         } else {
-          result = this.stubReflectionResult(dateStr, prompt.length);
+          console.warn(`[council] AI reflection returned empty result — skipping`);
+          return null;
         }
       } catch (err: any) {
-        console.error(`[council] AI reflection failed: ${err.message}`);
-        result = this.stubReflectionResult(dateStr, prompt.length);
+        console.error(`[council] AI reflection failed: ${err.message} — skipping`);
+        return null;
       }
     } else {
-      console.log(`[council] No AI backend available — stub reflection`);
-      result = this.stubReflectionResult(dateStr, prompt.length);
+      console.warn(`[council] No AI backend available — reflection skipped (not ready yet)`);
+      return null;
     }
 
     // Update reflection timestamp
@@ -372,15 +373,7 @@ Be concrete. If everything is healthy, say so — do not invent problems.`;
     return result;
   }
 
-  private stubReflectionResult(dateStr: string, promptLen: number): ReflectionResult {
-    return {
-      timestamp: Date.now(),
-      type: 'daily',
-      summary: `Daily reflection prompt assembled (${promptLen} chars). AI call pending.`,
-      proposals: [],
-      minutesEntry: `## ${dateStr} — Daily Reflection\n- Prompt assembled (${promptLen} chars), AI integration pending\n- Council: ${this.state.members.length} members\n`,
-    };
-  }
+  // stubReflectionResult removed — no stubs. If AI backend is not available, reflection is skipped.
 
   private parseReflectionOutput(output: string): { summary: string; observations: string[]; proposals: any[]; actions: any[] } {
     try {
@@ -467,19 +460,19 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
             reply = aiResult.output;
           }
         } else {
-          reply = this.fallbackResponse(message);
+          reply = `AI backend returned an empty response. The council cannot process this request right now.`;
         }
       } catch (err: any) {
         console.error(`[council] Chat AI failed: ${err.message}`);
-        reply = this.fallbackResponse(message);
+        reply = `AI backend error: ${err.message}. The council cannot process this request right now.`;
       }
     } else {
-      // No AI backend — check for actionable keywords
+      // No AI backend available — still handle actionable requests via builder spawning
       if (this.isActionableRequest(message)) {
         this.runSelfHealingLoop(message);
-        reply = `Understood. I'm spawning a builder agent to handle: "${message.slice(0, 80)}".`;
+        reply = `No AI backend available for chat, but I detected an actionable request. Spawning a builder agent to handle: "${message.slice(0, 80)}".`;
       } else {
-        reply = this.fallbackResponse(message);
+        reply = `No AI backend available. The council requires a Claude Code backend to respond to messages. Ensure at least one council node has shareCompute enabled.`;
       }
     }
 
@@ -515,19 +508,7 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
     return keywords.test(message);
   }
 
-  private fallbackResponse(message: string): string {
-    const lower = message.toLowerCase();
-    if (/status|health/.test(lower)) {
-      const network = this.node.getNetwork?.();
-      const peers = network?.getPeerCount() ?? 0;
-      return `Network has ${peers} peer(s) connected. Council has ${this.state.members.length} member(s). Use /status for full details.`;
-    }
-    if (/council|members/.test(lower)) {
-      const members = this.state.members.map(m => m.peerId.slice(0, 12)).join(', ');
-      return `Council members: [${members || 'none selected'}]. Next rotation: ${new Date(this.state.rotatesAt).toISOString().slice(0, 10)}.`;
-    }
-    return 'I\'m the Pando Network Council. I can help manage the network, spawn builders, and create governance proposals. What do you need?';
-  }
+  // fallbackResponse removed — no stubs. Council requires real AI backend.
 
   getChatHistory(): CouncilChatMessage[] {
     return [...this.chatHistory];
@@ -1005,8 +986,10 @@ Otherwise, respond naturally as a helpful AI council member. Keep answers concis
     }, checkInterval);
     if (this.timer.unref) this.timer.unref();
 
-    // Run initial tick
-    this.tick();
+    // Delay initial tick to allow AI backend detection to complete (takes ~5s for `where claude`)
+    setTimeout(() => {
+      this.tick();
+    }, 10_000);
 
     // Register council agent and start bridge watcher (delayed — AgentManager starts after council)
     setTimeout(() => {

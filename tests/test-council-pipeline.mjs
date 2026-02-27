@@ -110,8 +110,8 @@ try {
   assert(directive.id.startsWith('dir-'), 'Directive has valid ID');
 
   const reflection = await council.runDailyReflection();
-  assert(reflection !== null, 'Reflection returns a result');
-  assert(reflection.type === 'daily', 'Reflection type is daily');
+  // No AI backend in test env → reflection returns null (stubs removed)
+  assert(reflection === null, 'Reflection returns null without AI backend (no stubs)');
 
   const tasks = council.getActiveTasks();
   assert(Array.isArray(tasks), 'getActiveTasks returns an array');
