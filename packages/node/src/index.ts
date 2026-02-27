@@ -2550,7 +2550,7 @@ location /apps/${projectId}/ {
     );
 
     // Initialize unified agent database
-    this.agentDb = new AgentDatabase(join(dataDir, 'agents.db'));
+    this.agentDb = new AgentDatabase(dataDir);
     const cleaned = this.agentDb.cleanupStaleAgents();
     if (cleaned > 0) console.log(`[agents] Cleaned ${cleaned} stale agents from previous run`);
     console.log('[agents] AgentDatabase initialized');

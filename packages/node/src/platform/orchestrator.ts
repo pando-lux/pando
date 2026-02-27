@@ -79,6 +79,7 @@ export class Orchestrator {
   private timer: ReturnType<typeof setInterval> | null = null;
   private ticking = false;
   private stopped = false;
+  private _startTime: number = 0;
 
   constructor(
     private orchestratorId: string,
@@ -95,6 +96,7 @@ export class Orchestrator {
 
     const interval = agent.tickIntervalMs || 60000;
     this.stopped = false;
+    this._startTime = Date.now();
 
     // Tick immediately on start, then on interval
     this.tick().catch(err => console.error(`[Orchestrator ${this.orchestratorId}] tick error:`, err));
@@ -140,8 +142,10 @@ export class Orchestrator {
 
       let actions: OrchestratorAction[] = [];
 
+      const uptimeMs = Date.now() - this._startTime;
+      const uptimeSec = Math.floor(uptimeMs / 1000);
       const inboxSummary = `msgs=${board.messages.length} reports=${board.workerReports.length} alerts=${board.healthAlerts.length} requests=${board.userRequests.length}`;
-      console.log(`[Orchestrator ${this.orchestratorId}] Tick — Tier ${tier}, workers=${board.activeWorkers}/${board.maxWorkers}, ${inboxSummary}`);
+      console.log(`[Orchestrator ${this.orchestratorId}] Tick — Tier ${tier}, workers=${board.activeWorkers}/${board.maxWorkers}, ${inboxSummary}, uptime=${uptimeSec}s`);
 
       if (tier === 1) {
         // Tier 1: deterministic actions
