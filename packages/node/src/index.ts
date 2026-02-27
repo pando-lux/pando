@@ -27,7 +27,11 @@ import { HealthMonitor } from './kernel/monitor.js';
 import { Guardrails } from './kernel/guardrails.js';
 import { RequestReplyManager } from './core/request-reply.js';
 import { ReputationManager } from './kernel/reputation.js';
-import { AgentManager, type AgentManagerConfig } from './core/agent-manager.js';
+import { AgentDatabase } from './platform/agent-database.js';
+import { MessageBus } from './core/message-bus.js';
+import { WorkerPool } from './core/worker-pool.js';
+import { OrgManager } from './platform/org-manager.js';
+import { Orchestrator } from './platform/orchestrator.js';
 import { EmissionWitness, TOPIC_EMISSIONS } from './kernel/emission-witness.js';
 import { SecurityMonitor } from './kernel/security-monitor.js';
 import { ResourceProofChallenger } from './platform/resource-proof.js';
@@ -62,7 +66,7 @@ import { ProjectRegistry, TOPIC_PROJECTS } from './platform/project-registry.js'
 import { RevenueEngine } from './platform/revenue-engine.js';
 import { ContributionTracker } from './platform/contribution-tracker.js';
 import { GenomeAgent } from './platform/genome-agent.js';
-import { Council } from './platform/council.js';
+// Council replaced by Orchestrator
 import { NetworkState } from './kernel/network-state.js';
 import { ThreadStore } from './platform/thread-store.js';
 import { HostingService } from './platform/hosting-service.js';
@@ -121,7 +125,12 @@ export class PandoNode {
   private guardrails: Guardrails | null = null;
   private requestReply: RequestReplyManager | null = null;
   private reputation: ReputationManager | null = null;
-  private agentManager: AgentManager | null = null;
+  private agentDb: AgentDatabase | null = null;
+  private messageBus: MessageBus | null = null;
+  private workerPool: WorkerPool | null = null;
+  private orgManager: OrgManager | null = null;
+  private councilOrchestrator: Orchestrator | null = null;
+  private councilOrchId: string | null = null;
   private emissionWitness: EmissionWitness | null = null;
   private securityMonitor: SecurityMonitor | null = null;
   private resourceProofChallenger: ResourceProofChallenger | null = null;
@@ -187,8 +196,7 @@ export class PandoNode {
   private hostingService: HostingService | null = null;
   // Phase 50: Network State Aggregator
   private networkState: NetworkState | null = null;
-  // Phase 50: Network Council
-  private council: Council | null = null;
+  // Council orchestrator (replaced Council class)
   // v2.1: AI Backend Registry (exposed for council + subsystems)
   private aiBackendRegistry: AIBackendRegistry | null = null;
   // Phase 64: Cloud Instance Manager (EC2 compute nodes)
@@ -1800,10 +1808,7 @@ location /apps/${projectId}/ {
     this.networkState.start();
     console.log('[network-state] Aggregator started (hourly snapshots)');
 
-    // Phase 50: Network Council — rotating top-reputation nodes, daily reflection
-    this.council = new Council(this, dataDir);
-    this.council.start();
-    console.log('[council] Council system started');
+    // Council is now the Orchestrator — initialized in startAgentSystem()
 
     // v2.5: Local Environment — Envelope 1 file index + user memory (always on, no network)
     try {
@@ -1889,30 +1894,30 @@ location /apps/${projectId}/ {
           }
         }
 
-        // Phase 27-E + Phase 33: Enqueue governance decision to AgentManager bridge
-        // Includes category so agents can differentiate code_change proposals
-        if (this.agentManager) {
+        // Send governance decision to council orchestrator via MessageBus
+        if (this.messageBus && this.councilOrchId) {
           try {
             const proposal = this.governance?.getProposal(decision.proposalId);
-            this.agentManager.getBridge().enqueue(DEFAULT_MANAGER_ID, {
+            this.messageBus.send({
+              recipientId: this.councilOrchId,
+              senderId: 'governance',
+              senderType: 'system',
               type: 'governance_decision',
-              source: 'governance',
               payload: {
                 proposalId: decision.proposalId,
                 title: proposalTitle,
                 description: proposal?.description || '',
                 outcome: decision.outcome,
-                decision: decision.outcome, // legacy compat
                 category: proposal?.category || 'unknown',
                 votesFor: decision.votesFor,
                 votesAgainst: decision.votesAgainst,
                 taskId: createdTaskId,
               },
-              priority: 'critical',
+              priority: 0, // critical
             });
-            console.log(`[governance→agents] Proposal "${proposalTitle}" (${proposal?.category || 'unknown'}) → agent manager`);
+            console.log(`[governance→agents] Proposal "${proposalTitle}" → council orchestrator`);
           } catch (err: any) {
-            console.error(`[governance→agents] Failed to enqueue governance decision: ${err.message}`);
+            console.error(`[governance→agents] Failed to send governance decision: ${err.message}`);
           }
         }
       }
@@ -2527,60 +2532,91 @@ location /apps/${projectId}/ {
   // ----------------------------------------------------------
 
   /**
-   * Start the AgentManager — the universal agent system (Phase 27).
-   * Always runs regardless of --scheduler flag. Provides chat routing,
-   * project managers, and the bridge queue for all agent communication.
+   * Start the new agent system: AgentDatabase, MessageBus, WorkerPool,
+   * OrgManager, and the council Orchestrator.
    */
   startAgentSystem(): void {
     if (this.agentSystemStarted) return;
     this.agentSystemStarted = true;
 
+    const dataDir = this.config.dataDir;
+
     // v2.1: Initialize AI Backend Registry — detect available backends
     this.aiBackendRegistry = new AIBackendRegistry();
     this.aiBackendRegistry.register(new ClaudeBackend());
     this.aiBackendRegistry.register(new OllamaBackend());
-    // detectAll() runs async — backends mark themselves available when detected
     this.aiBackendRegistry.detectAll().catch(err =>
       console.warn('[ai-backend] Detection error:', err)
     );
 
-    // Start AgentManager — the new universal agent system (Phase 27)
-    this.agentManager = new AgentManager({
-      localPeerId: this.identity?.peerId || '',
-      dataDir: this.config.dataDir,
-      apiPort: this.config.apiPort,
-      genomeAgent: this.genomeAgent || undefined,
+    // Initialize unified agent database
+    this.agentDb = new AgentDatabase(join(dataDir, 'agents.db'));
+    console.log('[agents] AgentDatabase initialized');
+
+    // Initialize MessageBus
+    this.messageBus = new MessageBus(this.agentDb);
+    console.log('[agents] MessageBus initialized');
+
+    // Initialize WorkerPool
+    this.workerPool = new WorkerPool(
+      this.agentDb,
+      this.aiBackendRegistry,
+      this.messageBus,
+      { dataDir, apiPort: this.config.apiPort },
+    );
+    console.log('[agents] WorkerPool initialized');
+
+    // Initialize OrgManager
+    this.orgManager = new OrgManager(this.agentDb, this.workerPool, this.messageBus);
+    console.log('[agents] OrgManager initialized');
+
+    // Create and start the council orchestrator (top-level, manages the network)
+    this.councilOrchId = this.orgManager.createOrchestrator({
+      role: 'council',
+      level: 0,
+      scope: 'public',
+      tickIntervalMs: 60000,
+      maxWorkers: 10,
+      maxChildren: 5,
+      persistent: true,
+      nodeId: this.identity?.peerId || undefined,
+      rolePrompt: `You are the council orchestrator for a Pando node.
+Your job: monitor the network, handle user requests (routed from project orchestrators),
+respond to health alerts, and manage the self-sustaining loop (build → QA → governance → upgrade).
+In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for tasks.`,
     });
+    console.log(`[agents] Council orchestrator created: ${this.councilOrchId}`);
 
-    // Wire PaymentGate to AgentManager for cost gating
-    if (this.paymentGate) {
-      this.agentManager.setPaymentGate(this.paymentGate);
-    }
+    // Start the council orchestrator's tick loop
+    this.councilOrchestrator = new Orchestrator(this.councilOrchId, {
+      db: this.agentDb,
+      messageBus: this.messageBus,
+      workerPool: this.workerPool,
+      orgManager: this.orgManager,
+      aiRegistry: this.aiBackendRegistry,
+      onPropose: this.governance ? async (title, description) => {
+        await this.governance!.createProposal(
+          title,
+          description,
+        );
+      } : undefined,
+      onCommit: async (message) => {
+        // TODO: wire to DeployManager.commit()
+        console.log(`[orchestrator] Commit requested: ${message}`);
+        return true;
+      },
+    });
+    this.councilOrchestrator.start();
+    console.log('[agents] Council orchestrator tick loop started');
 
-    // Phase 31.1: Wire ProjectStore to AgentManager for persistent project records
-    if (this.projectStore) {
-      this.agentManager.setProjectStore(this.projectStore);
-    }
-
-    // Phase 87: Wire CapabilityRegistry to AgentManager for compute node context injection
-    if (this.capabilityRegistry) {
-      const capReg = this.capabilityRegistry;
-      const localPeer = this.identity?.peerId || '';
-      this.agentManager.setComputeNodeProvider(() => {
-        return (capReg.getAllProfiles?.() || [])
-          .filter((p: any) => p.storageBackend === 'mongodb' && p.peerId !== localPeer)
-          .map((p: any) => ({
-            peerId: p.peerId,
-            publicAddress: p.publicAddress || '',
-            storageBackend: p.storageBackend,
-            credentialAccess: !!p.credentialAccess,
-          }));
+    // Wire to API server
+    if (this.apiServer) {
+      this.apiServer.setAgentSystem({
+        db: this.agentDb,
+        workerPool: this.workerPool,
+        messageBus: this.messageBus,
+        orgManager: this.orgManager,
       });
-    }
-
-    // v2.5: Wire LocalEnvironment to AgentManager for user memory injection at spawn time
-    if (this.localEnv) {
-      this.agentManager.setLocalEnv(this.localEnv);
     }
 
     // Phase 30: Wire PaymentGate to Governance for proposal staking
@@ -2588,50 +2624,41 @@ location /apps/${projectId}/ {
       this.governance.setPaymentGate(this.paymentGate);
     }
 
-    // Phase 30.2: Wire AgentManager to Governance for reviewer agent spawning
-    if (this.governance) {
-      this.governance.setAgentManager(this.agentManager);
-    }
-
-    // Wire AgentManager SSE push to API server
-    if (this.apiServer) {
-      this.agentManager.setSsePushCallback((eventType: string, data: any) => {
-        this.apiServer?.pushEvent(eventType, data);
+    // Phase 30.2: Wire WorkerPool to Governance for reviewer agent spawning
+    if (this.governance && this.workerPool && this.councilOrchId) {
+      const pool = this.workerPool;
+      const orchId = this.councilOrchId;
+      this.governance.setAgentManager({
+        async spawnAgent(opts: any) {
+          return pool.spawn({
+            role: opts.role || 'reviewer',
+            orchestratorId: orchId,
+            projectId: opts.projectId,
+            rolePrompt: `${opts.description || ''}\n\n${opts.taskContext || ''}`,
+          });
+        },
       });
     }
 
-    // Wire AgentManager thread message persistence to ThreadStore
-    if (this.threadStore) {
-      this.agentManager.setThreadMessageCallback((threadId, message) => {
-        this.threadStore?.addMessage(threadId, message as any);
-      });
-    }
-
-    this.agentManager.start().then(() => {
-      console.log('[agents] AgentManager started (Phase 27 universal agent system).');
-      if (this.agentManager) this.apiServer?.setAgentManager(this.agentManager);
-    }).catch((err: any) => {
-      console.error('[agents] AgentManager failed to start:', err.message);
-    });
-
-    // Wire health monitor alerts to agent manager and council
-    if (this.monitor) {
+    // Wire health monitor alerts to council orchestrator
+    if (this.monitor && this.messageBus && this.councilOrchId) {
+      const bus = this.messageBus;
+      const councilId = this.councilOrchId;
       this.monitor.onAlert((alert) => {
-        if (this.agentManager) {
-          this.agentManager.getBridge().enqueue(DEFAULT_MANAGER_ID, {
-            type: 'health_alert' as any,
-            content: `[${alert.severity || 'medium'}] ${alert.message || alert.type}`,
-            source: 'health-monitor',
-            timestamp: Date.now(),
-            priority: alert.severity === 'critical' ? 'critical' : 'normal',
-          } as any);
-        }
-        // Forward to council for REQUIRES_HUMAN_ACTION classification
-        if (this.council) {
-          this.council.handleHealthAlert(alert);
-        }
+        bus.send({
+          recipientId: councilId,
+          senderId: 'health-monitor',
+          senderType: 'system',
+          type: 'health_alert',
+          payload: {
+            severity: alert.severity || 'medium',
+            message: alert.message || alert.type,
+            type: alert.type,
+          },
+          priority: alert.severity === 'critical' ? 0 : 1,
+        });
       });
-      console.log('[agents] Health monitor wired to agent manager and council');
+      console.log('[agents] Health monitor wired to council orchestrator');
     }
 
     console.log('[agents] Agent system started.');
@@ -2721,114 +2748,93 @@ location /apps/${projectId}/ {
       this.monitor.attachScheduler(this.scheduler);
     }
 
-    // Wire Scheduler's BridgeQueue so it can post task_failed events to the Manager
-    if (this.agentManager) {
-      this.scheduler.setBridgeQueue(this.agentManager.getBridge());
-    }
-
-    // Bug H1/H2 fix: Wire task completion callback so bridge processing
-    // updates task status and scheduler counters when a task completes via agents.
-    if (this.agentManager) {
-      const sched = this.scheduler;
-      const tq = taskQueue;
-      this.agentManager.setTaskCompletionCallback((taskId: string, success: boolean, output: string) => {
-        if (success) {
-          // Update task status to 'done' (Bug H1)
-          tq.completeTask(taskId, { buildPassed: true, note: output.slice(0, 500) });
-          // Increment scheduler counters (Bug H2)
-          sched.reportTaskCompleted(taskId, output);
-          console.log(`[task-bridge] Task ${taskId.slice(0, 8)} marked done + scheduler counters updated`);
-        } else {
-          // Update task status to 'rejected'
-          tq.updateStatus(taskId, 'rejected');
-          tq.setResultNote(taskId, output.slice(0, 500));
-          // Increment scheduler failure counters (Bug H2)
-          sched.reportTaskFailed(taskId, output);
-          console.log(`[task-bridge] Task ${taskId.slice(0, 8)} marked rejected + scheduler counters updated`);
-        }
-      });
-    }
-
-    // Task completion/failure → notify agent manager
+    // Task completion/failure → notify council orchestrator via MessageBus
     this.scheduler.on('task:completed', (data: any) => {
-      if (this.agentManager && data?.taskId) {
+      if (this.messageBus && this.councilOrchId && data?.taskId) {
         const task = this.taskQueue?.getTask(data.taskId);
-        const managerId = task?.managerId || task?.createdBy || DEFAULT_MANAGER_ID;
-        this.agentManager.getBridge().enqueue(managerId, {
-          type: 'task_result' as any,
-          content: `Task "${task?.title || data.taskId}" completed successfully.`,
-          source: 'scheduler',
-          timestamp: Date.now(),
-          priority: 'normal',
-          metadata: { taskId: data.taskId, success: true },
-        } as any);
+        this.messageBus.send({
+          recipientId: this.councilOrchId,
+          senderId: 'scheduler',
+          senderType: 'system',
+          type: 'task_result',
+          payload: { taskId: data.taskId, success: true, title: task?.title || data.taskId },
+          priority: 1,
+        });
       }
     });
     this.scheduler.on('task:failed', (data: any) => {
-      if (this.agentManager && data?.taskId) {
+      if (this.messageBus && this.councilOrchId && data?.taskId) {
         const task = this.taskQueue?.getTask(data.taskId);
-        const managerId = task?.managerId || task?.createdBy || DEFAULT_MANAGER_ID;
-        this.agentManager.getBridge().enqueue(managerId, {
-          type: 'task_result' as any,
-          content: `Task "${task?.title || data.taskId}" failed: ${data?.error || 'Unknown error'}`,
-          source: 'scheduler',
-          timestamp: Date.now(),
-          priority: 'critical',
-          metadata: { taskId: data.taskId, success: false, error: data?.error },
-        } as any);
+        this.messageBus.send({
+          recipientId: this.councilOrchId,
+          senderId: 'scheduler',
+          senderType: 'system',
+          type: 'task_result',
+          payload: { taskId: data.taskId, success: false, title: task?.title || data.taskId, error: data?.error },
+          priority: 0,
+        });
       }
     });
 
-    // S2 fix: When a task is approved, enqueue it to the AgentManager's bridge
-    // so the manager agent picks it up and spawns workers
-    // S8 fix: Check capabilities BEFORE enqueuing to bridge (matches dequeueApproved() logic)
+    // When a task is approved, send to council orchestrator
     this.scheduler.on('task:approved', (data: any) => {
-      if (!this.agentManager || !this.taskQueue) return;
+      if (!this.messageBus || !this.councilOrchId || !this.taskQueue) return;
       const task = this.taskQueue.getTask(data.taskId);
       if (!task) return;
 
-      // S8: Capability check — resource-based (CapabilityRegistry)
+      // Capability check
       if (this.capabilityRegistry) {
         const resourceReqs = task.requiredResources;
         if (resourceReqs && resourceReqs.length > 0 && !this.capabilityRegistry.canExecuteLocally(resourceReqs)) {
-          console.log(`[scheduler→agents] Skipping task ${data.taskId.slice(0, 8)}: local node missing resource capabilities [${resourceReqs.join(', ')}]`);
+          console.log(`[scheduler→agents] Skipping task ${data.taskId.slice(0, 8)}: missing resource capabilities`);
           return;
         }
       }
-      // S8: Capability check — legacy NodeCapability string check
       const requiredCaps = (task.requiredCapabilities && task.requiredCapabilities.length > 0)
         ? task.requiredCapabilities
         : [NodeCapability.CLAUDE_CODE];
       const missingCaps = requiredCaps.filter((c: string) => !this.detectedCapabilities.includes(c));
       if (missingCaps.length > 0) {
-        console.log(`[scheduler→agents] Skipping task ${data.taskId.slice(0, 8)}: local node missing capabilities [${missingCaps.join(', ')}]`);
+        console.log(`[scheduler→agents] Skipping task ${data.taskId.slice(0, 8)}: missing capabilities`);
         return;
       }
 
-      const managerId = task.managerId || DEFAULT_MANAGER_ID;
-      this.agentManager.getBridge().enqueue(managerId, {
-        type: 'user_request',
-        source: 'scheduler',
+      this.messageBus.send({
+        recipientId: this.councilOrchId,
+        senderId: 'scheduler',
+        senderType: 'system',
+        type: 'task_assignment',
         payload: {
           message: `[APPROVED TASK] Execute this task:\n\nTitle: ${task.title}\nDescription: ${task.description || 'No description'}\nPriority: ${task.priority}\nTask ID: ${data.taskId}`,
           taskId: data.taskId,
         },
-        priority: task.priority === 'critical' ? 'critical' : 'normal',
+        priority: task.priority === 'critical' ? 0 : 1,
       });
-      console.log(`[scheduler→agents] Approved task ${data.taskId.slice(0, 8)} → bridge for ${managerId}`);
+      console.log(`[scheduler→agents] Approved task ${data.taskId.slice(0, 8)} → council orchestrator`);
     });
 
     return this.scheduler;
   }
 
   /**
-   * Stop the Agent System (AgentManager) and release resources.
+   * Stop the Agent System and release resources.
    */
   stopAgentSystem(): void {
-    if (this.agentManager) {
-      this.agentManager.stop();
-      this.agentManager = null;
+    if (this.councilOrchestrator) {
+      this.councilOrchestrator.stop();
+      this.councilOrchestrator = null;
     }
+    if (this.workerPool) {
+      this.workerPool.cleanup();
+    }
+    if (this.agentDb) {
+      this.agentDb.close();
+      this.agentDb = null;
+    }
+    this.messageBus = null;
+    this.workerPool = null;
+    this.orgManager = null;
+    this.councilOrchId = null;
     this.agentSystemStarted = false;
   }
 
@@ -2848,8 +2854,24 @@ location /apps/${projectId}/ {
     return this.scheduler;
   }
 
-  getAgentManager(): AgentManager | null {
-    return this.agentManager;
+  getAgentDb(): AgentDatabase | null {
+    return this.agentDb;
+  }
+
+  getMessageBus(): MessageBus | null {
+    return this.messageBus;
+  }
+
+  getWorkerPool(): WorkerPool | null {
+    return this.workerPool;
+  }
+
+  getOrgManager(): OrgManager | null {
+    return this.orgManager;
+  }
+
+  getCouncilOrchId(): string | null {
+    return this.councilOrchId;
   }
 
   getThreadStore(): ThreadStore | null {
@@ -3179,8 +3201,8 @@ location /apps/${projectId}/ {
     return this.networkState;
   }
 
-  getCouncil(): Council | null {
-    return this.council;
+  getCouncilOrchestrator(): Orchestrator | null {
+    return this.councilOrchestrator;
   }
 
   getAIBackendRegistry(): AIBackendRegistry | null {
@@ -3261,9 +3283,9 @@ location /apps/${projectId}/ {
       this.networkState.stop();
       this.networkState = null;
     }
-    if (this.council) {
-      this.council.stop();
-      this.council = null;
+    if (this.councilOrchestrator) {
+      this.councilOrchestrator.stop();
+      this.councilOrchestrator = null;
     }
     this.stopMonitor();
     this.stopScheduler();
@@ -3345,10 +3367,7 @@ location /apps/${projectId}/ {
     this.requestReply = null;
     this.reputation = null;
     this.genomeAgent = null;
-    if (this.agentManager) {
-      this.agentManager.stop();
-      this.agentManager = null;
-    }
+    // Agent system cleanup handled by stopAgentSystem() via stopScheduler()
     if (this.apiServer) {
       await this.apiServer.stop();
     }
@@ -3374,11 +3393,12 @@ export { LedgerSync } from './kernel/sync.js';
 export { GovernanceSync } from './kernel/governance.js';
 export { FileRegistry } from './platform/file-registry.js';
 export { getDefaultConfig } from './config.js';
-// Phase 27: New agent system exports
-export { Agent } from './core/agent.js';
-export type { AgentConfig, AgentState, AgentMemory, AgentRole, AgentStatus, AgentLimits, AgentEventResult } from './core/agent.js';
-export { AgentManager } from './core/agent-manager.js';
-export type { AgentManagerConfig, SpawnAgentConfig, AgentTreeNode } from './core/agent-manager.js';
+// New agent system exports
+export { AgentDatabase } from './platform/agent-database.js';
+export { MessageBus } from './core/message-bus.js';
+export { WorkerPool } from './core/worker-pool.js';
+export { OrgManager } from './platform/org-manager.js';
+export { Orchestrator } from './platform/orchestrator.js';
 export { registerAgentRoutes } from './platform/agent-tools.js';
 export { Scheduler } from './platform/scheduler.js';
 export type { SchedulerConfig, SchedulerStatus, ActiveTask, TaskLifecycle } from './platform/scheduler.js';
@@ -3422,9 +3442,7 @@ export type { GenomeAgentConfig, ScopedGenomeContext, DriftIssue, CommitInfo, Ch
 // Phase 50: Network State exports
 export { NetworkState } from './kernel/network-state.js';
 export type { NetworkStateSnapshot } from './kernel/network-state.js';
-// Phase 50: Council exports
-export { Council } from './platform/council.js';
-export type { CouncilMember, CouncilState, ReflectionResult } from './platform/council.js';
+// Council replaced by Orchestrator (exported above)
 // Phase 42: StorageBackend exports
 export type { StorageBackend } from './core/storage-backend.js';
 export { MongoStorageBackend } from './core/mongo-backend.js';

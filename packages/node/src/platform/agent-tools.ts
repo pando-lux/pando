@@ -1,345 +1,212 @@
 /**
- * agent-tools.ts -- HTTP API endpoints for agent tools (Phase 27-A)
+ * agent-tools.ts -- HTTP API endpoints for agent management.
  *
- * Registers Fastify routes that agents call via curl from their Claude Code
- * sessions. Also used by the gateway and external tooling.
+ * Registers Fastify routes for agent/orchestrator lifecycle.
+ * Uses the new agent system: AgentDatabase, WorkerPool, MessageBus, OrgManager.
  *
  * Auth model (matches api-server.ts):
  *   - GET endpoints are public (read-only)
  *   - POST/PUT/DELETE require Authorization: Bearer <token>
- *   (Auth is enforced by the global onRequest hook in api-server.ts,
- *    so these routes do NOT need per-route auth checks.)
- *
- * All routes check for AgentManager availability and return 503 if the
- * agent system is not started.
  */
 
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
-import type { AgentManager, ProjectAccessLevel } from '../core/agent-manager.js';
-import type { AgentRole } from '../core/agent.js';
-import type { BridgeItemType } from '../core/bridge-queue.js';
+import type { FastifyInstance, FastifyReply } from 'fastify';
+import type { AgentDatabase } from './agent-database.js';
+import type { WorkerPool } from '../core/worker-pool.js';
+import type { MessageBus } from '../core/message-bus.js';
+import type { OrgManager } from './org-manager.js';
+
+// ── Deps interface ────────────────────────────────────────────────────────────
+
+export interface AgentRouteDeps {
+  getDb: () => AgentDatabase | null;
+  getWorkerPool: () => WorkerPool | null;
+  getMessageBus: () => MessageBus | null;
+  getOrgManager: () => OrgManager | null;
+  getApiToken: () => string;
+}
 
 // ── Route Registration ────────────────────────────────────────────────────────
 
 export function registerAgentRoutes(
   fastify: FastifyInstance,
-  getAgentManager: () => AgentManager | null,
-  getApiToken: () => string,
+  deps: AgentRouteDeps,
 ): void {
 
-  // ── Helper: get AgentManager or 503 ────────────────────────────────────────
-
-  function requireAgentManager(reply: FastifyReply): AgentManager | null {
-    const mgr = getAgentManager();
-    if (!mgr) {
+  function requireDb(reply: FastifyReply): AgentDatabase | null {
+    const db = deps.getDb();
+    if (!db) {
       reply.code(503).send({ error: 'Agent system not started' });
       return null;
     }
-    return mgr;
+    return db;
   }
 
-  // ── Agent Management (POST — auth required) ────────────────────────────────
+  // ── Spawn worker (POST — auth required) ──────────────────────────────────
 
-  /**
-   * POST /agents/spawn
-   * Spawn a new agent in the agent tree.
-   * Body: { role, template?, parentId, projectId, description, taskContext? }
-   */
   fastify.post('/agents/spawn', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
+    const db = requireDb(reply);
+    if (!db) return;
+    const pool = deps.getWorkerPool();
+    if (!pool) return reply.code(503).send({ error: 'Worker pool not started' });
 
-    const { role, template, parentId, projectId, description, taskContext } = request.body || {};
+    const { role, orchestratorId, taskId, projectId, fileScope } = request.body || {};
 
-    // Validate required fields
     if (!role || typeof role !== 'string') {
-      return reply.code(400).send({ error: 'role is required (manager|builder|tester|reviewer|researcher|devops)' });
+      return reply.code(400).send({ error: 'role is required (builder|tester|reviewer|researcher|devops)' });
     }
-    const validRoles: AgentRole[] = ['manager', 'builder', 'tester', 'reviewer', 'researcher', 'devops'];
-    if (!validRoles.includes(role as AgentRole)) {
+    const validRoles = ['builder', 'tester', 'reviewer', 'researcher', 'devops'];
+    if (!validRoles.includes(role)) {
       return reply.code(400).send({ error: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
     }
-    if (!projectId || typeof projectId !== 'string') {
-      return reply.code(400).send({ error: 'projectId is required' });
+
+    // Resolve orchestratorId — use provided or find/create for project
+    let parentId = orchestratorId;
+    if (!parentId && projectId) {
+      const org = deps.getOrgManager();
+      if (org) parentId = org.getOrchestratorForProject(projectId);
     }
-    if (!description || typeof description !== 'string') {
-      return reply.code(400).send({ error: 'description is required' });
+    if (!parentId) {
+      return reply.code(400).send({ error: 'orchestratorId or projectId is required' });
     }
 
     try {
-      const requestedBy = (request as any).actor?.id;
-      const agentId = await agentManager.spawnAgent({
-        role: role as AgentRole,
-        template: template || undefined,
-        parentId: parentId || null,
+      const workerId = await pool.spawn({
+        role,
+        orchestratorId: parentId,
+        taskId,
         projectId,
-        description,
-        taskContext: taskContext || undefined,
-        requestedBy,
+        fileScope,
       });
-
-      if (!agentId) {
-        return reply.code(409).send({ error: 'Spawn denied — hard limits exceeded (depth, count, or budget)' });
-      }
-
-      return { agentId };
+      return { workerId };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message || 'Failed to spawn agent' });
+      return reply.code(500).send({ error: err.message || 'Failed to spawn worker' });
     }
   });
 
-  /**
-   * POST /agents/:id/message
-   * Enqueue a message to an agent's bridge queue.
-   * Body: { prompt, priority?, source? }
-   */
+  // ── Send message to agent (POST — auth required) ─────────────────────────
+
   fastify.post('/agents/:id/message', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
+    const db = requireDb(reply);
+    if (!db) return;
+    const bus = deps.getMessageBus();
+    if (!bus) return reply.code(503).send({ error: 'Message bus not started' });
 
     const { id } = request.params || {};
-    const { prompt, priority, source } = request.body || {};
+    const { prompt, message, priority, source } = request.body || {};
+    const content = prompt || message;
 
-    if (!id) {
-      return reply.code(400).send({ error: 'Agent ID is required' });
-    }
-    if (!prompt || typeof prompt !== 'string') {
-      return reply.code(400).send({ error: 'prompt is required' });
+    if (!id) return reply.code(400).send({ error: 'Agent ID is required' });
+    if (!content || typeof content !== 'string') {
+      return reply.code(400).send({ error: 'prompt or message is required' });
     }
 
-    const validPriorities = ['critical', 'normal', 'low'];
-    const resolvedPriority = priority && validPriorities.includes(priority) ? priority : 'normal';
+    const agent = db.getAgent(id);
+    if (!agent) return reply.code(404).send({ error: `Agent ${id} not found` });
 
     try {
-      agentManager.getBridge().enqueue(id, {
-        type: 'worker_message' as BridgeItemType,
-        source: source || 'api',
-        payload: { message: prompt },
-        priority: resolvedPriority,
+      bus.send({
+        recipientId: id,
+        senderId: source || 'api',
+        senderType: 'system',
+        type: 'worker_message',
+        payload: { message: content },
+        priority: priority === 'critical' ? 0 : priority === 'low' ? 2 : 1,
       });
-
       return { queued: true };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message || 'Failed to enqueue message' });
+      return reply.code(500).send({ error: err.message || 'Failed to send message' });
     }
   });
 
-  /**
-   * POST /agents/:id/report
-   * Report task status from a child agent to its parent's bridge queue.
-   * Body: { status: 'complete'|'failed'|'progress', summary, details? }
-   */
+  // ── Report from worker to parent (POST — auth required) ──────────────────
+
   fastify.post('/agents/:id/report', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
+    const db = requireDb(reply);
+    if (!db) return;
+    const bus = deps.getMessageBus();
+    if (!bus) return reply.code(503).send({ error: 'Message bus not started' });
 
     const { id } = request.params || {};
-    const { status, summary, details } = request.body || {};
+    const { status, summary, details, difficulties, suggestions } = request.body || {};
 
-    if (!id) {
-      return reply.code(400).send({ error: 'Agent ID is required' });
-    }
-    if (!status || typeof status !== 'string') {
-      return reply.code(400).send({ error: 'status is required (complete|failed|progress)' });
-    }
-    const validStatuses = ['complete', 'failed', 'progress'];
-    if (!validStatuses.includes(status)) {
-      return reply.code(400).send({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
-    }
-    if (!summary || typeof summary !== 'string') {
-      return reply.code(400).send({ error: 'summary is required' });
-    }
+    if (!id) return reply.code(400).send({ error: 'Agent ID is required' });
+    if (!status) return reply.code(400).send({ error: 'status is required (done|failed|progress)' });
+    if (!summary) return reply.code(400).send({ error: 'summary is required' });
 
-    // Look up the reporting agent to find its parent
-    const agent = agentManager.getAgent(id);
-    if (!agent) {
-      return reply.code(404).send({ error: `Agent ${id} not found` });
+    const agent = db.getAgent(id);
+    if (!agent) return reply.code(404).send({ error: `Agent ${id} not found` });
+
+    // Update worker status
+    if (status === 'done' || status === 'complete') {
+      db.updateAgent(id, { status: 'done' });
+    } else if (status === 'failed') {
+      db.updateAgent(id, { status: 'failed' });
     }
 
-    const state = agent.getState();
-    const parentId = state.parentId;
-
-    if (!parentId) {
-      // Top-level agent with no parent — log the report but still acknowledge
-      console.log(`[agent-tools] Top-level agent ${id} reported: ${status} — ${summary}`);
-      return { received: true, note: 'No parent agent — report logged' };
-    }
-
-    // Map status to bridge event type
-    const typeMap: Record<string, BridgeItemType> = {
-      complete: 'task_completed',
-      failed: 'task_failed',
-      progress: 'progress',
-    };
-
-    const priorityMap: Record<string, 'critical' | 'normal' | 'low'> = {
-      complete: 'normal',
-      failed: 'critical',
-      progress: 'low',
-    };
-
-    try {
-      agentManager.getBridge().enqueue(parentId, {
-        type: typeMap[status],
-        source: id,
-        payload: {
-          agentId: id,
-          status,
-          summary,
-          details: details || undefined,
-        },
-        priority: priorityMap[status],
-      });
-
-      return { received: true };
-    } catch (err: any) {
-      return reply.code(500).send({ error: err.message || 'Failed to enqueue report' });
-    }
-  });
-
-  /**
-   * POST /agents/:id/resume
-   * Resume an existing agent with a new prompt.
-   * Body: { prompt }
-   */
-  fastify.post('/agents/:id/resume', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
-
-    const { id } = request.params || {};
-    const { prompt } = request.body || {};
-
-    if (!id) {
-      return reply.code(400).send({ error: 'Agent ID is required' });
-    }
-    if (!prompt || typeof prompt !== 'string') {
-      return reply.code(400).send({ error: 'prompt is required' });
-    }
-
-    const agent = agentManager.getAgent(id);
-    if (!agent) {
-      return reply.code(404).send({ error: `Agent ${id} not found` });
-    }
-
-    try {
-      // Fire and forget — resume is async but we don't wait for the Claude Code
-      // spawn to complete. The caller gets an immediate acknowledgement.
-      agentManager.resumeAgent(id, prompt).catch((err: any) => {
-        console.error(`[agent-tools] Resume failed for ${id}: ${err.message}`);
-      });
-
-      return { resumed: true };
-    } catch (err: any) {
-      return reply.code(500).send({ error: err.message || 'Failed to resume agent' });
-    }
-  });
-
-  /**
-   * POST /agents/:id/rotate
-   * Rotate an agent's session (knowledge dump → fresh session).
-   */
-  fastify.post('/agents/:id/rotate', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
-
-    const { id } = request.params || {};
-
-    if (!id) {
-      return reply.code(400).send({ error: 'Agent ID is required' });
-    }
-
-    const agent = agentManager.getAgent(id);
-    if (!agent) {
-      return reply.code(404).send({ error: `Agent ${id} not found` });
-    }
-
-    try {
-      // Fire and forget — rotation involves two Claude Code spawns and takes
-      // a long time. Return immediately and let it run in the background.
-      agentManager.rotateAgent(id).catch((err: any) => {
-        console.error(`[agent-tools] Rotation failed for ${id}: ${err.message}`);
-      });
-
-      return { rotated: true };
-    } catch (err: any) {
-      return reply.code(500).send({ error: err.message || 'Failed to rotate agent' });
-    }
-  });
-
-  /**
-   * POST /agents/:id/reset-session
-   * Reset an agent's session — forces a fresh CLAUDE.md read on the next event.
-   * Use this when context compression has caused the agent to lose its
-   * CLAUDE.md instructions (e.g., forgetting to deploy after 100+ tasks).
-   */
-  fastify.post('/agents/:id/reset-session', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
-
-    const { id } = request.params || {};
-
-    if (!id) {
-      return reply.code(400).send({ error: 'Agent ID is required' });
-    }
-
-    const agent = agentManager.getAgent(id);
-    if (!agent) {
-      return reply.code(404).send({ error: `Agent ${id} not found` });
-    }
-
-    try {
-      agent.resetSession();
-      return { success: true, message: `Session reset for ${id}. Next event will start fresh.` };
-    } catch (err: any) {
-      return reply.code(500).send({ error: err.message || 'Failed to reset session' });
-    }
-  });
-
-  /**
-   * POST /agents/:id/resurrect
-   * Resurrect an archived agent.
-   */
-  fastify.post('/agents/:id/resurrect', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
-
-    const { id } = request.params || {};
-
-    if (!id) {
-      return reply.code(400).send({ error: 'Agent ID is required' });
-    }
-
-    const agent = agentManager.getAgent(id);
-    if (!agent) {
-      return reply.code(404).send({ error: `Agent ${id} not found` });
-    }
-
-    try {
-      const success = await agentManager.resurrectAgent(id);
-      if (!success) {
-        return reply.code(409).send({ error: `Agent ${id} cannot be resurrected (not archived)` });
+    // Send report to parent orchestrator
+    if (agent.parentId) {
+      try {
+        bus.send({
+          recipientId: agent.parentId,
+          senderId: id,
+          senderType: 'worker',
+          type: 'worker_report',
+          payload: { status, summary, details, difficulties, suggestions, taskId: agent.currentTaskId },
+          priority: status === 'failed' ? 0 : 1,
+        });
+      } catch (err: any) {
+        console.error(`[agent-tools] Report routing failed for ${id}: ${err.message}`);
       }
-      return { resurrected: true };
-    } catch (err: any) {
-      return reply.code(500).send({ error: err.message || 'Failed to resurrect agent' });
     }
+
+    return { received: true };
   });
 
-  // ── Agent Queries (GET — no auth) ──────────────────────────────────────────
+  // ── Reset session (POST — auth required) ─────────────────────────────────
+
+  fastify.post('/agents/:id/reset-session', async (request: any, reply: any) => {
+    const db = requireDb(reply);
+    if (!db) return;
+
+    const { id } = request.params || {};
+    if (!id) return reply.code(400).send({ error: 'Agent ID is required' });
+
+    const agent = db.getAgent(id);
+    if (!agent) return reply.code(404).send({ error: `Agent ${id} not found` });
+
+    db.updateAgent(id, { sessionId: null });
+    return { success: true, message: `Session reset for ${id}. Next spawn will start fresh.` };
+  });
+
+  // ── Kill worker (POST — auth required) ───────────────────────────────────
+
+  fastify.post('/agents/:id/kill', async (request: any, reply: any) => {
+    const db = requireDb(reply);
+    if (!db) return;
+    const pool = deps.getWorkerPool();
+    if (!pool) return reply.code(503).send({ error: 'Worker pool not started' });
+
+    const { id } = request.params || {};
+    if (!id) return reply.code(400).send({ error: 'Agent ID is required' });
+
+    pool.kill(id);
+    return { killed: true };
+  });
+
+  // ── Agent Queries (GET — no auth) ────────────────────────────────────────
 
   /**
    * GET /agents/tree
-   * Get the hierarchical agent tree. Optional ?projectId= filter.
+   * Hierarchical tree of orchestrators and workers.
    */
   fastify.get('/agents/tree', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
-
-    const projectId = (request.query as any)?.projectId as string | undefined;
+    const db = requireDb(reply);
+    if (!db) return;
+    const org = deps.getOrgManager();
+    if (!org) return reply.code(503).send({ error: 'Org manager not started' });
 
     try {
-      const tree = agentManager.getAgentTree(projectId || undefined);
-      return tree;
+      return org.getTree();
     } catch (err: any) {
       return reply.code(500).send({ error: err.message || 'Failed to get agent tree' });
     }
@@ -347,17 +214,20 @@ export function registerAgentRoutes(
 
   /**
    * GET /agents/list
-   * List all agents (flat). Optional ?projectId= filter.
+   * Flat list of all agents. Optional ?type=worker|orchestrator&status=active
    */
   fastify.get('/agents/list', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
+    const db = requireDb(reply);
+    if (!db) return;
 
-    const projectId = (request.query as any)?.projectId as string | undefined;
+    const { type, status, projectId } = (request.query as any) || {};
+    const filters: any = {};
+    if (type) filters.type = type;
+    if (status) filters.status = status;
+    if (projectId) filters.projectId = projectId;
 
     try {
-      const agents = agentManager.listAgents(projectId || undefined);
-      return agents;
+      return db.listAgents(filters);
     } catch (err: any) {
       return reply.code(500).send({ error: err.message || 'Failed to list agents' });
     }
@@ -365,159 +235,125 @@ export function registerAgentRoutes(
 
   /**
    * GET /agents/:id/status
-   * Get the state of a single agent.
+   * Single agent status.
    */
   fastify.get('/agents/:id/status', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
+    const db = requireDb(reply);
+    if (!db) return;
 
     const { id } = request.params || {};
+    if (!id) return reply.code(400).send({ error: 'Agent ID is required' });
 
-    if (!id) {
-      return reply.code(400).send({ error: 'Agent ID is required' });
-    }
+    const agent = db.getAgent(id);
+    if (!agent) return reply.code(404).send({ error: `Agent ${id} not found` });
 
-    const agent = agentManager.getAgent(id);
-    if (!agent) {
-      return reply.code(404).send({ error: `Agent ${id} not found` });
-    }
-
-    try {
-      return agent.getState();
-    } catch (err: any) {
-      return reply.code(500).send({ error: err.message || 'Failed to get agent status' });
-    }
+    return agent;
   });
 
   /**
    * GET /agents/:parentId/children
-   * List child agents of a parent, optionally filtered by role.
-   * Query params: ?role=tester (optional)
+   * List children of an orchestrator. Optional ?role= filter.
    */
   fastify.get('/agents/:parentId/children', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
+    const db = requireDb(reply);
+    if (!db) return;
 
     const { parentId } = request.params || {};
-    const { role } = request.query || {};
+    const { role } = (request.query as any) || {};
 
-    if (!parentId) {
-      return reply.code(400).send({ error: 'parentId is required' });
+    if (!parentId) return reply.code(400).send({ error: 'parentId is required' });
+
+    const parent = db.getAgent(parentId);
+    if (!parent) return reply.code(404).send({ error: 'Agent not found' });
+
+    let children = db.getChildren(parentId);
+    if (role) {
+      children = children.filter(c => c.role === role);
     }
 
-    const parent = agentManager.getAgent(parentId);
-    if (!parent) {
-      return reply.code(404).send({ error: 'Agent not found' });
-    }
-
-    try {
-      const children = parent.getChildren()
-        .map((id: string) => agentManager.getAgent(id))
-        .filter((c: any) => c && (!role || c.getState().role === role))
-        .map((c: any) => ({
-          id: c.id,
-          role: c.getState().role,
-          status: c.getStatus(),
-          taskCount: c.getState().taskCount || 0,
-          description: c.getState().description || '',
-        }));
-
-      return { children };
-    } catch (err: any) {
-      return reply.code(500).send({ error: err.message || 'Failed to list children' });
-    }
+    return { children };
   });
 
-  // ── Project Management ──────────────────────────
-  // All /projects routes moved to api-server.ts (Phase 31.2) with proper
-  // user-token auth and ProjectStore persistence. Only agent-specific
-  // routes remain here.
+  // ── Directive Management (POST — auth required) ──────────────────────────
 
-  /**
-   * POST /agents/:id/connect
-   * Connect a user directly to an agent (bypass manager routing).
-   * Body: { userId }
-   */
-  fastify.post('/agents/:id/connect', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
-
-    const { id: agentId } = request.params || {};
-    const { userId } = request.body || {};
-
-    if (!agentId) return reply.code(400).send({ error: 'Agent ID is required' });
-    if (!userId) return reply.code(400).send({ error: 'userId is required' });
-
-    const success = agentManager.connectUserToAgent(userId, agentId);
-    if (!success) return reply.code(404).send({ error: `Agent ${agentId} not found` });
-
-    return { connected: true, userId, agentId };
-  });
-
-  /**
-   * POST /agents/:id/disconnect
-   * Disconnect a user from direct agent connection.
-   * Body: { userId }
-   */
-  fastify.post('/agents/:id/disconnect', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
-
-    const { userId } = request.body || {};
-    if (!userId) return reply.code(400).send({ error: 'userId is required' });
-
-    agentManager.disconnectUser(userId);
-    return { disconnected: true, userId };
-  });
-
-  // ── Standing Directive Management (Phase 29 — auth required) ──────────────
-
-  /**
-   * POST /agents/:id/directive
-   * Set a standing directive on an agent for self-continuation.
-   * Body: { instruction, completionCondition, maxDuration?, maxCost?, createdBy? }
-   */
   fastify.post('/agents/:id/directive', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
+    const db = requireDb(reply);
+    if (!db) return;
 
     const { id } = request.params || {};
-    const agent = agentManager.getAgent(id);
-    if (!agent) return reply.code(404).send({ error: 'Agent not found' });
+    const { content, issuedBy } = request.body || {};
 
-    const { instruction, completionCondition, maxDuration, maxCost, createdBy } = request.body || {};
-    if (!instruction) return reply.code(400).send({ error: 'Missing instruction' });
-    if (!completionCondition) return reply.code(400).send({ error: 'Missing completionCondition' });
+    if (!id) return reply.code(400).send({ error: 'Agent ID is required' });
+    if (!content) return reply.code(400).send({ error: 'content is required' });
 
-    agent.setStandingDirective({
-      instruction,
-      completionCondition,
-      createdAt: Date.now(),
-      createdBy: createdBy || 'user',
-      progress: '',
-      maxDuration: maxDuration || 86400000,  // 24h default
-      maxCost: maxCost || 50,  // $50 default
+    const agent = db.getAgent(id);
+    if (!agent) return reply.code(404).send({ error: `Agent ${id} not found` });
+
+    db.addDirective({
+      targetId: id,
+      content,
+      addedBy: issuedBy || 'user',
     });
 
-    return { success: true, directive: agent.getStandingDirective() };
-  });
-
-  /**
-   * DELETE /agents/:id/directive
-   * Clear a standing directive from an agent.
-   */
-  fastify.delete('/agents/:id/directive', async (request: any, reply: any) => {
-    const agentManager = requireAgentManager(reply);
-    if (!agentManager) return;
-
-    const { id } = request.params || {};
-    const agent = agentManager.getAgent(id);
-    if (!agent) return reply.code(404).send({ error: 'Agent not found' });
-
-    agent.clearStandingDirective();
     return { success: true };
   });
 
-  // Phase 70: POST /agents/:id/deploy removed.
-  // Deployment now uses unified POST /projects/:id/deploy (see api-server.ts).
+  fastify.delete('/agents/:id/directive', async (request: any, reply: any) => {
+    const db = requireDb(reply);
+    if (!db) return;
+
+    const { id } = request.params || {};
+    if (!id) return reply.code(400).send({ error: 'Agent ID is required' });
+
+    const directives = db.getDirectives(id);
+    for (const d of directives) {
+      db.deactivateDirective(d.id);
+    }
+    return { success: true, deactivated: directives.length };
+  });
+
+  // ── Orchestrator Management (POST — auth required) ───────────────────────
+
+  /**
+   * POST /orchestrators/create
+   * Create a new orchestrator in the hierarchy.
+   */
+  fastify.post('/orchestrators/create', async (request: any, reply: any) => {
+    const org = deps.getOrgManager();
+    if (!org) return reply.code(503).send({ error: 'Org manager not started' });
+
+    const { role, parentId, projectId, scope, rolePrompt, tickIntervalMs, maxWorkers } = request.body || {};
+
+    if (!role) return reply.code(400).send({ error: 'role is required' });
+
+    try {
+      const orchestratorId = org.createOrchestrator({
+        role,
+        parentId,
+        projectId,
+        scope,
+        rolePrompt,
+        tickIntervalMs,
+        maxWorkers,
+      });
+      return { orchestratorId };
+    } catch (err: any) {
+      return reply.code(500).send({ error: err.message || 'Failed to create orchestrator' });
+    }
+  });
+
+  /**
+   * POST /orchestrators/:id/dissolve
+   * Dissolve an orchestrator and all its children.
+   */
+  fastify.post('/orchestrators/:id/dissolve', async (request: any, reply: any) => {
+    const org = deps.getOrgManager();
+    if (!org) return reply.code(503).send({ error: 'Org manager not started' });
+
+    const { id } = request.params || {};
+    if (!id) return reply.code(400).send({ error: 'Orchestrator ID is required' });
+
+    org.dissolve(id);
+    return { dissolved: true };
+  });
 }

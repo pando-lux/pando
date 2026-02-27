@@ -26,8 +26,7 @@ export { ContentSafetyReviewer } from './content-safety.js';
 
 export { ContributionTracker } from './contribution-tracker.js';
 
-export { Council } from './council.js';
-export type { CouncilMember, CouncilState, ReflectionResult } from './council.js';
+// Council replaced by Orchestrator
 
 export { FileRegistry } from './file-registry.js';
 

@@ -28,7 +28,7 @@ import { randomUUID } from 'node:crypto';
 export type AgentType = 'worker' | 'orchestrator';
 export type AgentScope = 'private' | 'public';
 export type AgentStatus = 'pending' | 'spawning' | 'active' | 'idle' | 'done' | 'failed' | 'dissolved';
-export type MessageType = 'worker_report' | 'health_alert' | 'cross_team' | 'user_request' | 'directive' | 'task_assignment' | 'escalation';
+export type MessageType = 'worker_report' | 'health_alert' | 'cross_team' | 'user_request' | 'directive' | 'task_assignment' | 'escalation' | 'governance_decision' | 'task_result' | 'worker_message';
 export type SenderType = 'worker' | 'orchestrator' | 'user' | 'system';
 export type ReflectionLevel = 'task' | 'project' | 'pattern' | 'organization';
 

@@ -87,14 +87,9 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       // Run shutdown sequence asynchronously so the HTTP response can be sent
       setImmediate(async () => {
         try {
-          // 1. Stop accepting new bridge items and tasks by stopping the AgentManager
-          const agentManager = node.getAgentManager();
-          if (agentManager) {
-            // Send SIGTERM to all child agent processes, wait up to 10s, then SIGKILL
-            const killed = await agentManager.stopAll(10_000);
-            console.log(`[api] Shutdown: stopped ${killed} agent process(es)`);
-            agentManager.stop();
-          }
+          // 1. Stop the agent system (orchestrator + workers)
+          node.stopAgentSystem();
+          console.log(`[api] Shutdown: agent system stopped`);
 
           // 2. Stop the node (closes Fastify, libp2p, SQLite, scheduler, etc.)
           await node.stop();
@@ -1091,12 +1086,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
 
                 // Fallback: direct shutdown + exit (headless/PM2 mode)
                 console.log('[pipeline] Graceful shutdown: stopping agents...');
-                const agentManager = node.getAgentManager();
-                if (agentManager) {
-                  const killed = await agentManager.stopAll(10_000);
-                  console.log(`[pipeline] Stopped ${killed} agent process(es)`);
-                  agentManager.stop();
-                }
+                node.stopAgentSystem();
+                console.log(`[pipeline] Agent system stopped`);
 
                 console.log('[pipeline] Graceful shutdown: stopping node...');
                 await node.stop();

@@ -12,17 +12,51 @@ import { toString as uint8ArrayToString, fromString as uint8ArrayFromString } fr
 import { publicKeyFromProtobuf } from '@libp2p/crypto/keys';
 import { randomBytes } from 'node:crypto';
 import { hasClaudeCodeAuth } from '../platform/capability-detector.js';
-import type { AgentManager } from '../core/agent-manager.js';
+import type { MessageBus } from '../core/message-bus.js';
+import type { OrgManager } from '../platform/org-manager.js';
+import type { AgentDatabase } from '../platform/agent-database.js';
 import type { DeployFile } from '../platform/hosting-service.js';
 import type { RouteHelpers } from './middleware/auth.js';
 
 export async function registerPlatformRoutes(
   fastify: any,
   deps: RouteHelpers,
-  getAgentManager: () => AgentManager | null
+  getMessageBus: () => MessageBus | null,
+  getOrgManager: () => OrgManager | null,
+  getAgentDb: () => AgentDatabase | null,
 ): Promise<void> {
   const { node } = deps;
-  const getAM = () => getAgentManager();
+
+  /** Resolve a project ID to its orchestrator, sending a user message. */
+  function sendToOrchestrator(
+    projectId: string | undefined,
+    message: string,
+    extra: Record<string, unknown> = {},
+  ): boolean {
+    const bus = getMessageBus();
+    const org = getOrgManager();
+    if (!bus || !org) return false;
+
+    const orchId = projectId
+      ? org.getOrchestratorForProject(projectId)
+      : null;
+    if (!orchId) return false;
+
+    bus.send({
+      recipientId: orchId,
+      senderId: 'user',
+      senderType: 'user',
+      type: 'user_request',
+      payload: { message, ...extra },
+      priority: 1,
+    });
+    return true;
+  }
+
+  /** Check if agent system is available. */
+  function hasAgentSystem(): boolean {
+    return !!(getMessageBus() && getOrgManager());
+  }
     fastify.post('/chat/message', async (request: any, reply: any) => {
       const { message, projectId } = request.body || {};
       if (!message || typeof message !== 'string') {
@@ -47,7 +81,7 @@ export async function registerPlatformRoutes(
           threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
         }
 
-        if (!getAM() || !hasClaudeCodeAuth()) {
+        if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
           // Phase 98: Try P2P routing to a shareCompute peer before returning error
           const p2pResult = await node.routeClaudeTaskP2P?.(trimmed);
           if (p2pResult) {
@@ -63,13 +97,8 @@ export async function registerPlatformRoutes(
           return { status: 'ok', threadId, reply: noAgentReply, tier: 'simple' };
         }
 
-        getAM()!.getBridge().enqueue(managerId, {
-          type: 'user_request',
-          payload: { message: trimmed, threadId, projectId },
-          source: 'user',
-          priority: 'normal',
-        });
-        return { status: 'queued', managerId, threadId, message: trimmed };
+        sendToOrchestrator(projectId, trimmed, { threadId, projectId });
+        return { status: 'queued', threadId, message: trimmed };
       }
 
       // No projectId — doorman handles first contact
@@ -88,7 +117,7 @@ export async function registerPlatformRoutes(
       }
 
       // Intent is 'build' — create project, run preflight, spawn per-project manager
-      if (!getAM() || !hasClaudeCodeAuth()) {
+      if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
         // Phase 98: Try P2P routing to a shareCompute peer before returning error
         const p2pResult = await node.routeClaudeTaskP2P?.(trimmed);
         if (p2pResult) {
@@ -156,14 +185,10 @@ export async function registerPlatformRoutes(
         threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
       }
 
-      // Spawn per-project manager and enqueue
-      const managerId = newProjectId ? `project-${newProjectId}` : 'pando-node-mgr';
-      getAM()!.getBridge().enqueue(managerId, {
-        type: 'user_request',
-        payload: { message: trimmed, threadId, projectId: newProjectId },
-        source: 'user',
-        priority: 'normal',
-      });
+      // Route to project orchestrator
+      if (newProjectId) {
+        sendToOrchestrator(newProjectId, trimmed, { threadId, projectId: newProjectId });
+      }
 
       // Return instant feedback — user knows something is happening
       const instantReply = newProjectId
@@ -184,7 +209,7 @@ export async function registerPlatformRoutes(
         tier: 'simple',
       });
 
-      return { status: 'queued', managerId, threadId, projectId: newProjectId, reply: instantReply, tier: 'complex' };
+      return { status: 'queued', threadId, projectId: newProjectId, reply: instantReply, tier: 'complex' };
     });
 
     // GET /chat/history — return messages from the most recent thread
@@ -328,7 +353,7 @@ export async function registerPlatformRoutes(
       // If no projectId, use doorman to classify intent.
       if (threadMeta?.projectId) {
         // Existing project thread — route directly to manager
-        if (!getAM() || !hasClaudeCodeAuth()) {
+        if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
           // Phase 98: Try P2P routing before returning error
           const p2pResult = await node.routeClaudeTaskP2P?.(plaintextForProcessing);
           if (p2pResult) {
@@ -339,13 +364,7 @@ export async function registerPlatformRoutes(
           threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
           return { status: 'ok', threadId: id, reply: noAgentReply, tier: 'simple' };
         }
-        const managerId = `project-${threadMeta.projectId}`;
-        getAM()!.getBridge().enqueue(managerId, {
-          type: 'user_request',
-          payload: { message: plaintextForProcessing, threadId: id, projectId: threadMeta.projectId },
-          source: 'user',
-          priority: 'normal',
-        });
+        sendToOrchestrator(threadMeta.projectId, plaintextForProcessing, { threadId: id, projectId: threadMeta.projectId });
         return { status: 'queued', threadId: id, reply: 'Message received. Processing...', tier: 'complex' };
       }
 
@@ -392,7 +411,7 @@ export async function registerPlatformRoutes(
       }
 
       // Build request — create project, update thread, route to manager
-      if (!getAM() || !hasClaudeCodeAuth()) {
+      if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
         // Phase 98: Try P2P routing to a shareCompute peer before returning error
         const p2pResult = await node.routeClaudeTaskP2P?.(plaintextForProcessing);
         if (p2pResult) {
@@ -438,26 +457,30 @@ export async function registerPlatformRoutes(
         }
       }
 
-      const managerId = newProjectId ? `project-${newProjectId}` : 'pando-node-mgr';
-      getAM()!.getBridge().enqueue(managerId, {
-        type: 'user_request',
-        payload: { message: plaintextForProcessing, threadId: id, projectId: threadMeta?.projectId || undefined },
-        source: 'user',
-        priority: 'normal',
-      });
+      const targetProjectId = newProjectId || threadMeta?.projectId;
+      if (targetProjectId) {
+        sendToOrchestrator(targetProjectId, plaintextForProcessing, { threadId: id, projectId: targetProjectId });
+      }
 
       // Return immediate response — real response comes via SSE
       return { status: 'queued', threadId: id, reply: `Message received. Processing...`, tier: 'complex' };
     });
 
-    // ── Bridge Queue API (Phase 27: AgentManager) ──────────────────────────
+    // ── Inbox API (agent message queues) ──────────────────────────────────
 
-    // GET /bridge — all bridge queue statuses
+    // GET /bridge — inbox summary for all orchestrators (backwards compat)
     fastify.get('/bridge', async () => {
-      if (!getAM()) {
+      const db = getAgentDb();
+      if (!db) {
         return { queues: {}, error: 'Agent system not started' };
       }
-      return { queues: getAM()!.getBridge().getAllStatuses() };
+      const orchestrators = db.listAgents({ type: 'orchestrator', status: 'active' });
+      const queues: Record<string, { unread: number }> = {};
+      for (const orch of orchestrators) {
+        const messages = db.readInbox(orch.id, 100);
+        queues[orch.id] = { unread: messages.length };
+      }
+      return { queues };
     });
 
     // GET /bridge/:managerId — bridge queue status for a specific manager
@@ -466,10 +489,12 @@ export async function registerPlatformRoutes(
       if (!managerId) {
         return reply.code(400).send({ error: 'Manager ID is required', code: 'BAD_REQUEST' });
       }
-      if (!getAM()) {
+      const db = getAgentDb();
+      if (!db) {
         return reply.code(503).send({ error: 'Agent system not started', code: 'NOT_READY' });
       }
-      return getAM()!.getBridge().getQueueStatus(managerId);
+      const messages = db.readInbox(managerId, 100);
+      return { managerId, unread: messages.length, messages };
     });
 
     // POST /tasks/:id/messages — worker mid-task message to bridge queue
@@ -483,22 +508,30 @@ export async function registerPlatformRoutes(
       if (!messageType || !content) {
         return reply.code(400).send({ error: 'type and content are required', code: 'BAD_REQUEST' });
       }
-      if (!getAM()) {
+      const bus = getMessageBus();
+      if (!bus) {
         return reply.code(503).send({ error: 'Agent system not started', code: 'NOT_READY' });
       }
 
       // Find which manager owns this task
       const taskQueue = node.getActiveTaskQueue();
       const task = taskQueue?.getTask(taskId);
-      const managerId = task?.managerId || 'pando-node-mgr';
+      const org = getOrgManager();
 
-      // Enqueue to bridge
-      getAM()!.getBridge().enqueue(managerId, {
-        type: 'worker_message',
-        source: `worker-${taskId.slice(0, 8)}`,
-        payload: { taskId, messageType, content, urgency },
-        priority: messageType === 'blocked' ? 'critical' : 'normal',
-      });
+      // Route to project orchestrator
+      const orchId = task?.managerId && org
+        ? org.getOrchestratorForProject(task.managerId)
+        : null;
+      if (orchId) {
+        bus.send({
+          recipientId: orchId,
+          senderId: `worker-${taskId.slice(0, 8)}`,
+          senderType: 'system',
+          type: 'worker_message',
+          payload: { taskId, messageType, content, urgency },
+          priority: messageType === 'blocked' ? 0 : 1,
+        });
+      }
 
       // Broadcast worker message to SSE clients for real-time gateway updates
       deps.pushEvent('worker_message', { taskId, messageType, content, timestamp: Date.now() });
@@ -3795,68 +3828,72 @@ export async function registerPlatformRoutes(
       return true;
     }
 
-    // GET /council — returns council state (members, rotation, this node's membership)
+    // GET /council — council orchestrator state
     fastify.get('/council', async (_request: any, reply: any) => {
-      const council = node.getCouncil();
-      if (!council) {
+      const db = getAgentDb();
+      const orchId = node.getCouncilOrchId();
+      if (!db || !orchId) {
         return reply.code(503).send({ error: 'Council system not initialized' });
       }
-      return council.getCouncil();
+      const agent = db.getAgent(orchId);
+      if (!agent) return reply.code(503).send({ error: 'Council orchestrator not found' });
+      const workers = db.getActiveWorkers(orchId);
+      return { orchestratorId: orchId, role: agent.role, status: agent.status, workers: workers.length, lastTickAt: agent.lastTickAt };
     });
 
-    // GET /council/minutes — returns recent council minutes text
+    // GET /council/minutes — tick log as minutes
     fastify.get('/council/minutes', async (_request: any, reply: any) => {
-      const council = node.getCouncil();
-      if (!council) {
-        return reply.code(503).send({ error: 'Council system not initialized' });
+      const db = getAgentDb();
+      const orchId = node.getCouncilOrchId();
+      if (!db || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
+      // Return last 20 tick logs as "minutes"
+      const tickNumber = db.getLatestTickNumber(orchId);
+      const minutes: any[] = [];
+      for (let i = Math.max(1, tickNumber - 19); i <= tickNumber; i++) {
+        minutes.push({ tickNumber: i });
       }
-      return { minutes: council.getMinutes() };
+      return { minutes };
     });
 
-    // POST /council/message — send message to council (Phase 101c)
+    // POST /council/message — send message to council orchestrator
     fastify.post('/council/message', async (request: any, reply: any) => {
       if (!requireAuth(request, reply)) return;
-      const council = node.getCouncil();
-      if (!council) {
-        return reply.code(503).send({ error: 'Council system not initialized' });
-      }
+      const bus = getMessageBus();
+      const orchId = node.getCouncilOrchId();
+      if (!bus || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
       const { message } = request.body || {};
-      if (!message || typeof message !== 'string') {
-        return reply.code(400).send({ error: 'message is required' });
-      }
-      const actor = (request as any).actor;
-      const response = await council.handleMessage(message.trim(), actor);
-      return { status: 'ok', response };
+      if (!message || typeof message !== 'string') return reply.code(400).send({ error: 'message is required' });
+      bus.send({
+        recipientId: orchId,
+        senderId: 'user',
+        senderType: 'user' as any,
+        type: 'user_request',
+        payload: { message: message.trim() },
+        priority: 1,
+      });
+      return { status: 'queued', message: 'Message sent to council orchestrator' };
     });
 
-    // POST /council/directive — add founder directive (Phase 102.5)
+    // POST /council/directive — add directive to council orchestrator
     fastify.post('/council/directive', async (request: any, reply: any) => {
       if (!requireOperator(request, reply)) return;
-      const council = node.getCouncil();
-      if (!council) {
-        return reply.code(503).send({ error: 'Council system not initialized' });
-      }
+      const db = getAgentDb();
+      const orchId = node.getCouncilOrchId();
+      if (!db || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
       const { content } = request.body || {};
-      if (!content || typeof content !== 'string') {
-        return reply.code(400).send({ error: 'content is required' });
-      }
-      const actor = (request as any).actor;
-      const directive = council.addFounderDirective(content.trim(), actor?.id || 'operator');
-      return { status: 'ok', directive };
+      if (!content || typeof content !== 'string') return reply.code(400).send({ error: 'content is required' });
+      db.addDirective({ targetId: orchId, content: content.trim(), addedBy: 'operator' });
+      return { status: 'ok' };
     });
 
-    // POST /council/veto/:id — veto a council proposal (Phase 102.5)
+    // POST /council/veto/:id — veto a proposal via governance
     fastify.post('/council/veto/:id', async (request: any, reply: any) => {
       if (!requireOperator(request, reply)) return;
       const governance = node.getGovernance();
-      if (!governance) {
-        return reply.code(503).send({ error: 'Governance not initialized' });
-      }
+      if (!governance) return reply.code(503).send({ error: 'Governance not initialized' });
       const { id } = request.params || {};
       const { reason } = request.body || {};
       try {
-        const identity = node.getIdentity();
-        if (!identity) return reply.code(503).send({ error: 'Node identity not available' });
         await governance.castVote(id, 'reject', reason || 'Operator veto');
         return { status: 'vetoed', proposalId: id };
       } catch (err: any) {
@@ -3864,60 +3901,49 @@ export async function registerPlatformRoutes(
       }
     });
 
-    // POST /council/reflect — trigger manual reflection (Phase 101b)
+    // POST /council/reflect — trigger immediate tick on council orchestrator
     fastify.post('/council/reflect', async (request: any, reply: any) => {
       if (!requireOperatorOrAgent(request, reply)) return;
-      const council = node.getCouncil();
-      if (!council) {
-        return reply.code(503).send({ error: 'Council system not initialized' });
-      }
-      const result = await council.runDailyReflection();
-      if (result) {
-        council.appendMinutes(result.minutesEntry);
-      }
-      return { status: 'ok', result };
+      const orch = node.getCouncilOrchestrator();
+      if (!orch) return reply.code(503).send({ error: 'Council system not initialized' });
+      await orch.tick();
+      return { status: 'ok', message: 'Manual tick executed' };
     });
 
-    // GET /council/requests — council request log (Phase 102.5)
+    // GET /council/requests — council inbox (unread messages)
     fastify.get('/council/requests', async (_request: any, reply: any) => {
-      const council = node.getCouncil();
-      if (!council) {
-        return reply.code(503).send({ error: 'Council system not initialized' });
-      }
-      return { requests: council.getRequestLog() };
+      const bus = getMessageBus();
+      const orchId = node.getCouncilOrchId();
+      if (!bus || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
+      const messages = bus.read(orchId, 50);
+      return { requests: messages };
     });
 
-    // GET /council/chat — council chat history (Phase 101c)
+    // GET /council/chat — same as requests for backwards compat
     fastify.get('/council/chat', async (_request: any, reply: any) => {
-      const council = node.getCouncil();
-      if (!council) {
-        return reply.code(503).send({ error: 'Council system not initialized' });
-      }
-      return { messages: council.getChatHistory() };
+      const bus = getMessageBus();
+      const orchId = node.getCouncilOrchId();
+      if (!bus || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
+      return { messages: bus.read(orchId, 50) };
     });
 
-    // GET /council/directives — founder directives (Phase 102.5)
+    // GET /council/directives — directives for council orchestrator
     fastify.get('/council/directives', async (_request: any, reply: any) => {
-      const council = node.getCouncil();
-      if (!council) {
-        return reply.code(503).send({ error: 'Council system not initialized' });
-      }
-      return { directives: council.getFounderDirectives() };
+      const db = getAgentDb();
+      const orchId = node.getCouncilOrchId();
+      if (!db || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
+      return { directives: db.getDirectives(orchId) };
     });
 
     // GET /council/health — council health summary
     fastify.get('/council/health', async (_request: any, reply: any) => {
-      const council = node.getCouncil();
-      if (!council) {
-        return reply.code(503).send({ error: 'Council system not initialized' });
-      }
-      const memberCount = council.getCouncil().members.length;
-      const lastReflectionTs = council.getLastReflectionAt();
-      const lastReflectionAt = lastReflectionTs ? new Date(lastReflectionTs).toISOString() : null;
-      const activeTasks = council.getActiveTasks();
-      const hasActiveTasks = activeTasks.some(t => t.stage !== 'done' && t.stage !== 'failed');
-      const status: 'active' | 'idle' = hasActiveTasks ? 'active' : 'idle';
-      return { memberCount, lastReflectionAt, status };
+      const db = getAgentDb();
+      const orchId = node.getCouncilOrchId();
+      if (!db || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
+      const agent = db.getAgent(orchId);
+      if (!agent) return reply.code(503).send({ error: 'Council orchestrator not found' });
+      const workers = db.getActiveWorkers(orchId);
+      return { memberCount: 1, lastReflectionAt: agent.lastTickAt, status: workers.length > 0 ? 'active' : 'idle' };
     });
 
 

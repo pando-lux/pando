@@ -2076,12 +2076,8 @@ class PandoTUI {
     (async () => {
       try {
         // Stop agents first
-        const agentManager = this.node.getAgentManager();
-        if (agentManager) {
-          const killed = await agentManager.stopAll(10_000);
-          this.log(`${c.dim}Stopped ${killed} agent(s)${c.reset}`);
-          agentManager.stop();
-        }
+        await this.node.stopAgentSystem();
+        this.log(`${c.dim}Stopped agent system${c.reset}`);
 
         this.log(`${c.dim}Stopping node...${c.reset}`);
         await this.node.stop();

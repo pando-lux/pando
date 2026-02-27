@@ -17,7 +17,12 @@ import { homedir } from 'node:os';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { registerAgentRoutes } from '../platform/agent-tools.js';
-import type { AgentManager } from '../core/agent-manager.js';
+import type { AgentRouteDeps } from '../platform/agent-tools.js';
+import { registerWorkerRoutes } from '../core/worker-mcp.js';
+import type { AgentDatabase } from '../platform/agent-database.js';
+import type { WorkerPool } from '../core/worker-pool.js';
+import type { MessageBus } from '../core/message-bus.js';
+import type { OrgManager } from '../platform/org-manager.js';
 import type { PandoNode } from '../index.js';
 import type { RequestActor } from '@pando/shared';
 import { registerKernelRoutes } from './kernel-api.js';
@@ -179,7 +184,10 @@ export class ApiServer {
 
   private rateLimiters = new Map<string, RateLimiter>();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
-  private agentManager: AgentManager | null = null;
+  private agentDb: AgentDatabase | null = null;
+  private workerPool: WorkerPool | null = null;
+  private messageBus: MessageBus | null = null;
+  private orgManager: OrgManager | null = null;
 
   constructor(node: PandoNode) {
     this.node = node;
@@ -322,14 +330,16 @@ export class ApiServer {
 
   private async setupRoutes(): Promise<void> {
     const deps = this.buildRouteDeps();
-    const getAM = () => this.agentManager;
+    const getMessageBus = () => this.messageBus;
+    const getOrgManager = () => this.orgManager;
+    const getAgentDb = () => this.agentDb;
 
     // All routes are versioned under /v1/.
     // v2.2: No unversioned aliases — consumers must use /v1/* paths.
     await this.fastify.register(async (v1: any) => {
       await registerKernelRoutes(v1, deps);
       await registerCoreRoutes(v1, deps);
-      await registerPlatformRoutes(v1, deps, getAM);
+      await registerPlatformRoutes(v1, deps, getMessageBus, getOrgManager, getAgentDb);
     }, { prefix: '/v1' });
   }
 
@@ -818,9 +828,17 @@ Be friendly and helpful. Keep answers short.`
     // Register all routes before listening
     await this.setupRoutes();
 
-    // Register agent tool routes under /v1/ (Phase 27)
+    // Register agent tool routes under /v1/
     await this.fastify.register(async (v1: any) => {
-      registerAgentRoutes(v1, () => this.agentManager, () => this.apiToken);
+      registerAgentRoutes(v1, {
+        getDb: () => this.agentDb,
+        getWorkerPool: () => this.workerPool,
+        getMessageBus: () => this.messageBus,
+        getOrgManager: () => this.orgManager,
+        getApiToken: () => this.apiToken,
+      });
+      // Worker MCP routes (task, report, identity)
+      registerWorkerRoutes(v1, () => this.agentDb!);
     }, { prefix: '/v1' });
 
     await this.fastify.listen({ port: config.port, host: config.host });
@@ -835,14 +853,17 @@ Be friendly and helpful. Keep answers short.`
     // Data persists across restarts. Optional TTL cleanup can be added later.
   }
 
-  /** Set the AgentManager (Phase 27). */
-  setAgentManager(mgr: AgentManager): void {
-    this.agentManager = mgr;
+  /** Set the new agent system deps. */
+  setAgentSystem(deps: { db: AgentDatabase; workerPool: WorkerPool; messageBus: MessageBus; orgManager: OrgManager }): void {
+    this.agentDb = deps.db;
+    this.workerPool = deps.workerPool;
+    this.messageBus = deps.messageBus;
+    this.orgManager = deps.orgManager;
   }
 
-  /** Get the AgentManager (Phase 27). */
-  getAgentManager(): AgentManager | null {
-    return this.agentManager;
+  /** Get the MessageBus for external access. */
+  getMessageBus(): MessageBus | null {
+    return this.messageBus;
   }
 
   // ── Phase 41: Server-side E2E message crypto helpers ─────────────────────
