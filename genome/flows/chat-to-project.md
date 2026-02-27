@@ -1,6 +1,6 @@
 ---
 id: chat-to-project
-components: [bridge-queue, agent-manager, payment-gate, manager, governance]
+components: [message-bus, orchestrator, org-manager, payment-gate, governance]
 rules: [project-types, authority-model, budget-enforcement]
 trigger: user_task_intent
 ---

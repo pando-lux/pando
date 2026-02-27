@@ -1,21 +1,21 @@
 ---
 id: agent-tools
 type: service
-domain: core
+domain: platform
 entry: packages/node/src/platform/agent-tools.ts
-depends_on: [agent-manager, bridge-queue]
+depends_on: [agent-database, worker-pool, message-bus, org-manager]
 depended_by: [api-server]
 exposes:
-  - registerRoutes(fastify, agentManager) — register all agent HTTP API routes on the Fastify server
+  - registerAgentRoutes(fastify, deps: AgentRouteDeps) — register all agent HTTP API routes
 rules: []
-last_verified: 2026-02-20
+last_verified: 2026-02-27
 ---
 
 # Agent Tools
 
 ## What It Does
 
-HTTP API route handlers that expose agent operations to the outside world. These are the endpoints that agents call via curl from their Claude Code sessions, and that the gateway calls for the agent tree view and project management.
+HTTP API route handlers for the agent system. Uses `AgentRouteDeps` interface to access AgentDatabase, WorkerPool, MessageBus, and OrgManager.
 
 Registered on the Fastify server by `api-server.ts` during startup.
 
@@ -23,39 +23,32 @@ Registered on the Fastify server by `api-server.ts` during startup.
 
 | Method | Path | Auth | Description |
 |---|---|---|---|
-| POST | /agents/spawn | Yes | Spawn a new child agent. Body: `{role, template, context, parentId, projectId}` |
-| POST | /agents/:id/message | Yes | Send message to an agent's bridge queue. Body: `{content, type, senderId}` |
-| POST | /agents/:id/report | Yes | Agent reports completion or status. Body: `{status, output, cost}` |
-| GET | /agents/tree | No | Full agent hierarchy for a project. Query: `?projectId=...` |
-| GET | /agents/:id/status | No | Single agent status with cost and task info |
-| GET | /agents | No | List all agents on this node |
-| POST | /projects | Yes | Create a new project. Body: `{description, userId}` |
-| GET | /projects | No | List all projects |
-| POST | /projects/:id/collaborators | Yes | Add/remove collaborators. Body: `{userId, role, action}` |
-| GET | /projects/:id/access | No | Check access level for a user. Query: `?userId=...` |
-| POST | /agents/:id/connect | Yes | Connect user directly to agent. Body: `{userId}` |
-| POST | /agents/:id/disconnect | Yes | End direct user-agent connection |
+| POST | /agents/spawn | Yes | Spawn a worker via WorkerPool. Body: `{role, parentId, projectId, context}` |
+| POST | /agents/:id/message | Yes | Send message via MessageBus. Body: `{content, type, senderId}` |
+| POST | /agents/:id/report | Yes | Worker reports completion. Body: `{status, output, cost}` |
+| POST | /agents/:id/reset-session | Yes | Reset an agent's session ID |
+| POST | /agents/:id/kill | Yes | Kill a worker via WorkerPool |
+| GET | /agents/tree | No | Full org hierarchy via OrgManager.getTree() |
+| GET | /agents/list | No | List all agents from AgentDatabase |
+| GET | /agents/:id/status | No | Single agent status from AgentDatabase |
+| GET | /agents/:parentId/children | No | List children of an agent |
+| POST | /agents/:id/directive | Yes | Add directive to agent via AgentDatabase |
+| DELETE | /agents/:id/directive | Yes | Deactivate all directives for agent |
+| POST | /orchestrators/create | Yes | Create new orchestrator via OrgManager |
+| POST | /orchestrators/:id/dissolve | Yes | Dissolve orchestrator and promote lessons |
 
-## How Agents Use These
+## Worker Tool Endpoints (worker-mcp.ts)
 
-Agents run as Claude Code sessions with full tool access. When an agent needs to spawn a child, message its parent, or report completion, it uses curl to call these endpoints:
+Registered alongside agent routes. Workers call these from their Claude Code sessions:
 
-```bash
-# Agent spawns a child builder
-curl -X POST http://localhost:4000/agents/spawn \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"role":"builder","template":"builder","context":"Build auth system","parentId":"manager-xyz","projectId":"proj-001"}'
-
-# Agent reports completion to parent
-curl -X POST http://localhost:4000/agents/manager-xyz/report \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"status":"completed","output":"Auth module done. 4 files created."}'
-```
+| Method | Path | Description |
+|---|---|---|
+| GET | /worker/:id/task | Get assigned task for worker |
+| POST | /worker/:id/report | Report progress/completion |
+| GET | /worker/:id/identity | Get worker's identity and authority |
 
 ## Key Files
 
-- `packages/node/src/agent-tools.ts` -- route handler implementations
-- `packages/node/src/api-server.ts` -- registers routes on Fastify
-- `packages/node/src/agent-manager.ts` -- AgentManager called by route handlers
+- `packages/node/src/platform/agent-tools.ts` — route handler implementations
+- `packages/node/src/core/worker-mcp.ts` — worker HTTP tool endpoints
+- `packages/node/src/api/api-server.ts` — registers routes on Fastify

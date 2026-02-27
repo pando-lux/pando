@@ -3,7 +3,7 @@ id: scheduler
 type: service
 domain: core
 entry: packages/node/src/platform/scheduler.ts
-depends_on: [task-queue, agent-manager, bridge-queue]
+depends_on: [task-queue]
 depended_by: []
 exposes:
   - start() — begin polling task queue, recover orphans

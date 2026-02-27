@@ -1,109 +1,107 @@
-flow CouncilOperatingSystem {
-  summary: "Phase 101: The Council Operating System — autonomous brain that observes, decides, acts, tests, heals, and communicates. Reads constitution, runs hourly reflections, spawns agents, gates deployments with adversarial QA, communicates with founder via gateway/TUI."
+flow OrchestratorSystem {
+  summary: "Orchestrator-based agent system — deterministic tick loop that manages AI workers. Replaces the old Council/AgentManager/BridgeQueue with 5 modules: AgentDatabase, MessageBus, WorkerPool, OrgManager, Orchestrator."
   trigger: NodeBoot
 
-  step boot -> select_council {
-    actor: Council
-    what: "On node boot, Council selects top 3 AI-capable nodes by reputation from CapabilityRegistry. Rotates weekly. Stores state in ~/.pando/council/council-state.json."
+  step boot -> create_db {
+    actor: PandoNode
+    what: "On node boot (full mode only), PandoNode.startAgentSystem() creates AgentDatabase (SQLite at ~/.pando/agents.db), MessageBus, WorkerPool, OrgManager."
   }
 
-  step select_council -> reflection {
-    actor: Council
-    what: "Hourly (dev), 4h (beta), or daily (live) reflection cycle. Assembles prompt from: network-state.md, constitution.md, council-minutes.md, genome state, founder directives, health alerts, active governance proposals. Calls AIBackendRegistry.getBest() to run real AI reflection."
-    @gotcha("Phase 101b: AI call is LIVE. Uses AIBackendRegistry.getBest('text-generation'). If no backend available, reflection is deferred (no crash). Output must be valid JSON matching ReflectionOutput interface.")
+  step create_db -> create_council {
+    actor: OrgManager
+    what: "OrgManager.createOrchestrator() creates the council orchestrator — a top-level (level 0) persistent agent identity in AgentDatabase with role 'council'."
   }
 
-  step reflection -> proposals {
-    actor: Council
-    what: "AI output parsed into: summary (health assessment), observations, proposals[] (governance proposals), actions[] (agent spawns). Each proposal submitted to governance with category 'council_action'."
+  step create_council -> start_tick {
+    actor: Orchestrator
+    what: "Orchestrator(councilOrchId, deps) starts a deterministic tick loop (setInterval). Default: 60s for council. Each tick: read inbox → classify → decide → execute."
   }
 
-  step proposals -> auto_approve {
-    actor: GovernanceSync
-    what: "In dev mode: council_action proposals auto-approve immediately (veto model). In beta/live: standard governance voting applies per tier classification."
-    @gotcha("Founder can veto any auto-approved proposal after the fact via POST /v1/council/veto/:id or TUI /council veto <id>.")
+  step start_tick -> tick_classify {
+    actor: Orchestrator
+    what: "classify() examines inbox messages. Tier 1 (~80%): deterministic actions (route task results, ack health alerts, check worker status). Tier 2 (~20%): needs AI judgment (new user request, complex health issue, architecture decision)."
+    @gotcha("Tier 1 ticks use ZERO AI tokens. Only Tier 2 calls AIBackendRegistry.getBest().")
   }
 
-  step auto_approve -> execute {
-    actor: Council
-    what: "Approved proposals trigger agent spawning: builder for code fixes, qa-adversarial for testing, devops for infrastructure repair. Results logged in council minutes."
+  step tick_classify -> tick_execute {
+    actor: Orchestrator
+    what: "execute() processes OrchestratorAction[] from either deterministic() or callAI(). 12 action types: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy, respond_to_user."
   }
 
-  step execute -> qa_gate {
-    actor: Council
-    what: "Phase 101d: Before deploying any fix, adversarial QA micro-agents test affected flows. Each agent knows NOTHING about the change — gets flow name, API URL, and QA memory briefing. Verdicts: PASS/FAIL/INCONCLUSIVE."
-    @gotcha("QA agents test against STANDARD_FLOWS list. mapChangeToFlows() uses keyword heuristics to select relevant flows.")
+  step tick_execute -> spawn_workers {
+    actor: WorkerPool
+    what: "WorkerPool.spawn() creates a Claude Code child process. Builds CLAUDE.md from 5 layers: constitution, role prompt, authority rules, lessons, tools. Worker communicates via 3 HTTP endpoints (GET /worker/:id/task, POST /worker/:id/report, GET /worker/:id/identity)."
+    @gotcha("Workers are stateless. They get a task, do it, report back. No persistent session. assembleContext() builds their entire world from scratch.")
   }
 
-  step qa_gate -> deploy_or_block {
-    actor: Council
-    what: "Phase 101e: If all QA passes → governance proposal created (auto-approved in dev). If any FAIL → proposal blocked, failure logged in council minutes and QA memory."
+  step spawn_workers -> qa_cycle {
+    actor: Orchestrator
+    what: "Self-sustaining loop: Orchestrator spawns builder → builder reports completion → Orchestrator spawns QA tester (independent, gets ONLY task + diff) → QA passes → governance proposal → auto-approve in dev → commit."
   }
 
-  step deploy_or_block -> heal {
-    actor: Council
-    what: "Phase 101e: Self-healing loop. HealthMonitor alerts route to council. Critical alerts trigger immediate reflection. Council spawns builder agents via POST /v1/agents/spawn. Full loop: detect → fix → QA → governance → deploy."
-    @gotcha("Builder spawning is fire-and-forget. The council logs intent in minutes. Actual QA gating happens when builder reports back.")
+  step qa_cycle -> governance {
+    actor: Orchestrator
+    what: "onPropose callback calls governance.createProposal(). In dev mode: auto-approve. Governance decisions route back via MessageBus as 'governance_decision' messages."
+  }
+
+  step governance -> reflection {
+    actor: Orchestrator
+    what: "reflectOnCompletion() called after task finishes. Extracts lessons from worker reports. High-confidence lessons promote to org_knowledge. Reflection levels: task → project → pattern → organization."
   }
 }
 
-concept NetworkMode {
-  description: "Phase 101: Three governance autonomy levels. 'dev' = founder veto model (auto-approve all, founder can reject). 'beta' = council votes + founder veto on critical. 'live' = fully autonomous (founder = regular participant)."
-  defined_in: SharedTypes
-  used_by: [GovernanceSync, Council, PandoNode, CliEntryPoint]
+concept OrchestratorAction {
+  description: "Union type of 12 actions an orchestrator can take per tick. Returned from either deterministic() (Tier 1) or parseAIActions() (Tier 2). Each action has a 'type' discriminator."
+  defined_in: "packages/node/src/platform/orchestrator.ts"
+  used_by: [Orchestrator]
 }
 
-concept Constitution {
-  description: "Phase 101: The foundational operating document all agents read as Layer 0 of their CLAUDE.md. Defines Two Laws, network mode, change tiers, agent charter, credential policy, safety invariants. Lives at genome/constitution.md. Amendments require governance_change category (80% approval, 24h vote)."
-  defined_in: "genome/constitution.md"
-  used_by: [Agent, Council, GovernanceSync]
+concept AgentIdentity {
+  description: "Unified SQLite record for every agent (worker or orchestrator). Fields: id, role, type, scope, parentId, nodeId, status, authority (JSON), fileScope, budget, tickIntervalMs, maxWorkers, rolePrompt, sessionId, createdAt, updatedAt."
+  defined_in: "packages/node/src/platform/agent-database.ts"
+  used_by: [AgentDatabase, OrgManager, WorkerPool, Orchestrator]
 }
 
-concept ReflectionOutput {
-  description: "Phase 101b: Structured JSON output from council AI reflection. Fields: summary (string), observations (string[]), proposals (array of {title, description, tier, category}), actions (array of {type, description, priority}). Parsed by Council.parseReflectionOutput() — handles raw JSON, markdown code blocks, and fallback to raw text."
-  defined_in: "packages/node/src/platform/council.ts"
-  used_by: [Council]
+concept MessageBus {
+  description: "SQLite-backed persistent message routing. Replaces in-memory BridgeQueue. Enforces communication boundaries: workers → parent only, orchestrators → parent/child/sibling, users → project orchestrator. Messages survive restarts."
+  defined_in: "packages/node/src/core/message-bus.ts"
+  used_by: [Orchestrator, PandoNode, PlatformApi]
 }
 
-concept FounderDirective {
-  description: "Phase 101b: Standing instructions from the founder injected into every council reflection prompt. Stored in council-state.json (max 20, FIFO). Added via Council.addFounderDirective(). Allows founder to guide council priorities without approving each action."
-  defined_in: "packages/node/src/platform/council.ts"
-  used_by: [Council]
+concept WorkerPool {
+  description: "Spawn/kill Claude Code worker processes. Does ONE thing: manages child_process lifecycle. assembleContext() builds 5-layer CLAUDE.md (constitution, role, authority, lessons, tools). Workers communicate via 3 HTTP endpoints, not MCP."
+  defined_in: "packages/node/src/core/worker-pool.ts"
+  used_by: [Orchestrator, AgentTools]
 }
 
-concept CouncilTemplate {
-  description: "Phase 101b: Agent template for council members at genome/templates/council.md. Defines council identity, authority boundaries (CAN/CANNOT), mandatory JSON output format, assessment priorities (safety > health > performance > growth > quality > evolution)."
-  defined_in: "genome/templates/council.md"
-  used_by: [Council, Agent]
+concept OrgManager {
+  description: "Hierarchy management. createOrchestrator(), dissolve(), getTree(), getOrchestratorForProject(). Authority inheritance via narrowAuthority() — children can never exceed parent's authority. Max depth: 5."
+  defined_in: "packages/node/src/platform/org-manager.ts"
+  used_by: [PandoNode, Orchestrator, AgentTools]
 }
 
-concept QAMemory {
-  description: "Phase 101d: Persistent store of past QA results at {dataDir}/council/qa-memory.json (max 500 entries, FIFO). Stores flow name, verdict (PASS/FAIL/INCONCLUSIVE), failure details, edge cases. getBriefing(flow) provides historical context to QA agents."
-  defined_in: "packages/node/src/platform/qa-memory.ts"
-  used_by: [Council]
+concept AgentDatabase {
+  description: "SQLite-backed storage with 7 tables: agent_identity, message_inbox, tick_log, lessons, org_knowledge, directives, reflections. Single file at ~/.pando/agents.db. WAL mode, prepared statements."
+  defined_in: "packages/node/src/platform/agent-database.ts"
+  used_by: [MessageBus, WorkerPool, OrgManager, Orchestrator, AgentTools, PlatformApi]
 }
 
-concept AdversarialQA {
-  description: "Phase 101d: Non-biased QA orchestration. Council.runAdversarialQA() spawns one AI agent per flow with ZERO context about what changed. Agent gets: flow name, API URL, QA memory briefing. Does NOT get: change description, source code. Returns PASS/FAIL/INCONCLUSIVE with evidence."
-  defined_in: "packages/node/src/platform/council.ts"
-  used_by: [Council]
+concept TierClassification {
+  description: "Each orchestrator tick is classified as Tier 1 (deterministic, no AI call) or Tier 2 (needs AI judgment). Examples of Tier 1: route task_result, ack health_alert, check worker timeout. Examples of Tier 2: new user_request, complex escalation, reflection."
+  defined_in: "packages/node/src/platform/orchestrator.ts"
+  used_by: [Orchestrator]
 }
 
-concept SelfHealingLoop {
-  description: "Phase 101e: Full autonomous fix loop. HealthMonitor alerts route to council via handleHealthAlert(). Critical alerts trigger immediate reflection. Council spawns builder agents via spawnFixAgent(). runSelfHealingLoop() orchestrates: detect → spawn builder → QA → governance → deploy."
-  defined_in: "packages/node/src/platform/council.ts"
-  used_by: [Council, HealthMonitor, PandoNode]
+decision THIN_AGENT_THICK_ORCHESTRATOR {
+  context: "Old system had thick Agent class (1,279 lines) with persistent sessions, workspace, state files. New system needed to be simpler."
+  choice: "Thin workers (stateless, short-lived) + thick orchestrator (deterministic tick loop, all state in SQLite)"
+  why: "80% of orchestration is deterministic (routing, status checks). Only 20% needs AI. Persistent sessions were expensive and fragile. SQLite survives crashes."
+  date: "2026-02-27"
 }
 
-concept CouncilChat {
-  description: "Phase 101c: Direct communication with the council. handleMessage() processes user messages via AI backend. Chat history persisted at {dataDir}/council/chat-history.json (max 200 entries). Accessible via POST /v1/council/message, GET /v1/council/chat, gateway /council page, TUI /council msg."
-  defined_in: "packages/node/src/platform/council.ts"
-  used_by: [Council, PlatformApi, TuiEntryPoint]
-}
-
-decision VETO_MODEL {
-  context: "Phase 101: In dev mode, should the founder approve everything, or should everything auto-approve with founder having veto power?"
-  choice: "Veto model — everything auto-approves, founder can reject after the fact"
-  why: "Speed matters in dev. Approval model creates bottleneck. Veto model lets the council move fast while founder retains ultimate control."
-  date: "2026-02-26"
+decision SQLITE_OVER_MEMORY {
+  context: "BridgeQueue was in-memory. Messages lost on crash. State scattered across JSON files."
+  choice: "Unified SQLite database (agents.db) for all agent state, messages, lessons, reflections."
+  why: "Crash recovery. Single source of truth. WAL mode handles concurrent reads. No more scattered state files."
+  date: "2026-02-27"
 }

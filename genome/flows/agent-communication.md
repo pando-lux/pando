@@ -1,6 +1,6 @@
 ---
 id: agent-communication
-components: [bridge-queue, agent-manager, manager, scheduler]
+components: [message-bus, orchestrator, worker-pool, scheduler]
 rules: [authority-model, workflow-pipeline]
 trigger: any_event
 ---

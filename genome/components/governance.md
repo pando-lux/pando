@@ -3,7 +3,7 @@ id: governance
 type: service
 domain: governance
 entry: packages/node/src/kernel/governance.ts
-depends_on: [network, ledger, payment-gate, agent-manager]
+depends_on: [network, ledger, payment-gate]
 depended_by: [upgrade-protocol]
 exposes:
   - start() — run migrations, prepare statements, load from DB, subscribe GossipSub

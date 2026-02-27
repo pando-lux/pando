@@ -2,23 +2,49 @@
 id: agent-hierarchy
 type: flow
 domain: agents
-entry: packages/node/src/core/agent-manager.ts
-depends_on: [agent, agent-manager, council, governance, bridge-queue, upgrade-protocol]
-last_verified: 2026-02-26
+entry: packages/node/src/platform/orchestrator.ts
+depends_on: [orchestrator, org-manager, worker-pool, message-bus, agent-database, governance, upgrade-protocol]
+last_verified: 2026-02-27
 ---
 
 # Agent Hierarchy & Execution Pipelines
 
 ## Overview
 
-Pando has two distinct pipelines for AI-driven work, unified by the same Agent primitive:
+Pando's agent system uses the "thin agent, thick orchestrator" pattern:
 
-1. **Node Infrastructure Pipeline** — council detects issues → builder fixes → QA validates → governance approves → upgrade deploys
-2. **App Development Pipeline** — user requests app → doorman routes → app manager coordinates → builders implement → deploy
+- **Orchestrators** — deterministic tick loops that manage workers. All state in SQLite.
+- **Workers** — stateless Claude Code processes that do one task and die.
 
-Both use the same `Agent` class, `BridgeQueue` for communication, and `AgentManager` for lifecycle management.
+Two pipelines, same architecture:
 
-## Intent Routing (Phase 102c)
+1. **Node Infrastructure Pipeline** — council orchestrator detects issues → spawns builder → QA validates → governance approves → upgrade deploys
+2. **App Development Pipeline** — user requests app → project orchestrator coordinates → builders implement → deploy
+
+## Architecture
+
+```
+                    ┌──────────────────────┐
+                    │   Council            │ Level 0 (persistent)
+                    │   Orchestrator       │ tick: 60s
+                    │   (Deterministic)    │
+                    └──────┬──────┬────────┘
+                           │      │
+                  ┌────────┘      └────────┐
+                  │                        │
+         ┌────────▼────────┐     ┌─────────▼────────┐
+         │ Project Orch    │     │  Builder Worker   │ Level 1+
+         │ (user_project)  │     │  (stateless)      │
+         │ tick: 30s       │     └──────────────────┘
+         └────────┬────────┘
+                  │
+         ┌────────▼────────┐
+         │ Builder/QA/etc  │
+         │ Workers         │
+         └─────────────────┘
+```
+
+## Intent Routing
 
 ```
 User sends message via Gateway / TUI / API
@@ -26,115 +52,97 @@ User sends message via Gateway / TUI / API
   ▼
 POST /v1/chat/message
   │
-  ├─ Has projectId? → Route directly to project manager
+  ├─ Has projectId? → MessageBus.send() to project orchestrator
   │
   └─ No projectId → Doorman classification
      │
      ├─ 'simple' → Instant answer (status, balance, peers, help)
-     ├─ 'question' → OpenAI answers directly
-     ├─ 'council' → Council handles (node infrastructure work)
-     └─ 'build' → Create project + spawn app manager
+     ├─ 'question' → AI answers directly
+     ├─ 'council' → MessageBus.send() to council orchestrator
+     └─ 'build' → Create project + OrgManager.createProjectOrchestrator()
 ```
 
-**Council intent detection:** Messages with infrastructure keywords (node, API, gateway, governance, P2P, ledger, etc.) AND action verbs (fix, improve, update, etc.) route to the council.
-
-## Pipeline 1: Node Infrastructure (Council)
+## Pipeline 1: Node Infrastructure (Council Orchestrator)
 
 ```
-Council Reflection (hourly in dev)
+Council orchestrator tick()
   │
-  ├─ Reads: network-state, minutes, health alerts, directives
-  ├─ AI generates: summary, proposals, fix actions
+  ├─ classify() — Tier 1 or Tier 2?
   │
-  ├─ Proposals → governance.createProposal('council_action')
-  │               └─ Dev mode: auto-approved (quorum=1, auto-vote)
+  ├─ Tier 1 (deterministic): route task_results, ack health alerts
   │
-  └─ Fix Actions → spawnFixAgent(description, files)
-                    │
-                    ├─ Spawn builder with workDir = repo root
-                    ├─ parentId = councilAgentId
-                    ├─ Builder works on REAL codebase
-                    ├─ Builder commits + pushes to branch
-                    └─ Builder calls POST /agents/:id/report
-                       │
-                       ▼
-                    Council bridge watcher receives task_completed
-                       │
-                       ▼
-                    Adversarial QA (zero-context flow testing)
-                       │
-                       ├─ PASS → Create governance proposal
-                       │         └─ Auto-approved → UpgradeProtocol.pullAndUpgrade()
-                       │                            └─ Build + restart
-                       │
-                       └─ FAIL → Block proposal, log in minutes
+  └─ Tier 2 (AI): callAI() with inbox messages as context
+     │
+     ├─ AI returns OrchestratorAction[]
+     │   ├─ spawn_worker (builder for fix)
+     │   ├─ propose_upgrade (governance proposal)
+     │   ├─ commit_code (via DeployManager)
+     │   └─ respond_to_user (chat response)
+     │
+     └─ execute(actions)
+        │
+        ├─ WorkerPool.spawn(builder) → builder works → reports via HTTP
+        ├─ Worker completion arrives as message_inbox entry
+        ├─ Next tick: spawn QA worker (independent, zero context about change)
+        ├─ QA passes → onPropose(title, desc) → governance.createProposal()
+        │              └─ Dev mode: auto-approved
+        └─ QA fails → retry with failure details (max 3 attempts)
 ```
 
-## Pipeline 2: App Development (Manager)
+## Pipeline 2: App Development (Project Orchestrator)
 
 ```
 User: "build me a todo app"
   │
   ▼
-Doorman classifies as 'build'
+OrgManager.createProjectOrchestrator(projectId)
+  │ (persistent: false — dissolves when project completes)
+  │ (tick: 30s — faster than council)
   │
   ▼
-Create project in ProjectStore
+Project orchestrator tick()
+  │
+  ├─ Reads user_request from inbox
+  ├─ AI plans 3-7 steps
+  ├─ Spawns builders/testers via WorkerPool
   │
   ▼
-Spawn Manager agent (project-<id>)
-  │
-  ├─ Manager reads project-state.md
-  ├─ Manager plans 3-7 steps
-  ├─ Manager spawns builders/testers/reviewers as needed
+Workers work in project workspace
   │
   ▼
-Builders work in project workspace
+Orchestrator reviews, iterates
   │
   ▼
-Manager reviews, iterates, deploys
-  │
-  ▼
-POST /v1/projects/:id/deploy
+deploy action → POST /v1/projects/:id/deploy
 ```
 
-## Agent Tiers (From Brainstorm)
+## Tick Classification (Tier 1 vs Tier 2)
 
-| Tier | Name | Purpose | Lifespan | Cost | Backend |
-|---|---|---|---|---|---|
-| 3 | Builder | Write code, test, deploy | Task duration | 5-50 Lux/task | Claude Code CLI |
-| 2 | Runner (Session) | Serve users with memory | App lifetime | 0.5-5 Lux/session | LLM API (future) |
-| 1 | Runner (Stateless) | Single-call compute | Per-call | 0.01-0.1 Lux/call | LLM API (future) |
+| Tier | Criteria | AI Call? | Examples |
+|---|---|---|---|
+| 1 | Deterministic, pattern-matched | No | Route task_result, ack health_alert, check worker timeout |
+| 2 | Needs judgment | Yes | New user_request, complex escalation, reflection |
 
-Currently only Tier 3 (Builder) agents are implemented. Tier 1/2 Runner agents are planned for Phase 103+.
-
-## Council as Virtual Agent (Phase 102b)
-
-The council registers a lightweight agent in AgentManager so builders can report completion to it via the standard bridge queue mechanism:
-
-1. On `agentManager.start()`, council calls `registerCouncilAgent()`
-2. A researcher-role agent is created (never starts Claude Code session)
-3. Council listens on the bridge queue for `task_completed` / `task_failed` events
-4. Builder agents spawned by council have `parentId: councilAgentId`
-5. When builder reports done → council processes the completion (QA → governance)
+~80% of ticks are Tier 1 (zero tokens). Only ~20% need AI.
 
 ## Governance Integration
 
-- **council_action** proposals: auto-approved in dev mode (governance auto-votes approve within 100ms)
-- **council_action approved** → triggers `onCouncilActionApproved` callback → UpgradeProtocol pulls + builds + restarts
-- **Founder veto**: can reject any proposal via API, TUI, or gateway
+- Orchestrator's `onPropose` callback → `governance.createProposal(title, description)`
+- Dev mode: council_action proposals auto-approve (quorum=1, auto-vote)
+- Governance decisions arrive as `governance_decision` messages in orchestrator inbox
+- Founder veto: POST /v1/council/veto/:id
 
 ## Key Files
 
 | Component | File |
 |---|---|
-| Agent primitive | `packages/node/src/core/agent.ts` |
-| Agent lifecycle | `packages/node/src/core/agent-manager.ts` |
-| Bridge queue | `packages/node/src/core/bridge-queue.ts` |
-| Council | `packages/node/src/platform/council.ts` |
+| Orchestrator (tick loop) | `packages/node/src/platform/orchestrator.ts` |
+| OrgManager (hierarchy) | `packages/node/src/platform/org-manager.ts` |
+| AgentDatabase (SQLite) | `packages/node/src/platform/agent-database.ts` |
+| WorkerPool (spawn/kill) | `packages/node/src/core/worker-pool.ts` |
+| MessageBus (routing) | `packages/node/src/core/message-bus.ts` |
+| Worker HTTP tools | `packages/node/src/core/worker-mcp.ts` |
+| Agent API routes | `packages/node/src/platform/agent-tools.ts` |
 | Governance | `packages/node/src/kernel/governance.ts` |
 | Upgrade protocol | `packages/node/src/core/upgrade-protocol.ts` |
-| Doorman | `packages/node/src/api/api-server.ts` |
 | Chat routing | `packages/node/src/api/platform-api.ts` |
-| Agent API | `packages/node/src/platform/agent-tools.ts` |
-| SmartRouter | `packages/node/src/smart-router.ts` |
