@@ -2608,8 +2608,8 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
         try {
           const { execSync } = await import('node:child_process');
           const cwd = process.cwd();
-          // Stage all modified/deleted files (not untracked)
-          execSync('git add -u', { cwd, timeout: 10000 });
+          // Stage all changes including new untracked files
+          execSync('git add -A', { cwd, timeout: 10000 });
           // Check if there's anything to commit
           const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000 });
           if (!status.trim()) {
