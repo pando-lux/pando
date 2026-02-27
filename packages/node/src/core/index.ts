@@ -55,5 +55,8 @@ export type { RequestHandler, RequestReplyStats } from './request-reply.js';
 export { MessageBus } from './message-bus.js';
 export type { SendMessageOpts } from './message-bus.js';
 
+export { WorkerPool } from './worker-pool.js';
+export type { WorkerConfig, WorkerStatus, SessionStrategy } from './worker-pool.js';
+
 export { registerWorkerRoutes, generateWorkerToolsDocs } from './worker-mcp.js';
 export type { WorkerTaskResponse, WorkerIdentityResponse, ReportProgressBody } from './worker-mcp.js';
