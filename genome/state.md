@@ -1,11 +1,11 @@
 # Project State (Auto-Updated)
 
-> Last updated: 2026-02-26 (governance fix deployed: upgradePayload now persisted to SQLite — checkForMissedUpgrades works after restart; both EC2 nodes at a98bff6)
+> Last updated: 2026-02-27 (Genome as single source of truth: GenomeBridge + ScenarioRunner + 64 test scenarios in .know format. All nodes at c9ae719f.)
 > Note: This file should be auto-updated by the genome agent. Manual edits are fine but may be overwritten.
 
-## Overnight sprint (2026-02-26) — continuing
+## Sprint (2026-02-27)
 
-v2.1-v2.5 + Phase 53.7 + Phase 53.8 + Phase 68.4 + Ledger Explorer + Node Setup + Phase 89 (Dev Hub) + Phase 90 (Install Script) + Phase 91 (P2P public IP announce) + Phase 92 (Direct TCP capability exchange) + Phase 93 (Direct TCP request/reply) + Phase 94 (Project settings repoUrl/tier) + platform health fix + 18/18 smoke tests all complete and deployed.
+Genome integration: 64 test scenarios migrated from legacy markdown to `genome/knowledge/scenarios/*.know`. GenomeBridge reads compiled graph at runtime. Workers get architecture context in CLAUDE.md (Layer 6). Council gets genome context + failing tests in AI prompts. ScenarioRunner executes API regression from graph. Wired into self-sustaining loop (after upgrade → run regression). 10/11 API tests pass against live EC2-1 (monitor 503 = real finding).
 
 **Production alert**: Resource health checker found S3 resource `51909cbe` is UNHEALTHY — "The AWS Access Key Id you provided does not exist in our records." EC2-1 health check data confirms the S3 credentials contributed are invalid. Jai: re-contribute S3 credentials.
 
@@ -13,13 +13,13 @@ v2.1-v2.5 + Phase 53.7 + Phase 53.8 + Phase 68.4 + Ledger Explorer + Node Setup 
 
 | Node | IP | Status | Peers | StorageBackend | CredentialAccess | Supervisor | Uptime |
 |---|---|---|---|---|---|---|---|
-| EC2-1 (compute) | 54.82.241.132 | **ONLINE** | 2 | **mongodb** | true | **systemd** | Continuous |
-| EC2-2 (compute) | 34.201.82.126 | **ONLINE** | 1+ | **mongodb** | true | **systemd** | Continuous |
-| LS-1 (relay) | 54.145.144.221 | **DOWN** | -- | **p2p** | false | PM2 | Machine unreachable |
-| LS-2 (untrusted) | 3.237.175.38 | **ONLINE** | 1+ | **p2p** | false | PM2 | Continuous |
-| Windows (dev) | 100.87.67.78:4100 | ONLINE | 2+ | mongodb | true | Manual | Dev sessions |
+| EC2-1 (compute) | 54.82.241.132 | **ONLINE** | 3 | **mongodb** | true | **systemd** | Continuous |
+| EC2-2 (compute) | 34.201.82.126 | **ONLINE** | 3 | **mongodb** | true | **systemd** | Continuous |
+| LS-1 (relay) | 54.145.144.221 | **ONLINE** | 3 | **p2p** | false | PM2 | Continuous |
+| LS-2 (untrusted) | 3.237.175.38 | **DOWN** | -- | **p2p** | false | PM2 | Unreachable (SSH+HTTP timeout) |
+| Windows (dev) | 100.87.67.78:4100 | **ONLINE** | 3 | mongodb | true | Manual | Dev sessions |
 
-**LS-1 alert**: SSH + HTTP both unreachable since 2026-02-26. Machine-level issue. Needs Lightsail console restart (Jai: action required).
+**LS-2 alert**: SSH + HTTP both unreachable since 2026-02-27. Machine-level issue. Needs Lightsail console check.
 
 **Smoke test**: `node tests/smoke-test.mjs` → 18/18 PASS on 3-node network (LS-1 excluded)
 

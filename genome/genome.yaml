@@ -293,6 +293,18 @@ components:
     domain: evolution
     summary: 14 built-in tests, persistent storage, run by category
 
+  - id: genome-bridge
+    file: packages/node/src/platform/genome-bridge.ts
+    type: service
+    domain: evolution
+    summary: TypeScript reader for compiled genome graph (output/graph.json). Provides contextForTask() for agent context injection.
+
+  - id: scenario-runner
+    file: packages/node/src/platform/scenario-runner.ts
+    type: service
+    domain: evolution
+    summary: Automated test runner — reads 64 test scenarios from genome graph, executes API regression via fetch, saves results to e2e/results/.
+
   # ── Support ───────────────────────────────────────────────────────────
   - id: file-registry
     file: components/file-registry.md
