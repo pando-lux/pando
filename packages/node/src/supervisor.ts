@@ -116,12 +116,11 @@ function openUrl(url: string): void {
 
 // ─── System tray (optional — headless fallback) ────────────────────────────
 
-// Minimal 16×16 green circle PNG (base64) for the tray icon.
+// 16×16 "P" icon: amber P on dark background (Pando brand).
 const ICON_B64 =
-  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAaUlEQVQ4y2NgGKqA' +
-  'kZGRgYGBgYGJiYmBgYFBiYmJgYGBgYmJiYGBgYGJiYmBgYGBiYmJgYGBgYmJiY' +
-  'GBgYGJiYmBgYGBiYmJgYGBgYmJiYGBgYGJiYmBgYGBiYmJgYGBgYmJiYGBgYGA' +
-  'AAAA//8DAFKqFQAAAABJRU5ErkJggg==';
+  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAALUlEQVR4nGPQ1dX9' +
+  'TwlmGHwG/N/PgBfTzwBixWlnwOALA5KjcQgbQHFSprsBAKmBwGAyMyKZAAAAAElF' +
+  'TkSuQmCC';
 
 async function initTray(
   getChild: () => ChildProcess | null,
