@@ -159,10 +159,26 @@ export class Orchestrator {
         return;
       }
 
-      // 1. Read board and inbox
-      const board = this.readBoard();
-
       this._tickCount++;
+      const uptimeMs = Date.now() - this._startTime;
+      const uptimeSec = Math.floor(uptimeMs / 1000);
+
+      // Pre-read guards: skip BEFORE reading inbox so messages aren't consumed and lost
+      if (uptimeSec < 120) {
+        console.log(`[Orchestrator ${this.orchestratorId}] Node stabilizing (${uptimeSec}s), skipping tick`);
+        return;
+      }
+
+      const heapUsed = process.memoryUsage().heapUsed;
+      if (heapUsed > 524288000) {
+        const heapMB = Math.round(heapUsed / (1024 * 1024));
+        console.warn(`[Orchestrator ${this.orchestratorId}] Memory pressure (${heapMB}mb), skipping tick`);
+        this.dissolveIdleWorkers();
+        return;
+      }
+
+      // 1. Read board and inbox (messages marked as read here)
+      const board = this.readBoard();
 
       // 1a. Health monitoring (always Tier 1 — deterministic, no AI call)
       await this.runHealthMonitoring(board);
@@ -172,8 +188,6 @@ export class Orchestrator {
 
       let actions: OrchestratorAction[] = [];
 
-      const uptimeMs = Date.now() - this._startTime;
-      const uptimeSec = Math.floor(uptimeMs / 1000);
       const inboxSummary = `msgs=${board.messages.length} reports=${board.workerReports.length} alerts=${board.healthAlerts.length} requests=${board.userRequests.length}`;
       console.log(`[Orchestrator ${this.orchestratorId}] Tick — Tier ${tier}, workers=${board.activeWorkers}/${board.maxWorkers}, ${inboxSummary}, uptime=${uptimeSec}s`);
 
@@ -181,30 +195,15 @@ export class Orchestrator {
         // Tier 1: deterministic actions
         actions = this.deterministic(board, agent);
       } else {
-        // Change 1: Memory pressure guard — dissolve idle workers and skip AI if heap > 500MB
-        const heapUsed = process.memoryUsage().heapUsed;
-        const heapMB = Math.round(heapUsed / (1024 * 1024));
-        if (heapUsed > 524288000) {
-          console.warn(`[Orchestrator ${this.orchestratorId}] Memory pressure detected (heap: ${heapMB}mb), skipping AI tick`);
-          this.dissolveIdleWorkers();
-          return;
-        }
-
-        // Change 3: Startup stabilization guard — skip AI for first 120 seconds
-        if (uptimeSec < 120) {
-          console.log(`[Orchestrator ${this.orchestratorId}] Node stabilizing, skipping AI tick (uptime: ${uptimeSec}s)`);
-          // Skip AI this tick; actions remain empty
-        } else {
-          // Tier 2: call AI for judgment
-          console.log(`[Orchestrator ${this.orchestratorId}] Calling AI...`);
-          try {
-            actions = await this.callAI(board, agent);
-            console.log(`[Orchestrator ${this.orchestratorId}] AI returned ${actions.length} action(s): ${actions.map(a => a.type).join(', ') || 'none'}`);
-          } catch (aiErr: any) {
-            console.error(`[Orchestrator ${this.orchestratorId}] AI call failed: ${aiErr.message}`);
-            // Messages stay unread — they will be retried on the next tick
-            return;
-          }
+        // Tier 2: call AI for judgment
+        console.log(`[Orchestrator ${this.orchestratorId}] Calling AI...`);
+        try {
+          actions = await this.callAI(board, agent);
+          console.log(`[Orchestrator ${this.orchestratorId}] AI returned ${actions.length} action(s): ${actions.map(a => a.type).join(', ') || 'none'}`);
+        } catch (aiErr: any) {
+          console.error(`[Orchestrator ${this.orchestratorId}] AI call failed: ${aiErr.message}`);
+          // Messages already consumed — log the failure but don't return silently
+          // The orchestrator will see the worker states on next tick
         }
       }
 
