@@ -1688,6 +1688,13 @@ export class GovernanceSync {
     const isEmergency = options?.isEmergency ?? false;
     const category = options?.category;
     let stakeAmount = isEmergency ? EMERGENCY_STAKE_LUX : PROPOSAL_STAKE_LUX;
+
+    // Dev mode: reduce stake when network is small (same condition as auto-approve)
+    const activePeers = this.network.getPeerCount() + 1;
+    if (!isEmergency && activePeers <= this.upgradeAutoApproveThreshold) {
+      stakeAmount = 1;
+    }
+
     let stakeHoldId: string | undefined;
     let isFreeTier = false;
 
