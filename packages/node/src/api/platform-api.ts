@@ -59,6 +59,8 @@ export async function registerPlatformRoutes(
     return !!(getMessageBus() && getOrgManager());
   }
     fastify.post('/chat/message', async (request: any, reply: any) => {
+      const peerId = await deps.verifyUserJwt(request);
+      if (!peerId) { reply.status(401).send({ error: 'Unauthorized' }); return; }
       const { message, projectId } = request.body || {};
       if (!message || typeof message !== 'string') {
         return reply.code(400).send({ error: 'message is required' });
@@ -70,7 +72,7 @@ export async function registerPlatformRoutes(
       let threadId: string | undefined;
 
       // Resolve user identity so threads are owned by the authenticated user
-      const chatUserId = (await deps.verifyUserJwt(request)) || undefined;
+      const chatUserId = peerId || undefined;
 
       // If projectId is provided, skip doorman — route directly to existing project orchestrator
       if (projectId && typeof projectId === 'string') {
