@@ -3903,17 +3903,21 @@ export async function registerPlatformRoutes(
       return { orchestratorId: orchId, role: agent.role, status: agent.status, workers: workers.length, lastTickAt: agent.lastTickAt };
     });
 
-    // GET /council/minutes — tick log as minutes
+    // GET /council/minutes — tick log as minutes (with full data from tick_log table)
     fastify.get('/council/minutes', async (_request: any, reply: any) => {
       const db = getAgentDb();
       const orchId = node.getCouncilOrchId();
       if (!db || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
-      // Return last 20 tick logs as "minutes"
-      const tickNumber = db.getLatestTickNumber(orchId);
-      const minutes: any[] = [];
-      for (let i = Math.max(1, tickNumber - 19); i <= tickNumber; i++) {
-        minutes.push({ tickNumber: i });
-      }
+      const logs = db.getTickLog(orchId, 20);
+      const minutes = logs.reverse().map((log: any) => ({
+        tickNumber: log.tickNumber,
+        tier: log.tier,
+        inbox: log.aiInput,
+        aiResult: log.aiOutput,
+        actions: log.actionsTaken,
+        durationMs: log.durationMs,
+        at: log.createdAt,
+      }));
       return { minutes };
     });
 

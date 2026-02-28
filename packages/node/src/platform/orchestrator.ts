@@ -187,6 +187,7 @@ export class Orchestrator {
       const tier = this.classify(board);
 
       let actions: OrchestratorAction[] = [];
+      let aiError: string | null = null;
 
       const inboxSummary = `msgs=${board.messages.length} reports=${board.workerReports.length} alerts=${board.healthAlerts.length} requests=${board.userRequests.length}`;
       console.log(`[Orchestrator ${this.orchestratorId}] Tick — Tier ${tier}, workers=${board.activeWorkers}/${board.maxWorkers}, ${inboxSummary}, uptime=${uptimeSec}s`);
@@ -201,7 +202,8 @@ export class Orchestrator {
           actions = await this.callAI(board, agent);
           console.log(`[Orchestrator ${this.orchestratorId}] AI returned ${actions.length} action(s): ${actions.map(a => a.type).join(', ') || 'none'}`);
         } catch (aiErr: any) {
-          console.error(`[Orchestrator ${this.orchestratorId}] AI call failed: ${aiErr.message}`);
+          aiError = aiErr.message || 'Unknown AI error';
+          console.error(`[Orchestrator ${this.orchestratorId}] AI call failed: ${aiError}`);
           // Messages already consumed — log the failure but don't return silently
           // The orchestrator will see the worker states on next tick
         }
@@ -251,9 +253,10 @@ export class Orchestrator {
           activeTasks: board.activeTasks,
           activeWorkers: board.activeWorkers,
           inboxCount: allMessageIds.length,
+          inbox: inboxSummary,
         }),
-        aiInput: tier === 2 ? 'AI called' : null,
-        aiOutput: tier === 2 ? JSON.stringify(actions) : null,
+        aiInput: tier === 2 ? inboxSummary : null,
+        aiOutput: tier === 2 ? (aiError ? `ERROR: ${aiError}` : JSON.stringify(actions)) : null,
         actionsTaken: actions.length > 0 ? JSON.stringify(actions.map(a => a.type)) : null,
         durationMs: Date.now() - startMs,
       });
