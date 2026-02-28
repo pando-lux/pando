@@ -154,8 +154,11 @@ async function main() {
   const port = portFlag !== -1 ? parsePort(args[portFlag + 1]) : 0;
 
   // --api-port <n> (HTTP API port, default 4000)
+  // Falls back to PANDO_API_PORT env var, then 4000
   const apiPortFlag = args.indexOf('--api-port');
-  const apiPort = apiPortFlag !== -1 ? parsePort(args[apiPortFlag + 1]) : 4000;
+  const apiPort = apiPortFlag !== -1
+    ? parsePort(args[apiPortFlag + 1])
+    : (process.env.PANDO_API_PORT ? parsePort(process.env.PANDO_API_PORT) : 4000);
 
   // --data-dir <path> (isolate identity + ledger, default ~/.pando)
   const dataDirFlag = args.indexOf('--data-dir');

@@ -43,6 +43,27 @@ const RESTART_EXIT_CODE = 75;
 
 /** Stash uncommitted changes before destructive git reset. */
 export function safeGitReset(repoDir: string, target: string = 'origin/master'): void {
+  // Push any local commits not yet on origin before resetting — prevents data loss
+  try {
+    const unpushed = execSync('git log origin/master..HEAD --oneline', {
+      cwd: repoDir, encoding: 'utf-8', timeout: 10_000, stdio: 'pipe',
+    }).trim();
+    if (unpushed.length > 0) {
+      const count = unpushed.split('\n').length;
+      console.warn(`[upgrade] ${count} unpushed local commit(s) detected — pushing before reset...`);
+      try {
+        execSync('git push origin master', {
+          cwd: repoDir, encoding: 'utf-8', timeout: 30_000, stdio: 'pipe', windowsHide: true,
+        });
+        console.log('[upgrade] Pushed local commits to origin before reset.');
+      } catch (pushErr: any) {
+        console.warn(`[upgrade] Push failed (${pushErr.message?.slice(0, 200)}) — proceeding with reset anyway.`);
+      }
+    }
+  } catch (checkErr: any) {
+    console.warn(`[upgrade] Could not check for unpushed commits (${checkErr.message?.slice(0, 100)}) — proceeding.`);
+  }
+
   const status = execSync('git status --porcelain', {
     cwd: repoDir, encoding: 'utf-8', timeout: 10_000, stdio: 'pipe',
   }).trim();
