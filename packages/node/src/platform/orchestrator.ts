@@ -86,6 +86,8 @@ interface BoardState {
   userRequests: InboxMessage[];
   peerDisconnects: InboxMessage[];
   directives: string[];
+  recentlyFailed: Array<{ id: string; role: string; failedAt: string; lastTask: string | null; rolePrompt: string | null }>;
+  overdueWorkers: Array<{ id: string; role: string; spawnedAt: string; lastReportAt: string | null }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -317,6 +319,34 @@ export class Orchestrator {
     // Get directives
     const directives = this.deps.db.getDirectives(this.orchestratorId);
 
+    // Recently failed workers (last 15 minutes) under this orchestrator
+    const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+    const allFailed = this.deps.db.listAgents({ type: 'worker', status: 'failed', parentId: this.orchestratorId });
+    const recentlyFailed = allFailed
+      .filter(w => (w.updatedAt || '') >= fifteenMinAgo)
+      .map(w => ({
+        id: w.id,
+        role: w.role,
+        failedAt: w.updatedAt || w.createdAt,
+        lastTask: w.currentTaskId || null,
+        rolePrompt: w.rolePrompt ? w.rolePrompt.slice(0, 200) : null,
+      }));
+
+    // Overdue workers: active >10 min with no lastReportAt update
+    const tenMinAgo = new Date(Date.now() - 10 * 60 * 1000).toISOString();
+    const overdueWorkers = activeWorkers
+      .filter(w => {
+        const spawnedLongAgo = (w.createdAt || '') < tenMinAgo;
+        const noRecentReport = !w.lastReportAt || w.lastReportAt < tenMinAgo;
+        return spawnedLongAgo && noRecentReport;
+      })
+      .map(w => ({
+        id: w.id,
+        role: w.role,
+        spawnedAt: w.createdAt,
+        lastReportAt: w.lastReportAt || null,
+      }));
+
     return {
       pendingTasks: this.deps.db.listAgents({ parentId: this.orchestratorId, status: 'pending' }).length,
       activeTasks: activeWorkers.filter(w => w.currentTaskId).length,
@@ -328,6 +358,8 @@ export class Orchestrator {
       userRequests,
       peerDisconnects,
       directives: directives.map(d => d.content),
+      recentlyFailed,
+      overdueWorkers,
     };
   }
 
@@ -434,6 +466,26 @@ export class Orchestrator {
     sections.push(`Active tasks: ${board.activeTasks}`);
     sections.push(`Pending tasks: ${board.pendingTasks}`);
     sections.push('');
+
+    // Recently failed workers (Fix 2)
+    if (board.recentlyFailed.length > 0) {
+      sections.push('## Recently Failed Workers');
+      for (const w of board.recentlyFailed) {
+        const task = w.rolePrompt ? w.rolePrompt.replace(/\n/g, ' ').slice(0, 120) : (w.lastTask || 'unknown task');
+        sections.push(`- ${w.role} ${w.id} failed at ${w.failedAt}. Was working on: ${task}`);
+      }
+      sections.push('');
+    }
+
+    // Overdue workers (Fix 3)
+    if (board.overdueWorkers.length > 0) {
+      sections.push('## Overdue Workers (No Report in >10 min)');
+      for (const w of board.overdueWorkers) {
+        sections.push(`- ${w.role} ${w.id} spawned at ${w.spawnedAt}, last report: ${w.lastReportAt || 'never'}`);
+      }
+      sections.push('Consider: kill and respawn, or wait longer.');
+      sections.push('');
+    }
 
     // Worker reports
     if (board.workerReports.length > 0) {
@@ -665,6 +717,12 @@ export class Orchestrator {
       sections.push('4. **Platform health**: Any degraded services? Spawn a builder to fix.');
       sections.push('5. **Architecture improvements**: Any gaps or tech debt you can identify?');
       sections.push('');
+      if (board.recentlyFailed.length > 0) {
+        sections.push('⚠️  Recently failed workers (see above) may have left **partial work on disk** (uncommitted files, half-written code).');
+        sections.push('Before re-attempting their tasks from scratch, spawn a devops worker to run `git status` and check what is already done.');
+        sections.push('This avoids duplicating work and ensures partial progress is not lost.');
+        sections.push('');
+      }
       sections.push('You are the autonomous manager of this node. Don\'t wait for humans — lead.');
       sections.push('Only return [] if you have genuinely reviewed everything and there is nothing to improve.');
       sections.push('');

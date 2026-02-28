@@ -421,12 +421,13 @@ export class WorkerPool {
    * Called every 60 seconds by the watchdog interval.
    */
   private runMemoryWatchdog(): void {
-    const FIVE_GB = 5 * 1024 * 1024 * 1024;
+    // Claude Code sessions accumulate conversation context and routinely grow to 9GB+ for long-running resumed sessions
+    const MAX_WORKER_RSS = 8 * 1024 * 1024 * 1024;
     const stats = this.getWorkerMemoryStats();
     for (const { workerId, pid, rssBytes } of stats) {
-      if (rssBytes > FIVE_GB) {
+      if (rssBytes > MAX_WORKER_RSS) {
         const mb = Math.round(rssBytes / (1024 * 1024));
-        console.warn(`[WorkerPool] Watchdog: worker ${workerId} (PID ${pid}) RSS=${mb}MB exceeds 5GB. Killing.`);
+        console.warn(`[WorkerPool] Watchdog: worker ${workerId} (PID ${pid}) RSS=${mb}MB exceeds 8GB. Killing.`);
         this.kill(workerId);
         // Notify orchestrator about the kill via messageBus
         const agent = this.db.getAgent(workerId);
@@ -438,7 +439,7 @@ export class WorkerPool {
             type: 'worker_report',
             payload: {
               status: 'failed',
-              summary: `Worker killed by memory watchdog: RSS=${mb}MB exceeded 5GB limit.`,
+              summary: `Worker killed by memory watchdog: RSS=${mb}MB exceeded 8GB limit.`,
               taskId: agent.currentTaskId,
               auto: true,
             },
@@ -471,6 +472,22 @@ export class WorkerPool {
           this.db.updateAgent(worker.id, {
             status: 'failed',
           });
+          // Notify parent orchestrator so it can decide to retry or escalate
+          if (worker.parentId) {
+            this.messageBus.send({
+              recipientId: worker.parentId,
+              senderId: worker.id,
+              senderType: 'worker',
+              type: 'worker_report',
+              payload: {
+                status: 'failed',
+                summary: 'Worker process died unexpectedly (reaped — process no longer running)',
+                taskId: worker.currentTaskId,
+                auto: true,
+              },
+              priority: 0,
+            });
+          }
           reaped++;
         }
       }
