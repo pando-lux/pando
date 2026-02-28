@@ -966,7 +966,7 @@ export class Orchestrator {
         // Write response to ThreadStore so it appears in the chat UI
         if (this.deps.threadStore && this._lastThreadId) {
           try {
-            this.deps.threadStore.addMessage(this._lastThreadId, {
+            await this.deps.threadStore.addMessage(this._lastThreadId, {
               role: 'assistant',
               content: action.message,
               timestamp: Date.now(),

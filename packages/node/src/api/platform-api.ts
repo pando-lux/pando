@@ -80,7 +80,7 @@ export async function registerPlatformRoutes(
           threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'project', '', chatUserId);
           threadStore.updateThread(threadId, { projectId });
-          threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
+          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
         }
 
         if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
@@ -88,13 +88,13 @@ export async function registerPlatformRoutes(
           const p2pResult = await node.routeClaudeTaskP2P?.(trimmed);
           if (p2pResult) {
             if (threadStore && threadId) {
-              threadStore.addMessage(threadId, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' as any });
+              await threadStore.addMessage(threadId, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' as any });
             }
             return { status: 'ok', threadId, reply: p2pResult.output, tier: 'simple', routedTo: p2pResult.executedBy };
           }
           const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
           if (threadStore && threadId) {
-            threadStore.addMessage(threadId, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' as any });
+            await threadStore.addMessage(threadId, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' as any });
           }
           return { status: 'ok', threadId, reply: noAgentReply, tier: 'simple' };
         }
@@ -115,8 +115,8 @@ export async function registerPlatformRoutes(
         if (threadStore) {
           threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
-          threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
-          threadStore.addMessage(threadId, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' as any });
+          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
+          await threadStore.addMessage(threadId, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' as any });
         }
         return { status: 'ok', threadId, reply: doormanReply, tier: 'simple' };
       }
@@ -129,8 +129,8 @@ export async function registerPlatformRoutes(
           if (threadStore) {
             threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
             threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
-            threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
-            threadStore.addMessage(threadId, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' as any });
+            await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
+            await threadStore.addMessage(threadId, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' as any });
           }
           return { status: 'ok', threadId, reply: p2pResult.output, tier: 'simple', routedTo: p2pResult.executedBy };
         }
@@ -138,8 +138,8 @@ export async function registerPlatformRoutes(
         if (threadStore) {
           threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
-          threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
-          threadStore.addMessage(threadId, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' as any });
+          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
+          await threadStore.addMessage(threadId, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' as any });
         }
         return { status: 'ok', threadId, reply: noAgentReply, tier: 'simple' };
       }
@@ -187,7 +187,7 @@ export async function registerPlatformRoutes(
         if (newProjectId) {
           threadStore.updateThread(threadId, { projectId: newProjectId });
         }
-        threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
+        await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
       }
 
       // Route to project orchestrator
@@ -206,7 +206,7 @@ export async function registerPlatformRoutes(
         : `Message received. Your AI manager is working on this.`;
 
       if (threadStore && threadId) {
-        threadStore.addMessage(threadId, { role: 'assistant', content: instantReply, timestamp: Date.now(), tier: 'simple' as any });
+        await threadStore.addMessage(threadId, { role: 'assistant', content: instantReply, timestamp: Date.now(), tier: 'simple' as any });
       }
 
       // Push instant feedback via SSE so gateway shows it immediately
@@ -349,7 +349,7 @@ export async function registerPlatformRoutes(
       }
 
       // Save user message to thread (encrypted form for at-rest protection)
-      threadStore.addMessage(id, {
+      await threadStore.addMessage(id, {
         role: 'user',
         content: trimmed,
         timestamp: Date.now(),
@@ -367,11 +367,11 @@ export async function registerPlatformRoutes(
           // Phase 98: Try P2P routing before returning error
           const p2pResult = await node.routeClaudeTaskP2P?.(plaintextForProcessing);
           if (p2pResult) {
-            threadStore.addMessage(id, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' });
+            await threadStore.addMessage(id, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' });
             return { status: 'ok', threadId: id, reply: p2pResult.output, tier: 'simple', routedTo: p2pResult.executedBy };
           }
           const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
-          threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
+          await threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
           return { status: 'ok', threadId: id, reply: noAgentReply, tier: 'simple' };
         }
         await sendToOrchestrator(threadMeta.projectId, plaintextForProcessing, { threadId: id, projectId: threadMeta.projectId });
@@ -392,13 +392,13 @@ export async function registerPlatformRoutes(
         if (isEncrypted && threadMeta?.encryptionKeys) {
           try {
             const encReply = await deps.encryptOutgoingMessage(smartReply, threadMeta, encryptedThreadKey);
-            threadStore.addMessage(id, { role: 'assistant', content: encReply.ciphertext, timestamp: Date.now(), tier: 'medium', encrypted: true, nonce: encReply.nonce });
+            await threadStore.addMessage(id, { role: 'assistant', content: encReply.ciphertext, timestamp: Date.now(), tier: 'medium', encrypted: true, nonce: encReply.nonce });
             return { status: 'ok', threadId: id, reply: encReply.ciphertext, tier: 'medium', encrypted: true, nonce: encReply.nonce };
           } catch (err: any) {
             console.warn(`[api] Failed to encrypt smart reply: ${err.message}`);
           }
         }
-        threadStore.addMessage(id, { role: 'assistant', content: smartReply, timestamp: Date.now(), tier: 'medium' });
+        await threadStore.addMessage(id, { role: 'assistant', content: smartReply, timestamp: Date.now(), tier: 'medium' });
         return { status: 'ok', threadId: id, reply: smartReply, tier: 'medium' };
       }
 
@@ -410,13 +410,13 @@ export async function registerPlatformRoutes(
         if (isEncrypted && threadMeta?.encryptionKeys) {
           try {
             const encReply = await deps.encryptOutgoingMessage(doormanReply, threadMeta, encryptedThreadKey);
-            threadStore.addMessage(id, { role: 'assistant', content: encReply.ciphertext, timestamp: Date.now(), tier: 'simple', encrypted: true, nonce: encReply.nonce });
+            await threadStore.addMessage(id, { role: 'assistant', content: encReply.ciphertext, timestamp: Date.now(), tier: 'simple', encrypted: true, nonce: encReply.nonce });
             return { status: 'ok', threadId: id, reply: encReply.ciphertext, tier: 'simple', encrypted: true, nonce: encReply.nonce };
           } catch (err: any) {
             console.warn(`[api] Failed to encrypt doorman reply: ${err.message}`);
           }
         }
-        threadStore.addMessage(id, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' });
+        await threadStore.addMessage(id, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' });
         return { status: 'ok', threadId: id, reply: doormanReply, tier: 'simple' };
       }
 
@@ -425,11 +425,11 @@ export async function registerPlatformRoutes(
         // Phase 98: Try P2P routing to a shareCompute peer before returning error
         const p2pResult = await node.routeClaudeTaskP2P?.(plaintextForProcessing);
         if (p2pResult) {
-          threadStore.addMessage(id, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' });
+          await threadStore.addMessage(id, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' });
           return { status: 'ok', threadId: id, reply: p2pResult.output, tier: 'simple', routedTo: p2pResult.executedBy };
         }
         const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
-        threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
+        await threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
         return { status: 'ok', threadId: id, reply: noAgentReply, tier: 'simple' };
       }
 

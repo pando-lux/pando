@@ -137,7 +137,7 @@ export class ThreadStore {
   }
 
   /** Add a message to a thread. Creates thread if it doesn't exist. */
-  addMessage(threadId: string, message: ThreadMessage): void {
+  async addMessage(threadId: string, message: ThreadMessage): Promise<void> {
     // Ensure thread exists
     let meta = this.index.find(t => t.id === threadId);
     if (!meta) {
@@ -155,14 +155,18 @@ export class ThreadStore {
       meta.preview = message.content.slice(0, 200);
     }
 
-    // Update via backend (fire-and-forget for sync API compat)
-    this.backend.putRecord('threads', threadId, meta).catch(err => {
+    // Await both writes so callers can rely on messages being readable immediately after
+    try {
+      await this.backend.putRecord('threads', threadId, meta);
+    } catch (err: any) {
       console.error(`[threads] Backend update meta failed: ${err.message}`);
-    });
+    }
     // Atomic push — no read-modify-write race
-    this.backend.pushToArray('messages', threadId, 'messages', message).catch(err => {
+    try {
+      await this.backend.pushToArray('messages', threadId, 'messages', message);
+    } catch (err: any) {
       console.error(`[threads] Backend addMessage failed: ${err.message}`);
-    });
+    }
   }
 
   /** Get all messages for a thread (sync — returns empty, use getMessagesAsync). */
