@@ -388,7 +388,7 @@ export class WorkerPool {
       claudeBackend.onPid = onPidOrig;
       this.activeProcesses.delete(workerId);
       this.workerPids.delete(workerId);  // stop tracking memory
-      this.db.updateAgent(workerId, { status: 'failed' });
+      this.db.updateAgent(workerId, { status: 'failed', pid: null });
       console.error(`[WorkerPool] Worker ${workerId} crashed:`, err.message?.slice(0, 200));
 
       // Notify orchestrator about crash with full error details
@@ -432,7 +432,7 @@ export class WorkerPool {
 
     const agent = this.db.getAgent(workerId);
     if (agent && !['done', 'failed', 'dissolved'].includes(agent.status)) {
-      this.db.updateAgent(workerId, { status: 'failed' });
+      this.db.updateAgent(workerId, { status: 'failed', pid: null });
     }
   }
 
@@ -674,6 +674,7 @@ export class WorkerPool {
         if (!alive) {
           this.db.updateAgent(worker.id, {
             status: 'failed',
+            pid: null,
           });
           // Notify parent orchestrator so it can decide to retry or escalate
           if (worker.parentId) {
