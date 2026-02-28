@@ -594,9 +594,17 @@ Be friendly and helpful. Keep answers short.`
     }
 
     // ── Fallback: no AI key available → deterministic keyword matching ────
-    const buildKeywords = /\b(build|create|make|develop|implement|deploy|set up|launch)\b.*\b(app|application|website|site|tool|game|page|project|platform|service|api|server|board|dashboard|blog|shop|store|portfolio|chat|bot)\b/i;
+    const tier2Keywords = /\b(websocket|real-?time|express|backend|server|api.?server|ec2|tier\s*2|multiplayer|database|auth|login|socket\.?io|node\.?js)\b/i;
+
+    // Imperative build: "build me a X" / "create a X" / "make me a X" — always build intent
+    const imperativeBuild = /^\s*(build|create|make|develop|implement|deploy|set\s*up|launch)\s+(me\s+)?(a\s+|an\s+)?/i;
+    if (imperativeBuild.test(message)) {
+      return { intent: 'build', description: message.slice(0, 200), tier: tier2Keywords.test(message) ? 2 : 1 };
+    }
+
+    // Verb + known product noun
+    const buildKeywords = /\b(build|create|make|develop|implement|deploy|set up|launch)\b.*\b(app|application|website|site|tool|game|page|project|platform|service|api|server|board|dashboard|blog|shop|store|portfolio|chat|bot|canvas|widget|interface)\b/i;
     if (buildKeywords.test(message)) {
-      const tier2Keywords = /\b(websocket|real-?time|express|backend|server|api server|ec2|tier\s*2)\b/i;
       return { intent: 'build', description: message.slice(0, 200), tier: tier2Keywords.test(message) ? 2 : 1 };
     }
 
