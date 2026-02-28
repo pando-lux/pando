@@ -3133,13 +3133,45 @@ location /apps/${projectId}/ {
 
     // Initialize unified agent database
     this.agentDb = new AgentDatabase(dataDir);
-    const cleaned = this.agentDb.cleanupStaleAgents();
+    const { cleaned, interruptedWorkers } = this.agentDb.cleanupStaleAgents();
     if (cleaned > 0) console.log(`[agents] Cleaned ${cleaned} stale agents from previous run`);
+    if (interruptedWorkers.length > 0) console.log(`[agents] ${interruptedWorkers.length} worker(s) were interrupted during restart`);
     console.log('[agents] AgentDatabase initialized');
 
     // Initialize MessageBus
     this.messageBus = new MessageBus(this.agentDb);
     console.log('[agents] MessageBus initialized');
+
+    // Send worker_report messages for workers interrupted during node restart.
+    // Using type 'worker_report' so orchestrators see these in their Worker Reports
+    // section and can decide to re-spawn. Clear currentTaskId to prevent duplicate
+    // notifications on subsequent restarts.
+    for (const worker of interruptedWorkers) {
+      try {
+        this.messageBus.send({
+          recipientId: worker.parentId,
+          senderId: worker.id,
+          senderType: 'worker',
+          type: 'worker_report',
+          payload: {
+            status: 'interrupted',
+            summary: `Worker was interrupted during node restart while working on: ${(worker.rolePrompt || '').slice(0, 200)}`,
+            taskId: worker.currentTaskId,
+            sessionId: worker.sessionId,
+            auto: true,
+          },
+          priority: 0,
+        });
+        // Clear currentTaskId so this notification isn't sent again on subsequent restarts
+        this.agentDb.updateAgent(worker.id, { currentTaskId: null });
+        console.log(`[agents] Sent recovery report for interrupted worker ${worker.id} (${worker.role}) → ${worker.parentId}`);
+      } catch (err) {
+        console.warn(`[agents] Failed to send recovery report for ${worker.id}:`, err);
+      }
+    }
+    if (interruptedWorkers.length > 0) {
+      console.log(`[agents] Notified orchestrator(s) about ${interruptedWorkers.length} interrupted worker(s)`);
+    }
 
     // Initialize GenomeBridge + Registry (reads compiled knowledge graph for agent context)
     const graphPath = join(process.cwd(), 'output', 'graph.json');

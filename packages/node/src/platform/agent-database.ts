@@ -28,7 +28,7 @@ import { randomUUID } from 'node:crypto';
 export type AgentType = 'worker' | 'orchestrator';
 export type AgentScope = 'private' | 'public';
 export type AgentStatus = 'pending' | 'spawning' | 'active' | 'idle' | 'done' | 'failed' | 'dissolved';
-export type MessageType = 'worker_report' | 'health_alert' | 'cross_team' | 'user_request' | 'directive' | 'task_assignment' | 'escalation' | 'governance_decision' | 'task_result' | 'worker_message' | 'peer_disconnect';
+export type MessageType = 'worker_report' | 'health_alert' | 'cross_team' | 'user_request' | 'directive' | 'task_assignment' | 'escalation' | 'governance_decision' | 'task_result' | 'worker_message' | 'peer_disconnect' | 'worker_interrupted';
 export type SenderType = 'worker' | 'orchestrator' | 'user' | 'system';
 export type ReflectionLevel = 'task' | 'project' | 'pattern' | 'organization';
 
@@ -543,7 +543,7 @@ export class AgentDatabase {
    * orchestrators and their workers (session IDs, accumulated knowledge).
    * Only reset statuses so they can be rehydrated — never delete.
    */
-  cleanupStaleAgents(): number {
+  cleanupStaleAgents(): { cleaned: number; interruptedWorkers: Array<{ id: string; parentId: string; role: string; rolePrompt: string | null; sessionId: string | null; currentTaskId: string | null }> } {
     const now = new Date().toISOString();
 
     // Non-persistent active/spawning agents → failed
@@ -559,6 +559,14 @@ export class AgentDatabase {
       WHERE type = 'orchestrator' AND persistent = 1 AND status IN ('active', 'spawning')
     `).run(now);
 
+    // Capture workers that were active/spawning under persistent orchestrators BEFORE resetting them.
+    // These are interrupted workers whose tasks silently disappeared — orchestrators need to know.
+    const interruptedRows = this.db.prepare(`
+      SELECT id, parent_id, role, role_prompt, session_id, current_task_id FROM agent_identity
+      WHERE type = 'worker' AND status IN ('active', 'spawning')
+      AND parent_id IN (SELECT id FROM agent_identity WHERE type = 'orchestrator' AND persistent = 1)
+    `).all() as Array<{ id: string; parent_id: string; role: string; role_prompt: string | null; session_id: string | null; current_task_id: string | null }>;
+
     // Workers under persistent orchestrators: reset active/spawning to 'done'
     // PRESERVE session_id — this is the key to session resume across restarts
     const r3 = this.db.prepare(`
@@ -573,7 +581,19 @@ export class AgentDatabase {
       AND recipient_id NOT IN (SELECT id FROM agent_identity)
     `).run();
 
-    return (r1.changes || 0) + (r2.changes || 0) + (r3.changes || 0);
+    const interruptedWorkers = interruptedRows.map(row => ({
+      id: row.id,
+      parentId: row.parent_id,
+      role: row.role,
+      rolePrompt: row.role_prompt,
+      sessionId: row.session_id,
+      currentTaskId: row.current_task_id,
+    }));
+
+    return {
+      cleaned: (r1.changes || 0) + (r2.changes || 0) + (r3.changes || 0),
+      interruptedWorkers,
+    };
   }
 
   getAgent(id: string): AgentIdentity | null {

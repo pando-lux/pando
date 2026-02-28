@@ -95,6 +95,7 @@ interface BoardState {
   directives: string[];
   recentlyFailed: Array<{ id: string; role: string; failedAt: string; lastTask: string | null; rolePrompt: string | null }>;
   overdueWorkers: Array<{ id: string; role: string; spawnedAt: string; lastReportAt: string | null }>;
+  interruptedWorkers: Array<{ workerId: string; role: string; rolePrompt: string | null; sessionId: string | null }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -385,8 +386,9 @@ export class Orchestrator {
     const healthAlerts = messages.filter(m => m.type === 'health_alert');
     const userRequests = messages.filter(m => m.type === 'user_request');
     const peerDisconnects = messages.filter(m => m.type === 'peer_disconnect');
+    const interruptedMsgs = messages.filter(m => m.type === 'worker_interrupted');
     const otherMessages = messages.filter(m =>
-      !['worker_report', 'health_alert', 'user_request', 'peer_disconnect'].includes(m.type));
+      !['worker_report', 'health_alert', 'user_request', 'peer_disconnect', 'worker_interrupted'].includes(m.type));
 
     // Track threadId from user requests for respond_to_user
     for (const req of userRequests) {
@@ -427,6 +429,14 @@ export class Orchestrator {
         lastReportAt: w.lastReportAt || null,
       }));
 
+    // Parse interrupted worker notifications (from node restart)
+    const interruptedWorkers = interruptedMsgs.map(m => {
+      try {
+        const p = JSON.parse(m.payload);
+        return { workerId: p.workerId as string, role: p.role as string, rolePrompt: (p.rolePrompt as string) || null, sessionId: (p.sessionId as string) || null };
+      } catch { return null; }
+    }).filter(Boolean) as Array<{ workerId: string; role: string; rolePrompt: string | null; sessionId: string | null }>;
+
     return {
       pendingTasks: this.deps.db.listAgents({ parentId: this.orchestratorId, status: 'pending' }).length,
       activeTasks: activeWorkers.filter(w => w.currentTaskId).length,
@@ -440,6 +450,7 @@ export class Orchestrator {
       directives: directives.map(d => d.content),
       recentlyFailed,
       overdueWorkers,
+      interruptedWorkers,
     };
   }
 
@@ -756,6 +767,17 @@ export class Orchestrator {
         sections.push(`- ${w.role} ${w.id} spawned at ${w.spawnedAt}, last report: ${w.lastReportAt || 'never'}`);
       }
       sections.push('Consider: kill and respawn, or wait longer.');
+      sections.push('');
+    }
+
+    // Interrupted workers (killed during node restart)
+    if (board.interruptedWorkers.length > 0) {
+      sections.push('## Interrupted Workers (killed during restart)');
+      sections.push('These workers were active when the node restarted. Consider re-spawning them.');
+      for (const w of board.interruptedWorkers) {
+        const task = w.rolePrompt ? w.rolePrompt.replace(/\n/g, ' ').slice(0, 120) : 'unknown task';
+        sections.push(`- ${w.role} ${w.workerId}: was working on: ${task}`);
+      }
       sections.push('');
     }
 
