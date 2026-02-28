@@ -848,6 +848,7 @@ Be friendly and helpful. Keep answers short.`
       registerContextRoutes(v1, {
         getDb: () => this.agentDb!,
         getGenomeBridge: () => this.node.getGenomeBridge(),
+        getGenomeBridgeRegistry: () => this.node.getGenomeBridgeRegistry(),
         apiPort: this.node.getApiPort(),
       });
     }, { prefix: '/v1' });

@@ -37,7 +37,7 @@ import { SecurityMonitor } from './kernel/security-monitor.js';
 import { ResourceProofChallenger } from './platform/resource-proof.js';
 import { ReputationWeightedGovernance } from './platform/reputation-governance.js';
 import { ContentSafetyReviewer } from './platform/content-safety.js';
-import { GenomeBridge } from './platform/genome-bridge.js';
+import { GenomeBridge, GenomeBridgeRegistry } from './platform/genome-bridge.js';
 import { TemplateRegistry } from './platform/template-registry.js';
 import { ScenarioRunner } from './platform/scenario-runner.js';
 import { ContentRegistry } from './platform/content-registry.js';
@@ -140,6 +140,7 @@ export class PandoNode {
   private reputationGovernance: ReputationWeightedGovernance | null = null;
   private contentSafetyReviewer: ContentSafetyReviewer | null = null;
   private genomeBridge: GenomeBridge | null = null;
+  private genomeBridgeRegistry: GenomeBridgeRegistry | null = null;
   private templateRegistry: TemplateRegistry | null = null;
   private scenarioRunner: ScenarioRunner | null = null;
   private pipelineRunner: PipelineRunner | null = null;
@@ -3027,6 +3028,7 @@ location /apps/${projectId}/ {
       orgManager: this.orgManager,
       aiRegistry: this.aiBackendRegistry,
       genomeBridge: this.genomeBridge || undefined,
+      genomeBridgeRegistry: this.genomeBridgeRegistry ?? undefined,
       scenarioRunner: this.scenarioRunner || undefined,
       templateRegistry: this.templateRegistry || undefined,
       threadStore: this.threadStore || undefined,
@@ -3102,9 +3104,10 @@ location /apps/${projectId}/ {
     this.messageBus = new MessageBus(this.agentDb);
     console.log('[agents] MessageBus initialized');
 
-    // Initialize GenomeBridge (reads compiled knowledge graph for agent context)
+    // Initialize GenomeBridge + Registry (reads compiled knowledge graph for agent context)
     const graphPath = join(process.cwd(), 'output', 'graph.json');
-    this.genomeBridge = new GenomeBridge(graphPath);
+    this.genomeBridgeRegistry = new GenomeBridgeRegistry(graphPath);
+    this.genomeBridge = this.genomeBridgeRegistry.getPandoBridge();
     if (this.genomeBridge.isLoaded()) {
       const stats = this.genomeBridge.getStats();
       console.log(`[agents] GenomeBridge loaded: ${stats.totalNodes} nodes, ${stats.testNodes} tests`);
@@ -3137,7 +3140,7 @@ location /apps/${projectId}/ {
       this.agentDb,
       this.aiBackendRegistry,
       this.messageBus,
-      { dataDir, apiPort: this.config.apiPort, genomeBridge: this.genomeBridge, templateRegistry: this.templateRegistry },
+      { dataDir, apiPort: this.config.apiPort, genomeBridge: this.genomeBridge, genomeBridgeRegistry: this.genomeBridgeRegistry ?? undefined, templateRegistry: this.templateRegistry },
     );
     console.log('[agents] WorkerPool initialized');
 
@@ -3486,6 +3489,10 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
 
   getGenomeBridge(): GenomeBridge | null {
     return this.genomeBridge;
+  }
+
+  getGenomeBridgeRegistry(): GenomeBridgeRegistry | null {
+    return this.genomeBridgeRegistry;
   }
 
   // ----------------------------------------------------------
