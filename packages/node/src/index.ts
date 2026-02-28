@@ -2130,31 +2130,35 @@ location /apps/${projectId}/ {
     });
 
     // Safe self-restart watchdog: detect when the running process has stale compiled code.
-    // Checks every 5 minutes: if git HEAD has moved past the commit we were built from,
-    // and there are no active workers in flight, restart with exit(75) so PM2/systemd
-    // picks up the freshly-built code.  Gracefully disabled if the stamp file is missing.
+    // Checks every 5 minutes: re-reads .build-commit from disk (upgrade catch-up may
+    // have rebuilt and updated it), compares against git HEAD, and exits with code 75
+    // if they differ and no active workers are in flight.
     {
-      let builtAtCommit: string | null = null;
-      // The build script writes `git rev-parse HEAD` to packages/node/dist/.build-commit.
-      // Try both the project-root layout and the packages/node/ layout to be robust.
-      for (const candidatePath of [
+      const buildCommitPaths = [
         join(process.cwd(), 'packages', 'node', 'dist', '.build-commit'),
         join(process.cwd(), 'dist', '.build-commit'),
-      ]) {
-        try {
-          const val = readFileSync(candidatePath, 'utf8').trim();
-          if (val) { builtAtCommit = val; break; }
-        } catch { /* try next */ }
-      }
-      if (builtAtCommit) {
-        const builtCommit = builtAtCommit; // capture for closure
-        console.log(`[self-restart] Stale-build watchdog active (built at ${builtCommit.slice(0, 8)})`);
+      ];
+      const readBuildCommit = (): string | null => {
+        for (const p of buildCommitPaths) {
+          try {
+            const val = readFileSync(p, 'utf8').trim();
+            if (val) return val;
+          } catch { /* try next */ }
+        }
+        return null;
+      };
+      const initialCommit = readBuildCommit();
+      if (initialCommit) {
+        console.log(`[self-restart] Stale-build watchdog active (built at ${initialCommit.slice(0, 8)})`);
         const selfRestartInterval = setInterval(() => {
           try {
+            // Re-read .build-commit each cycle — upgrade catch-up may have rebuilt
+            const builtCommit = readBuildCommit();
+            if (!builtCommit) return;
             const currentCommit = (execSync('git rev-parse HEAD', {
               cwd: process.cwd(), encoding: 'utf8', timeout: 5000,
             }) as string).trim();
-            if (currentCommit === builtCommit) return; // still fresh — nothing to do
+            if (currentCommit === builtCommit) return; // build matches HEAD — nothing to do
             const activeWorkers = this.workerPool?.getActiveWorkerCount() ?? 0;
             if (activeWorkers > 0) {
               console.log(`[self-restart] Stale build detected (built=${builtCommit.slice(0, 8)}, head=${currentCommit.slice(0, 8)}) but ${activeWorkers} worker(s) active — deferring restart`);
