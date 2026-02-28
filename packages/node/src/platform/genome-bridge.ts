@@ -10,6 +10,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -352,5 +353,66 @@ export class GenomeBridge {
     }
 
     return parts.join('\n');
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GenomeBridgeRegistry — Per-project genome graph management
+// ---------------------------------------------------------------------------
+
+const PANDO_PROJECT_ID = '__pando__';
+
+/**
+ * Registry that maps project IDs to their own GenomeBridge instances.
+ * Council workers on Pando get Pando's genome. Workers on user projects
+ * get that project's genome (if compiled) or null.
+ */
+export class GenomeBridgeRegistry {
+  private bridges: Map<string, GenomeBridge> = new Map();
+
+  constructor(pandoGraphPath: string) {
+    const pandoBridge = new GenomeBridge(pandoGraphPath);
+    this.bridges.set(PANDO_PROJECT_ID, pandoBridge);
+  }
+
+  /** Get genome bridge for a project. Returns Pando's bridge for '__pando__'. */
+  getForProject(projectId: string | null): GenomeBridge | null {
+    if (!projectId) return this.getPandoBridge();
+    if (this.bridges.has(projectId)) return this.bridges.get(projectId)!;
+    return null;
+  }
+
+  /** Register a project's genome graph. Called when a project has output/graph.json. */
+  register(projectId: string, graphPath: string): void {
+    if (existsSync(graphPath)) {
+      this.bridges.set(projectId, new GenomeBridge(graphPath));
+    }
+  }
+
+  /** Auto-detect and register genome for a project workspace. */
+  registerFromWorkspace(projectId: string, workspaceDir: string): boolean {
+    const graphPath = join(workspaceDir, 'output', 'graph.json');
+    if (existsSync(graphPath)) {
+      this.register(projectId, graphPath);
+      return true;
+    }
+    return false;
+  }
+
+  /** Get the Pando bridge (backward compat). */
+  getPandoBridge(): GenomeBridge {
+    return this.bridges.get(PANDO_PROJECT_ID)!;
+  }
+
+  /** Check if a project has a registered genome. */
+  has(projectId: string): boolean {
+    return this.bridges.has(projectId);
+  }
+
+  /** Reload all bridges (after recompilation). */
+  reloadAll(): void {
+    for (const bridge of this.bridges.values()) {
+      bridge.reload();
+    }
   }
 }

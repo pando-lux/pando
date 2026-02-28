@@ -201,9 +201,8 @@ export class WorkerPool {
       console.log(`[WorkerPool] Creating fresh ${config.role} worker ${workerId}`);
     }
 
-    // Assemble context — write to .pando-worker-context.md to avoid overwriting project CLAUDE.md
-    const claudeMd = this.assembleContext(agent);
-    writeFileSync(join(workspaceDir, '.pando-worker-context.md'), claudeMd);
+    // Build boot prompt — slim context injected at spawn (~500 tokens)
+    // Workers query /v1/context/* for rich project/lesson context on demand
 
     // Get AI backend
     const backend = this.aiRegistry.getBest('code-execution');
@@ -234,19 +233,8 @@ export class WorkerPool {
       taskPrompt += `\nIMPORTANT: The build MUST pass (npm run build) before you report "done".\n`;
       taskPrompt += `Start working now.`;
     } else {
-      // Fresh worker — full context
-      taskPrompt = claudeMd;
-      taskPrompt += `\n\n---\n`;
-      taskPrompt += `\nYou are starting now. Your agent ID is: ${workerId}`;
-      taskPrompt += `\nProject root: ${projectRoot}`;
-      taskPrompt += `\nScratch workspace: ${workspaceDir}`;
-      if (config.taskId) {
-        taskPrompt += `\nTask ID: ${config.taskId}`;
-      }
-      taskPrompt += `\n\nWhen you finish, report via HTTP:`;
-      taskPrompt += `\ncurl -s -X POST http://localhost:${this.apiPort}/v1/worker/${workerId}/report -H "Content-Type: application/json" --data-raw '{"status":"done","summary":"<what you did>","filesChanged":["list","of","files"]}'`;
-      taskPrompt += `\n\nIMPORTANT: The build MUST pass (npm run build) before you report "done".`;
-      taskPrompt += `\nStart working now.`;
+      // Fresh worker — boot prompt + context API for on-demand rich context
+      taskPrompt = this.buildBootPrompt(agent, config, workerId, projectRoot, workspaceDir);
     }
 
     // Clone backend for per-worker callbacks
@@ -574,8 +562,111 @@ export class WorkerPool {
   }
 
   /**
+   * Build a slim boot prompt for fresh workers (~500 tokens).
+   * Workers use the context API to query rich project/lesson context on demand.
+   * Replaces the old 20,000 token assembleContext() dump for initial spawn.
+   */
+  private buildBootPrompt(
+    agent: AgentIdentity,
+    config: WorkerConfig,
+    workerId: string,
+    projectRoot: string,
+    workspaceDir: string,
+  ): string {
+    const port = this.apiPort;
+    const projectId = agent.projectId || config.projectId || null;
+    const task = config.rolePrompt || 'Complete the assigned task.';
+    const base = `http://localhost:${port}/v1`;
+
+    // Resolve role workflow from template
+    let roleWorkflow = '';
+    let guardrails = '';
+    if (agent.templateId && this.templateRegistry) {
+      const tmpl = this.templateRegistry.getTemplate(agent.templateId);
+      if (tmpl?.rolePrompt) {
+        roleWorkflow = tmpl.rolePrompt;
+      }
+    }
+    if (!roleWorkflow && this.templateRegistry) {
+      const tmpl = this.templateRegistry.getByRole(agent.role);
+      if (tmpl?.rolePrompt) roleWorkflow = tmpl.rolePrompt;
+    }
+
+    const lines: string[] = [];
+
+    // Identity
+    lines.push(`You are agent ${workerId} on the Pando network.`);
+    lines.push(`Role: ${agent.role}. Reports to: ${agent.parentId || 'none'}.`);
+    if (projectId) lines.push(`Project: ${projectId}`);
+    lines.push(`Workspace: ${projectRoot}`);
+    lines.push('');
+
+    // Context API — query before starting
+    lines.push('## Get Context Before Starting');
+    lines.push('Query these endpoints to understand the project:');
+    if (projectId) {
+      lines.push(`  curl "${base}/context/project?id=${encodeURIComponent(projectId)}&task=${encodeURIComponent(task.slice(0, 80))}&workspaceDir=${encodeURIComponent(projectRoot)}"`);
+    } else {
+      lines.push(`  curl "${base}/context/project?workspaceDir=${encodeURIComponent(projectRoot)}"`);
+    }
+    lines.push(`  curl "${base}/context/lessons?role=${agent.role}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ''}"`);
+    if (agent.parentId) {
+      lines.push(`  curl "${base}/context/team?orchestratorId=${encodeURIComponent(agent.parentId)}${projectId ? `&projectId=${encodeURIComponent(projectId)}` : ''}"`);
+    }
+    lines.push('');
+
+    // Role workflow
+    if (roleWorkflow) {
+      lines.push('## Your Role');
+      lines.push(roleWorkflow);
+      lines.push('');
+    }
+
+    // Authority
+    if (agent.authority) {
+      try {
+        const auth = JSON.parse(agent.authority);
+        if (auth.files?.forbidden?.length || auth.commands?.forbidden?.length) {
+          lines.push('## Restrictions');
+          if (auth.files?.forbidden) lines.push(`Do NOT touch: ${JSON.stringify(auth.files.forbidden)}`);
+          if (auth.commands?.forbidden) lines.push(`Do NOT run: ${JSON.stringify(auth.commands.forbidden)}`);
+          lines.push('');
+        }
+      } catch { /* skip */ }
+    }
+
+    // Task
+    lines.push('## Your Task');
+    if (config.taskId) lines.push(`Task ID: ${config.taskId}`);
+    lines.push(task);
+    if (config.fileScope?.length) lines.push(`Files: ${config.fileScope.join(', ')}`);
+    lines.push('');
+
+    // Report and discover endpoints
+    lines.push('## When You Finish');
+    lines.push('Share discoveries:');
+    lines.push(`  curl -s -X POST ${base}/context/discover -H "Content-Type: application/json" -d '{"agentId":"${workerId}","projectId":"${projectId || ''}","category":"convention","content":"<what you learned>"}'`);
+    lines.push('Report done:');
+    lines.push(`  curl -s -X POST ${base}/worker/${workerId}/report -H "Content-Type: application/json" --data-raw '{"status":"done","summary":"<what you did>","filesChanged":["list","of","files"]}'`);
+    lines.push('');
+
+    // Universal rules
+    lines.push('## Rules');
+    lines.push('- Query project context (above) before writing any code.');
+    lines.push('- Read existing code before modifying it.');
+    lines.push('- Build MUST pass before reporting done.');
+    lines.push('- Never modify .env, .git/, or credential files.');
+    lines.push('- Report stuck if blocked.');
+    lines.push('');
+    lines.push('Start working now.');
+
+    return lines.join('\n');
+  }
+
+  /**
    * Assemble the CLAUDE.md content for a worker.
    * Pulls from 5 layers: role, project, task, lessons, authority.
+   * @deprecated Use buildBootPrompt() for new spawns. Workers query context API on demand.
    */
   private assembleContext(agent: AgentIdentity): string {
     const sections: string[] = [];

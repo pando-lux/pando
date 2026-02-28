@@ -14,7 +14,7 @@
 
 import type { FastifyInstance } from 'fastify';
 import type { AgentDatabase, DiscoveryCategory } from '../platform/agent-database.js';
-import type { GenomeBridge } from '../platform/genome-bridge.js';
+import type { GenomeBridge, GenomeBridgeRegistry } from '../platform/genome-bridge.js';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
 
@@ -25,6 +25,7 @@ import { join, basename } from 'node:path';
 export interface ContextApiDeps {
   getDb: () => AgentDatabase;
   getGenomeBridge: () => GenomeBridge | null;
+  getGenomeBridgeRegistry?: () => GenomeBridgeRegistry | null;
   apiPort: number;
 }
 
@@ -191,11 +192,21 @@ export function registerContextRoutes(
     const workspaceDir = query.workspaceDir || null;
     const db = deps.getDb();
 
-    // Genome context (if available)
+    // Genome context — use per-project registry if available, else fall back to single bridge
     let genomeContext: string | null = null;
-    const bridge = deps.getGenomeBridge();
-    if (bridge?.isLoaded() && task) {
-      genomeContext = bridge.contextForTask({ taskDescription: task });
+    const registry = deps.getGenomeBridgeRegistry?.();
+    if (registry && projectId) {
+      // Try project-specific genome first, fall back to Pando's
+      const projectBridge = registry.getForProject(projectId);
+      if (projectBridge?.isLoaded() && task) {
+        genomeContext = projectBridge.contextForTask({ taskDescription: task });
+      }
+    } else {
+      // No registry — use single genome bridge (backward compat)
+      const bridge = deps.getGenomeBridge();
+      if (bridge?.isLoaded() && task) {
+        genomeContext = bridge.contextForTask({ taskDescription: task });
+      }
     }
 
     // Auto-generated project context (from workspace)
