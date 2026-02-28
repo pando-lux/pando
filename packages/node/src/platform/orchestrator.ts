@@ -706,6 +706,16 @@ export class Orchestrator {
       sections.push('- respond_to_user AFTER commit + propose_upgrade to confirm the change is deployed.');
       sections.push('The minimum for any code change: builder → commit_code → propose_upgrade → respond_to_user.');
       sections.push('');
+      sections.push('### CRITICAL: Governance IS Deployment');
+      sections.push('propose_upgrade IS the deployment mechanism. After you call propose_upgrade:');
+      sections.push('1. All nodes vote on the proposal via governance');
+      sections.push('2. If approved, every node auto-pulls the code, rebuilds, and restarts (via upgrade-protocol catch-up timer, every 5 min)');
+      sections.push('3. You do NOT need to deploy manually. DO NOT spawn devops workers to SSH into nodes after propose_upgrade.');
+      sections.push('4. Manual devops deployment is ONLY for: emergency fixes when governance is broken, or a specific node that is unreachable by P2P.');
+      sections.push('');
+      sections.push('WRONG: commit_code → propose_upgrade → spawn devops to SSH deploy to each node');
+      sections.push('RIGHT: commit_code → propose_upgrade → DONE. Governance handles the rest.');
+      sections.push('');
     }
     sections.push('## Focus Principle — One Task At A Time');
     sections.push('You must focus on ONE task at a time. Do not start unrelated tasks while current work is in progress.');
