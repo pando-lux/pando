@@ -133,7 +133,8 @@ async function initTray(
     // Dynamic import — systray2 is optional; fails gracefully on headless systems
     // @ts-ignore — no type declarations for systray2
     const mod = await import('systray2');
-    SysTray = mod.default ?? mod;
+    // Handle ESM/CJS interop — systray2 may nest default exports
+    SysTray = mod.default?.default || mod.default || mod;
   } catch {
     console.log('[supervisor] Running in headless mode (systray2 unavailable or unsupported)');
     return;
