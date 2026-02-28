@@ -146,6 +146,15 @@ export class Orchestrator {
     this._consecutiveEmptyTicks = 0;
     this._consecutiveParseFailures = 0;
 
+    // Restore _lastThreadId from SQLite (survives node restarts)
+    try {
+      const meta = this.deps.db.getMetadata(this.orchestratorId);
+      if (meta) {
+        const parsed = JSON.parse(meta);
+        if (parsed.lastThreadId) this._lastThreadId = parsed.lastThreadId;
+      }
+    } catch { /* ignore parse errors */ }
+
     // Tick immediately on start, then on interval
     this.tick().catch(err => console.error(`[Orchestrator ${this.orchestratorId}] tick error:`, err));
 
@@ -309,6 +318,32 @@ export class Orchestrator {
         }
       }
 
+      // 3b2. Deploy URL fix: Auto-respond to user when devops worker reports success with a URL.
+      // This is deterministic — no AI judgment needed. Prevents "Processing..." forever.
+      if (board.workerReports.length > 0 && this._lastThreadId) {
+        for (const report of board.workerReports) {
+          try {
+            const payload = JSON.parse(report.payload);
+            if (payload.status !== 'done') continue;
+            // Check if sender is a devops worker
+            const worker = this.deps.db.getAgent(report.senderId);
+            if (!worker || worker.role !== 'devops') continue;
+            // Extract URL from summary
+            const summary = payload.summary || '';
+            const urlMatch = summary.match(/https?:\/\/[^\s)>"']+/);
+            if (!urlMatch) continue;
+            const deployUrl = urlMatch[0];
+            // Check if AI already sent respond_to_user for this URL in this tick
+            const alreadyResponded = actions.some(a =>
+              a.type === 'respond_to_user' && a.message.includes(deployUrl));
+            if (alreadyResponded) continue;
+            // Send respond_to_user deterministically
+            console.log(`[Orchestrator ${this.orchestratorId}] Auto-responding with deploy URL: ${deployUrl}`);
+            await this.execute({ type: 'respond_to_user', message: `Deployment complete! Your app is live at: ${deployUrl}` }, agent);
+          } catch { /* ignore parse errors */ }
+        }
+      }
+
       // 3c. Issue MASTER-FIX-2: Deactivate directives after successful Tier 2
       // Directives are standing orders — once the AI has seen them and produced
       // actions, they are consumed. This prevents the same directives from
@@ -425,7 +460,11 @@ export class Orchestrator {
     for (const req of userRequests) {
       try {
         const payload = typeof req.payload === 'string' ? JSON.parse(req.payload) : req.payload;
-        if (payload.threadId) this._lastThreadId = payload.threadId;
+        if (payload.threadId) {
+          this._lastThreadId = payload.threadId;
+          // Persist to SQLite so threadId survives node restarts
+          this.deps.db.setMetadata(this.orchestratorId, JSON.stringify({ lastThreadId: payload.threadId }));
+        }
       } catch { /* ignore */ }
     }
 

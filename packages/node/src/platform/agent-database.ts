@@ -496,6 +496,15 @@ export class AgentDatabase {
       }
     } catch { /* column already exists or migration not needed */ }
 
+    // Deploy URL fix: Migrate — add metadata column to agent_identity if missing
+    try {
+      const cols3 = this.db.pragma('table_info(agent_identity)') as any[];
+      if (!cols3.some((c: any) => c.name === 'metadata')) {
+        this.db.exec('ALTER TABLE agent_identity ADD COLUMN metadata TEXT');
+        console.log('[agents] Migrated: added metadata column to agent_identity');
+      }
+    } catch { /* column already exists or migration not needed */ }
+
     // MASTER FIX: Deactivate directives 8-13 (completed standing orders from initial setup)
     try {
       this.db.exec('UPDATE directives SET active = 0 WHERE id IN (8,9,10,11,12,13) AND active = 1');
@@ -693,6 +702,18 @@ export class AgentDatabase {
   clearCurrentFocus(orchestratorId: string): void {
     this.db.prepare('UPDATE agent_identity SET current_focus = NULL, updated_at = ? WHERE id = ?')
       .run(new Date().toISOString(), orchestratorId);
+  }
+
+  // ---- Metadata (Deploy URL fix: persist orchestrator state across restarts) ----
+
+  setMetadata(agentId: string, metadata: string): void {
+    this.db.prepare('UPDATE agent_identity SET metadata = ?, updated_at = ? WHERE id = ?')
+      .run(metadata, new Date().toISOString(), agentId);
+  }
+
+  getMetadata(agentId: string): string | null {
+    const row = this.db.prepare('SELECT metadata FROM agent_identity WHERE id = ?').get(agentId) as any;
+    return row?.metadata ?? null;
   }
 
   /** Recursive CTE to get full hierarchy tree from a root */
