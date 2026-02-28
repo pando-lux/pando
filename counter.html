@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Counter</title>
+  <style>
+    body {
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      margin: 0;
+      font-family: system-ui, sans-serif;
+      background: #1a1a2e;
+      color: #eee;
+    }
+    .counter {
+      text-align: center;
+    }
+    .count {
+      font-size: 6rem;
+      font-weight: 700;
+      margin: 1rem 0;
+    }
+    .buttons {
+      display: flex;
+      gap: 1rem;
+      justify-content: center;
+    }
+    button {
+      font-size: 2rem;
+      width: 4rem;
+      height: 4rem;
+      border: none;
+      border-radius: 50%;
+      cursor: pointer;
+      font-weight: 700;
+      transition: transform 0.1s;
+    }
+    button:active {
+      transform: scale(0.9);
+    }
+    .dec { background: #e94560; color: #fff; }
+    .inc { background: #0f3460; color: #fff; }
+  </style>
+</head>
+<body>
+  <div class="counter">
+    <div class="count" id="count">0</div>
+    <div class="buttons">
+      <button class="dec" onclick="update(-1)">−</button>
+      <button class="inc" onclick="update(1)">+</button>
+    </div>
+  </div>
+  <script>
+    let count = 0;
+    function update(n) {
+      count += n;
+      document.getElementById('count').textContent = count;
+    }
+  </script>
+</body>
+</html>
