@@ -1,3 +1,4 @@
+<!-- STATUS: HISTORICAL DESIGN - superseded by genome/knowledge/flows/*.know -->
 # Phase: Agent Architecture Refactor — Work Plan
 
 **Date**: 2026-02-27

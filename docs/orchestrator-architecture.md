@@ -1,3 +1,4 @@
+<!-- STATUS: HISTORICAL DESIGN - superseded by genome/knowledge/flows/*.know -->
 # Pando Orchestrator Architecture
 
 **Date**: 2026-02-27

@@ -1,3 +1,4 @@
+<!-- STATUS: HISTORICAL DESIGN - superseded by genome/knowledge/flows/*.know -->
 # Agent System Integration — How the New Architecture Fits Into Pando
 
 **Date**: 2026-02-27

@@ -114,7 +114,7 @@
       "content_hash": "f0e0c078"
     },
     "genome/knowledge/flows/council-operating-system.know": {
-      "mtime": 1772265241.1400602,
+      "mtime": 1772300621.583408,
       "nodes": [
         {
           "_type": "flow",
@@ -372,9 +372,264 @@
             "PandoNode",
             "PlatformApi"
           ]
+        },
+        {
+          "_type": "flow",
+          "_name": "TickLifecycle",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "_steps": [
+            {
+              "_name": "tick_start",
+              "_target": "read_board",
+              "actor": "Orchestrator",
+              "what": "readBoard() collects current state: inbox messages (categorized into workerReports, healthAlerts, userRequests, peerDisconnects, interruptedWorkers), active directives from SQLite, recently failed workers (last 15min), overdue workers, pending tasks, and worker counts.",
+              "_next": "read_board"
+            },
+            {
+              "_name": "read_board",
+              "_target": "health_check",
+              "actor": "Orchestrator",
+              "what": "runHealthMonitoring(board) \u2014 always runs (Tier 1). Checks worker health, peer connectivity. Deterministic, no AI call.",
+              "_next": "health_check"
+            },
+            {
+              "_name": "health_check",
+              "_target": "classify",
+              "_tags": [
+                "@gotcha(\"Issue 6 guard: active non-overdue workers + empty inbox = Tier 1. Prevents burning Opus tokens while workers are busy.\")"
+              ],
+              "actor": "Orchestrator",
+              "what": "classify(board) returns 1 or 2. Tier 1 when: (a) non-overdue workers active AND inbox empty (let them work), or (b) inbox empty, no directives, not a reflection tick. Tier 2 when: directives exist, reflection tick (every 5th), recently failed/overdue workers, or inbox has messages.",
+              "_next": "classify"
+            },
+            {
+              "_name": "classify",
+              "_target": "decide",
+              "_tags": [
+                "@gotcha(\"Tier 1 ticks use ZERO AI tokens. Idle ticks = zero cost.\")"
+              ],
+              "actor": "Orchestrator",
+              "what": "Tier 1: deterministic(board) returns actions directly (route results, ack alerts). Tier 2: callAI() sends boot prompt (first tick) or tick update (subsequent ticks) to session-persistent Opus brain. AI returns OrchestratorAction[] via 3-layer JSON parser.",
+              "_next": "decide"
+            },
+            {
+              "_name": "decide",
+              "_target": "execute",
+              "actor": "Orchestrator",
+              "what": "Execute OrchestratorAction[] array. 13 action types: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy, respond_to_user, run_scenarios.",
+              "_next": "execute"
+            },
+            {
+              "_name": "execute",
+              "_target": "mark_read",
+              "_tags": [
+                "@gotcha(\"markRead guard: if AI call fails, messages stay unread so nothing is lost. Next tick retries.\")"
+              ],
+              "actor": "Orchestrator",
+              "what": "messageBus.markRead(allMessageIds) \u2014 only if aiError is null. On AI failure, messages are preserved unread for retry on next tick. Agent lastReportAt updated.",
+              "_next": "mark_read"
+            },
+            {
+              "_name": "mark_read",
+              "_target": "log_tick",
+              "actor": "Orchestrator",
+              "what": "db.logTick() records: orchestratorId, tickNumber, tier, boardSnapshot (JSON), actionsExecuted (JSON), aiError if any. Every tick is logged for auditability.",
+              "_next": "log_tick"
+            }
+          ],
+          "summary": "Single orchestrator tick: classify \u2192 readBoard \u2192 AI or deterministic \u2192 execute \u2192 markRead \u2192 logTick. Tier 1 = deterministic (no AI, ~2ms). Tier 2 = AI judgment (10-300s).",
+          "trigger": "SetIntervalTick"
+        },
+        {
+          "_type": "flow",
+          "_name": "DirectiveFlow",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "_steps": [
+            {
+              "_name": "post_directive",
+              "_target": "store_sqlite",
+              "actor": "PlatformApi",
+              "what": "POST /v1/council/directive receives { content } from operator. Inserts into SQLite directives table with active=1, target_id=councilOrchId, addedBy='operator'.",
+              "_next": "store_sqlite"
+            },
+            {
+              "_name": "store_sqlite",
+              "_target": "read_in_tick",
+              "actor": "Orchestrator",
+              "what": "readBoard().getDirectives() queries SQLite: SELECT * FROM directives WHERE active=1 AND (target_id=? OR target_id IS NULL). Returns as board.directives string array.",
+              "_next": "read_in_tick"
+            },
+            {
+              "_name": "read_in_tick",
+              "_target": "classify_tier2",
+              "_tags": [
+                "@gotcha(\"Exception: if non-overdue workers are active AND inbox is empty, stays Tier 1 even with directives \u2014 avoids burning tokens while workers are busy.\")"
+              ],
+              "actor": "Orchestrator",
+              "what": "classify() checks board.directives.length > 0 \u2014 if directives exist, returns Tier 2 (needs AI judgment). Directives always trigger AI thinking.",
+              "_next": "classify_tier2"
+            },
+            {
+              "_name": "classify_tier2",
+              "_target": "ai_sees_directives",
+              "actor": "Orchestrator",
+              "what": "AI prompt includes '## Directives' section listing all active directive strings. AI decides actions based on directive content.",
+              "_next": "ai_sees_directives"
+            },
+            {
+              "_name": "ai_sees_directives",
+              "_target": "deactivate",
+              "actor": "AgentTools",
+              "what": "After orchestrator processes directives, deactivateDirective(id) sets active=0. GET /council/directives shows current active directives.",
+              "_next": "deactivate"
+            }
+          ],
+          "summary": "Directives are standing orders injected into the orchestrator's AI prompt. They persist in SQLite until explicitly deactivated after processing.",
+          "trigger": "HumanDirective"
+        },
+        {
+          "_type": "flow",
+          "_name": "SelfRestartProtocol",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "_steps": [
+            {
+              "_name": "build_writes_stamp",
+              "_target": "watchdog_check",
+              "actor": "BuildScript",
+              "what": "npm run build writes .build-commit file (git commit hash) to packages/node/dist/.build-commit and dist/.build-commit. This stamps which commit the compiled code corresponds to.",
+              "_next": "watchdog_check"
+            },
+            {
+              "_name": "watchdog_check",
+              "_target": "compare_commits",
+              "actor": "PandoNode",
+              "what": "Watchdog runs every 5 minutes (setInterval, .unref()). Re-reads .build-commit from disk each cycle (upgrade catch-up may have rebuilt). Compares against git rev-parse HEAD.",
+              "_next": "compare_commits"
+            },
+            {
+              "_name": "compare_commits",
+              "_target": "check_workers",
+              "_tags": [
+                "@gotcha(\"Restart is deferred while workers are active \u2014 never kills in-flight work.\")"
+              ],
+              "actor": "PandoNode",
+              "what": "If .build-commit !== HEAD, checks workerPool.getActiveWorkerCount(). If workers > 0, logs 'deferring restart' and waits for next cycle. Active workers are never interrupted.",
+              "_next": "check_workers"
+            },
+            {
+              "_name": "check_workers",
+              "_target": "exit_75",
+              "actor": "PandoNode",
+              "what": "If .build-commit !== HEAD AND 0 active workers: process.exit(75). Exit code 75 is the RESTART_EXIT_CODE convention. start-node.bat (Windows) and systemd/PM2 (Linux) detect this code and restart the process.",
+              "_next": "exit_75"
+            },
+            {
+              "_name": "exit_75",
+              "_target": "process_manager_restart",
+              "actor": "SystemD_PM2_Bat",
+              "what": "Process manager restarts the node. New process loads the updated compiled code from dist/. Boot health check runs. Agent system rehydrates from SQLite.",
+              "_next": "process_manager_restart"
+            }
+          ],
+          "summary": "Safe self-restart watchdog detects stale compiled code and exits with code 75 for the process manager (systemd/PM2/start-node.bat) to restart.",
+          "trigger": "BuildCompletion"
+        },
+        {
+          "_type": "flow",
+          "_name": "CouncilBoot",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "_steps": [
+            {
+              "_name": "node_start",
+              "_target": "start_agent_system",
+              "actor": "PandoNode",
+              "what": "PandoNode._start() calls startAgentSystem() in full mode. Creates: AIBackendRegistry (detects Claude + Ollama), AgentDatabase (SQLite), MessageBus, GenomeBridge + GenomeBridgeRegistry, TemplateRegistry, WorkerPool, OrgManager.",
+              "_next": "start_agent_system"
+            },
+            {
+              "_name": "start_agent_system",
+              "_target": "find_or_create_council",
+              "_tags": [
+                "@gotcha(\"Council identity survives restarts. Only created once \u2014 all subsequent boots rehydrate the existing record from SQLite.\")"
+              ],
+              "actor": "PandoNode",
+              "what": "Queries AgentDatabase for existing council orchestrator (role='council', type='orchestrator', status='pending' or 'active'). If found: rehydrate (set status='active'). If not found: OrgManager.createOrchestrator() with role='council', level=0, scope='public', tickInterval=60s, maxWorkers=10.",
+              "_next": "find_or_create_council"
+            },
+            {
+              "_name": "find_or_create_council",
+              "_target": "instantiate",
+              "actor": "PandoNode",
+              "what": "instantiateOrchestrator(councilOrchId) creates the Orchestrator instance. Factory method determines callbacks based on role: council gets onCommit (git commit + governance proposal), onRestart hooks.",
+              "_next": "instantiate"
+            },
+            {
+              "_name": "instantiate",
+              "_target": "start_tick_loop",
+              "actor": "Orchestrator",
+              "what": "orch.start() begins setInterval tick loop (60s for council). First tick gets full boot prompt with instructions. Subsequent ticks get short board-state update. Session rotates every ~50 ticks.",
+              "_next": "start_tick_loop"
+            },
+            {
+              "_name": "start_tick_loop",
+              "_target": "rehydrate_projects",
+              "actor": "PandoNode",
+              "what": "After council boot, PandoNode also rehydrates persistent project orchestrators from DB (status='active' or 'pending'). Each gets its own instantiateOrchestrator() call with project-specific callbacks.",
+              "_next": "rehydrate_projects"
+            }
+          ],
+          "summary": "How the council orchestrator is created and started during node boot. Survives restarts via SQLite persistence.",
+          "trigger": "NodeBoot"
+        },
+        {
+          "_type": "flow",
+          "_name": "WorkerReportFlow",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "_steps": [
+            {
+              "_name": "worker_completes",
+              "_target": "send_report",
+              "actor": "Worker",
+              "what": "Worker calls POST /v1/worker/:id/report with { status:'done'|'error', summary (3000 chars max) }. Auto-report also appends git diff stat. Report stored via messageBus.send() as type='worker_report' to parent orchestrator.",
+              "_next": "send_report"
+            },
+            {
+              "_name": "send_report",
+              "_target": "message_bus",
+              "actor": "MessageBus",
+              "what": "messageBus.send({ type:'worker_report', to: parentOrchId, payload: { status, summary, taskId, auto } }). Message persists in SQLite message_inbox table. Survives restarts.",
+              "_next": "message_bus"
+            },
+            {
+              "_name": "message_bus",
+              "_target": "next_tick",
+              "actor": "Orchestrator",
+              "what": "Next tick: readBoard() categorizes messages. worker_report messages appear in board.workerReports. classify() returns Tier 2 (inbox not empty). AI reads the report in prompt context.",
+              "_next": "next_tick"
+            },
+            {
+              "_name": "next_tick",
+              "_target": "ai_decides",
+              "_tags": [
+                "@gotcha(\"AI has session memory from previous ticks \u2014 it remembers what it asked the worker to do and can evaluate the report in context.\")"
+              ],
+              "actor": "Orchestrator",
+              "what": "AI evaluates the worker report. Decisions vary: builder reports done \u2192 spawn QA tester. QA reports PASS \u2192 commit_code + propose_upgrade. QA reports FAIL \u2192 spawn builder with failure details. Genome-updater reports done \u2192 commit .know changes.",
+              "_next": "ai_decides"
+            },
+            {
+              "_name": "ai_decides",
+              "_target": "execute_actions",
+              "actor": "Orchestrator",
+              "what": "AI returns OrchestratorAction[] (e.g., spawn_worker with tester role, or commit_code). Actions executed in order. The loop continues: builder \u2192 QA \u2192 commit \u2192 upgrade \u2192 next task.",
+              "_next": "execute_actions"
+            }
+          ],
+          "summary": "How worker completion reports flow back to the orchestrator and trigger the next step in the self-sustaining loop.",
+          "trigger": "WorkerCompletion"
         }
       ],
-      "content_hash": "16d631b5"
+      "content_hash": "a81aba5b"
     },
     "genome/knowledge/flows/node-onboarding.know": {
       "mtime": 1772122710.7784405,
@@ -2616,9 +2871,9 @@
       "content_hash": "f457bc4f"
     },
     "packages/gateway/app/chat/page.tsx": {
-      "mtime": 1772225655.8512685,
+      "mtime": 1772289943.367191,
       "nodes": [],
-      "content_hash": "5cb85c02"
+      "content_hash": "87bdff9b"
     },
     "packages/gateway/app/content/page.tsx": {
       "mtime": 1771400157.8528934,
@@ -2821,7 +3076,7 @@
       "content_hash": "6eb69926"
     },
     "packages/gateway/next-env.d.ts": {
-      "mtime": 1771878180.3517861,
+      "mtime": 1772296862.4029045,
       "nodes": [],
       "content_hash": "2a74d390"
     },
@@ -2861,9 +3116,9 @@
       "content_hash": "c5a62be0"
     },
     "packages/node/src/api/api-server.ts": {
-      "mtime": 1772265581.0439806,
+      "mtime": 1772295187.9488206,
       "nodes": [],
-      "content_hash": "a5d9f15b"
+      "content_hash": "bf66284f"
     },
     "packages/node/src/api/context-api.ts": {
       "mtime": 1772264762.3030508,
@@ -2891,7 +3146,7 @@
       "content_hash": "28dd8208"
     },
     "packages/node/src/cli.ts": {
-      "mtime": 1772256103.8843932,
+      "mtime": 1772300209.6348763,
       "nodes": [
         {
           "_type": "entity",
@@ -2916,7 +3171,7 @@
             "SharedCrypto"
           ],
           "file": "packages\\node\\src\\cli.ts:1",
-          "_content_hash": "5c7f9281"
+          "_content_hash": "8d7d4e14"
         },
         {
           "_type": "lesson",
@@ -2929,10 +3184,10 @@
           "severity": "warning",
           "date": "2026-02",
           "file": "packages\\node\\src\\cli.ts:1",
-          "_content_hash": "5c7f9281"
+          "_content_hash": "8d7d4e14"
         }
       ],
-      "content_hash": "5c7f9281"
+      "content_hash": "8d7d4e14"
     },
     "packages/node/src/config.ts": {
       "mtime": 1772136174.3416348,
@@ -2940,9 +3195,9 @@
       "content_hash": "f177cca4"
     },
     "packages/node/src/core/ai-backend-claude.ts": {
-      "mtime": 1772187735.9541261,
+      "mtime": 1772288180.2552366,
       "nodes": [],
-      "content_hash": "2c3c3d7f"
+      "content_hash": "0d2e7308"
     },
     "packages/node/src/core/ai-backend-ollama.ts": {
       "mtime": 1772127664.9263244,
@@ -3015,9 +3270,9 @@
       "content_hash": "23f6666f"
     },
     "packages/node/src/core/upgrade-protocol.ts": {
-      "mtime": 1772261437.8419619,
+      "mtime": 1772294716.7871046,
       "nodes": [],
-      "content_hash": "055173d9"
+      "content_hash": "122b1594"
     },
     "packages/node/src/core/version-protocol.ts": {
       "mtime": 1772127664.935471,
@@ -3030,12 +3285,12 @@
       "content_hash": "fcc1fa1a"
     },
     "packages/node/src/core/worker-pool.ts": {
-      "mtime": 1772272480.861223,
+      "mtime": 1772299662.5847085,
       "nodes": [],
-      "content_hash": "6a9e22e9"
+      "content_hash": "a0425022"
     },
     "packages/node/src/index.ts": {
-      "mtime": 1772276250.7073328,
+      "mtime": 1772293684.1786609,
       "nodes": [
         {
           "_type": "entity",
@@ -3070,10 +3325,10 @@
             "StorageBackend"
           ],
           "file": "packages\\node\\src\\index.ts:1",
-          "_content_hash": "33d29bc6"
+          "_content_hash": "0ebb3d40"
         }
       ],
-      "content_hash": "33d29bc6"
+      "content_hash": "0ebb3d40"
     },
     "packages/node/src/kernel/crash-guard.ts": {
       "mtime": 1772127664.9374683,
@@ -3086,9 +3341,9 @@
       "content_hash": "fb34a75f"
     },
     "packages/node/src/kernel/governance.ts": {
-      "mtime": 1772136174.3456395,
+      "mtime": 1772294289.9436407,
       "nodes": [],
-      "content_hash": "8318c9af"
+      "content_hash": "ade42d40"
     },
     "packages/node/src/kernel/guardrails.ts": {
       "mtime": 1772127664.9405558,
@@ -3096,9 +3351,9 @@
       "content_hash": "124433b6"
     },
     "packages/node/src/kernel/index.ts": {
-      "mtime": 1772127664.9405558,
+      "mtime": 1772300219.2372446,
       "nodes": [],
-      "content_hash": "9d1ad57e"
+      "content_hash": "32e1c859"
     },
     "packages/node/src/kernel/local-environment.ts": {
       "mtime": 1772127664.9415479,
@@ -3209,6 +3464,11 @@
       "nodes": [],
       "content_hash": "3c998f16"
     },
+    "packages/node/src/kernel/startup-health.ts": {
+      "mtime": 1772300144.9249256,
+      "nodes": [],
+      "content_hash": "1ddb404a"
+    },
     "packages/node/src/kernel/sync.ts": {
       "mtime": 1772127664.946547,
       "nodes": [],
@@ -3220,9 +3480,9 @@
       "content_hash": "fea57ec4"
     },
     "packages/node/src/platform/agent-database.ts": {
-      "mtime": 1772264406.3783498,
+      "mtime": 1772299077.8014076,
       "nodes": [],
-      "content_hash": "dddcf44b"
+      "content_hash": "365c886f"
     },
     "packages/node/src/platform/agent-tools.ts": {
       "mtime": 1772216846.500401,
@@ -3300,14 +3560,14 @@
       "content_hash": "6d8b4070"
     },
     "packages/node/src/platform/orchestrator.ts": {
-      "mtime": 1772277236.5460515,
+      "mtime": 1772299140.7944453,
       "nodes": [],
-      "content_hash": "c27600ca"
+      "content_hash": "5101b91f"
     },
     "packages/node/src/platform/org-manager.ts": {
-      "mtime": 1772215867.5819185,
+      "mtime": 1772285210.4756103,
       "nodes": [],
-      "content_hash": "9b7328e1"
+      "content_hash": "ed1f000d"
     },
     "packages/node/src/platform/pipeline-runner.ts": {
       "mtime": 1772127664.9565673,
@@ -3419,9 +3679,9 @@
       "content_hash": "b9164caf"
     },
     "packages/node/src/platform/template-registry.ts": {
-      "mtime": 1772276231.589025,
+      "mtime": 1772285172.1840801,
       "nodes": [],
-      "content_hash": "73acfe57"
+      "content_hash": "8a7d6c87"
     },
     "packages/node/src/platform/thread-store.ts": {
       "mtime": 1772280116.5367045,
@@ -3464,7 +3724,7 @@
       "content_hash": "d89d6925"
     },
     "packages/shared/src/types.ts": {
-      "mtime": 1772254768.1331134,
+      "mtime": 1772285190.4387212,
       "nodes": [
         {
           "_type": "entity",
@@ -3483,7 +3743,7 @@
           "description": "All shared types, interfaces, enums, and constants used across every Pando package \u2014 identity, messages, transactions, governance, agents, capabilities, and economics.",
           "depends_on": [],
           "file": "packages\\shared\\src\\types.ts:1",
-          "_content_hash": "c4ccaa9c"
+          "_content_hash": "a17e7476"
         },
         {
           "_type": "invariant",
@@ -3496,10 +3756,10 @@
           ],
           "severity": "critical",
           "file": "packages\\shared\\src\\types.ts:1",
-          "_content_hash": "c4ccaa9c"
+          "_content_hash": "a17e7476"
         }
       ],
-      "content_hash": "c4ccaa9c"
+      "content_hash": "a17e7476"
     },
     "scripts/launch-nodes.js": {
       "mtime": 1771159401.9941764,

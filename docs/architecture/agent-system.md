@@ -1,3 +1,4 @@
+<!-- STATUS: HISTORICAL DESIGN - superseded by genome/knowledge/flows/*.know -->
 # Agent System Architecture
 
 ## Core Concept

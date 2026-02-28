@@ -160,3 +160,170 @@ concept TemplateRegistry {
   defined_in: "packages/node/src/platform/template-registry.ts"
   used_by: [WorkerPool, PandoNode, PlatformApi]
 }
+
+flow TickLifecycle {
+  summary: "Single orchestrator tick: classify → readBoard → AI or deterministic → execute → markRead → logTick. Tier 1 = deterministic (no AI, ~2ms). Tier 2 = AI judgment (10-300s)."
+  trigger: SetIntervalTick
+
+  step tick_start -> read_board {
+    actor: Orchestrator
+    what: "readBoard() collects current state: inbox messages (categorized into workerReports, healthAlerts, userRequests, peerDisconnects, interruptedWorkers), active directives from SQLite, recently failed workers (last 15min), overdue workers, pending tasks, and worker counts."
+  }
+
+  step read_board -> health_check {
+    actor: Orchestrator
+    what: "runHealthMonitoring(board) — always runs (Tier 1). Checks worker health, peer connectivity. Deterministic, no AI call."
+  }
+
+  step health_check -> classify {
+    actor: Orchestrator
+    what: "classify(board) returns 1 or 2. Tier 1 when: (a) non-overdue workers active AND inbox empty (let them work), or (b) inbox empty, no directives, not a reflection tick. Tier 2 when: directives exist, reflection tick (every 5th), recently failed/overdue workers, or inbox has messages."
+    @gotcha("Issue 6 guard: active non-overdue workers + empty inbox = Tier 1. Prevents burning Opus tokens while workers are busy.")
+  }
+
+  step classify -> decide {
+    actor: Orchestrator
+    what: "Tier 1: deterministic(board) returns actions directly (route results, ack alerts). Tier 2: callAI() sends boot prompt (first tick) or tick update (subsequent ticks) to session-persistent Opus brain. AI returns OrchestratorAction[] via 3-layer JSON parser."
+    @gotcha("Tier 1 ticks use ZERO AI tokens. Idle ticks = zero cost.")
+  }
+
+  step decide -> execute {
+    actor: Orchestrator
+    what: "Execute OrchestratorAction[] array. 13 action types: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy, respond_to_user, run_scenarios."
+  }
+
+  step execute -> mark_read {
+    actor: Orchestrator
+    what: "messageBus.markRead(allMessageIds) — only if aiError is null. On AI failure, messages are preserved unread for retry on next tick. Agent lastReportAt updated."
+    @gotcha("markRead guard: if AI call fails, messages stay unread so nothing is lost. Next tick retries.")
+  }
+
+  step mark_read -> log_tick {
+    actor: Orchestrator
+    what: "db.logTick() records: orchestratorId, tickNumber, tier, boardSnapshot (JSON), actionsExecuted (JSON), aiError if any. Every tick is logged for auditability."
+  }
+}
+
+flow DirectiveFlow {
+  summary: "Directives are standing orders injected into the orchestrator's AI prompt. They persist in SQLite until explicitly deactivated after processing."
+  trigger: HumanDirective
+
+  step post_directive -> store_sqlite {
+    actor: PlatformApi
+    what: "POST /v1/council/directive receives { content } from operator. Inserts into SQLite directives table with active=1, target_id=councilOrchId, addedBy='operator'."
+  }
+
+  step store_sqlite -> read_in_tick {
+    actor: Orchestrator
+    what: "readBoard().getDirectives() queries SQLite: SELECT * FROM directives WHERE active=1 AND (target_id=? OR target_id IS NULL). Returns as board.directives string array."
+  }
+
+  step read_in_tick -> classify_tier2 {
+    actor: Orchestrator
+    what: "classify() checks board.directives.length > 0 — if directives exist, returns Tier 2 (needs AI judgment). Directives always trigger AI thinking."
+    @gotcha("Exception: if non-overdue workers are active AND inbox is empty, stays Tier 1 even with directives — avoids burning tokens while workers are busy.")
+  }
+
+  step classify_tier2 -> ai_sees_directives {
+    actor: Orchestrator
+    what: "AI prompt includes '## Directives' section listing all active directive strings. AI decides actions based on directive content."
+  }
+
+  step ai_sees_directives -> deactivate {
+    actor: AgentTools
+    what: "After orchestrator processes directives, deactivateDirective(id) sets active=0. GET /council/directives shows current active directives."
+  }
+}
+
+flow SelfRestartProtocol {
+  summary: "Safe self-restart watchdog detects stale compiled code and exits with code 75 for the process manager (systemd/PM2/start-node.bat) to restart."
+  trigger: BuildCompletion
+
+  step build_writes_stamp -> watchdog_check {
+    actor: BuildScript
+    what: "npm run build writes .build-commit file (git commit hash) to packages/node/dist/.build-commit and dist/.build-commit. This stamps which commit the compiled code corresponds to."
+  }
+
+  step watchdog_check -> compare_commits {
+    actor: PandoNode
+    what: "Watchdog runs every 5 minutes (setInterval, .unref()). Re-reads .build-commit from disk each cycle (upgrade catch-up may have rebuilt). Compares against git rev-parse HEAD."
+  }
+
+  step compare_commits -> check_workers {
+    actor: PandoNode
+    what: "If .build-commit !== HEAD, checks workerPool.getActiveWorkerCount(). If workers > 0, logs 'deferring restart' and waits for next cycle. Active workers are never interrupted."
+    @gotcha("Restart is deferred while workers are active — never kills in-flight work.")
+  }
+
+  step check_workers -> exit_75 {
+    actor: PandoNode
+    what: "If .build-commit !== HEAD AND 0 active workers: process.exit(75). Exit code 75 is the RESTART_EXIT_CODE convention. start-node.bat (Windows) and systemd/PM2 (Linux) detect this code and restart the process."
+  }
+
+  step exit_75 -> process_manager_restart {
+    actor: SystemD_PM2_Bat
+    what: "Process manager restarts the node. New process loads the updated compiled code from dist/. Boot health check runs. Agent system rehydrates from SQLite."
+  }
+}
+
+flow CouncilBoot {
+  summary: "How the council orchestrator is created and started during node boot. Survives restarts via SQLite persistence."
+  trigger: NodeBoot
+
+  step node_start -> start_agent_system {
+    actor: PandoNode
+    what: "PandoNode._start() calls startAgentSystem() in full mode. Creates: AIBackendRegistry (detects Claude + Ollama), AgentDatabase (SQLite), MessageBus, GenomeBridge + GenomeBridgeRegistry, TemplateRegistry, WorkerPool, OrgManager."
+  }
+
+  step start_agent_system -> find_or_create_council {
+    actor: PandoNode
+    what: "Queries AgentDatabase for existing council orchestrator (role='council', type='orchestrator', status='pending' or 'active'). If found: rehydrate (set status='active'). If not found: OrgManager.createOrchestrator() with role='council', level=0, scope='public', tickInterval=60s, maxWorkers=10."
+    @gotcha("Council identity survives restarts. Only created once — all subsequent boots rehydrate the existing record from SQLite.")
+  }
+
+  step find_or_create_council -> instantiate {
+    actor: PandoNode
+    what: "instantiateOrchestrator(councilOrchId) creates the Orchestrator instance. Factory method determines callbacks based on role: council gets onCommit (git commit + governance proposal), onRestart hooks."
+  }
+
+  step instantiate -> start_tick_loop {
+    actor: Orchestrator
+    what: "orch.start() begins setInterval tick loop (60s for council). First tick gets full boot prompt with instructions. Subsequent ticks get short board-state update. Session rotates every ~50 ticks."
+  }
+
+  step start_tick_loop -> rehydrate_projects {
+    actor: PandoNode
+    what: "After council boot, PandoNode also rehydrates persistent project orchestrators from DB (status='active' or 'pending'). Each gets its own instantiateOrchestrator() call with project-specific callbacks."
+  }
+}
+
+flow WorkerReportFlow {
+  summary: "How worker completion reports flow back to the orchestrator and trigger the next step in the self-sustaining loop."
+  trigger: WorkerCompletion
+
+  step worker_completes -> send_report {
+    actor: Worker
+    what: "Worker calls POST /v1/worker/:id/report with { status:'done'|'error', summary (3000 chars max) }. Auto-report also appends git diff stat. Report stored via messageBus.send() as type='worker_report' to parent orchestrator."
+  }
+
+  step send_report -> message_bus {
+    actor: MessageBus
+    what: "messageBus.send({ type:'worker_report', to: parentOrchId, payload: { status, summary, taskId, auto } }). Message persists in SQLite message_inbox table. Survives restarts."
+  }
+
+  step message_bus -> next_tick {
+    actor: Orchestrator
+    what: "Next tick: readBoard() categorizes messages. worker_report messages appear in board.workerReports. classify() returns Tier 2 (inbox not empty). AI reads the report in prompt context."
+  }
+
+  step next_tick -> ai_decides {
+    actor: Orchestrator
+    what: "AI evaluates the worker report. Decisions vary: builder reports done → spawn QA tester. QA reports PASS → commit_code + propose_upgrade. QA reports FAIL → spawn builder with failure details. Genome-updater reports done → commit .know changes."
+    @gotcha("AI has session memory from previous ticks — it remembers what it asked the worker to do and can evaluate the report in context.")
+  }
+
+  step ai_decides -> execute_actions {
+    actor: Orchestrator
+    what: "AI returns OrchestratorAction[] (e.g., spawn_worker with tester role, or commit_code). Actions executed in order. The loop continues: builder → QA → commit → upgrade → next task."
+  }
+}

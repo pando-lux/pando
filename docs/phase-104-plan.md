@@ -1,3 +1,4 @@
+<!-- STATUS: HISTORICAL DESIGN - superseded by genome/knowledge/flows/*.know -->
 # Phase 104: Universal Project Pipeline
 
 ## The Core Idea

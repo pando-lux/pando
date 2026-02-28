@@ -1,3 +1,4 @@
+<!-- STATUS: HISTORICAL DESIGN - superseded by genome/knowledge/flows/*.know -->
 # Brainstorm: Persistent Session Orchestrator (2026-02-28)
 
 **STATUS: IMPLEMENTED** — See orchestrator.ts, template-registry.ts (`builtin:manager`), ai-backend-claude.ts.
