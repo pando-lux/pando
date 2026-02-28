@@ -25,9 +25,12 @@ const PROXY_TIMEOUT_MS = 15_000;
 const MAX_ATTEMPTS = 3;
 const PEER_WAIT_TIMEOUT_MS = 30_000;  // Wait up to 30s for compute peers on first call
 const PEER_POLL_INTERVAL_MS = 1_000;  // Poll every 1s
+const UNHEALTHY_TTL_MS = 2 * 60 * 1_000;  // 2 minutes
 
 export class P2PStorageBackend implements StorageBackend {
   private preferredPeerId: string | null = null;
+  /** Peers that recently failed — skip until TTL expires */
+  private unhealthyPeers = new Map<string, number>();  // peerId → expiryTimestamp
 
   constructor(
     private requestReply: RequestReplyManager,
@@ -92,12 +95,14 @@ export class P2PStorageBackend implements StorageBackend {
       console.log(`[P2PStorageBackend] Found ${computePeers.length} compute peer(s) after waiting`);
     }
 
-    // Try preferred peer first (sticky affinity), then others
+    // Try preferred peer first (sticky affinity), then others — skipping unhealthy peers
     const ordered = this.orderPeers(computePeers);
+    const healthy = ordered.filter(p => !this.isUnhealthy(p));
+    const candidates = healthy.length > 0 ? healthy : ordered;  // Fall back to all peers if all are marked unhealthy
     let lastError: Error | null = null;
 
-    for (let i = 0; i < Math.min(MAX_ATTEMPTS, ordered.length); i++) {
-      const peerId = ordered[i];
+    for (let i = 0; i < Math.min(MAX_ATTEMPTS, candidates.length); i++) {
+      const peerId = candidates[i];
       try {
         const reply = await this.requestReply.request(
           peerId,
@@ -116,15 +121,27 @@ export class P2PStorageBackend implements StorageBackend {
         return payload?.result;
       } catch (err) {
         lastError = err as Error;
+        // Mark peer unhealthy for 2 minutes so we skip it on next calls
+        this.unhealthyPeers.set(peerId, Date.now() + UNHEALTHY_TTL_MS);
         // Clear affinity on failure so we try a different peer next
         if (this.preferredPeerId === peerId) {
           this.preferredPeerId = null;
         }
-        console.log(`[P2PStorageBackend] ${method} failed on ${peerId.slice(0, 12)}: ${(err as Error).message}`);
+        console.log(`[P2PStorageBackend] ${method} failed on ${peerId.slice(0, 12)}: ${(err as Error).message} — marked unhealthy for 2min`);
       }
     }
 
     throw lastError || new Error('[P2PStorageBackend] All compute peers failed');
+  }
+
+  private isUnhealthy(peerId: string): boolean {
+    const expiry = this.unhealthyPeers.get(peerId);
+    if (expiry === undefined) return false;
+    if (Date.now() > expiry) {
+      this.unhealthyPeers.delete(peerId);  // TTL expired — remove and treat as healthy
+      return false;
+    }
+    return true;
   }
 
   private getComputePeers(): string[] {

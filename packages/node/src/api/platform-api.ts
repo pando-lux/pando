@@ -192,7 +192,12 @@ export async function registerPlatformRoutes(
 
       // Route to project orchestrator
       if (newProjectId) {
-        await sendToOrchestrator(newProjectId, trimmed, { threadId, projectId: newProjectId });
+        try {
+          await sendToOrchestrator(newProjectId, trimmed, { threadId, projectId: newProjectId });
+        } catch (orchErr) {
+          console.error('[chat] sendToOrchestrator failed:', (orchErr as Error).message);
+          return reply.code(503).send({ error: 'Orchestrator unavailable, please try again', code: 'ORCHESTRATOR_UNAVAILABLE' });
+        }
       }
 
       // Return instant feedback — user knows something is happening
