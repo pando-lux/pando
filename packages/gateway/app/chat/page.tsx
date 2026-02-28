@@ -455,28 +455,32 @@ function ChatPage() {
           try {
             const userPrivKey = cryptoMod.getPrivateKey(user.peerId);
             if (userPrivKey) {
-              const threadKey = cryptoMod.generateThreadKey();
               const padB64 = (s: string) => s + '='.repeat((4 - (s.length % 4)) % 4);
               const userPublicKeyBytes = Uint8Array.from(atob(padB64(user.publicKey)), c => c.charCodeAt(0));
 
-              // Encrypt the thread key for the user (for recovery on other devices via localStorage)
-              const encKeyForUser = await cryptoMod.encryptThreadKey(threadKey, userPrivKey, userPublicKeyBytes);
+              // Validate public key is 32 bytes (Ed25519) before attempting ECDH
+              if (userPublicKeyBytes.length === 32) {
+                const threadKey = cryptoMod.generateThreadKey();
 
-              // Phase 41.5: Only store user's key + sender public key. No node key.
-              createBody.encryptionKeys = {
-                [user.peerId]: encKeyForUser,
-                // Store sender's public key so the node can derive the X25519 shared secret
-                _senderPublicKey: user.publicKey,  // base64 encoded Ed25519 public key of the sender
-              };
+                // Encrypt the thread key for the user (for recovery on other devices via localStorage)
+                const encKeyForUser = await cryptoMod.encryptThreadKey(threadKey, userPrivKey, userPublicKeyBytes);
 
-              // Store thread key locally (will be associated once we know the threadId)
-              // We'll store it after we get the threadId back
-              (createBody as any)._localThreadKey = threadKey;
+                // Phase 41.5: Only store user's key + sender public key. No node key.
+                createBody.encryptionKeys = {
+                  [user.peerId]: encKeyForUser,
+                  // Store sender's public key so the node can derive the X25519 shared secret
+                  _senderPublicKey: user.publicKey,  // base64 encoded Ed25519 public key of the sender
+                };
+
+                // Store thread key locally (will be associated once we know the threadId)
+                // We'll store it after we get the threadId back
+                (createBody as any)._localThreadKey = threadKey;
+              }
+              // else: skip encryption — public key is empty or invalid, proceed unencrypted
             }
           } catch (err: any) {
-            console.error("Thread encryption setup failed:", err?.message);
-            setError("Failed to set up encrypted thread. Please refresh and try again.");
-            return;
+            // Non-fatal: fall through to unencrypted thread creation
+            console.warn("Thread encryption setup failed, proceeding unencrypted:", err?.message);
           }
         }
 
@@ -534,9 +538,12 @@ function ChatPage() {
           if (userPrivKey) {
             const padB64 = (s: string) => s + '='.repeat((4 - (s.length % 4)) % 4);
             const nodePublicKeyBytes = Uint8Array.from(atob(padB64(nodePublicKey)), c => c.charCodeAt(0));
-            body.encryptedThreadKey = await cryptoMod.encryptThreadKeyForNode(
-              threadKey, userPrivKey, nodePublicKeyBytes
-            );
+            // Validate node public key is 32 bytes (Ed25519) before attempting ECDH
+            if (nodePublicKeyBytes.length === 32) {
+              body.encryptedThreadKey = await cryptoMod.encryptThreadKeyForNode(
+                threadKey, userPrivKey, nodePublicKeyBytes
+              );
+            }
           }
         }
       } else {
