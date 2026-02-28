@@ -70,21 +70,21 @@ packages/node/src/
 
 ## Agent Architecture (LIVE — E2E verified 2026-02-27)
 
-Design: "Thin Agent, Thick Orchestrator" — deterministic tick loop that calls AI only when needed.
+Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. First tick = boot prompt with full instructions. Subsequent ticks = short board-state update. Session rotates every ~50 ticks.
 
 ### The Self-Sustaining Loop (verified end-to-end)
 
 ```
 1. User request → MessageBus → Orchestrator inbox
-2. Orchestrator tick (60s) → Tier 2 → AI call (short, stateless, no file access)
-3. AI returns action: spawn_worker(role=builder, rolePrompt="...")
+2. Orchestrator tick (60s) → Tier 2 → session-persistent AI call (boot prompt on first tick, tick update on subsequent)
+3. AI investigates if needed (CAN read files, MUST NOT write code), returns action array
 4. WorkerPool spawns Claude Code worker in project root
-5. Builder reads/writes code, runs build, reports done via HTTP
-6. Next tick → Tier 1 (deterministic): builder done → spawn QA tester
+5. Builder reads/writes code, runs build, reports done via HTTP (3000-char reports + git diff)
+6. Next tick → AI reads builder report (remembers context from previous ticks), decides next step
 7. QA tester independently verifies → reports PASS/FAIL
-8. Next tick → Tier 1 (deterministic):
+8. Next tick → AI decides:
    - PASS → git commit + push + governance upgrade proposal (10 Lux stake)
-   - FAIL → escalate to AI on next Tier 2 tick
+   - FAIL → spawn builder with failure details
 9. Governance auto-approves (≤8 peers in dev) → broadcast via GossipSub
 10. All nodes: git pull → build → restart (systemd/PM2)
 ```
@@ -96,11 +96,11 @@ Design: "Thin Agent, Thick Orchestrator" — deterministic tick loop that calls 
 | Component | File | Purpose |
 |---|---|---|
 | **AgentDatabase** | `platform/agent-database.ts` | SQLite storage for agents, messages, lessons, reflections, tick logs. Single source of truth. |
-| **Orchestrator** | `platform/orchestrator.ts` | Deterministic tick loop. Tier 1 (deterministic) or Tier 2 (AI judgment). Same class at every hierarchy level. |
+| **Orchestrator** | `platform/orchestrator.ts` | Deterministic tick loop with session-persistent AI brain. Tier 1 (deterministic) or Tier 2 (Opus with tools). Session rotates every ~50 ticks. Same class at every hierarchy level. |
 | **WorkerPool** | `core/worker-pool.ts` | Spawn/resume Claude Code workers. Workers persist sessions — resumed for related tasks, rotated when domain changes. |
 | **MessageBus** | `core/message-bus.ts` | SQLite-backed persistent message routing. Priority, type-based, sender validation. |
 | **OrgManager** | `platform/org-manager.ts` | Hierarchy: create/dissolve orchestrators, route messages, authority inheritance. |
-| **AIBackendRegistry** | `core/ai-backend-registry.ts` | Pluggable AI backends. ClaudeBackend has `noTools` mode for orchestrator brain (no file access). |
+| **AIBackendRegistry** | `core/ai-backend-registry.ts` | Pluggable AI backends. Default model: `claude-opus-4-6`. |
 | **GenomeBridge** | `platform/genome-bridge.ts` | Reads compiled genome knowledge graph (`output/graph.json`). Provides `contextForTask()` — architecture context injected into worker boot prompts and council AI prompts. |
 | **ScenarioRunner** | `platform/scenario-runner.ts` | Reads test scenarios from genome graph. Executes API regression tests via fetch. Wired into self-sustaining loop after upgrade. |
 
@@ -122,7 +122,7 @@ Claude Code is a **contributed resource**, not a node requirement. Most nodes wo
 **ALL workers are persistent team members** — builders, testers, reviewers, researchers, devops. Every role resumes when possible. On first spawn: fresh session. On every subsequent spawn for the same role + orchestrator: `--continue --resume <sessionId>`. Session IDs are saved to SQLite. Resumed workers get a short task prompt (they already know the codebase). Fresh workers get full boot prompt context. Workers are only fresh when no prior session exists for that role. Lessons extracted from each session also accumulate in SQLite and get injected into future workers as a safety net.
 
 ### Key principle
-**State lives in SQLite, not in AI conversation.** Orchestrators are deterministic code (setInterval) that call AI in short bursts. Every tick is logged. Lessons and worker sessions persist across runs.
+**State lives in SQLite, AI brain lives in session.** Orchestrators are deterministic code (setInterval) that resume a persistent Claude Code session each tick. The session provides memory across ticks; SQLite provides ground truth. Sessions rotate every ~50 ticks. Every tick is logged. Lessons, worker sessions, and orchestrator sessions persist across runs.
 
 ## How to Build and Run
 
@@ -227,7 +227,7 @@ Key endpoints:
 | Ledger | SQLite via better-sqlite3 |
 | HTTP API | Fastify |
 | Gateway | Next.js 16 + Tailwind |
-| Agent Runtime | Claude Code via `claude -p` (child_process spawn) |
+| Agent Runtime | Claude Code (Opus) via `claude -p` (child_process spawn) |
 | AI Search | OpenAI/Gemini via ResourceRegistry + CredentialStore |
 
 ## Token Economics
