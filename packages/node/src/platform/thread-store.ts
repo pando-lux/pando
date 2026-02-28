@@ -161,9 +161,15 @@ export class ThreadStore {
     } catch (err: any) {
       console.error(`[threads] Backend update meta failed: ${err.message}`);
     }
-    // Atomic push — no read-modify-write race
+    // Read-modify-write for messages. pushToArray via P2P was unreliable:
+    // (a) split-brain: write to EC2-1, read from EC2-2 (separate MongoDB instances)
+    // (b) $push fails if document has a non-array messages field (old schema remnants)
+    // putRecord ($set) is proven to work and handles both cases correctly.
     try {
-      await this.backend.pushToArray('messages', threadId, 'messages', message);
+      const existing = await this.backend.getRecord('messages', threadId);
+      const messages = Array.isArray(existing?.messages) ? existing.messages as ThreadMessage[] : [];
+      messages.push(message);
+      await this.backend.putRecord('messages', threadId, { messages });
     } catch (err: any) {
       console.error(`[threads] Backend addMessage failed: ${err.message}`);
     }
