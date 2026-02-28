@@ -6,6 +6,7 @@ import { FileLogger } from './logger.js';
 const RESTART_EXIT_CODE = 75;
 import { checkAndRecordStartup, markStable, getStabilityDelay } from './kernel/crash-guard.js';
 import { readRestartReason, clearRestartReason } from './kernel/restart-reason.js';
+import { analyzeStartupHealth, resetCircuitBreaker } from './kernel/startup-health.js';
 import { QaRunner } from './platform/qa-runner.js';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -160,6 +161,14 @@ async function main() {
   if (crashCheck.crashLoop && !crashCheck.rolledBack) {
     console.error('[cli] CRASH LOOP: No backup available. Manual intervention required.');
     // Continue anyway — maybe the crash was transient
+  }
+
+  // Issue 9: Startup health analysis — crash patterns, circuit breaker
+  const healthReport = analyzeStartupHealth(dataDir0);
+  if (healthReport.halted) {
+    console.error('[cli] HALTED: Circuit breaker tripped. Too many consecutive failures.');
+    console.error('[cli] Delete ~/.pando/circuit-breaker.json to reset, then restart manually.');
+    process.exit(1);
   }
 
   // --port <n> (P2P listen port)
@@ -417,6 +426,30 @@ async function main() {
     node.startMonitor();
   }
 
+  // Issue 9: Forward startup health patterns as health_alert messages to council
+  if (healthReport.patterns.length > 0) {
+    const msgBus = node.getMessageBus();
+    if (msgBus) {
+      for (const pattern of healthReport.patterns) {
+        try {
+          msgBus.send({
+            recipientId: 'council',
+            senderId: 'startup-health',
+            senderType: 'system',
+            type: 'health_alert',
+            payload: {
+              severity: pattern.startsWith('circuit_breaker') ? 'critical' : 'warning',
+              message: `Startup health: ${pattern}`,
+              alertType: 'startup_pattern',
+            },
+            priority: 0,
+          });
+        } catch { /* best-effort — orchestrator may not exist yet */ }
+      }
+      console.log(`[cli] Sent ${healthReport.patterns.length} startup health alert(s) to council`);
+    }
+  }
+
   // Post-deploy health check: detect restart-reason file and verify system health
   const restartReason = readRestartReason(dataDir);
   if (restartReason) {
@@ -489,6 +522,7 @@ async function main() {
   // Phase 15.5: Mark node as stable after 30s of successful uptime
   setTimeout(() => {
     markStable(dataDir);
+    resetCircuitBreaker(dataDir);  // Issue 9: Reset circuit breaker on stable uptime
   }, getStabilityDelay());
 
   // Heartbeat + status report every 30 seconds

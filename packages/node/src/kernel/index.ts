@@ -35,3 +35,6 @@ export { checkAndRecordStartup, markStable, getStabilityDelay } from './crash-gu
 
 export { writeRestartReason, readRestartReason, clearRestartReason } from './restart-reason.js';
 export type { RestartReason } from './restart-reason.js';
+
+export { analyzeStartupHealth, resetCircuitBreaker } from './startup-health.js';
+export type { StartupHealthReport } from './startup-health.js';
