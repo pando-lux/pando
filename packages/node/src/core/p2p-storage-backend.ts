@@ -21,7 +21,7 @@ interface CapabilityRegistryLike {
   getAllProfiles(): import('@pando/shared').CapabilityProfile[];
 }
 
-const PROXY_TIMEOUT_MS = 15_000;
+const PROXY_TIMEOUT_MS = 5_000;
 const MAX_ATTEMPTS = 3;
 const PEER_WAIT_TIMEOUT_MS = 30_000;  // Wait up to 30s for compute peers on first call
 const PEER_POLL_INTERVAL_MS = 1_000;  // Poll every 1s

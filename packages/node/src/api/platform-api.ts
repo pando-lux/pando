@@ -226,11 +226,11 @@ export async function registerPlatformRoutes(
     fastify.get('/chat/history', async (request: any) => {
       const threadStore = node.getThreadStore();
       if (!threadStore) return { messages: [] };
-      const threads = threadStore.listThreads();
+      const threads = await threadStore.listThreadsAsync();
       // threads are sorted by updatedAt desc
       if (threads.length > 0) {
         const latest = threads[0];
-        const msgs = threadStore.getMessages(latest.id);
+        const msgs = await threadStore.getMessagesAsync(latest.id);
         return { messages: msgs, threadId: latest.id };
       }
       return { messages: [] };
