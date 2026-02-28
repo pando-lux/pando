@@ -707,6 +707,55 @@
       ],
       "content_hash": "4116f31a"
     },
+    "genome/knowledge/patterns/p2p-storage-array-writes.know": {
+      "mtime": 1772281149.5099373,
+      "nodes": [
+        {
+          "_type": "concept",
+          "_name": "P2PStorageArrayWriteReliability",
+          "_source": "genome\\knowledge\\patterns\\p2p-storage-array-writes.know",
+          "_tags": [
+            "@gotcha(\"pushToArray fails SILENTLY via P2P proxy \u2014 no error, no log, no thrown exception. The only symptom is the array staying empty while the document's scalar counters increment. Always test on an untrusted (non-direct-MongoDB) node.\")",
+            "@gotcha(\"The split-brain manifests as: thread.messageCount grows (putRecord succeeds), but thread.messages[] is always [] (pushToArray silently discarded). Looks like an async race condition \u2014 it is not. The async fix (d719e757) was correct but insufficient.\")"
+          ],
+          "description": "ARCHITECTURAL GOTCHA (confirmed 2026-02-28, commit 7ce9a282): storageBackend.pushToArray() ($push operator) FAILS SILENTLY when routed through the P2P storage proxy. The proxy returns HTTP 200 success but the write never reaches the underlying MongoDB collection. This causes array fields to stay empty while scalar fields (e.g. messageCount) increment correctly \u2014 a split-brain symptom. ONLY safe to use pushToArray on trusted nodes with a direct PANDO_STORAGE_URL connection. For all other paths, use the read-modify-write pattern: getRecord() \u2192 mutate array in memory \u2192 putRecord() with $set.",
+          "defined_in": "packages/node/src/platform/thread-store.ts",
+          "used_by": [
+            "StorageBackend",
+            "ThreadStore"
+          ]
+        },
+        {
+          "_type": "decision",
+          "_name": "P2P_ARRAY_WRITE_READ_MODIFY_WRITE",
+          "_source": "genome\\knowledge\\patterns\\p2p-storage-array-writes.know",
+          "context": "thread-store.ts addMessage() used storageBackend.pushToArray($push) to append messages. On nodes without PANDO_STORAGE_URL (P2P proxy path), pushToArray returned success but the $push never reached MongoDB. getMessagesAsync() returned [] despite messageCount incrementing. Root cause surfaced in commit 7ce9a282 after ruling out async race conditions (d719e757) and schema mismatches.",
+          "choice": "Replace ALL pushToArray calls in the P2P-proxied code path with a read-modify-write pattern: (1) getRecord() to fetch the full document, (2) append to the target array in memory (document.field = [...(document.field || []), newItem]), (3) putRecord() with $set to write the full document back. This is the reliable pattern for P2P proxy nodes.",
+          "why": "The P2P storage proxy translates putRecord($set) correctly but does not support the MongoDB $push operator. pushToArray is only safe with a direct MongoDB connection (PANDO_STORAGE_URL set on trusted nodes). Using read-modify-write with $set works through the proxy because it is a simple document replacement, not an operator. Any future array append operations in P2P-proxied collections must follow this pattern.",
+          "date": "2026-02-28",
+          "affected_files": [
+            "packages/node/src/platform/thread-store.ts"
+          ],
+          "confirmed_fix_commit": "7ce9a282"
+        },
+        {
+          "_type": "concept",
+          "_name": "StorageProxyLimitations",
+          "_source": "genome\\knowledge\\patterns\\p2p-storage-array-writes.know",
+          "_tags": [
+            "@gotcha(\"This is a proxy capability gap, not a MongoDB limitation. Direct-connection nodes (EC2-1, EC2-2 with PANDO_STORAGE_URL set) work fine with pushToArray. The bug only surfaces on user nodes or untrusted relays routing through the P2P proxy.\")"
+          ],
+          "description": "The P2P storage proxy (request-reply.ts routing to a trusted peer's StorageBackend) supports a subset of MongoDB operations. Confirmed WORKING via proxy: putRecord($set, upsert), getRecord, deleteRecord, listRecords. Confirmed BROKEN via proxy: pushToArray($push) \u2014 silently discarded. Any code calling pushToArray must assume it will fail on non-trusted-compute nodes. If P2P array writes are needed in the future, the proxy handler must be extended to support $push translation.",
+          "defined_in": "packages/node/src/core/storage-backend.ts",
+          "used_by": [
+            "ThreadStore",
+            "ProjectStore",
+            "CredentialStore"
+          ]
+        }
+      ],
+      "content_hash": "6ebaebf2"
+    },
     "genome/knowledge/scenarios/layer0-kernel.know": {
       "mtime": 1772205733.6904638,
       "nodes": [
@@ -2162,9 +2211,9 @@
       "content_hash": "5fd71f8b"
     },
     "packages/gateway/app/api/chat/history/route.ts": {
-      "mtime": 1772055135.6148632,
+      "mtime": 1772281073.855678,
       "nodes": [],
-      "content_hash": "699fcd07"
+      "content_hash": "7d8504fc"
     },
     "packages/gateway/app/api/chat/message/route.ts": {
       "mtime": 1772078659.3449883,
@@ -2837,9 +2886,9 @@
       "content_hash": "b6386d5e"
     },
     "packages/node/src/api/platform-api.ts": {
-      "mtime": 1772269708.202024,
+      "mtime": 1772278636.07714,
       "nodes": [],
-      "content_hash": "3e1ffc6d"
+      "content_hash": "28dd8208"
     },
     "packages/node/src/cli.ts": {
       "mtime": 1772256103.8843932,
@@ -2946,9 +2995,9 @@
       "content_hash": "e761e560"
     },
     "packages/node/src/core/p2p-storage-backend.ts": {
-      "mtime": 1772127664.9324727,
+      "mtime": 1772275909.6869864,
       "nodes": [],
-      "content_hash": "b2688d33"
+      "content_hash": "9065ab97"
     },
     "packages/node/src/core/payment-gate.ts": {
       "mtime": 1772127664.9334714,
@@ -2981,12 +3030,12 @@
       "content_hash": "fcc1fa1a"
     },
     "packages/node/src/core/worker-pool.ts": {
-      "mtime": 1772265566.6915524,
+      "mtime": 1772272480.861223,
       "nodes": [],
-      "content_hash": "629dedbf"
+      "content_hash": "6a9e22e9"
     },
     "packages/node/src/index.ts": {
-      "mtime": 1772266159.6515317,
+      "mtime": 1772276250.7073328,
       "nodes": [
         {
           "_type": "entity",
@@ -3021,10 +3070,10 @@
             "StorageBackend"
           ],
           "file": "packages\\node\\src\\index.ts:1",
-          "_content_hash": "7f654fe4"
+          "_content_hash": "33d29bc6"
         }
       ],
-      "content_hash": "7f654fe4"
+      "content_hash": "33d29bc6"
     },
     "packages/node/src/kernel/crash-guard.ts": {
       "mtime": 1772127664.9374683,
@@ -3251,9 +3300,9 @@
       "content_hash": "6d8b4070"
     },
     "packages/node/src/platform/orchestrator.ts": {
-      "mtime": 1772269675.1127105,
+      "mtime": 1772277236.5460515,
       "nodes": [],
-      "content_hash": "f91bfa36"
+      "content_hash": "c27600ca"
     },
     "packages/node/src/platform/org-manager.ts": {
       "mtime": 1772215867.5819185,
@@ -3370,14 +3419,14 @@
       "content_hash": "b9164caf"
     },
     "packages/node/src/platform/template-registry.ts": {
-      "mtime": 1772264868.2870893,
+      "mtime": 1772276231.589025,
       "nodes": [],
-      "content_hash": "9cb972e0"
+      "content_hash": "73acfe57"
     },
     "packages/node/src/platform/thread-store.ts": {
-      "mtime": 1772127664.9670794,
+      "mtime": 1772280116.5367045,
       "nodes": [],
-      "content_hash": "d65767ed"
+      "content_hash": "cc1ea28c"
     },
     "packages/node/src/platform/user-accounts.ts": {
       "mtime": 1772127664.9670794,

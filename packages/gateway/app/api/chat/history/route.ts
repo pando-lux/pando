@@ -8,6 +8,11 @@ export async function GET(request: NextRequest) {
     if (token) {
       headers["Authorization"] = `Bearer ${token}`;
     }
+    // Forward user token so the node can scope history to the authenticated user
+    const userToken = request.headers.get("X-User-Token");
+    if (userToken) {
+      headers["X-User-Token"] = userToken;
+    }
 
     // Forward projectId query param if present
     const projectId = request.nextUrl.searchParams.get("projectId");
