@@ -201,9 +201,9 @@ export class WorkerPool {
       console.log(`[WorkerPool] Creating fresh ${config.role} worker ${workerId}`);
     }
 
-    // Assemble context and write CLAUDE.md
+    // Assemble context — write to .pando-worker-context.md to avoid overwriting project CLAUDE.md
     const claudeMd = this.assembleContext(agent);
-    writeFileSync(join(workspaceDir, 'CLAUDE.md'), claudeMd);
+    writeFileSync(join(workspaceDir, '.pando-worker-context.md'), claudeMd);
 
     // Get AI backend
     const backend = this.aiRegistry.getBest('code-execution');
