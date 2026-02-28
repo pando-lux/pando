@@ -473,6 +473,17 @@ export class PandoNode {
 
     // Initialize SecurityMonitor — anomaly detection + quarantine system
     const dataDir = this.config.dataDir || join(homedir(), '.pando');
+
+    // Write running-commit.txt so the orchestrator's safe-restart guard can
+    // detect when a newer build is ready and the node is idle.
+    try {
+      const headCommit = (execSync('git rev-parse HEAD', {
+        cwd: process.cwd(), encoding: 'utf-8', timeout: 5000, stdio: 'pipe',
+      }) as string).trim();
+      writeFileSync(join(dataDir, 'running-commit.txt'), headCommit);
+      console.log(`[node] Running commit: ${headCommit.slice(0, 8)}`);
+    } catch { /* git unavailable — skip silently */ }
+
     this.securityMonitor = new SecurityMonitor(dataDir, this.identity.peerId);
     this.securityMonitor.setNetwork(this.network);
     this.securityMonitor.setLedger(this.ledger);
@@ -3055,6 +3066,7 @@ location /apps/${projectId}/ {
       threadStore: this.threadStore || undefined,
       apiPort: this.config.apiPort,
       dataDir: this.config.dataDir || join(homedir(), '.pando'),
+      repoDir: process.cwd(),
       onCommit,
       onPropose,
     });

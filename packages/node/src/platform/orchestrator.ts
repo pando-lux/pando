@@ -21,6 +21,9 @@
  *   - Same class at all levels. Only the config and rolePrompt differ.
  */
 
+import { execSync } from 'node:child_process';
+import { readFileSync, existsSync } from 'node:fs';
+import { join } from 'node:path';
 import type { AgentDatabase, AgentIdentity, InboxMessage, Lesson } from './agent-database.js';
 import type { MessageBus } from '../core/message-bus.js';
 import type { WorkerPool } from '../core/worker-pool.js';
@@ -55,8 +58,10 @@ export interface OrchestratorDeps {
   templateRegistry?: TemplateRegistry;
   /** API port for worker HTTP calls (deploy, validate, etc.) */
   apiPort?: number;
-  /** Data directory for reading api-token */
+  /** Data directory for reading api-token and running-commit.txt */
   dataDir?: string;
+  /** Repo root directory for git rev-parse HEAD (safe restart check) */
+  repoDir?: string;
   /** Thread store for writing orchestrator responses back to chat UI */
   threadStore?: ThreadStore;
 }
@@ -142,6 +147,57 @@ export class Orchestrator {
       clearInterval(this.timer);
       this.timer = null;
     }
+  }
+
+  /**
+   * Check whether a safe self-restart is due (council orchestrator only).
+   *
+   * A restart is pending when git HEAD has moved past the commit that was
+   * running when the node started (recorded in <dataDir>/running-commit.txt).
+   * Exits with code 75 only when fully idle: no active workers, no pending
+   * tasks, and no unread messages in the bus.  PM2/systemd then restarts the
+   * node with the freshly-built binary.
+   */
+  private checkSafeRestart(): void {
+    const agent = this.deps.db.getAgent(this.orchestratorId);
+    if (!agent || agent.role !== 'council') return;
+
+    const dataDir = this.deps.dataDir;
+    const repoDir = this.deps.repoDir;
+    if (!dataDir || !repoDir) return;
+
+    try {
+      const stampPath = join(dataDir, 'running-commit.txt');
+      if (!existsSync(stampPath)) return;
+
+      const runningCommit = readFileSync(stampPath, 'utf-8').trim();
+      const currentHead = (execSync('git rev-parse HEAD', {
+        cwd: repoDir, encoding: 'utf-8', timeout: 5000, stdio: 'pipe',
+      }) as string).trim();
+
+      if (currentHead === runningCommit) return; // still on the same build — nothing to do
+
+      // A new commit is in the repo.  Only restart when fully idle.
+      const activeWorkers = this.deps.db.getActiveWorkers(this.orchestratorId).length;
+      const pendingTasks = this.deps.db.listAgents({ parentId: this.orchestratorId, status: 'pending' }).length;
+      const messagesPending = this.deps.messageBus.hasPendingMessages();
+
+      if (activeWorkers > 0) {
+        console.log(`[Orchestrator ${this.orchestratorId}] Safe restart deferred: ${activeWorkers} active worker(s) (built=${currentHead.slice(0, 8)}, running=${runningCommit.slice(0, 8)})`);
+        return;
+      }
+      if (pendingTasks > 0) {
+        console.log(`[Orchestrator ${this.orchestratorId}] Safe restart deferred: ${pendingTasks} pending task(s)`);
+        return;
+      }
+      if (messagesPending) {
+        console.log(`[Orchestrator ${this.orchestratorId}] Safe restart deferred: messages in-flight`);
+        return;
+      }
+
+      console.log(`[Orchestrator ${this.orchestratorId}] Safe restart: exiting with code 75 (upgrade) — built=${currentHead.slice(0, 8)}, was=${runningCommit.slice(0, 8)}`);
+      process.exit(75);
+    } catch { /* git unavailable or file missing — skip silently */ }
   }
 
   /**
@@ -289,6 +345,9 @@ export class Orchestrator {
 
       // Update last tick time
       this.deps.db.updateAgent(this.orchestratorId, { lastTickAt: new Date().toISOString() });
+
+      // Check if a safe self-restart is pending (council orchestrator only)
+      this.checkSafeRestart();
 
     } finally {
       this.ticking = false;
