@@ -302,7 +302,7 @@ export class Orchestrator {
         } catch { /* skip malformed */ }
       }
 
-      // 5. Mark messages as read
+      // 5. Mark messages as read — but NOT if AI call failed (preserve for retry)
       const allMessageIds = [
         ...board.messages.map(m => m.id),
         ...board.workerReports.map(m => m.id),
@@ -310,10 +310,13 @@ export class Orchestrator {
         ...board.userRequests.map(m => m.id),
         ...board.peerDisconnects.map(m => m.id),
       ];
-      if (allMessageIds.length > 0) {
-        this.deps.messageBus.markRead(allMessageIds);
-        // Change 4: Update lastActivityAt (stored in lastReportAt) when messages are processed
-        this.deps.db.updateAgent(this.orchestratorId, { lastReportAt: new Date().toISOString() });
+      if (!aiError) {
+        if (allMessageIds.length > 0) {
+          this.deps.messageBus.markRead(allMessageIds);
+          this.deps.db.updateAgent(this.orchestratorId, { lastReportAt: new Date().toISOString() });
+        }
+      } else {
+        console.warn(`[Orchestrator ${this.orchestratorId}] AI failed — preserving ${allMessageIds.length} unread messages for retry`);
       }
 
       // 5. Log the tick
@@ -475,6 +478,11 @@ export class Orchestrator {
 
     // Reflection tick — every 5th tick (~5 min), think proactively
     if (this._tickCount > 0 && this._tickCount % 5 === 0) {
+      return 2;
+    }
+
+    // Recently failed or overdue workers need AI attention immediately
+    if (board.recentlyFailed.length > 0 || board.overdueWorkers.length > 0) {
       return 2;
     }
 

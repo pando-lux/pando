@@ -340,6 +340,23 @@ export class WorkerPool {
       this.workerPids.delete(workerId);  // stop tracking memory
       this.db.updateAgent(workerId, { status: 'failed' });
       console.error(`[WorkerPool] Worker ${workerId} crashed:`, err.message?.slice(0, 200));
+
+      // Notify orchestrator about crash so it can retry or escalate
+      try {
+        this.messageBus.send({
+          recipientId: config.orchestratorId,
+          senderId: workerId,
+          senderType: 'worker',
+          type: 'worker_report',
+          payload: {
+            status: 'failed',
+            summary: `Worker crashed: ${err.message?.slice(0, 500) || 'unknown error'}`,
+            taskId: config.taskId,
+            auto: true,
+          },
+          priority: 0,
+        });
+      } catch { /* best-effort notification */ }
     });
 
     return workerId;
