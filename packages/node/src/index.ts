@@ -3021,6 +3021,13 @@ location /apps/${projectId}/ {
           const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000 });
           if (!status.trim()) {
             console.log('[orchestrator] Nothing to commit');
+            // Still push — flush any orphaned commits from builders that committed directly
+            try {
+              execSync('git push origin master', { cwd, timeout: 30000 });
+              console.log('[orchestrator] Pushed orphaned commits to origin');
+            } catch (pushErr: any) {
+              console.warn('[orchestrator] Push failed (non-fatal):', pushErr.message?.slice(0, 100));
+            }
             return false;
           }
           execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, { cwd, timeout: 30000 });
