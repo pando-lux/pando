@@ -3134,6 +3134,7 @@ location /apps/${projectId}/ {
     this.templateRegistry = new TemplateRegistry(this.agentDb.getRawDb());
     const tmplCount = this.templateRegistry.listTemplates().length;
     console.log(`[agents] TemplateRegistry initialized (${tmplCount} templates)`);
+    console.log('[agents] Context API ready: /v1/context/{project,lessons,team,identity,discover}');
 
     // Initialize WorkerPool
     this.workerPool = new WorkerPool(
