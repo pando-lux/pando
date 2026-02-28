@@ -3142,17 +3142,16 @@ location /apps/${projectId}/ {
     this.messageBus = new MessageBus(this.agentDb);
     console.log('[agents] MessageBus initialized');
 
-    // Send worker_report messages for workers interrupted during node restart.
-    // Using type 'worker_report' so orchestrators see these in their Worker Reports
-    // section and can decide to re-spawn. Clear currentTaskId to prevent duplicate
-    // notifications on subsequent restarts.
+    // Send worker_interrupted messages for workers interrupted during node restart.
+    // Orchestrator (orchestrator.ts) filters for 'worker_interrupted' type and surfaces
+    // these in the dedicated interrupted-workers board section.
     for (const worker of interruptedWorkers) {
       try {
         this.messageBus.send({
           recipientId: worker.parentId,
           senderId: worker.id,
           senderType: 'worker',
-          type: 'worker_report',
+          type: 'worker_interrupted',
           payload: {
             status: 'interrupted',
             summary: `Worker was interrupted during node restart while working on: ${(worker.rolePrompt || '').slice(0, 200)}`,

@@ -28,3 +28,6 @@ stderr.tmp
 # Private dev testing guide (contains AWS credentials)
 dev-testing/
 .vercel
+
+# E2E test results (runtime artifacts)
+e2e/results/
