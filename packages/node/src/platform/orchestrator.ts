@@ -781,6 +781,7 @@ export class Orchestrator {
     sections.push('- Check "Lessons Learned" above — avoid repeating past mistakes.');
     sections.push('- Inbox empty on a reflection tick? Review directives, failing tests, and lessons — proactively fix issues.');
     sections.push('- Only return [] if you have reviewed everything and there is genuinely nothing to improve.');
+    sections.push('- When genome-updater reports done, commit_code the .know changes, then propose_upgrade. Genome-only commits will NOT trigger another genome-updater (no recursion).');
     sections.push('');
     if (agent.projectId) {
       sections.push('### Deployment Context (for devops worker):');

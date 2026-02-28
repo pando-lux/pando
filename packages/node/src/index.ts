@@ -2949,6 +2949,17 @@ location /apps/${projectId}/ {
           console.warn(`[project-orch] GitHub push failed (non-fatal): ${pushErr.message?.slice(0, 100)}`);
         }
 
+        // Post-commit: recompile genome graph if genome.py exists in project
+        try {
+          execSync('python genome.py compile . 2>/dev/null || python3 genome.py compile . 2>/dev/null', {
+            cwd: wsDir, timeout: 15000, stdio: 'ignore'
+          });
+          this.genomeBridgeRegistry?.reloadAll();
+          console.log(`[project-orch] Genome recompiled for project ${projectId}`);
+        } catch {
+          // Python or genome.py not available in project — skip silently
+        }
+
         return true;
       } catch (err: any) {
         console.error(`[project-orch] Commit failed: ${err.message?.slice(0, 200)}`);
@@ -3004,6 +3015,16 @@ location /apps/${projectId}/ {
             console.log('[orchestrator] Pushed to origin');
           } catch (pushErr: any) {
             console.warn('[orchestrator] Push failed (non-fatal):', pushErr.message?.slice(0, 100));
+          }
+          // Post-commit: recompile genome graph and reload bridges
+          try {
+            execSync('python genome.py compile . 2>/dev/null || python3 genome.py compile . 2>/dev/null', {
+              cwd, timeout: 15000, stdio: 'ignore'
+            });
+            this.genomeBridgeRegistry?.reloadAll();
+            console.log('[orchestrator] Genome recompiled + bridge reloaded');
+          } catch {
+            // Python not available or compiler not found — skip silently
           }
           return true;
         } catch (err: any) {
