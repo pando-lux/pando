@@ -495,6 +495,11 @@ export class AgentDatabase {
         console.log('[agents] Migrated: added current_focus column to agent_identity');
       }
     } catch { /* column already exists or migration not needed */ }
+
+    // MASTER FIX: Deactivate directives 8-13 (completed standing orders from initial setup)
+    try {
+      this.db.exec('UPDATE directives SET active = 0 WHERE id IN (8,9,10,11,12,13) AND active = 1');
+    } catch { /* table may not exist yet */ }
   }
 
   close(): void {

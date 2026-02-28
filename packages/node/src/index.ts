@@ -3038,7 +3038,24 @@ location /apps/${projectId}/ {
           } catch (pushErr: any) {
             console.warn('[orchestrator] Push failed (non-fatal):', pushErr.message?.slice(0, 100));
           }
-          // Post-commit: recompile genome graph and reload bridges
+          // Post-commit: rebuild so dist matches the new HEAD
+          try {
+            console.log('[orchestrator] Post-commit build starting...');
+            execSync('npm run build', { cwd, timeout: 120000, stdio: 'pipe' });
+            console.log('[orchestrator] Post-commit build succeeded');
+          } catch (buildErr: any) {
+            // Build failed — revert the commit so broken code never reaches governance
+            console.error('[orchestrator] Post-commit build FAILED — reverting commit');
+            try {
+              execSync('git revert --no-edit HEAD', { cwd, timeout: 15000 });
+              console.log('[orchestrator] Reverted broken commit');
+            } catch (revertErr: any) {
+              console.error('[orchestrator] Revert failed:', revertErr.message?.slice(0, 100));
+            }
+            return false;
+          }
+
+          // Post-build: recompile genome graph and reload bridges
           try {
             execSync('python genome.py compile . 2>/dev/null || python3 genome.py compile . 2>/dev/null', {
               cwd, timeout: 15000, stdio: 'ignore'

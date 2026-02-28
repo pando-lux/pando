@@ -92,7 +92,7 @@ interface BoardState {
   healthAlerts: InboxMessage[];
   userRequests: InboxMessage[];
   peerDisconnects: InboxMessage[];
-  directives: string[];
+  directives: Array<{ id: number; content: string }>;
   recentlyFailed: Array<{ id: string; role: string; failedAt: string; lastTask: string | null; rolePrompt: string | null }>;
   overdueWorkers: Array<{ id: string; role: string; spawnedAt: string; lastReportAt: string | null }>;
   interruptedWorkers: Array<{ workerId: string; role: string; rolePrompt: string | null; sessionId: string | null }>;
@@ -305,6 +305,17 @@ export class Orchestrator {
         }
       }
 
+      // 3c. Issue MASTER-FIX-2: Deactivate directives after successful Tier 2
+      // Directives are standing orders — once the AI has seen them and produced
+      // actions, they are consumed. This prevents the same directives from
+      // triggering Tier 2 every single tick forever.
+      if (tier === 2 && !aiError && board.directives.length > 0) {
+        for (const d of board.directives) {
+          this.deps.db.deactivateDirective(d.id);
+        }
+        console.log(`[Orchestrator ${this.orchestratorId}] Deactivated ${board.directives.length} directive(s) after Tier 2 tick`);
+      }
+
       // 4. Reflect on any worker completions (extract lessons)
       for (const report of board.workerReports) {
         try {
@@ -463,7 +474,7 @@ export class Orchestrator {
       healthAlerts,
       userRequests,
       peerDisconnects,
-      directives: directives.map(d => d.content),
+      directives: directives.map(d => ({ id: d.id, content: d.content })),
       recentlyFailed,
       overdueWorkers,
       interruptedWorkers,
@@ -872,7 +883,7 @@ export class Orchestrator {
     if (board.directives.length > 0) {
       sections.push('## Directives');
       for (const d of board.directives) {
-        sections.push(`- ${d}`);
+        sections.push(`- ${d.content}`);
       }
       sections.push('');
     }
