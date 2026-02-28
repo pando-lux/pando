@@ -218,7 +218,31 @@ export class WorkerPool {
     // For resumed workers: shorter prompt (they already know the codebase)
     // For fresh workers: full context in prompt
     // Phase 104: Workers run in project workspace if set, otherwise Pando repo root
-    const projectRoot = config.workspaceDir || process.cwd();
+    let projectRoot = config.workspaceDir || process.cwd();
+
+    // Issue 8: Create git worktree for builder workers to isolate writes
+    let worktreePath: string | null = null;
+    if (config.role === 'builder' && !resumeSessionId) {
+      try {
+        const wtDir = join(this.dataDir, 'worktrees');
+        if (!existsSync(wtDir)) mkdirSync(wtDir, { recursive: true });
+        worktreePath = join(wtDir, workerId);
+        const branchName = `worker/${workerId}`;
+        execSync(`git worktree add "${worktreePath}" -b "${branchName}" HEAD`, {
+          cwd: projectRoot,
+          encoding: 'utf-8',
+          timeout: 30_000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        projectRoot = worktreePath;
+        this.db.updateAgent(workerId, { workspaceDir: worktreePath });
+        console.log(`[WorkerPool] Created worktree for ${workerId} at ${worktreePath}`);
+      } catch (wtErr: any) {
+        console.warn(`[WorkerPool] Worktree creation failed for ${workerId}, using shared root: ${wtErr.message?.slice(0, 200)}`);
+        worktreePath = null;
+      }
+    }
+
     let taskPrompt: string;
 
     if (resumeSessionId) {
@@ -333,6 +357,11 @@ export class WorkerPool {
         });
         console.log(`[WorkerPool] Auto-reported ${status} for worker ${workerId} to orchestrator`);
       }
+
+      // Issue 8: Merge worktree changes back to main repo then clean up
+      if (worktreePath) {
+        this.mergeAndCleanupWorktree(workerId, worktreePath, result.success);
+      }
     }).catch((err) => {
       claudeBackend.onProgress = onProgressOrig;
       claudeBackend.onPid = onPidOrig;
@@ -357,6 +386,11 @@ export class WorkerPool {
           priority: 0,
         });
       } catch { /* best-effort notification */ }
+
+      // Issue 8: Clean up worktree on failure (discard changes)
+      if (worktreePath) {
+        this.cleanupWorktree(workerId, worktreePath);
+      }
     });
 
     return workerId;
@@ -420,6 +454,104 @@ export class WorkerPool {
   /** Phase 105: Expose template registry for role validation */
   getTemplateRegistry(): TemplateRegistry | null {
     return this.templateRegistry;
+  }
+
+  // ---- Issue 8: Worktree helpers ----
+
+  /**
+   * Merge worker worktree changes back to main repo, then clean up.
+   * Called on successful completion. Attempts ff-only merge for commits,
+   * or git diff + apply for uncommitted changes.
+   */
+  private mergeAndCleanupWorktree(workerId: string, wtPath: string, success: boolean): void {
+    const mainRepo = process.cwd();
+    const branchName = `worker/${workerId}`;
+
+    if (!success) {
+      this.cleanupWorktree(workerId, wtPath);
+      return;
+    }
+
+    try {
+      // Check if worktree branch has commits ahead of current branch
+      const logOutput = execSync(`git log HEAD..${JSON.stringify(branchName)} --oneline`, {
+        cwd: mainRepo,
+        encoding: 'utf-8',
+        timeout: 10_000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+
+      if (logOutput) {
+        // Commits exist — fast-forward merge into main repo
+        execSync(`git merge ${JSON.stringify(branchName)} --ff-only`, {
+          cwd: mainRepo,
+          encoding: 'utf-8',
+          timeout: 30_000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+        console.log(`[WorkerPool] Merged ${branchName} into main repo (ff-only)`);
+      } else {
+        // No commits — check for dirty (uncommitted) files in worktree
+        const diff = execSync('git diff', {
+          cwd: wtPath,
+          encoding: 'utf-8',
+          timeout: 10_000,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        }).trim();
+
+        if (diff) {
+          // Apply the patch to the main repo
+          execSync('git apply --allow-empty -', {
+            cwd: mainRepo,
+            input: diff,
+            encoding: 'utf-8',
+            timeout: 10_000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+          console.log(`[WorkerPool] Applied uncommitted changes from ${workerId} worktree to main repo`);
+        } else {
+          console.log(`[WorkerPool] No changes in ${workerId} worktree to merge`);
+        }
+      }
+    } catch (mergeErr: any) {
+      console.warn(`[WorkerPool] Worktree merge failed for ${workerId}: ${mergeErr.message?.slice(0, 200)}`);
+    }
+
+    this.cleanupWorktree(workerId, wtPath);
+  }
+
+  /**
+   * Remove a worker's git worktree and delete its branch.
+   * Safe to call even if the worktree or branch doesn't exist.
+   */
+  private cleanupWorktree(workerId: string, wtPath: string): void {
+    const mainRepo = process.cwd();
+    const branchName = `worker/${workerId}`;
+
+    try {
+      execSync(`git worktree remove "${wtPath}" --force`, {
+        cwd: mainRepo,
+        encoding: 'utf-8',
+        timeout: 10_000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch { /* worktree may already be removed */ }
+
+    try {
+      execSync(`git branch -D "${branchName}"`, {
+        cwd: mainRepo,
+        encoding: 'utf-8',
+        timeout: 5_000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch { /* branch may not exist */ }
+
+    // Also remove the directory if it lingers
+    try {
+      if (existsSync(wtPath)) rmSync(wtPath, { recursive: true, force: true });
+    } catch { /* best-effort */ }
+
+    console.log(`[WorkerPool] Cleaned up worktree for ${workerId}`);
   }
 
   /**
