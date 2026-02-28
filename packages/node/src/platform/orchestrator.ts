@@ -286,7 +286,11 @@ export class Orchestrator {
       // 3. Execute actions
       for (const action of actions) {
         try {
-          await this.execute(action, agent);
+          const shouldContinue = await this.execute(action, agent);
+          if (shouldContinue === false) {
+            console.log(`[Orchestrator ${this.orchestratorId}] Action ${action.type} signaled stop — skipping remaining actions`);
+            break;
+          }
         } catch (err: any) {
           console.error(`[Orchestrator ${this.orchestratorId}] action error (${action.type}):`, err.message?.slice(0, 200));
         }
@@ -1197,7 +1201,7 @@ export class Orchestrator {
   // Action execution
   // =========================================================================
 
-  private async execute(action: OrchestratorAction, agent: AgentIdentity): Promise<void> {
+  private async execute(action: OrchestratorAction, agent: AgentIdentity): Promise<void | false> {
     switch (action.type) {
       case 'spawn_worker': {
         const workerId = await this.deps.workerPool.spawn({
@@ -1299,7 +1303,11 @@ export class Orchestrator {
 
       case 'commit_code': {
         if (this.deps.onCommit) {
-          await this.deps.onCommit(action.message);
+          const success = await this.deps.onCommit(action.message);
+          if (!success) {
+            console.log(`[Orchestrator ${this.orchestratorId}] commit_code failed — skipping remaining actions`);
+            return false;
+          }
         }
         break;
       }
