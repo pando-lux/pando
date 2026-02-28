@@ -1,0 +1,40 @@
+flow ContextPipeline {
+  summary: "How architecture knowledge flows from genome documentation to running agents. The genome compiler reads .know files, builds a knowledge graph (output/graph.json), GenomeBridge searches it by keyword relevance, and contextForTask() injects the most relevant nodes into AI prompts. Flows are prioritized over concepts — they describe HOW things work, which is most actionable."
+  trigger: AgentContextRequest
+
+  step know_files -> compiler {
+    actor: Developer
+    what: "Architecture knowledge lives in .know files under genome/knowledge/. Only .know files are compiled — .md files in genome/flows/ are NOT in the graph. To make knowledge available to agents, it MUST be in a .know file."
+    @gotcha("genome/flows/*.md files exist for human reference but are INVISIBLE to agents. Only genome/knowledge/**/*.know files appear in the graph.")
+  }
+
+  step compiler -> graph {
+    actor: GenomeCompiler
+    what: "python genome.py compile . reads all .know files, extracts flow/concept/entity/test/lesson/decision nodes, resolves references, builds output/graph.json. Run after any .know file change."
+  }
+
+  step graph -> bridge {
+    actor: GenomeBridge
+    what: "GenomeBridge loads graph.json at node startup. contextForTask({taskDescription}) extracts keywords, scores nodes by relevance (primary fields weighted 2x, name 3x, step content 1x), returns top matches formatted as markdown."
+  }
+
+  step bridge -> orchestrator_prompt {
+    actor: Orchestrator
+    what: "buildAIPrompt() calls genomeBridge.contextForTask() with the current inbox messages as task description. Result injected as '## Architecture Knowledge' section. Flows appear first (most actionable), then concepts, entities."
+  }
+
+  step bridge -> worker_prompt {
+    actor: WorkerPool
+    what: "buildBootPrompt() includes genome context in worker's initial prompt. Workers also query /v1/context/project at runtime for on-demand architecture knowledge."
+  }
+}
+
+concept ContextDebugging {
+  description: "When agents make wrong decisions, check the context pipeline: 1) Is the knowledge in a .know file? (NOT .md) 2) Was the graph recompiled after changes? (python genome.py compile .) 3) Does contextForTask() return the right nodes for the task keywords? (test with node -e in CLI) 4) Does formatNode() render the full content including summary and steps? 5) Is the character budget (6000) not exhausted by irrelevant nodes?"
+  used_by: [GenomeBridge, Orchestrator]
+}
+
+concept FlowPriority {
+  description: "Flow nodes are presented before concepts/entities in contextForTask() output. Rationale: flows describe HOW things work (pipelines, sequences, routing), which is directly actionable. Concepts describe WHAT things are, which is reference info. When an agent asks 'how do I handle a build request?', it needs the ProjectPipeline flow, not the WorkerPool concept."
+  used_by: [GenomeBridge]
+}

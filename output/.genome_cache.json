@@ -41,8 +41,80 @@
       "nodes": [],
       "content_hash": "f82302d9"
     },
+    "genome/knowledge/flows/context-pipeline.know": {
+      "mtime": 1772271780.2115264,
+      "nodes": [
+        {
+          "_type": "flow",
+          "_name": "ContextPipeline",
+          "_source": "genome\\knowledge\\flows\\context-pipeline.know",
+          "_steps": [
+            {
+              "_name": "know_files",
+              "_target": "compiler",
+              "_tags": [
+                "@gotcha(\"genome/flows/*.md files exist for human reference but are INVISIBLE to agents. Only genome/knowledge/**/*.know files appear in the graph.\")"
+              ],
+              "actor": "Developer",
+              "what": "Architecture knowledge lives in .know files under genome/knowledge/. Only .know files are compiled \u2014 .md files in genome/flows/ are NOT in the graph. To make knowledge available to agents, it MUST be in a .know file.",
+              "_next": "compiler"
+            },
+            {
+              "_name": "compiler",
+              "_target": "graph",
+              "actor": "GenomeCompiler",
+              "what": "python genome.py compile . reads all .know files, extracts flow/concept/entity/test/lesson/decision nodes, resolves references, builds output/graph.json. Run after any .know file change.",
+              "_next": "graph"
+            },
+            {
+              "_name": "graph",
+              "_target": "bridge",
+              "actor": "GenomeBridge",
+              "what": "GenomeBridge loads graph.json at node startup. contextForTask({taskDescription}) extracts keywords, scores nodes by relevance (primary fields weighted 2x, name 3x, step content 1x), returns top matches formatted as markdown.",
+              "_next": "bridge"
+            },
+            {
+              "_name": "bridge",
+              "_target": "orchestrator_prompt",
+              "actor": "Orchestrator",
+              "what": "buildAIPrompt() calls genomeBridge.contextForTask() with the current inbox messages as task description. Result injected as '## Architecture Knowledge' section. Flows appear first (most actionable), then concepts, entities.",
+              "_next": "orchestrator_prompt"
+            },
+            {
+              "_name": "bridge",
+              "_target": "worker_prompt",
+              "actor": "WorkerPool",
+              "what": "buildBootPrompt() includes genome context in worker's initial prompt. Workers also query /v1/context/project at runtime for on-demand architecture knowledge.",
+              "_next": "worker_prompt"
+            }
+          ],
+          "summary": "How architecture knowledge flows from genome documentation to running agents. The genome compiler reads .know files, builds a knowledge graph (output/graph.json), GenomeBridge searches it by keyword relevance, and contextForTask() injects the most relevant nodes into AI prompts. Flows are prioritized over concepts \u2014 they describe HOW things work, which is most actionable.",
+          "trigger": "AgentContextRequest"
+        },
+        {
+          "_type": "concept",
+          "_name": "ContextDebugging",
+          "_source": "genome\\knowledge\\flows\\context-pipeline.know",
+          "description": "When agents make wrong decisions, check the context pipeline: 1) Is the knowledge in a .know file? (NOT .md) 2) Was the graph recompiled after changes? (python genome.py compile .) 3) Does contextForTask() return the right nodes for the task keywords? (test with node -e in CLI) 4) Does formatNode() render the full content including summary and steps? 5) Is the character budget (6000) not exhausted by irrelevant nodes?",
+          "used_by": [
+            "GenomeBridge",
+            "Orchestrator"
+          ]
+        },
+        {
+          "_type": "concept",
+          "_name": "FlowPriority",
+          "_source": "genome\\knowledge\\flows\\context-pipeline.know",
+          "description": "Flow nodes are presented before concepts/entities in contextForTask() output. Rationale: flows describe HOW things work (pipelines, sequences, routing), which is directly actionable. Concepts describe WHAT things are, which is reference info. When an agent asks 'how do I handle a build request?', it needs the ProjectPipeline flow, not the WorkerPool concept.",
+          "used_by": [
+            "GenomeBridge"
+          ]
+        }
+      ],
+      "content_hash": "f0e0c078"
+    },
     "genome/knowledge/flows/council-operating-system.know": {
-      "mtime": 1772197940.5667343,
+      "mtime": 1772265241.1400602,
       "nodes": [
         {
           "_type": "flow",
@@ -91,24 +163,35 @@
               "_name": "tick_execute",
               "_target": "spawn_workers",
               "_tags": [
-                "@gotcha(\"Workers are persistent team members, not disposable. Session IDs saved to SQLite. Resume workers for related tasks to preserve accumulated context. Only rotate when context is exhausted or domain changes.\")"
+                "@gotcha(\"Workers are persistent team members, not disposable. Session IDs saved to SQLite. Resume workers for related tasks to preserve accumulated context. Only rotate when context is exhausted or domain changes.\")",
+                "@gotcha(\"Phase 105: Role prompts come from TemplateRegistry (SQLite agent_templates table), not hardcoded DEFAULT_ROLE_PROMPTS. Custom templates can be created via POST /v1/templates.\")"
               ],
               "actor": "WorkerPool",
-              "what": "WorkerPool.spawn() creates or resumes a Claude Code child process. Builds CLAUDE.md from 6 layers: constitution, role prompt, authority rules, lessons, tools, genome context. Workers persist sessions \u2014 resumed for related tasks via SessionStrategy ('resume' for same domain, 'rotate' for new domain, 'fresh' only when no prior session). Workers communicate via 3 HTTP endpoints (GET /worker/:id/task, POST /worker/:id/report, GET /worker/:id/identity).",
+              "what": "WorkerPool.spawn() resolves agent template from TemplateRegistry, then creates or resumes a Claude Code child process. Injects a slim boot prompt (~500 tokens) with identity, task, and context API endpoints. Workers query /v1/context/* on demand for project architecture, lessons, and team state. Workers persist sessions \u2014 resumed for related tasks via SessionStrategy. Workers communicate via HTTP: GET /worker/:id/task, POST /worker/:id/report, GET /worker/:id/identity, GET /context/project, GET /context/lessons, GET /context/team, POST /context/discover.",
               "_next": "spawn_workers"
             },
             {
               "_name": "spawn_workers",
               "_target": "qa_cycle",
               "actor": "Orchestrator",
-              "what": "Self-sustaining loop: Orchestrator spawns builder \u2192 builder reports completion \u2192 Orchestrator spawns QA tester (independent, gets ONLY task + diff) \u2192 QA passes \u2192 governance proposal \u2192 auto-approve in dev \u2192 commit.",
+              "what": "Self-sustaining loop: Orchestrator spawns builder \u2192 builder reports completion \u2192 Orchestrator spawns QA tester (independent, gets ONLY task + diff) \u2192 QA passes \u2192 commit + deploy.",
               "_next": "qa_cycle"
             },
             {
               "_name": "qa_cycle",
+              "_target": "deploy",
+              "_tags": [
+                "@gotcha(\"Phase 105: Deployment is agent-driven. No hardcoded onDeploy callback. The devops agent calls the deploy API directly and reports back.\")"
+              ],
+              "actor": "Orchestrator",
+              "what": "QA PASS handler (Tier 1 deterministic): commit_code action \u2192 spawn devops agent. For projects: devops agent calls POST /v1/projects/:id/deploy and POST /v1/projects/:id/validate-deploy. For council: propose_upgrade \u2192 governance \u2192 broadcast to all nodes.",
+              "_next": "deploy"
+            },
+            {
+              "_name": "deploy",
               "_target": "governance",
               "actor": "Orchestrator",
-              "what": "onPropose callback calls governance.createProposal(). In dev mode: auto-approve. Governance decisions route back via MessageBus as 'governance_decision' messages.",
+              "what": "Council only: onPropose callback calls governance.createProposal(). In dev mode: auto-approve. Governance decisions route back via MessageBus as 'governance_decision' messages.",
               "_next": "governance"
             },
             {
@@ -126,7 +209,7 @@
           "_type": "concept",
           "_name": "OrchestratorAction",
           "_source": "genome\\knowledge\\flows\\council-operating-system.know",
-          "description": "Union type of 12 actions an orchestrator can take per tick. Returned from either deterministic() (Tier 1) or parseAIActions() (Tier 2). Each action has a 'type' discriminator.",
+          "description": "Union type of 13 action types an orchestrator can take per tick: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy (legacy/noop), respond_to_user, run_scenarios. Returned from deterministic() (Tier 1) or parseAIActions() (Tier 2).",
           "defined_in": "packages/node/src/platform/orchestrator.ts",
           "used_by": [
             "Orchestrator"
@@ -136,7 +219,7 @@
           "_type": "concept",
           "_name": "AgentIdentity",
           "_source": "genome\\knowledge\\flows\\council-operating-system.know",
-          "description": "Unified SQLite record for every agent (worker or orchestrator). Fields: id, role, type, scope, parentId, nodeId, status, authority (JSON), fileScope, budget, tickIntervalMs, maxWorkers, rolePrompt, sessionId, createdAt, updatedAt.",
+          "description": "Unified SQLite record for every agent (worker or orchestrator). Fields: id, role, type, scope, parentId, nodeId, status, authority (JSON), fileScope, budget, tickIntervalMs, maxWorkers, rolePrompt, sessionId, templateId, createdAt, updatedAt. Phase 105: templateId links agent instance to its source template.",
           "defined_in": "packages/node/src/platform/agent-database.ts",
           "used_by": [
             "AgentDatabase",
@@ -161,7 +244,7 @@
           "_type": "concept",
           "_name": "WorkerPool",
           "_source": "genome\\knowledge\\flows\\council-operating-system.know",
-          "description": "Spawn/resume Claude Code worker processes. Manages child_process lifecycle with session persistence. assembleContext() builds 6-layer CLAUDE.md (constitution, role, authority, lessons, tools, genome context). Workers persist sessions in SQLite \u2014 resumed for related tasks, rotated when domain changes. Claude Code is a network resource: discovered via CapabilityProfile (shareCompute: true), not required on every node.",
+          "description": "Spawn/resume Claude Code worker processes. Manages child_process lifecycle with session persistence. buildBootPrompt() generates a slim ~500-token prompt \u2014 workers query /v1/context/* for project architecture, lessons, and discoveries on demand. Workers persist sessions in SQLite \u2014 resumed for related tasks, rotated when domain changes. Claude Code is a network resource: discovered via CapabilityProfile (shareCompute: true), not required on every node.",
           "defined_in": "packages/node/src/core/worker-pool.ts",
           "used_by": [
             "Orchestrator",
@@ -184,7 +267,7 @@
           "_type": "concept",
           "_name": "AgentDatabase",
           "_source": "genome\\knowledge\\flows\\council-operating-system.know",
-          "description": "SQLite-backed storage with 7 tables: agent_identity, message_inbox, tick_log, lessons, org_knowledge, directives, reflections. Single file at ~/.pando/agents.db. WAL mode, prepared statements.",
+          "description": "SQLite-backed storage with 8 tables: agent_identity, agent_templates, message_inbox, tick_log, lessons, org_knowledge, directives, reflections. Single file at ~/.pando/agents.db. WAL mode, prepared statements. Phase 105: agent_templates table stores reusable role definitions.",
           "defined_in": "packages/node/src/platform/agent-database.ts",
           "used_by": [
             "MessageBus",
@@ -192,7 +275,8 @@
             "OrgManager",
             "Orchestrator",
             "AgentTools",
-            "PlatformApi"
+            "PlatformApi",
+            "TemplateRegistry"
           ]
         },
         {
@@ -240,9 +324,57 @@
           "choice": "Workers are persistent team members. Sessions saved to SQLite (sessionId). Resume via claude --continue --resume <sessionId> for related tasks. Rotate only when context exhausted or domain changes completely.",
           "why": "Workers accumulate valuable context \u2014 codebase understanding, file locations, gotchas discovered. Throwing this away is wasteful. Lessons in SQLite capture some knowledge, but a resumed session has the full mental model. Team members should persist.",
           "date": "2026-02-27"
+        },
+        {
+          "_type": "decision",
+          "_name": "PROJECT_ORCHESTRATOR_PIPELINE",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "context": "Phase 104. Council orchestrator worked for Pando infra. User app builds (build me X) created project in DB but no live orchestrator was spawned \u2014 dead end.",
+          "choice": "Same Orchestrator class for both council and projects. Factory method instantiateOrchestrator() determines callbacks based on role. Project orchestrators get onCommit (git in workspace \u2192 GitHub push). Deployment is agent-driven: devops worker spawned after QA pass, calls deploy API directly. Workers run in project workspace dir, not Pando repo root.",
+          "why": "Council is just Pando's own project manager. No special-casing. Same tick loop, same AI brain, same QA cycle. Only callbacks differ. Deployment through agents enables intelligent decision-making (t1 vs t2, troubleshooting, validation).",
+          "date": "2026-02-27"
+        },
+        {
+          "_type": "decision",
+          "_name": "AGENT_DRIVEN_DEPLOYMENT",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "context": "Phase 105. Deployment was a hardcoded onDeploy callback \u2014 just a fetch() to the deploy endpoint. No intelligence, no troubleshooting, no validation.",
+          "choice": "Remove onDeploy callback. After QA passes, orchestrator spawns a devops worker with instructions to call POST /v1/projects/:id/deploy and POST /v1/projects/:id/validate-deploy. Devops agent reads template from TemplateRegistry, can think about the deploy, troubleshoot failures, validate post-deploy.",
+          "why": "A callback can't decide 'this needs nginx config changes' or 'the last deploy failed, let me check logs'. An agent can. For simple deploys: agent makes the same HTTP call the callback did. For complex deploys: agent brings intelligence. Templates allow custom devops agents for different deployment environments.",
+          "date": "2026-02-27"
+        },
+        {
+          "_type": "decision",
+          "_name": "TEAM_STATE_IN_PROJECT",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "context": "Phase 104. Need project team hierarchy and worker states to be portable and transparent.",
+          "choice": "Export team-state.json v2 to project workspace on every commit. Contains: team blueprint (roles + templateIds), cumulative stats, lessons (with relevanceTags), reflections, active directives. Import on clone: lessons with 0.8x confidence decay, reflections, directives.",
+          "why": "SQLite is structured and queryable. JSON export travels with the project repo. New node clones and reads it. Users see team structure in GitHub for transparency. v2 format enables full knowledge portability across nodes.",
+          "date": "2026-02-27"
+        },
+        {
+          "_type": "decision",
+          "_name": "TEMPLATE_REGISTRY",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "context": "Phase 105. Agent roles were hardcoded as 5 strings in DEFAULT_ROLE_PROMPTS. Adding a new agent type (marketing, news, devops-specialist) required source code changes and redeployment.",
+          "choice": "TemplateRegistry class backed by agent_templates SQLite table. Built-in templates seeded on boot (builder, tester, reviewer, researcher, devops). Custom templates created via POST /v1/templates. WorkerPool resolves templates at spawn time. Each agent instance links to its source template via template_id.",
+          "why": "Agents are first-class network primitives. Templates are the reusable recipe; instances accumulate their own knowledge per-project. Same devops template \u2192 Facebook project learns Facebook patterns, Pando project learns Pando patterns. Schema has publisher_peer_id + version fields ready for future P2P sync and marketplace.",
+          "date": "2026-02-27"
+        },
+        {
+          "_type": "concept",
+          "_name": "TemplateRegistry",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "description": "SQLite-backed agent template storage. Replaces hardcoded DEFAULT_ROLE_PROMPTS with data-driven templates. 5 built-in templates seeded on boot. Custom templates via API. Future: P2P sync via GossipSub.",
+          "defined_in": "packages/node/src/platform/template-registry.ts",
+          "used_by": [
+            "WorkerPool",
+            "PandoNode",
+            "PlatformApi"
+          ]
         }
       ],
-      "content_hash": "1b8c8b38"
+      "content_hash": "16d631b5"
     },
     "genome/knowledge/flows/node-onboarding.know": {
       "mtime": 1772122710.7784405,
@@ -430,8 +562,153 @@
       ],
       "content_hash": "659a4eb3"
     },
+    "genome/knowledge/flows/project-pipeline.know": {
+      "mtime": 1772265271.3770583,
+      "nodes": [
+        {
+          "_type": "flow",
+          "_name": "ProjectPipeline",
+          "_source": "genome\\knowledge\\flows\\project-pipeline.know",
+          "_steps": [
+            {
+              "_name": "user_message",
+              "_target": "doorman",
+              "actor": "User",
+              "what": "User sends POST /v1/chat/message with 'build me a landing page'. No projectId.",
+              "_next": "doorman"
+            },
+            {
+              "_name": "doorman",
+              "_target": "classify",
+              "actor": "ApiServer",
+              "what": "doormanClassify() uses OpenAI gpt-4o-mini to determine intent. Returns 'build' with tier (1=static, 2=server) and description.",
+              "_next": "classify"
+            },
+            {
+              "_name": "classify",
+              "_target": "create_project",
+              "actor": "ProjectStore",
+              "what": "projectStore.createProject() creates record in MongoDB (via P2P proxy for untrusted nodes). Assigns MongoDB + GitHub resources via preflight.",
+              "_next": "create_project"
+            },
+            {
+              "_name": "create_project",
+              "_target": "ensure_workspace",
+              "actor": "PandoNode",
+              "what": "ensureProjectWorkspace(projectId) creates ~/.pando/projects/<projectId>/, runs git init. If project has githubRepo, clones it first. Workers query /v1/context/project for architecture context on demand \u2014 no CLAUDE.md needed.",
+              "_next": "ensure_workspace"
+            },
+            {
+              "_name": "ensure_workspace",
+              "_target": "instantiate_orchestrator",
+              "_tags": [
+                "@gotcha(\"Same Orchestrator class as council. Only callbacks differ.\")"
+              ],
+              "actor": "PandoNode",
+              "what": "ensureProjectOrchestrator(projectId) calls OrgManager.getOrchestratorForProject() for DB record, then instantiateOrchestrator() for live instance. Factory wires project-scoped callbacks: onCommit (git in workspace \u2192 GitHub push), onDeploy (S3/PM2+nginx).",
+              "_next": "instantiate_orchestrator"
+            },
+            {
+              "_name": "instantiate_orchestrator",
+              "_target": "first_tick",
+              "actor": "Orchestrator",
+              "what": "Orchestrator.start() begins 30s tick loop. First tick reads user_request from MessageBus inbox. Tier 2 \u2192 calls AI to plan approach.",
+              "_next": "first_tick"
+            },
+            {
+              "_name": "first_tick",
+              "_target": "spawn_builder",
+              "_tags": [
+                "@gotcha(\"Worker cwd = config.workspaceDir (project workspace). Workers write files HERE, not in Pando root.\")"
+              ],
+              "actor": "Orchestrator",
+              "what": "AI brain returns spawn_worker action with role='builder'. WorkerPool.spawn() creates Claude Code process in project workspace dir (not Pando repo root).",
+              "_next": "spawn_builder"
+            },
+            {
+              "_name": "spawn_builder",
+              "_target": "builder_works",
+              "actor": "Worker",
+              "what": "Builder receives slim boot prompt with task + context API endpoints. Queries /v1/context/project for architecture and discoveries, writes code, runs build, posts new discoveries via /v1/context/discover, reports 'done' via POST /v1/worker/:id/report.",
+              "_next": "builder_works"
+            },
+            {
+              "_name": "builder_works",
+              "_target": "spawn_tester",
+              "actor": "Orchestrator",
+              "what": "Deterministic Tier 1: builder done \u2192 spawn tester worker. Tester gets ONLY task description + code diff. Independent verification.",
+              "_next": "spawn_tester"
+            },
+            {
+              "_name": "spawn_tester",
+              "_target": "qa_pass",
+              "actor": "Worker",
+              "what": "Tester runs in same project workspace. Checks code quality, tests functionality, reports PASS or FAIL.",
+              "_next": "qa_pass"
+            },
+            {
+              "_name": "qa_pass",
+              "_target": "commit",
+              "actor": "Orchestrator",
+              "what": "Deterministic Tier 1: QA PASS \u2192 commit_code action. onCommit callback: exportTeamState() \u2192 git add -A \u2192 git commit in workspace \u2192 POST /projects/:id/github/push.",
+              "_next": "commit"
+            },
+            {
+              "_name": "commit",
+              "_target": "deploy",
+              "actor": "Orchestrator",
+              "what": "After commit, orchestrator may trigger deploy action. onDeploy callback: POST /v1/projects/:id/deploy \u2192 P2P discovery \u2192 compute peer \u2192 S3 (tier 1) or PM2+nginx (tier 2).",
+              "_next": "deploy"
+            },
+            {
+              "_name": "deploy",
+              "_target": "respond",
+              "actor": "Orchestrator",
+              "what": "respond_to_user action sends live URL via MessageBus \u2192 SSE to gateway.",
+              "_next": "respond"
+            }
+          ],
+          "summary": "Phase 104: End-to-end flow for user app creation. Chat message \u2192 doorman classifies 'build' \u2192 project created \u2192 workspace initialized \u2192 project orchestrator instantiated \u2192 builder spawns \u2192 QA verifies \u2192 commit to workspace \u2192 push to GitHub \u2192 deploy to S3/nginx.",
+          "trigger": "UserChatMessage"
+        },
+        {
+          "_type": "concept",
+          "_name": "ProjectWorkspace",
+          "_source": "genome\\knowledge\\flows\\project-pipeline.know",
+          "description": "Phase 104: Each user project gets a local directory at ~/.pando/projects/<projectId>/. Contains the project's git repo, team-state.json, and all source code. Workers run with cwd set to this directory. Context comes from /v1/context/project (genome if compiled, or auto-generated from package.json + file tree). On commit, pushed to GitHub as pando-lux/app-<id>-<name>.",
+          "defined_in": "packages/node/src/index.ts",
+          "used_by": [
+            "PandoNode",
+            "Orchestrator",
+            "WorkerPool"
+          ]
+        },
+        {
+          "_type": "concept",
+          "_name": "TeamStateExport",
+          "_source": "genome\\knowledge\\flows\\project-pipeline.know",
+          "description": "Phase 104: JSON file (team-state.json) exported to project workspace on every commit. Contains agent list (id, role, status, sessionId, budgetSpent), lessons. Committed to git \u2192 pushed to GitHub \u2192 cloned by new nodes for resume. Enables transparency (users see team in GitHub) and continuity (new orchestrator reads previous state).",
+          "defined_in": "packages/node/src/index.ts",
+          "used_by": [
+            "PandoNode",
+            "Orchestrator"
+          ]
+        },
+        {
+          "_type": "concept",
+          "_name": "OrchestratorFactory",
+          "_source": "genome\\knowledge\\flows\\project-pipeline.know",
+          "description": "Phase 104: PandoNode.instantiateOrchestrator(orchId) is the unified factory for ALL orchestrators. Reads DB record, determines callbacks based on role (council \u2192 git in Pando repo + governance, project \u2192 git in workspace + GitHub push + deploy). Stores live instances in Map<string, Orchestrator>. Used by council startup, project creation, and rehydration on restart.",
+          "defined_in": "packages/node/src/index.ts",
+          "used_by": [
+            "PandoNode"
+          ]
+        }
+      ],
+      "content_hash": "4116f31a"
+    },
     "genome/knowledge/scenarios/layer0-kernel.know": {
-      "mtime": 1772196919.2572353,
+      "mtime": 1772205733.6904638,
       "nodes": [
         {
           "_type": "test",
@@ -791,7 +1068,7 @@
       "content_hash": "2c5ea9de"
     },
     "genome/knowledge/scenarios/layer1-core.know": {
-      "mtime": 1772196919.25824,
+      "mtime": 1772205733.6904638,
       "nodes": [
         {
           "_type": "test",
@@ -1228,7 +1505,7 @@
       "content_hash": "169f035c"
     },
     "genome/knowledge/scenarios/layer2-platform.know": {
-      "mtime": 1772196919.2592392,
+      "mtime": 1772205733.6914628,
       "nodes": [
         {
           "_type": "test",
@@ -1392,7 +1669,7 @@
       "content_hash": "8c1c2623"
     },
     "genome/knowledge/scenarios/layer3-security.know": {
-      "mtime": 1772196919.2592392,
+      "mtime": 1772205733.6919754,
       "nodes": [
         {
           "_type": "test",
@@ -1560,7 +1837,7 @@
       "content_hash": "a5b81438"
     },
     "genome/knowledge/scenarios/regression-api.know": {
-      "mtime": 1772196919.260242,
+      "mtime": 1772205733.6919754,
       "nodes": [
         {
           "_type": "test",
@@ -2290,9 +2567,9 @@
       "content_hash": "f457bc4f"
     },
     "packages/gateway/app/chat/page.tsx": {
-      "mtime": 1772110687.2897792,
+      "mtime": 1772225655.8512685,
       "nodes": [],
-      "content_hash": "74d41796"
+      "content_hash": "5cb85c02"
     },
     "packages/gateway/app/content/page.tsx": {
       "mtime": 1771400157.8528934,
@@ -2390,9 +2667,9 @@
       "content_hash": "5b6eb1e2"
     },
     "packages/gateway/app/page.tsx": {
-      "mtime": 1772127664.909791,
+      "mtime": 1772217982.7079067,
       "nodes": [],
-      "content_hash": "7020e244"
+      "content_hash": "34bf4ac2"
     },
     "packages/gateway/app/projects/page.tsx": {
       "mtime": 1772070909.1659617,
@@ -2445,9 +2722,9 @@
       "content_hash": "bdbeb8c0"
     },
     "packages/gateway/components/NavBar.tsx": {
-      "mtime": 1772100194.7232628,
+      "mtime": 1772225660.303203,
       "nodes": [],
-      "content_hash": "fb4e22c5"
+      "content_hash": "0284e2b7"
     },
     "packages/gateway/components/ThemeToggle.tsx": {
       "mtime": 1771705579.7104096,
@@ -2535,9 +2812,14 @@
       "content_hash": "c5a62be0"
     },
     "packages/node/src/api/api-server.ts": {
-      "mtime": 1772185934.818736,
+      "mtime": 1772265581.0439806,
       "nodes": [],
-      "content_hash": "66dfd1b9"
+      "content_hash": "a5d9f15b"
+    },
+    "packages/node/src/api/context-api.ts": {
+      "mtime": 1772264762.3030508,
+      "nodes": [],
+      "content_hash": "40060213"
     },
     "packages/node/src/api/core-api.ts": {
       "mtime": 1772168966.106819,
@@ -2555,12 +2837,12 @@
       "content_hash": "b6386d5e"
     },
     "packages/node/src/api/platform-api.ts": {
-      "mtime": 1772196919.284757,
+      "mtime": 1772269708.202024,
       "nodes": [],
-      "content_hash": "890729c8"
+      "content_hash": "3e1ffc6d"
     },
     "packages/node/src/cli.ts": {
-      "mtime": 1772136174.3416348,
+      "mtime": 1772256103.8843932,
       "nodes": [
         {
           "_type": "entity",
@@ -2585,7 +2867,7 @@
             "SharedCrypto"
           ],
           "file": "packages\\node\\src\\cli.ts:1",
-          "_content_hash": "c1dbb9de"
+          "_content_hash": "5c7f9281"
         },
         {
           "_type": "lesson",
@@ -2598,10 +2880,10 @@
           "severity": "warning",
           "date": "2026-02",
           "file": "packages\\node\\src\\cli.ts:1",
-          "_content_hash": "c1dbb9de"
+          "_content_hash": "5c7f9281"
         }
       ],
-      "content_hash": "c1dbb9de"
+      "content_hash": "5c7f9281"
     },
     "packages/node/src/config.ts": {
       "mtime": 1772136174.3416348,
@@ -2654,9 +2936,9 @@
       "content_hash": "dea70e27"
     },
     "packages/node/src/core/message-bus.ts": {
-      "mtime": 1772186290.492018,
+      "mtime": 1772254587.5115938,
       "nodes": [],
-      "content_hash": "791b0348"
+      "content_hash": "5ce3cac7"
     },
     "packages/node/src/core/mongo-backend.ts": {
       "mtime": 1772127664.9314725,
@@ -2684,9 +2966,9 @@
       "content_hash": "23f6666f"
     },
     "packages/node/src/core/upgrade-protocol.ts": {
-      "mtime": 1772168966.1098216,
+      "mtime": 1772261437.8419619,
       "nodes": [],
-      "content_hash": "d6f436ba"
+      "content_hash": "055173d9"
     },
     "packages/node/src/core/version-protocol.ts": {
       "mtime": 1772127664.935471,
@@ -2694,17 +2976,17 @@
       "content_hash": "9eacc069"
     },
     "packages/node/src/core/worker-mcp.ts": {
-      "mtime": 1772185934.8227344,
+      "mtime": 1772265087.2126057,
       "nodes": [],
-      "content_hash": "9295a6b7"
+      "content_hash": "fcc1fa1a"
     },
     "packages/node/src/core/worker-pool.ts": {
-      "mtime": 1772196919.2857585,
+      "mtime": 1772265566.6915524,
       "nodes": [],
-      "content_hash": "e3fdb3e2"
+      "content_hash": "629dedbf"
     },
     "packages/node/src/index.ts": {
-      "mtime": 1772196919.2867532,
+      "mtime": 1772266159.6515317,
       "nodes": [
         {
           "_type": "entity",
@@ -2739,10 +3021,10 @@
             "StorageBackend"
           ],
           "file": "packages\\node\\src\\index.ts:1",
-          "_content_hash": "3cc8feb7"
+          "_content_hash": "7f654fe4"
         }
       ],
-      "content_hash": "3cc8feb7"
+      "content_hash": "7f654fe4"
     },
     "packages/node/src/kernel/crash-guard.ts": {
       "mtime": 1772127664.9374683,
@@ -2889,14 +3171,14 @@
       "content_hash": "fea57ec4"
     },
     "packages/node/src/platform/agent-database.ts": {
-      "mtime": 1772190291.9206004,
+      "mtime": 1772264406.3783498,
       "nodes": [],
-      "content_hash": "c6d546c0"
+      "content_hash": "dddcf44b"
     },
     "packages/node/src/platform/agent-tools.ts": {
-      "mtime": 1772185934.8257353,
+      "mtime": 1772216846.500401,
       "nodes": [],
-      "content_hash": "d292a409"
+      "content_hash": "92619ed2"
     },
     "packages/node/src/platform/capability-detector.ts": {
       "mtime": 1772127664.9480503,
@@ -2949,9 +3231,9 @@
       "content_hash": "48612771"
     },
     "packages/node/src/platform/genome-bridge.ts": {
-      "mtime": 1772196919.287752,
+      "mtime": 1772271700.025257,
       "nodes": [],
-      "content_hash": "2670a79f"
+      "content_hash": "8db053de"
     },
     "packages/node/src/platform/hosting-service.ts": {
       "mtime": 1772127664.9545722,
@@ -2959,9 +3241,9 @@
       "content_hash": "3e14c98c"
     },
     "packages/node/src/platform/index.ts": {
-      "mtime": 1772185934.8267336,
+      "mtime": 1772210704.7235112,
       "nodes": [],
-      "content_hash": "2b2f1348"
+      "content_hash": "a0585f97"
     },
     "packages/node/src/platform/local-capability-store.ts": {
       "mtime": 1772127664.9555724,
@@ -2969,14 +3251,14 @@
       "content_hash": "6d8b4070"
     },
     "packages/node/src/platform/orchestrator.ts": {
-      "mtime": 1772196919.2887528,
+      "mtime": 1772269675.1127105,
       "nodes": [],
-      "content_hash": "7059edaf"
+      "content_hash": "f91bfa36"
     },
     "packages/node/src/platform/org-manager.ts": {
-      "mtime": 1772185934.8277261,
+      "mtime": 1772215867.5819185,
       "nodes": [],
-      "content_hash": "6b13b9ba"
+      "content_hash": "9b7328e1"
     },
     "packages/node/src/platform/pipeline-runner.ts": {
       "mtime": 1772127664.9565673,
@@ -2989,9 +3271,9 @@
       "content_hash": "936e6962"
     },
     "packages/node/src/platform/project-store.ts": {
-      "mtime": 1772127664.9580736,
+      "mtime": 1772205702.0160394,
       "nodes": [],
-      "content_hash": "3b5ba8b9"
+      "content_hash": "944fa4d3"
     },
     "packages/node/src/platform/qa-memory.ts": {
       "mtime": 1772168966.1128173,
@@ -3068,7 +3350,7 @@
       "content_hash": "1ea9560b"
     },
     "packages/node/src/platform/scenario-runner.ts": {
-      "mtime": 1772196919.2887528,
+      "mtime": 1772205733.7189806,
       "nodes": [],
       "content_hash": "b76d2f6c"
     },
@@ -3086,6 +3368,11 @@
       "mtime": 1772127664.9660833,
       "nodes": [],
       "content_hash": "b9164caf"
+    },
+    "packages/node/src/platform/template-registry.ts": {
+      "mtime": 1772264868.2870893,
+      "nodes": [],
+      "content_hash": "9cb972e0"
     },
     "packages/node/src/platform/thread-store.ts": {
       "mtime": 1772127664.9670794,
@@ -3107,6 +3394,11 @@
       "nodes": [],
       "content_hash": "039ea596"
     },
+    "packages/node/src/supervisor.ts": {
+      "mtime": 1772260355.258776,
+      "nodes": [],
+      "content_hash": "e41fd691"
+    },
     "packages/node/src/tui.ts": {
       "mtime": 1772185934.8297262,
       "nodes": [],
@@ -3123,7 +3415,7 @@
       "content_hash": "d89d6925"
     },
     "packages/shared/src/types.ts": {
-      "mtime": 1772175902.0071168,
+      "mtime": 1772254768.1331134,
       "nodes": [
         {
           "_type": "entity",
@@ -3142,7 +3434,7 @@
           "description": "All shared types, interfaces, enums, and constants used across every Pando package \u2014 identity, messages, transactions, governance, agents, capabilities, and economics.",
           "depends_on": [],
           "file": "packages\\shared\\src\\types.ts:1",
-          "_content_hash": "fecc0792"
+          "_content_hash": "c4ccaa9c"
         },
         {
           "_type": "invariant",
@@ -3155,10 +3447,10 @@
           ],
           "severity": "critical",
           "file": "packages\\shared\\src\\types.ts:1",
-          "_content_hash": "fecc0792"
+          "_content_hash": "c4ccaa9c"
         }
       ],
-      "content_hash": "fecc0792"
+      "content_hash": "c4ccaa9c"
     },
     "scripts/launch-nodes.js": {
       "mtime": 1771159401.9941764,

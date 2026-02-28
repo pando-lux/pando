@@ -117,7 +117,7 @@ export class GenomeBridge {
     const MAX_CHARS = 6000;
     let charCount = 0;
 
-    // Group by type
+    // Group by type — maintain relevance ordering from searchNodes within each group
     const byType: Record<string, GraphNode[]> = {};
     for (const node of matchedNodes) {
       const t = node._type;
@@ -125,8 +125,9 @@ export class GenomeBridge {
       byType[t].push(node);
     }
 
-    // Entities and concepts first (architecture understanding)
-    for (const type of ['entity', 'concept', 'flow', 'invariant', 'lesson', 'decision']) {
+    // Flows first (they describe HOW things work — most actionable for agents),
+    // then concepts, entities, lessons, decisions, invariants
+    for (const type of ['flow', 'concept', 'entity', 'lesson', 'decision', 'invariant']) {
       const nodes = byType[type];
       if (!nodes?.length) continue;
 
@@ -313,7 +314,9 @@ export class GenomeBridge {
 
     for (const node of Object.values(this.graph.nodes)) {
       let score = 0;
-      const text = [
+
+      // Primary fields — matches here are more relevant than step content
+      const primaryText = [
         node._name,
         node.description || '',
         node.summary || '',
@@ -322,10 +325,24 @@ export class GenomeBridge {
         ...(node._tags || []),
       ].join(' ').toLowerCase();
 
+      // Secondary fields — flow step content (useful but lower signal)
+      const stepParts: string[] = [];
+      const steps = (node as any)._steps;
+      if (Array.isArray(steps)) {
+        for (const step of steps) {
+          if (step.what) stepParts.push(step.what);
+          if (step._name) stepParts.push(step._name);
+        }
+      }
+      const stepText = stepParts.join(' ').toLowerCase();
+
       for (const kw of keywords) {
-        if (text.includes(kw)) score++;
-        // Boost exact name match
-        if (node._name.toLowerCase().includes(kw)) score += 2;
+        // Primary match: name, description, summary — high signal
+        if (primaryText.includes(kw)) score += 2;
+        // Name match: strongest signal
+        if (node._name.toLowerCase().includes(kw)) score += 3;
+        // Step match: weaker signal (avoids irrelevant flows ranking high)
+        if (stepText.includes(kw)) score += 1;
       }
 
       if (score > 0) {
@@ -342,11 +359,26 @@ export class GenomeBridge {
   private formatNode(node: GraphNode): string {
     const parts: string[] = [];
     parts.push(`**${node._name}** (${node._type})`);
-    if (node.description) parts.push(`  ${node.description}`);
+
+    // Use description OR summary — flows and concepts often use summary instead of description
+    const text = node.description || (node as any).summary;
+    if (text) parts.push(`  ${text}`);
+
     if (node.validates) parts.push(`  Validates: ${node.validates}`);
     if (node._source) parts.push(`  Source: ${node._source}`);
 
-    const gotchas = (node._tags || []).filter(t => t.startsWith('@gotcha'));
+    // Flow nodes: render steps so agents understand the pipeline
+    const steps = (node as any)._steps;
+    if (Array.isArray(steps) && steps.length > 0) {
+      for (const step of steps) {
+        const stepName = step._name || '?';
+        const target = step._target || step._next || '';
+        const what = step.what || '';
+        parts.push(`  ${stepName} → ${target}: ${what}`);
+      }
+    }
+
+    const gotchas = (node._tags || []).filter((t: string) => t.startsWith('@gotcha'));
     for (const g of gotchas) {
       const match = g.match(/@gotcha\("(.+?)"\)/);
       if (match) parts.push(`  ⚠ ${match[1]}`);
