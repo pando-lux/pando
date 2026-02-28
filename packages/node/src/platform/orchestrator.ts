@@ -350,8 +350,8 @@ export class Orchestrator {
       return 2;
     }
 
-    // Reflection tick — every 15th tick (~15 min), think proactively
-    if (this._tickCount > 0 && this._tickCount % 15 === 0) {
+    // Reflection tick — every 5th tick (~5 min), think proactively
+    if (this._tickCount > 0 && this._tickCount % 5 === 0) {
       return 2;
     }
 
