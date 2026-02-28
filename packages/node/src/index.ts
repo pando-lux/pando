@@ -2117,6 +2117,48 @@ location /apps/${projectId}/ {
       }
     });
 
+    // Safe self-restart watchdog: detect when the running process has stale compiled code.
+    // Checks every 5 minutes: if git HEAD has moved past the commit we were built from,
+    // and there are no active workers in flight, restart with exit(75) so PM2/systemd
+    // picks up the freshly-built code.  Gracefully disabled if the stamp file is missing.
+    {
+      let builtAtCommit: string | null = null;
+      // The build script writes `git rev-parse HEAD` to packages/node/dist/.build-commit.
+      // Try both the project-root layout and the packages/node/ layout to be robust.
+      for (const candidatePath of [
+        join(process.cwd(), 'packages', 'node', 'dist', '.build-commit'),
+        join(process.cwd(), 'dist', '.build-commit'),
+      ]) {
+        try {
+          const val = readFileSync(candidatePath, 'utf8').trim();
+          if (val) { builtAtCommit = val; break; }
+        } catch { /* try next */ }
+      }
+      if (builtAtCommit) {
+        const builtCommit = builtAtCommit; // capture for closure
+        console.log(`[self-restart] Stale-build watchdog active (built at ${builtCommit.slice(0, 8)})`);
+        const selfRestartInterval = setInterval(() => {
+          try {
+            const currentCommit = (execSync('git rev-parse HEAD', {
+              cwd: process.cwd(), encoding: 'utf8', timeout: 5000,
+            }) as string).trim();
+            if (currentCommit === builtCommit) return; // still fresh — nothing to do
+            const activeWorkers = this.workerPool?.getActiveWorkerCount() ?? 0;
+            if (activeWorkers > 0) {
+              console.log(`[self-restart] Stale build detected (built=${builtCommit.slice(0, 8)}, head=${currentCommit.slice(0, 8)}) but ${activeWorkers} worker(s) active — deferring restart`);
+              return;
+            }
+            console.log(`[self-restart] Stale build detected and no active workers — restarting (exit ${RESTART_EXIT_CODE})`);
+            clearInterval(selfRestartInterval);
+            process.exit(RESTART_EXIT_CODE);
+          } catch { /* git unavailable or cwd mismatch — skip silently */ }
+        }, 5 * 60 * 1000);
+        selfRestartInterval.unref(); // don't prevent normal node exit
+      } else {
+        console.log('[self-restart] No build-commit stamp found — stale-build watchdog disabled (run npm run build to enable)');
+      }
+    }
+
     // v2.3: Compute and log final boot health
     this._computeBootHealth();
 

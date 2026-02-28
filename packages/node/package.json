@@ -16,7 +16,7 @@
     "node": ">=18"
   },
   "scripts": {
-    "build": "tsc",
+    "build": "tsc && git rev-parse HEAD > dist/.build-commit",
     "lint:imports": "node ../../scripts/check-imports.mjs",
     "test": "node --test dist/tests/api.test.js",
     "start": "node --loader ts-node/esm src/cli.ts",

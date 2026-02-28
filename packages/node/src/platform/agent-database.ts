@@ -147,6 +147,20 @@ export interface Reflection {
   createdAt: string;
 }
 
+export type DiscoveryCategory = 'convention' | 'gotcha' | 'dependency' | 'pattern' | 'decision';
+
+export interface Discovery {
+  id: number;
+  projectId: string;
+  workerId: string;
+  category: DiscoveryCategory;
+  content: string;
+  confidence: number;
+  fileScope: string | null;    // JSON array
+  createdAt: string;
+  expiresAt: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Schema
 // ---------------------------------------------------------------------------
@@ -296,6 +310,22 @@ const SCHEMA = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_templates_role ON agent_templates(role, status);
+
+  CREATE TABLE IF NOT EXISTS project_discoveries (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id TEXT NOT NULL,
+    worker_id TEXT NOT NULL,
+    category TEXT NOT NULL,
+    content TEXT NOT NULL,
+    confidence REAL NOT NULL DEFAULT 0.7,
+    file_scope TEXT,
+    created_at TEXT NOT NULL,
+    expires_at TEXT,
+    UNIQUE(project_id, content)
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_discoveries_project ON project_discoveries(project_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_discoveries_worker ON project_discoveries(worker_id);
 `;
 
 // ---------------------------------------------------------------------------
@@ -414,6 +444,20 @@ function rowToReflection(row: any): Reflection {
     output: row.output,
     lessonsCreated: row.lessons_created,
     createdAt: row.created_at,
+  };
+}
+
+function rowToDiscovery(row: any): Discovery {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    workerId: row.worker_id,
+    category: row.category,
+    content: row.content,
+    confidence: row.confidence,
+    fileScope: row.file_scope,
+    createdAt: row.created_at,
+    expiresAt: row.expires_at,
   };
 }
 
