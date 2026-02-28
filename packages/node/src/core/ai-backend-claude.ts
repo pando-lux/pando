@@ -76,7 +76,7 @@ export class ClaudeBackend implements AIBackend {
 
     const noTools = task.options?.noTools === true;
     const args = [
-      '-p', task.prompt,
+      '-p',
       '--output-format', 'stream-json',
       '--verbose',
       '--model', model,
@@ -88,8 +88,12 @@ export class ClaudeBackend implements AIBackend {
     }
 
     if (task.sessionId) {
-      args.unshift('--continue', '--resume', task.sessionId);
+      args.unshift('--resume', task.sessionId);
     }
+
+    // End-of-options separator + positional prompt argument.
+    // Must come last so prompts starting with dashes aren't parsed as flags.
+    args.push('--', task.prompt);
 
     const env: Record<string, string> = { ...(process.env as Record<string, string>) };
     env.PATH = AUGMENTED_PATH;

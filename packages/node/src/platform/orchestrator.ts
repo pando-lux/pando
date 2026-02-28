@@ -561,6 +561,8 @@ export class Orchestrator {
 
     if (!result.success || !result.output) {
       this._consecutiveParseFailures++;
+      const detail = result.output || result.error || 'AI backend returned no output';
+      console.log(`[Orchestrator ${this.orchestratorId}] AI failure detail: ${detail.slice(0, 500)}`);
       if (this._consecutiveParseFailures >= 2) {
         this.rotateSession('2 consecutive AI failures');
       }
