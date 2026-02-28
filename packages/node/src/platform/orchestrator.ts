@@ -292,6 +292,19 @@ export class Orchestrator {
         }
       }
 
+      // 3b. Issue 6: Clear currentFocus if worker reports done/failed and no active workers remain
+      if (board.workerReports.length > 0) {
+        const hasDoneOrFailed = board.workerReports.some(r => {
+          try { const p = JSON.parse(r.payload); return p.status === 'done' || p.status === 'failed'; } catch { return false; }
+        });
+        if (hasDoneOrFailed) {
+          const remaining = this.deps.db.getActiveWorkers(this.orchestratorId);
+          if (remaining.length === 0) {
+            this.deps.db.clearCurrentFocus(this.orchestratorId);
+          }
+        }
+      }
+
       // 4. Reflect on any worker completions (extract lessons)
       for (const report of board.workerReports) {
         try {
@@ -471,7 +484,20 @@ export class Orchestrator {
    * so the council can self-improve without waiting for human input.
    */
   private classify(board: BoardState): 1 | 2 {
-    // Active directives = standing orders → always think
+    // Issue 6: Workers are busy AND inbox is empty → let them work (Tier 1).
+    // Non-overdue active workers means real work is happening. Don't burn Opus
+    // tokens just because standing directives exist.
+    const nonOverdueActive = board.activeWorkers - board.overdueWorkers.length;
+    const inboxEmpty = board.workerReports.length === 0 &&
+        board.healthAlerts.length === 0 &&
+        board.userRequests.length === 0 &&
+        board.messages.length === 0 &&
+        board.interruptedWorkers.length === 0;
+    if (nonOverdueActive > 0 && inboxEmpty) {
+      return 1;
+    }
+
+    // Active directives = standing orders → think
     if (board.directives.length > 0) {
       return 2;
     }
@@ -487,10 +513,7 @@ export class Orchestrator {
     }
 
     // Tier 1: Nothing to do — empty inbox, no directives, not reflection tick
-    if (board.workerReports.length === 0 &&
-        board.healthAlerts.length === 0 &&
-        board.userRequests.length === 0 &&
-        board.messages.length === 0) {
+    if (inboxEmpty) {
       return 1;
     }
 
@@ -722,6 +745,15 @@ export class Orchestrator {
    * Append board state sections (shared between boot prompt and tick update).
    */
   private appendBoardState(sections: string[], board: BoardState, agent: AgentIdentity): void {
+    // Issue 6: Current focus — remind AI what it's working on
+    const currentFocus = this.deps.db.getCurrentFocus(this.orchestratorId);
+    if (currentFocus) {
+      sections.push('## Current Focus');
+      sections.push(currentFocus);
+      sections.push('Finish this before starting anything new.');
+      sections.push('');
+    }
+
     // Board state counts
     sections.push('## Current State');
     sections.push(`Active workers: ${board.activeWorkers}/${board.maxWorkers}`);
@@ -1171,6 +1203,9 @@ export class Orchestrator {
         console.log(`[Orchestrator ${this.orchestratorId}] Spawned ${action.role} worker: ${workerId}`);
         // Change 4: Update lastActivityAt when spawning workers (for idle orchestrator detection)
         this.deps.db.updateAgent(this.orchestratorId, { lastReportAt: new Date().toISOString() });
+        // Issue 6: Set current focus so classify() knows work is in progress
+        const focusDesc = action.rolePrompt ? action.rolePrompt.replace(/\n/g, ' ').slice(0, 100) : action.role;
+        this.deps.db.setCurrentFocus(this.orchestratorId, `${action.role}: ${focusDesc}`);
         break;
       }
 

@@ -486,6 +486,15 @@ export class AgentDatabase {
         console.log('[agents] Migrated: added template_id column to agent_identity');
       }
     } catch { /* column already exists or migration not needed */ }
+
+    // Issue 6: Migrate — add current_focus column to agent_identity if missing
+    try {
+      const cols2 = this.db.pragma('table_info(agent_identity)') as any[];
+      if (!cols2.some((c: any) => c.name === 'current_focus')) {
+        this.db.exec('ALTER TABLE agent_identity ADD COLUMN current_focus TEXT');
+        console.log('[agents] Migrated: added current_focus column to agent_identity');
+      }
+    } catch { /* column already exists or migration not needed */ }
   }
 
   close(): void {
@@ -662,6 +671,23 @@ export class AgentDatabase {
     return this.db.prepare(
       `SELECT * FROM agent_identity WHERE parent_id = ? AND type = 'worker' AND status IN ('spawning', 'active', 'idle') ORDER BY created_at`
     ).all(orchestratorId).map(rowToIdentity);
+  }
+
+  // ---- Current Focus (Issue 6: Council Focus Validation) ----
+
+  setCurrentFocus(orchestratorId: string, focus: string): void {
+    this.db.prepare('UPDATE agent_identity SET current_focus = ?, updated_at = ? WHERE id = ?')
+      .run(focus, new Date().toISOString(), orchestratorId);
+  }
+
+  getCurrentFocus(orchestratorId: string): string | null {
+    const row = this.db.prepare('SELECT current_focus FROM agent_identity WHERE id = ?').get(orchestratorId) as any;
+    return row?.current_focus ?? null;
+  }
+
+  clearCurrentFocus(orchestratorId: string): void {
+    this.db.prepare('UPDATE agent_identity SET current_focus = NULL, updated_at = ? WHERE id = ?')
+      .run(new Date().toISOString(), orchestratorId);
   }
 
   /** Recursive CTE to get full hierarchy tree from a root */
