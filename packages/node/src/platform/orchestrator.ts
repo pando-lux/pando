@@ -340,10 +340,22 @@ export class Orchestrator {
    *
    * Phase 105: Worker reports are ALWAYS Tier 2. The AI brain is the manager —
    * it reads reports and decides what happens next (spawn QA, commit, deploy, retry).
-   * Only truly empty ticks are Tier 1.
+   *
+   * Proactive autonomy: directives and reflection ticks also trigger Tier 2,
+   * so the council can self-improve without waiting for human input.
    */
   private classify(board: BoardState): 1 | 2 {
-    // Tier 1: Nothing to do — empty inbox
+    // Active directives = standing orders → always think
+    if (board.directives.length > 0) {
+      return 2;
+    }
+
+    // Reflection tick — every 15th tick (~15 min), think proactively
+    if (this._tickCount > 0 && this._tickCount % 15 === 0) {
+      return 2;
+    }
+
+    // Tier 1: Nothing to do — empty inbox, no directives, not reflection tick
     if (board.workerReports.length === 0 &&
         board.healthAlerts.length === 0 &&
         board.userRequests.length === 0 &&
@@ -504,11 +516,13 @@ export class Orchestrator {
       }
     } catch { /* non-fatal */ }
 
-    // Genome architecture knowledge
-    if (this.deps.genomeBridge?.isLoaded() && board.userRequests.length > 0) {
-      const requestText = board.userRequests.map(r => {
-        try { return JSON.parse(r.payload).message || r.payload; } catch { return r.payload; }
-      }).join(' ');
+    // Genome architecture knowledge — always injected (proactive autonomy)
+    if (this.deps.genomeBridge?.isLoaded()) {
+      const requestText = board.userRequests.length > 0
+        ? board.userRequests.map(r => {
+            try { return JSON.parse(r.payload).message || r.payload; } catch { return r.payload; }
+          }).join(' ')
+        : 'platform maintenance, self-improvement, and issue resolution';
       const ctx = this.deps.genomeBridge.contextForTask({ taskDescription: requestText });
       if (ctx) {
         sections.push('## Architecture Knowledge');
@@ -619,7 +633,8 @@ export class Orchestrator {
     sections.push('- Health alert? Assess severity. Critical → spawn builder. Minor → record_lesson.');
     sections.push('- Simple question with no code needed? respond_to_user directly.');
     sections.push('- Check "Lessons Learned" above — avoid repeating past mistakes.');
-    sections.push('- Nothing to do? Return [].');
+    sections.push('- Inbox empty on a reflection tick? Review directives, failing tests, and lessons — proactively fix issues.');
+    sections.push('- Only return [] if you have reviewed everything and there is genuinely nothing to improve.');
     sections.push('');
     if (agent.projectId) {
       sections.push('### Deployment Context (for devops worker):');
@@ -631,6 +646,30 @@ export class Orchestrator {
       sections.push(`- Auth token file: ${dataDir}/api-token`);
       sections.push('');
     }
+
+    // Proactive autonomy: when inbox is empty but AI is called (reflection tick or directives),
+    // tell the AI it's in proactive mode and should self-improve
+    const isProactive = board.workerReports.length === 0 &&
+        board.healthAlerts.length === 0 &&
+        board.userRequests.length === 0 &&
+        board.messages.length === 0;
+    if (isProactive) {
+      sections.push('## Proactive Mode — You Are Autonomous');
+      sections.push('');
+      sections.push('Your inbox is empty. This is a REFLECTION tick — you are not waiting for instructions.');
+      sections.push('');
+      sections.push('Review and act on:');
+      sections.push('1. **Directives** (above): Standing orders from the team. Execute them by spawning workers.');
+      sections.push('2. **Failing tests**: If any tests above are failing, spawn a builder to fix them.');
+      sections.push('3. **Lessons with recurring problems**: Spawn a researcher to investigate root causes.');
+      sections.push('4. **Platform health**: Any degraded services? Spawn a builder to fix.');
+      sections.push('5. **Architecture improvements**: Any gaps or tech debt you can identify?');
+      sections.push('');
+      sections.push('You are the autonomous manager of this node. Don\'t wait for humans — lead.');
+      sections.push('Only return [] if you have genuinely reviewed everything and there is nothing to improve.');
+      sections.push('');
+    }
+
     sections.push('OUTPUT: Return ONLY a JSON array. Example: [{"type":"spawn_worker","role":"builder","rolePrompt":"Build a landing page with..."}]');
     sections.push('If nothing needs to be done: []');
 
