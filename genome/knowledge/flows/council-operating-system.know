@@ -30,7 +30,7 @@ flow OrchestratorSystem {
 
   step tick_execute -> spawn_workers {
     actor: WorkerPool
-    what: "WorkerPool.spawn() resolves agent template from TemplateRegistry (Phase 105), then creates or resumes a Claude Code child process. Builds CLAUDE.md from 6 layers: template role prompt, authority rules, lessons, directives, tools, genome context. Workers persist sessions — resumed for related tasks via SessionStrategy. Workers communicate via 3 HTTP endpoints (GET /worker/:id/task, POST /worker/:id/report, GET /worker/:id/identity)."
+    what: "WorkerPool.spawn() resolves agent template from TemplateRegistry, then creates or resumes a Claude Code child process. Injects a slim boot prompt (~500 tokens) with identity, task, and context API endpoints. Workers query /v1/context/* on demand for project architecture, lessons, and team state. Workers persist sessions — resumed for related tasks via SessionStrategy. Workers communicate via HTTP: GET /worker/:id/task, POST /worker/:id/report, GET /worker/:id/identity, GET /context/project, GET /context/lessons, GET /context/team, POST /context/discover."
     @gotcha("Workers are persistent team members, not disposable. Session IDs saved to SQLite. Resume workers for related tasks to preserve accumulated context. Only rotate when context is exhausted or domain changes.")
     @gotcha("Phase 105: Role prompts come from TemplateRegistry (SQLite agent_templates table), not hardcoded DEFAULT_ROLE_PROMPTS. Custom templates can be created via POST /v1/templates.")
   }
@@ -76,7 +76,7 @@ concept MessageBus {
 }
 
 concept WorkerPool {
-  description: "Spawn/resume Claude Code worker processes. Manages child_process lifecycle with session persistence. assembleContext() builds 6-layer CLAUDE.md (constitution, role, authority, lessons, tools, genome context). Workers persist sessions in SQLite — resumed for related tasks, rotated when domain changes. Claude Code is a network resource: discovered via CapabilityProfile (shareCompute: true), not required on every node."
+  description: "Spawn/resume Claude Code worker processes. Manages child_process lifecycle with session persistence. buildBootPrompt() generates a slim ~500-token prompt — workers query /v1/context/* for project architecture, lessons, and discoveries on demand. Workers persist sessions in SQLite — resumed for related tasks, rotated when domain changes. Claude Code is a network resource: discovered via CapabilityProfile (shareCompute: true), not required on every node."
   defined_in: "packages/node/src/core/worker-pool.ts"
   used_by: [Orchestrator, AgentTools]
 }

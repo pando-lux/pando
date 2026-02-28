@@ -19,7 +19,7 @@ flow ProjectPipeline {
 
   step create_project -> ensure_workspace {
     actor: PandoNode
-    what: "ensureProjectWorkspace(projectId) creates ~/.pando/projects/<projectId>/, runs git init, writes initial CLAUDE.md. If project has githubRepo, clones it first."
+    what: "ensureProjectWorkspace(projectId) creates ~/.pando/projects/<projectId>/, runs git init. If project has githubRepo, clones it first. Workers query /v1/context/project for architecture context on demand — no CLAUDE.md needed."
   }
 
   step ensure_workspace -> instantiate_orchestrator {
@@ -41,7 +41,7 @@ flow ProjectPipeline {
 
   step spawn_builder -> builder_works {
     actor: Worker
-    what: "Builder reads CLAUDE.md in project workspace, writes code (index.html, style.css, etc.), runs build if needed, reports 'done' via POST /v1/worker/:id/report."
+    what: "Builder receives slim boot prompt with task + context API endpoints. Queries /v1/context/project for architecture and discoveries, writes code, runs build, posts new discoveries via /v1/context/discover, reports 'done' via POST /v1/worker/:id/report."
   }
 
   step builder_works -> spawn_tester {
@@ -71,7 +71,7 @@ flow ProjectPipeline {
 }
 
 concept ProjectWorkspace {
-  description: "Phase 104: Each user project gets a local directory at ~/.pando/projects/<projectId>/. Contains the project's git repo, CLAUDE.md, team-state.json, and all source code. Workers run with cwd set to this directory. On commit, pushed to GitHub as pando-lux/app-<id>-<name>."
+  description: "Phase 104: Each user project gets a local directory at ~/.pando/projects/<projectId>/. Contains the project's git repo, team-state.json, and all source code. Workers run with cwd set to this directory. Context comes from /v1/context/project (genome if compiled, or auto-generated from package.json + file tree). On commit, pushed to GitHub as pando-lux/app-<id>-<name>."
   defined_in: "packages/node/src/index.ts"
   used_by: [PandoNode, Orchestrator, WorkerPool]
 }

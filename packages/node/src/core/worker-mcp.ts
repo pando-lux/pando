@@ -216,23 +216,24 @@ export function registerWorkerRoutes(
 }
 
 /**
- * Generate CLAUDE.md section that tells a worker about its tool endpoints.
+ * Generate tool endpoint documentation for workers.
+ * Used in assembleContext() (legacy path). New boot prompt uses buildBootPrompt() instead.
  */
 export function generateWorkerToolsDocs(workerId: string, apiPort: number): string {
-  const baseUrl = `http://localhost:${apiPort}/v1/worker/${workerId}`;
+  const base = `http://localhost:${apiPort}/v1`;
   return `
 ## Your Tools (call these HTTP endpoints anytime)
 
 ### Get your current task
 \`\`\`bash
-curl ${baseUrl}/task
+curl ${base}/worker/${workerId}/task
 \`\`\`
 Returns: { taskId, title, description, files, orchestratorNotes, status }
 **Call this if you forget what you're doing** or if your context was compacted.
 
 ### Report progress
 \`\`\`bash
-curl -X POST ${baseUrl}/report -H 'Content-Type: application/json' -d '{
+curl -X POST ${base}/worker/${workerId}/report -H 'Content-Type: application/json' -d '{
   "status": "done|in_progress|stuck|question|failed",
   "summary": "What you did or what's wrong",
   "filesChanged": ["file1.ts", "file2.ts"],
@@ -244,9 +245,29 @@ curl -X POST ${baseUrl}/report -H 'Content-Type: application/json' -d '{
 
 ### Get your identity
 \`\`\`bash
-curl ${baseUrl}/identity
+curl ${base}/worker/${workerId}/identity
 \`\`\`
 Returns: { id, role, scope, parentId, projectId, authority, budget }
-**Call this to understand who you are and what you're allowed to do.**
+
+### Get project context (architecture, genome, discoveries)
+\`\`\`bash
+curl "${base}/context/project?id=<projectId>&task=<taskDescription>&workspaceDir=<path>"
+\`\`\`
+Returns project architecture, framework conventions, and shared worker discoveries.
+
+### Get lessons (what past workers learned)
+\`\`\`bash
+curl "${base}/context/lessons?role=<role>&projectId=<id>"
+\`\`\`
+
+### Share a discovery with the team
+\`\`\`bash
+curl -X POST ${base}/context/discover -H 'Content-Type: application/json' -d '{
+  "agentId": "${workerId}",
+  "projectId": "<id>",
+  "category": "convention|gotcha|dependency|pattern|decision",
+  "content": "What you discovered about this project"
+}'
+\`\`\`
 `.trim();
 }

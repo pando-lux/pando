@@ -26,7 +26,7 @@ import type { MessageBus } from '../core/message-bus.js';
 import type { WorkerPool } from '../core/worker-pool.js';
 import type { OrgManager } from './org-manager.js';
 import type { AIBackendRegistry } from '../core/ai-backend-registry.js';
-import type { GenomeBridge } from './genome-bridge.js';
+import type { GenomeBridge, GenomeBridgeRegistry } from './genome-bridge.js';
 import type { ScenarioRunner } from './scenario-runner.js';
 import type { TemplateRegistry } from './template-registry.js';
 import type { ThreadStore } from './thread-store.js';
@@ -47,6 +47,8 @@ export interface OrchestratorDeps {
   onCommit?: (message: string) => Promise<boolean>;
   /** Genome knowledge graph bridge for architecture context */
   genomeBridge?: GenomeBridge;
+  /** Per-project genome registry (prefers project-specific genome over Pando's) */
+  genomeBridgeRegistry?: GenomeBridgeRegistry;
   /** Scenario runner for post-upgrade regression testing */
   scenarioRunner?: ScenarioRunner;
   /** Phase 105: Template registry for available roles */
@@ -442,6 +444,18 @@ export class Orchestrator {
     return this.parseAIActions(result.output);
   }
 
+  /** Extract project ID from user requests if they reference a known project. */
+  private extractProjectId(requests: InboxMessage[]): string | null {
+    for (const msg of requests) {
+      try {
+        const payload = JSON.parse(msg.payload);
+        if (payload.projectId) return payload.projectId;
+        if (payload.context?.projectId) return payload.context.projectId;
+      } catch { /* skip */ }
+    }
+    return null;
+  }
+
   private buildAIPrompt(board: BoardState, agent: AgentIdentity): string {
     const sections: string[] = [];
 
@@ -597,20 +611,28 @@ export class Orchestrator {
       }
     } catch { /* non-fatal */ }
 
-    // Genome architecture knowledge — always injected (proactive autonomy)
-    if (this.deps.genomeBridge?.isLoaded()) {
-      const requestText = board.userRequests.length > 0
-        ? board.userRequests.map(r => {
-            try { return JSON.parse(r.payload).message || r.payload; } catch { return r.payload; }
-          }).join(' ')
-        : 'platform maintenance, self-improvement, and issue resolution';
-      const ctx = this.deps.genomeBridge.contextForTask({ taskDescription: requestText });
+    // Genome architecture knowledge — project-specific if registry available, else Pando's
+    const requestText = board.userRequests.length > 0
+      ? board.userRequests.map(r => {
+          try { return JSON.parse(r.payload).message || r.payload; } catch { return r.payload; }
+        }).join(' ')
+      : 'platform maintenance, self-improvement, and issue resolution';
+
+    // Determine which genome to use: project-specific > Pando default
+    let activeGenomeBridge = this.deps.genomeBridge || null;
+    if (this.deps.genomeBridgeRegistry && agent.projectId) {
+      const projectBridge = this.deps.genomeBridgeRegistry.getForProject(agent.projectId);
+      if (projectBridge?.isLoaded()) activeGenomeBridge = projectBridge;
+    }
+
+    if (activeGenomeBridge?.isLoaded()) {
+      const ctx = activeGenomeBridge.contextForTask({ taskDescription: requestText });
       if (ctx) {
         sections.push('## Architecture Knowledge');
         sections.push(ctx);
         sections.push('');
       }
-      const failing = this.deps.genomeBridge.failingTests();
+      const failing = activeGenomeBridge.failingTests();
       if (failing.length > 0) {
         sections.push(`### Failing Tests (${failing.length}):`);
         for (const t of failing) {
@@ -618,6 +640,20 @@ export class Orchestrator {
         }
         sections.push('');
       }
+    }
+
+    // Project discoveries — shared memory from workers
+    if (agent.projectId) {
+      try {
+        const discoveries = this.deps.db.getDiscoveries({ projectId: agent.projectId, limit: 10 });
+        if (discoveries.length > 0) {
+          sections.push('## Project Discoveries (from workers)');
+          for (const d of discoveries) {
+            sections.push(`- [${d.category}] ${d.content} (confidence: ${d.confidence.toFixed(1)})`);
+          }
+          sections.push('');
+        }
+      } catch { /* non-fatal */ }
     }
 
     // Role prompt
@@ -1224,4 +1260,5 @@ export class Orchestrator {
       lessonsCreated: (report.difficulties?.length || 0) + (report.suggestions?.length || 0),
     });
   }
+
 }

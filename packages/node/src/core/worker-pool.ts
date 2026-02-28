@@ -6,7 +6,7 @@
  *
  * Responsibilities:
  *   - Create workspace directories
- *   - Assemble worker CLAUDE.md via assembleContext()
+ *   - Build slim boot prompt via buildBootPrompt() (workers query context API on demand)
  *   - Start Claude Code processes via AIBackendRegistry
  *   - Register workers in agent_identity table
  *   - Kill workers and clean up
@@ -18,7 +18,7 @@
  *   - Make scheduling decisions
  */
 
-import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
+import { existsSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, freemem } from 'node:os';
 import { randomUUID } from 'node:crypto';
@@ -28,7 +28,8 @@ import type { AgentDatabase, AgentIdentity, AgentType, AgentScope } from '../pla
 import type { AIBackendRegistry } from './ai-backend-registry.js';
 import type { AIResult } from './ai-backend.js';
 import { MessageBus } from './message-bus.js';
-import { generateWorkerToolsDocs } from './worker-mcp.js';
+// generateWorkerToolsDocs is exported from worker-mcp.ts for external use
+// Boot prompt (buildBootPrompt) handles tool docs inline for new workers
 import type { GenomeBridge } from '../platform/genome-bridge.js';
 import type { TemplateRegistry } from '../platform/template-registry.js';
 
@@ -663,106 +664,6 @@ export class WorkerPool {
     return lines.join('\n');
   }
 
-  /**
-   * Assemble the CLAUDE.md content for a worker.
-   * Pulls from 5 layers: role, project, task, lessons, authority.
-   * @deprecated Use buildBootPrompt() for new spawns. Workers query context API on demand.
-   */
-  private assembleContext(agent: AgentIdentity): string {
-    const sections: string[] = [];
-
-    // Header
-    sections.push(`# You are a Pando ${agent.role}`);
-    sections.push(`Agent ID: ${agent.id}`);
-    sections.push(`Scope: ${agent.scope}`);
-    sections.push(`Reports to: ${agent.parentId || 'none'}`);
-    sections.push('');
-
-    // Layer 1: Role prompt — from agent record, template registry, or fallback
-    let rolePrompt = agent.rolePrompt;
-    if (!rolePrompt && agent.templateId && this.templateRegistry) {
-      const tmpl = this.templateRegistry.getTemplate(agent.templateId);
-      rolePrompt = tmpl?.rolePrompt || null;
-    }
-    if (!rolePrompt && this.templateRegistry) {
-      const tmpl = this.templateRegistry.getByRole(agent.role);
-      rolePrompt = tmpl?.rolePrompt || null;
-    }
-    rolePrompt = rolePrompt || 'Complete the assigned task.';
-    sections.push('## Your Role');
-    sections.push(rolePrompt);
-    sections.push('');
-
-    // Layer 2: Authority
-    if (agent.authority) {
-      try {
-        const auth = JSON.parse(agent.authority);
-        sections.push('## Authority');
-        if (auth.files?.write) sections.push(`Files you can write: ${JSON.stringify(auth.files.write)}`);
-        if (auth.files?.forbidden) sections.push(`Files you MUST NOT touch: ${JSON.stringify(auth.files.forbidden)}`);
-        if (auth.commands?.forbidden) sections.push(`Commands you MUST NOT run: ${JSON.stringify(auth.commands.forbidden)}`);
-        sections.push('');
-      } catch { /* skip */ }
-    }
-
-    // Layer 3: Lessons from previous work
-    const lessons = this.db.getLessons({
-      orchestratorId: agent.parentId || undefined,
-      projectId: agent.projectId || undefined,
-      role: agent.role,
-      minConfidence: 0.5,
-      limit: 10,
-    });
-    const orgKnowledge = this.db.getOrgKnowledge({ role: agent.role, limit: 5 });
-
-    if (lessons.length > 0 || orgKnowledge.length > 0) {
-      sections.push('## Lessons from Previous Work');
-      for (const l of lessons) {
-        sections.push(`- ${l.lesson}`);
-        this.db.incrementLessonUse(l.id);
-      }
-      for (const k of orgKnowledge) {
-        sections.push(`- [org] ${k.knowledge}`);
-      }
-      sections.push('');
-    }
-
-    // Layer 4: Directives
-    const directives = this.db.getDirectives(agent.id);
-    if (directives.length > 0) {
-      sections.push('## Directives');
-      for (const d of directives) {
-        sections.push(`- ${d.content}`);
-      }
-      sections.push('');
-    }
-
-    // Layer 5: Worker tools documentation
-    sections.push(generateWorkerToolsDocs(agent.id, this.apiPort));
-    sections.push('');
-
-    // Layer 6: Genome architecture context
-    if (this.genomeBridge?.isLoaded()) {
-      const ctx = this.genomeBridge.contextForTask({
-        taskDescription: agent.rolePrompt || '',
-        role: agent.role,
-        fileScope: agent.fileScope ? JSON.parse(agent.fileScope) : undefined,
-      });
-      if (ctx) {
-        sections.push('## Architecture Context (from Genome)');
-        sections.push(ctx);
-        sections.push('');
-      }
-    }
-
-    // Build rules
-    sections.push('## Build & Test');
-    sections.push('After making changes, run: `npm run build`');
-    sections.push('The build MUST pass before you report "done".');
-    sections.push('');
-
-    return sections.join('\n');
-  }
 }
 
 // ---------------------------------------------------------------------------
