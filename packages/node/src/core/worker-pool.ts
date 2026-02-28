@@ -538,6 +538,8 @@ export class WorkerPool {
    * Prefers workers with matching projectId. Returns null if no resumable worker found.
    */
   private findResumableWorker(config: WorkerConfig): AgentIdentity | null {
+    const fifteenMinAgo = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+
     // Find completed/idle workers under this orchestrator with same role
     const candidates = this.db.listAgents({
       parentId: config.orchestratorId,
@@ -549,7 +551,10 @@ export class WorkerPool {
       // Must not be currently running
       !this.activeProcesses.has(w.id) &&
       // Must be in a resumable state (done, idle, or failed — not actively spawning/running)
-      ['done', 'idle', 'failed'].includes(w.status)
+      ['done', 'idle', 'failed'].includes(w.status) &&
+      // Must be recent — stale sessions (>15 min since last activity) are not resumable.
+      // Old sessions may have dead Claude Code processes, outdated context, or wrong task state.
+      (w.lastReportAt || w.updatedAt || w.createdAt || '') >= fifteenMinAgo
     );
 
     if (candidates.length === 0) return null;
