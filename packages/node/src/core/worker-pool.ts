@@ -318,16 +318,29 @@ export class WorkerPool {
 
       console.log(`[WorkerPool] Worker ${workerId} finished — success=${result.success}, cost=$${result.cost?.toFixed(4) || '0'}`);
 
+      // Issue 8: Merge worktree changes back to main repo BEFORE reporting
+      // If merge fails after worker reported success, downgrade to failed
+      let mergeOk = true;
+      if (worktreePath) {
+        try {
+          this.mergeAndCleanupWorktree(workerId, worktreePath, result.success);
+        } catch {
+          mergeOk = false;
+          console.warn(`[WorkerPool] Worktree merge failed for ${workerId} — downgrading status to failed`);
+        }
+      }
+
       // If worker didn't report via HTTP (crashed or timed out), auto-report
       if (currentAgent.status === 'active' || currentAgent.status === 'spawning') {
-        const status = result.success ? 'done' : 'failed';
+        const effectiveSuccess = result.success && mergeOk;
+        const status = effectiveSuccess ? 'done' : 'failed';
         this.db.updateAgent(workerId, { status });
 
         // Build summary with optional git diff stat
-        let summary = result.success
+        let summary = effectiveSuccess
           ? `Worker completed. Output: ${result.output?.slice(0, 3000) || 'no output'}`
-          : (result.error || 'Worker process failed');
-        if (result.success) {
+          : (mergeOk ? (result.error || 'Worker process failed') : `Worker completed but worktree merge failed — changes may be lost`);
+        if (effectiveSuccess) {
           try {
             const diffStat = execSync('git diff --stat HEAD~1', {
               cwd: config.workspaceDir || process.cwd(),
@@ -348,20 +361,18 @@ export class WorkerPool {
           senderType: 'worker',
           type: 'worker_report',
           payload: {
-            status: result.success ? 'done' : 'failed',
+            status: effectiveSuccess ? 'done' : 'failed',
             summary,
             taskId: config.taskId,
             auto: true,  // auto-generated, not from worker HTTP report
           },
-          priority: result.success ? 1 : 0,
+          priority: effectiveSuccess ? 1 : 0,
         });
         console.log(`[WorkerPool] Auto-reported ${status} for worker ${workerId} to orchestrator`);
       }
 
-      // Issue 8: Merge worktree changes back to main repo then clean up
-      if (worktreePath) {
-        this.mergeAndCleanupWorktree(workerId, worktreePath, result.success);
-      }
+      // Clear session ID so next spawn for this role starts fresh
+      this.db.updateAgent(workerId, { sessionId: null });
     }).catch((err) => {
       claudeBackend.onProgress = onProgressOrig;
       claudeBackend.onPid = onPidOrig;
