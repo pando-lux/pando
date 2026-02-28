@@ -188,6 +188,12 @@ export class UpgradeProtocol {
    * NEVER call process.exit() if workers are active: kills running Claude Code sessions.
    */
   private safeRestart(builtCommit: string): void {
+    // Guard: if the built commit matches the running commit, no restart needed
+    if (builtCommit === this.runningCommit) {
+      console.log(`[upgrade] Built commit matches running commit (${builtCommit.slice(0, 8)}) — no restart needed`);
+      return;
+    }
+
     const activeWorkers = this.workersActiveFn();
     const messagesPending = this.messagesPendingFn();
 
@@ -294,6 +300,17 @@ export class UpgradeProtocol {
       return { success: false, message: `Git reset failed: ${msg}` };
     }
 
+    // Step 5b: If HEAD didn't move (safeGitReset skipped), mark applied without restart
+    const headAfterReset = this.git('rev-parse HEAD');
+    if (headAfterReset === localSha && localSha === this.runningCommit) {
+      console.log(`[upgrade] HEAD unchanged after reset (local ahead) — marking ${(commitHash || remoteSha).slice(0, 8)} as applied, no restart needed`);
+      const proposalId = commitHash || remoteSha;
+      this.appliedProposalIds.add(proposalId);
+      this.recordUpgrade(proposalId, 'success');
+      this.saveState();
+      return { success: true, message: 'Already incorporated (local ahead of origin).' };
+    }
+
     // Step 6: Build
     console.log('[upgrade] Building...');
     try {
@@ -316,9 +333,10 @@ export class UpgradeProtocol {
     this.recordUpgrade(proposalId, 'success');
     this.saveState();
 
-    this.safeRestart(remoteSha);
+    const actualHead = this.git('rev-parse HEAD');
+    this.safeRestart(actualHead);
 
-    return { success: true, message: `Updated to ${remoteSha.slice(0, 8)}. Restarting...` };
+    return { success: true, message: `Updated to ${actualHead.slice(0, 8)}. Restarting...` };
   }
 
   // ── Upgrade Proposal (for governance) ──────────────────────────────────
