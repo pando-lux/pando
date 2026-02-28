@@ -421,32 +421,56 @@ export class WorkerPool {
    * Called every 60 seconds by the watchdog interval.
    */
   private runMemoryWatchdog(): void {
-    // Claude Code sessions accumulate conversation context and routinely grow to 9GB+ for long-running resumed sessions
-    const MAX_WORKER_RSS = 8 * 1024 * 1024 * 1024;
+    // Use system free RAM as the trigger, not a hard per-worker limit.
+    // Claude Code sessions vary wildly in size depending on machine RAM — a 9GB worker is
+    // fine on a 64GB EC2 but catastrophic on an 8GB laptop. Let the OS tell us when we're desperate.
+    const TWO_GB  = 2 * 1024 * 1024 * 1024;
+    const ONE_GB  = 1 * 1024 * 1024 * 1024;
+    const freeRam = freemem();
+    const freeMB  = Math.round(freeRam / (1024 * 1024));
+
+    if (freeRam > TWO_GB) {
+      // Plenty of RAM — let all workers live
+      return;
+    }
+
     const stats = this.getWorkerMemoryStats();
-    for (const { workerId, pid, rssBytes } of stats) {
-      if (rssBytes > MAX_WORKER_RSS) {
-        const mb = Math.round(rssBytes / (1024 * 1024));
-        console.warn(`[WorkerPool] Watchdog: worker ${workerId} (PID ${pid}) RSS=${mb}MB exceeds 8GB. Killing.`);
-        this.kill(workerId);
-        // Notify orchestrator about the kill via messageBus
-        const agent = this.db.getAgent(workerId);
-        if (agent?.parentId) {
-          this.messageBus.send({
-            recipientId: agent.parentId,
-            senderId: workerId,
-            senderType: 'worker',
-            type: 'worker_report',
-            payload: {
-              status: 'failed',
-              summary: `Worker killed by memory watchdog: RSS=${mb}MB exceeded 8GB limit.`,
-              taskId: agent.currentTaskId,
-              auto: true,
-            },
-            priority: 0,
-          });
-        }
+    if (stats.length === 0) return;
+
+    const killWorker = (workerId: string, pid: number, rssBytes: number, reason: string) => {
+      const mb = Math.round(rssBytes / (1024 * 1024));
+      console.warn(`[WorkerPool] Watchdog: ${reason} Killing worker ${workerId} (PID ${pid}, RSS=${mb}MB).`);
+      this.kill(workerId);
+      const agent = this.db.getAgent(workerId);
+      if (agent?.parentId) {
+        this.messageBus.send({
+          recipientId: agent.parentId,
+          senderId: workerId,
+          senderType: 'worker',
+          type: 'worker_report',
+          payload: {
+            status: 'failed',
+            summary: `Worker killed by memory watchdog: ${reason} System free RAM=${freeMB}MB, worker RSS=${mb}MB.`,
+            taskId: agent.currentTaskId,
+            auto: true,
+          },
+          priority: 0,
+        });
       }
+    };
+
+    if (freeRam < ONE_GB) {
+      // Emergency: kill ALL workers
+      console.warn(`[WorkerPool] Watchdog: System free RAM critically low (${freeMB}MB < 1GB). Killing ALL workers.`);
+      for (const { workerId, pid, rssBytes } of stats) {
+        killWorker(workerId, pid, rssBytes, `System free RAM critically low (${freeMB}MB).`);
+      }
+    } else {
+      // Desperate: kill only the largest worker
+      const largest = stats.reduce((a, b) => a.rssBytes > b.rssBytes ? a : b);
+      const largestMB = Math.round(largest.rssBytes / (1024 * 1024));
+      console.warn(`[WorkerPool] Watchdog: System free RAM critically low (${freeMB}MB). Killing largest worker ${largest.workerId} (RSS=${largestMB}MB) to prevent OOM.`);
+      killWorker(largest.workerId, largest.pid, largest.rssBytes, `System free RAM critically low (${freeMB}MB).`);
     }
   }
 

@@ -467,6 +467,35 @@ export class Orchestrator {
     sections.push(`Pending tasks: ${board.pendingTasks}`);
     sections.push('');
 
+    // Full team roster — ALL workers under this orchestrator (last 2h + always active/recently-failed)
+    {
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
+      const fifteenMinAgo2 = new Date(Date.now() - 15 * 60 * 1000).toISOString();
+      const allTeamWorkers = this.deps.db.listAgents({ type: 'worker', parentId: this.orchestratorId });
+      const rosterWorkers = allTeamWorkers.filter(w => {
+        if (w.status === 'active') return true;
+        if ((w.updatedAt || w.createdAt || '') >= fifteenMinAgo2) return true; // recently failed/done
+        return (w.createdAt || '') >= twoHoursAgo;
+      });
+      if (rosterWorkers.length > 0) {
+        sections.push('## Your Team');
+        const now = Date.now();
+        for (const w of rosterWorkers) {
+          const spawnedMs = w.createdAt ? new Date(w.createdAt).getTime() : now;
+          const ageMin = Math.round((now - spawnedMs) / 60000);
+          const ageStr = ageMin < 60 ? `${ageMin}min ago` : `${Math.round(ageMin / 60)}h ago`;
+          const lastReport = w.lastReportAt
+            ? new Date(w.lastReportAt).toISOString().slice(11, 16)
+            : 'never';
+          const taskSnippet = w.rolePrompt
+            ? w.rolePrompt.replace(/\n/g, ' ').slice(0, 80)
+            : (w.currentTaskId || 'no task');
+          sections.push(`- ${w.role} ${w.id}: ${w.status.toUpperCase()} (spawned ${ageStr}, last report: ${lastReport}) — ${taskSnippet}`);
+        }
+        sections.push('');
+      }
+    }
+
     // Recently failed workers (Fix 2)
     if (board.recentlyFailed.length > 0) {
       sections.push('## Recently Failed Workers');
