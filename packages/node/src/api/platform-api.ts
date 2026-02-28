@@ -222,12 +222,16 @@ export async function registerPlatformRoutes(
       return { status: 'queued', threadId, projectId: newProjectId, reply: instantReply, tier: 'complex' };
     });
 
-    // GET /chat/history — return messages from the most recent thread
+    // GET /chat/history — return messages from the most recent thread for this user
     fastify.get('/chat/history', async (request: any) => {
       const threadStore = node.getThreadStore();
       if (!threadStore) return { messages: [] };
-      const threads = await threadStore.listThreadsAsync();
-      // threads are sorted by updatedAt desc
+      const userId = await deps.verifyUserJwt(request);
+      // Use user-scoped query (queryRecords with userId filter) to get only this user's threads
+      const threads = userId
+        ? await threadStore.listUserThreadsAsync(userId)
+        : await threadStore.listThreadsAsync();
+      // threads are sorted by updatedAt desc — first is most recent
       if (threads.length > 0) {
         const latest = threads[0];
         const msgs = await threadStore.getMessagesAsync(latest.id);
