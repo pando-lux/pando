@@ -14,6 +14,9 @@ nul
 # Temporary files
 tmp-*.json
 
+# Worker context files (runtime artifact, not source)
+.pando-worker-context.md
+
 # Launch scripts with embedded secrets
 start-with-keys.sh
 
