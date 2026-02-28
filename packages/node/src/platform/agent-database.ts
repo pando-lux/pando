@@ -663,6 +663,11 @@ export class AgentDatabase {
     return result.changes;
   }
 
+  countAllUnreadMessages(): number {
+    const row = this.db.prepare('SELECT COUNT(*) as count FROM message_inbox WHERE read_at IS NULL').get() as any;
+    return row?.count ?? 0;
+  }
+
   // =========================================================================
   // Tick Log
   // =========================================================================

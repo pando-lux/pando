@@ -719,6 +719,13 @@ export interface HealthMetrics {
   eventLoopLagMs?: number;
   ledgerSyncLagMs?: number | null; // null if no sync data available
   agentSpawnFailureRate?: number;  // 0-1, over spawn failure window
+  // Worker process memory (child claude.exe / node.exe processes spawned by WorkerPool)
+  workerMemory?: {
+    totalWorkerRssBytes: number;
+    freeMemBytes: number;
+    totalMemBytes: number;
+    perWorker: { workerId: string; pid: number; rssBytes: number }[];
+  };
 }
 
 export interface MonitorAlert {

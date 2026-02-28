@@ -81,7 +81,7 @@ import { OllamaBackend } from './core/ai-backend-ollama.js';
 import { LocalEnvironment } from './kernel/local-environment.js';
 import { toString as uint8ArrayToString } from 'uint8arrays';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, freemem, totalmem } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { execSync } from 'node:child_process';
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
@@ -514,6 +514,8 @@ export class PandoNode {
       repoDir,
       localPeerId: this.identity.peerId,
       networkProvider: () => this.network,
+      workersActiveFn: () => this.workerPool?.getActiveWorkerCount() ?? 0,
+      messagesPendingFn: () => this.messageBus?.hasPendingMessages() ?? false,
     });
 
     // Subscribe to GossipSub task events so all nodes see task changes
@@ -650,8 +652,17 @@ export class PandoNode {
 
     this.requestReply.registerHandler('health_check', async () => {
       const monitor = this.getMonitor();
+      // Include worker process memory (claude.exe / node.exe children)
+      const workerStats = this.workerPool?.getWorkerMemoryStats() ?? [];
+      const workerMemory = {
+        totalWorkerRssBytes: workerStats.reduce((sum, s) => sum + s.rssBytes, 0),
+        freeMemBytes: freemem(),
+        totalMemBytes: totalmem(),
+        perWorker: workerStats,
+      };
       if (monitor) {
-        return monitor.getCurrentMetrics();
+        const metrics = monitor.getCurrentMetrics();
+        return { ...metrics, workerMemory };
       }
       // Fallback basic health info when monitor is not running
       return {
@@ -660,6 +671,7 @@ export class PandoNode {
         peerCount: this.network!.getPeerCount(),
         schedulerRunning: !!this.scheduler,
         uptimeSeconds: Math.floor(process.uptime()),
+        workerMemory,
       };
     });
 

@@ -108,6 +108,10 @@ export interface UpgradeProtocolDeps {
   deployManagerProvider?: () => DeployManager | null;
   /** Optional: network for peer count */
   networkProvider?: () => PandoNetwork | null;
+  /** Returns number of active workers — safe restart requires 0 */
+  workersActiveFn?: () => number;
+  /** Returns true if unread messages exist — safe restart requires false */
+  messagesPendingFn?: () => boolean;
 }
 
 export class UpgradeProtocol {
@@ -134,6 +138,13 @@ export class UpgradeProtocol {
   // Restart callback — set by PandoNode
   private requestRestartFn: ((reason?: string) => void) | null = null;
 
+  // Safe restart callbacks
+  private workersActiveFn: () => number;
+  private messagesPendingFn: () => boolean;
+
+  // Commit hash that was running when this process started
+  private runningCommit: string;
+
   constructor(deps: UpgradeProtocolDeps) {
     this.governance = deps.governance;
     this.guardrails = deps.guardrails;
@@ -142,6 +153,18 @@ export class UpgradeProtocol {
     this.localPeerId = deps.localPeerId;
     this.deployManagerProvider = deps.deployManagerProvider || (() => null);
     this.networkProvider = deps.networkProvider || (() => null);
+    this.workersActiveFn = deps.workersActiveFn || (() => 0);
+    this.messagesPendingFn = deps.messagesPendingFn || (() => false);
+
+    // Snapshot the git HEAD at startup — used to detect stale compiled code after self-commits
+    try {
+      this.runningCommit = execSync('git rev-parse HEAD', {
+        cwd: deps.repoDir, encoding: 'utf-8', timeout: 5_000, stdio: 'pipe',
+      }).trim();
+      console.log(`[upgrade] Running commit: ${this.runningCommit.slice(0, 8)}`);
+    } catch {
+      this.runningCommit = 'unknown';
+    }
 
     // Ensure upgrade state directory
     const upgradeDir = join(this.dataDir, 'upgrade-protocol');
@@ -161,6 +184,35 @@ export class UpgradeProtocol {
 
   setRequestRestart(fn: (reason?: string) => void): void {
     this.requestRestartFn = fn;
+  }
+
+  /**
+   * Attempt a safe restart. Exits with RESTART_EXIT_CODE (75) only when:
+   * - 0 active workers (no Claude Code sessions in progress)
+   * - 0 unread messages in MessageBus (no requests in-flight)
+   *
+   * If not safe, logs a warning and returns — the next upgrade cycle will retry.
+   * NEVER call process.exit() if workers are active: kills running Claude Code sessions.
+   */
+  private safeRestart(builtCommit: string): void {
+    const activeWorkers = this.workersActiveFn();
+    const messagesPending = this.messagesPendingFn();
+
+    if (activeWorkers > 0) {
+      console.warn(`[upgrade] Safe restart deferred: ${activeWorkers} active worker(s) — will retry next cycle`);
+      return;
+    }
+    if (messagesPending) {
+      console.warn(`[upgrade] Safe restart deferred: unprocessed messages in-flight — will retry next cycle`);
+      return;
+    }
+
+    console.log(`[upgrade] Safe restart triggered: built ${builtCommit.slice(0, 8)}, was running ${this.runningCommit.slice(0, 8)}`);
+    if (this.requestRestartFn) {
+      this.requestRestartFn('safe-upgrade');
+    } else {
+      setTimeout(() => { process.exit(RESTART_EXIT_CODE); }, 500);
+    }
   }
 
   hasApplied(proposalId: string): boolean {
@@ -224,6 +276,12 @@ export class UpgradeProtocol {
 
     if (localSha === remoteSha) {
       console.log('[upgrade] Already up to date.');
+      // Proposer node: source matches origin but dist may be stale (self-commit scenario).
+      // If the running commit differs from current HEAD, we built new code — restart safely.
+      if (this.runningCommit !== 'unknown' && this.runningCommit !== localSha) {
+        console.log(`[upgrade] Stale dist detected: running ${this.runningCommit.slice(0, 8)}, source is now ${localSha.slice(0, 8)} — checking safe restart`);
+        this.safeRestart(localSha);
+      }
       return { success: true, message: 'Already up to date.' };
     }
 
@@ -259,18 +317,13 @@ export class UpgradeProtocol {
 
     console.log('[upgrade] Build passed.');
 
-    // Step 7: Record success and restart
+    // Step 7: Record success and attempt safe restart
     const proposalId = commitHash || remoteSha;
     this.appliedProposalIds.add(proposalId);
     this.recordUpgrade(proposalId, 'success');
     this.saveState();
 
-    console.log('[upgrade] Scheduling restart...');
-    if (this.requestRestartFn) {
-      this.requestRestartFn('upgrade');
-    } else {
-      setTimeout(() => { process.exit(RESTART_EXIT_CODE); }, 2000);
-    }
+    this.safeRestart(remoteSha);
 
     return { success: true, message: `Updated to ${remoteSha.slice(0, 8)}. Restarting...` };
   }

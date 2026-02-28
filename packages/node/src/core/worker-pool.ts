@@ -18,10 +18,11 @@
  *   - Make scheduling decisions
  */
 
-import { existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir } from 'node:os';
+import { homedir, freemem, totalmem } from 'node:os';
 import { randomUUID } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
 
 import type { AgentDatabase, AgentIdentity, AgentType, AgentScope } from '../platform/agent-database.js';
 import type { AIBackendRegistry } from './ai-backend-registry.js';
@@ -73,11 +74,14 @@ export class WorkerPool {
   private dataDir: string;
   private apiPort: number;
   private activeProcesses = new Map<string, { kill: () => void }>();
+  /** Maps workerId → child process PID for memory tracking. */
+  private workerPids = new Map<string, number>();
 
   private genomeBridge: GenomeBridge | null = null;
   private templateRegistry: TemplateRegistry | null = null;
 
   private reapInterval: NodeJS.Timeout | null = null;
+  private watchdogInterval: NodeJS.Timeout | null = null;
 
   constructor(
     private db: AgentDatabase,
@@ -94,13 +98,26 @@ export class WorkerPool {
     this.reapInterval = setInterval(() => this.cleanup(), 30_000);
     // Allow Node.js to exit even if this interval is still running
     this.reapInterval.unref();
+
+    // Memory watchdog: kill workers exceeding RSS limit every 60 seconds
+    this.watchdogInterval = setInterval(() => this.runMemoryWatchdog(), 60_000);
+    this.watchdogInterval.unref();
   }
 
-  /** Stop the periodic reap interval (call on node shutdown). */
+  /** Returns the number of currently active workers. Used by safe restart check. */
+  getActiveWorkerCount(): number {
+    return this.db.listAgents({ type: 'worker', status: 'active' }).length;
+  }
+
+  /** Stop the periodic reap and watchdog intervals (call on node shutdown). */
   stopReaper(): void {
     if (this.reapInterval) {
       clearInterval(this.reapInterval);
       this.reapInterval = null;
+    }
+    if (this.watchdogInterval) {
+      clearInterval(this.watchdogInterval);
+      this.watchdogInterval = null;
     }
   }
 
@@ -110,6 +127,15 @@ export class WorkerPool {
    * If found, resumes the existing worker instead of creating a new one.
    */
   async spawn(config: WorkerConfig): Promise<string> {
+    // ── Memory guard: refuse to spawn if system RAM is critically low ──────
+    const freeRam = freemem();
+    const THREE_GB = 3 * 1024 * 1024 * 1024;
+    if (freeRam < THREE_GB) {
+      const freeMB = Math.round(freeRam / (1024 * 1024));
+      console.warn(`[WorkerPool] Spawn rejected for role "${config.role}": only ${freeMB}MB free RAM (need 3GB). Skipping.`);
+      throw new Error(`Insufficient free RAM to spawn worker: ${freeMB}MB free, 3 GB required`);
+    }
+
     // ── Check for existing worker to resume ──────────────────────────────
     let workerId: string;
     let resumeSessionId: string | undefined;
@@ -230,6 +256,7 @@ export class WorkerPool {
 
     claudeBackend.onPid = (pid: number) => {
       this.db.updateAgent(workerId, { pid, status: 'active' });
+      this.workerPids.set(workerId, pid);  // track for memory monitoring
     };
 
     // Start Claude Code process — with session resume if available
@@ -259,6 +286,7 @@ export class WorkerPool {
       claudeBackend.onPid = onPidOrig;
 
       this.activeProcesses.delete(workerId);
+      this.workerPids.delete(workerId);  // stop tracking memory
 
       const currentAgent = this.db.getAgent(workerId);
       if (!currentAgent) return;
@@ -302,6 +330,7 @@ export class WorkerPool {
       claudeBackend.onProgress = onProgressOrig;
       claudeBackend.onPid = onPidOrig;
       this.activeProcesses.delete(workerId);
+      this.workerPids.delete(workerId);  // stop tracking memory
       this.db.updateAgent(workerId, { status: 'failed' });
       console.error(`[WorkerPool] Worker ${workerId} crashed:`, err.message?.slice(0, 200));
     });
@@ -318,6 +347,7 @@ export class WorkerPool {
       proc.kill();
       this.activeProcesses.delete(workerId);
     }
+    this.workerPids.delete(workerId);
 
     const agent = this.db.getAgent(workerId);
     if (agent && !['done', 'failed', 'dissolved'].includes(agent.status)) {
@@ -366,6 +396,57 @@ export class WorkerPool {
   /** Phase 105: Expose template registry for role validation */
   getTemplateRegistry(): TemplateRegistry | null {
     return this.templateRegistry;
+  }
+
+  /**
+   * Read RSS (resident set size) of every tracked worker process.
+   * Returns an array of { workerId, pid, rssBytes } for all active workers
+   * whose PIDs could be read. Workers with dead/unreadable PIDs are omitted.
+   *
+   * Uses /proc/<pid>/status on Linux, tasklist on Windows, ps on macOS/other.
+   */
+  getWorkerMemoryStats(): { workerId: string; pid: number; rssBytes: number }[] {
+    const stats: { workerId: string; pid: number; rssBytes: number }[] = [];
+    for (const [workerId, pid] of this.workerPids) {
+      const rssBytes = readPidRss(pid);
+      if (rssBytes !== null) {
+        stats.push({ workerId, pid, rssBytes });
+      }
+    }
+    return stats;
+  }
+
+  /**
+   * Kill any worker whose RSS exceeds 5 GB.
+   * Called every 60 seconds by the watchdog interval.
+   */
+  private runMemoryWatchdog(): void {
+    const FIVE_GB = 5 * 1024 * 1024 * 1024;
+    const stats = this.getWorkerMemoryStats();
+    for (const { workerId, pid, rssBytes } of stats) {
+      if (rssBytes > FIVE_GB) {
+        const mb = Math.round(rssBytes / (1024 * 1024));
+        console.warn(`[WorkerPool] Watchdog: worker ${workerId} (PID ${pid}) RSS=${mb}MB exceeds 5GB. Killing.`);
+        this.kill(workerId);
+        // Notify orchestrator about the kill via messageBus
+        const agent = this.db.getAgent(workerId);
+        if (agent?.parentId) {
+          this.messageBus.send({
+            recipientId: agent.parentId,
+            senderId: workerId,
+            senderType: 'worker',
+            type: 'worker_report',
+            payload: {
+              status: 'failed',
+              summary: `Worker killed by memory watchdog: RSS=${mb}MB exceeded 5GB limit.`,
+              taskId: agent.currentTaskId,
+              auto: true,
+            },
+            priority: 0,
+          });
+        }
+      }
+    }
   }
 
   /**
@@ -550,4 +631,62 @@ export class WorkerPool {
 
     return sections.join('\n');
   }
+}
+
+// ---------------------------------------------------------------------------
+// Module-level helper: read RSS of a process by PID
+// ---------------------------------------------------------------------------
+
+/**
+ * Read the RSS (Resident Set Size) of a process in bytes.
+ * Returns null if the process is not found or the OS call fails.
+ *
+ * - Linux:   reads /proc/<pid>/status (VmRSS line)
+ * - Windows: runs `tasklist /FI "PID eq <pid>" /FO CSV /NH`
+ * - macOS/other: runs `ps -o rss= -p <pid>`
+ */
+function readPidRss(pid: number): number | null {
+  if (process.platform === 'linux') {
+    try {
+      const status = readFileSync(`/proc/${pid}/status`, 'utf-8');
+      const m = status.match(/VmRSS:\s+(\d+)\s+kB/);
+      if (m) return parseInt(m[1], 10) * 1024;
+    } catch { /* process may have exited */ }
+    return null;
+  }
+
+  if (process.platform === 'win32') {
+    try {
+      const result = spawnSync('tasklist', ['/FI', `PID eq ${pid}`, '/FO', 'CSV', '/NH'], {
+        encoding: 'utf-8',
+        timeout: 5_000,
+      });
+      if (result.status === 0 && result.stdout) {
+        for (const line of result.stdout.trim().split('\n')) {
+          if (!line.trim() || line.includes('INFO:')) continue;
+          // CSV columns: "Image","PID","Session","Sess#","Mem Usage"
+          const cols = line.split('","');
+          if (cols.length >= 5) {
+            // last col may end with `"` — strip non-numeric chars then parse KB
+            const memStr = cols[4].replace(/[^0-9]/g, '');
+            if (memStr) return parseInt(memStr, 10) * 1024;
+          }
+        }
+      }
+    } catch { /* tasklist failed */ }
+    return null;
+  }
+
+  // macOS / other POSIX
+  try {
+    const result = spawnSync('ps', ['-o', 'rss=', '-p', String(pid)], {
+      encoding: 'utf-8',
+      timeout: 5_000,
+    });
+    if (result.status === 0 && result.stdout) {
+      const kb = parseInt(result.stdout.trim(), 10);
+      if (!isNaN(kb)) return kb * 1024;
+    }
+  } catch { /* ps failed */ }
+  return null;
 }

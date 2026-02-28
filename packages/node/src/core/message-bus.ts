@@ -84,6 +84,14 @@ export class MessageBus {
   }
 
   /**
+   * Returns true if any unread messages exist across all recipients.
+   * Used by safe restart check — don't exit if messages are in-flight.
+   */
+  hasPendingMessages(): boolean {
+    return this.db.countAllUnreadMessages() > 0;
+  }
+
+  /**
    * Clean up old read messages.
    */
   cleanup(olderThanDays = 7): number {
