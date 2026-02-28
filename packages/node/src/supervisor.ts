@@ -11,6 +11,8 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as http from 'node:http';
 import { execSync } from 'node:child_process';
+import { writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 
 const RESTART_EXIT_CODE = 75;
 const RESTART_DELAY_MS  = 2_000;
@@ -116,11 +118,22 @@ function openUrl(url: string): void {
 
 // ─── System tray (optional — headless fallback) ────────────────────────────
 
-// 16×16 "P" icon: amber P on dark background (Pando brand).
-const ICON_B64 =
-  'iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAALUlEQVR4nGPQ1dX9' +
-  'TwlmGHwG/N/PgBfTzwBixWlnwOALA5KjcQgbQHFSprsBAKmBwGAyMyKZAAAAAElF' +
-  'TkSuQmCC';
+// 16x16 amber "P" on dark background — Pillow-generated PNG-in-ICO (works on Windows 10/11).
+// Written to temp file because systray2 loads icons most reliably via file path.
+const ICON_ICO_B64 =
+  'AAABAAEAEBAAAAAAIADmAAAAFgAAAIlQTkcNChoKAAAADUlIRFIAAAAQAAAAEAgGAAAAH/P/YQAAAK1J' +
+  'REFUeJxjlJNT+c9AAWCiRDNVDGBBF5AR+c1wtPchnP/nLyPDqw/MDF1rhBnWH+Ml3gUrD/IxKCSo' +
+  'MJjlKzC8eM/C0Jf2kkFB/DfxBoDA//8MDG8/MzOsOMTHwMTIwGCp+Z2BrDDgYP1PfBggA0ZGBgYx' +
+  '/j8MkfafwGFx+AonA9EGhNt/AuNffxgZ7r9gZciYLMHw5A0r8QasPMjHUDZPjGHwJyTGoZ8XKDYg' +
+  'OhyIzgQAABUVLxVoLCCFAAAAAElFTkSuQmCC';
+
+function getIconPath(): string {
+  const icoPath = join(tmpdir(), 'pando-tray.ico');
+  try { writeFileSync(icoPath, Buffer.from(ICON_ICO_B64, 'base64')); } catch { /* ignore */ }
+  return icoPath;
+}
+
+const ICON_PATH = getIconPath();
 
 async function initTray(
   getChild: () => ChildProcess | null,
@@ -155,7 +168,7 @@ async function initTray(
   let tray: any;
   try {
     tray = new SysTray({
-      menu: { icon: ICON_B64, title: '', tooltip: 'Pando Node — Running', items },
+      menu: { icon: ICON_PATH, title: '', tooltip: 'Pando Node — Running', items },
       debug: false,
       copyDir: true,
     });
