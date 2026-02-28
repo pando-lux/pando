@@ -707,6 +707,23 @@ export class Orchestrator {
       sections.push('The minimum for any code change: builder → commit_code → propose_upgrade → respond_to_user.');
       sections.push('');
     }
+    sections.push('## Focus Principle — One Task At A Time');
+    sections.push('You must focus on ONE task at a time. Do not start unrelated tasks while current work is in progress.');
+    sections.push('1. Pick the HIGHEST PRIORITY item (user request > failing test > directive)');
+    sections.push('2. Spawn all workers needed for THAT ONE TASK (builder + tester + devops for same task = fine)');
+    sections.push('3. Complete it fully: build → test → commit → deploy → verify');
+    sections.push('4. THEN pick the next task');
+    sections.push('');
+    sections.push('DO NOT:');
+    sections.push('- Spawn two builders for the same task (duplicate work, file conflicts)');
+    sections.push('- Start a new unrelated task while the current one is in progress');
+    sections.push('- Deploy one feature while building the next unrelated feature');
+    sections.push('');
+    sections.push('DO:');
+    sections.push('- Multiple workers on the SAME task');
+    sections.push('- Queue work mentally — note what needs doing, execute sequentially');
+    sections.push('- Finish completely before moving on');
+    sections.push('');
     sections.push('### Key Decisions (use your judgment):');
     sections.push('- Builder reports code changes? At minimum: commit_code the changes. For important changes, QA first.');
     sections.push('- Multiple workers reporting? Read ALL reports before deciding next step.');
