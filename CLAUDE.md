@@ -91,6 +91,13 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
 
 **Idle ticks = zero cost.** When inbox is empty, tick is Tier 1 (deterministic, no AI call).
 
+### Production features (live)
+- **SSE push on respond_to_user**: Orchestrator pushes `chat_message` SSE events when responding to users. Gateway receives real-time updates — no page refresh needed.
+- **Auto-dissolution**: Project orchestrators dissolve immediately when all workers are done/failed and inbox is empty. Fallback: dissolve after 3 min idle (was 10 min).
+- **P2P chat proxy**: EC2 nodes without Claude Code forward build requests via `chat_proxy` P2P handler to Claude-capable nodes. The remote node runs the full pipeline (project creation → orchestrator → builder → deploy). Replaces old one-shot `routeClaudeTaskP2P`.
+- **Database cleanup**: 60s timer prunes read messages (>7d), expired discoveries. Every 10 min: prunes tick_log (>7d), failed/dissolved workers (>7d), old reflections (>30d), inactive directives (>7d).
+- **Builder error tracking**: Worker failure reports include exit code, stderr, and resume status. Orchestrator AI prompt warns when a role has failed 3+ times consecutively.
+
 ### Agent system components
 
 | Component | File | Purpose |

@@ -53,17 +53,12 @@ export default function ToastSSEBridge() {
         `Vote ${vote.choice} on "${vote.proposalTitle?.slice(0, 40) || "proposal"}"`
       );
     },
-    onComment: (comment) => {
-      showToast(
-        "comment",
-        `Comment: "${comment.content?.slice(0, 50) || "..."}"`
-      );
-    },
-    onDecision: (decision) => {
-      showToast(
-        "decision",
-        `Proposal ${decision.outcome}: "${decision.proposalTitle?.slice(0, 40) || "proposal"}"`
-      );
+    onActivity: (activity) => {
+      if (activity?.type === 'comment') {
+        showToast("comment", `Comment: "${activity.content?.slice(0, 50) || "..."}"`);
+      } else if (activity?.type === 'decision') {
+        showToast("decision", `Proposal ${activity.outcome}: "${activity.proposalTitle?.slice(0, 40) || "proposal"}"`);
+      }
     },
   });
 

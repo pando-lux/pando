@@ -1,0 +1,37 @@
+flow ChatProxyRouting {
+  summary: "P2P chat proxy: How build requests route from gateway → EC2 (no Claude Code) → P2P chat_proxy handler → Claude-capable node → full pipeline (project creation → orchestrator → builder → deploy). Replaces one-shot routeClaudeTaskP2P which only returned text."
+  trigger: UserBuildRequest
+
+  step gateway_request -> ec2_node {
+    actor: User
+    what: "User sends 'build me a counter app' via gateway. Gateway forwards to EC2 API (POST /v1/chat/threads/:id/message)."
+  }
+
+  step ec2_node -> classify {
+    actor: ApiServer
+    what: "EC2 node runs doormanClassify(). Intent = 'build'. But this node has no Claude Code (hasClaudeCodeAuth() = false)."
+  }
+
+  step classify -> p2p_proxy {
+    actor: PandoNode
+    what: "platform-api.ts calls node.routeChatProxyP2P(message, threadId). This finds shareCompute peers via CapabilityRegistry and sends 'chat_proxy' P2P request-reply."
+    @gotcha("routeChatProxyP2P returns immediately with 'queued' — 30s timeout for just the handshake, not the full build.")
+  }
+
+  step p2p_proxy -> chat_proxy_handler {
+    actor: PandoNode
+    what: "Claude-capable node receives 'chat_proxy' handler. Creates project via ProjectStore, calls ensureProjectOrchestrator, routes user_request to orchestrator via MessageBus."
+  }
+
+  step chat_proxy_handler -> full_pipeline {
+    actor: Orchestrator
+    what: "Standard pipeline runs: orchestrator tick → spawn builder → builder writes code → QA tests → devops deploys → respond_to_user with deploy URL."
+    @gotcha("Results come back via SSE push (chat_message event) on the node that owns the thread. Cross-node SSE not yet implemented — remote node results need thread polling.")
+  }
+
+  step full_pipeline -> user_sees_result {
+    actor: Gateway
+    what: "Gateway chat page receives chat_message SSE event with deploy URL, or user polls thread history. No page refresh needed."
+  }
+
+}

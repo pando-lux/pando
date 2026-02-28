@@ -969,4 +969,32 @@ export class AgentDatabase {
     const result = this.db.prepare('DELETE FROM project_discoveries WHERE expires_at IS NOT NULL AND expires_at < ?').run(now);
     return result.changes;
   }
+
+  /**
+   * Prune old data from all tables to prevent unbounded SQLite growth.
+   * Called periodically from the node cleanup timer.
+   */
+  pruneOldData(): { tickLog: number; agents: number; reflections: number; directives: number } {
+    const tickLog = this.db.prepare(
+      "DELETE FROM tick_log WHERE created_at < datetime('now', '-7 days')"
+    ).run().changes;
+
+    const agents = this.db.prepare(
+      "DELETE FROM agent_identity WHERE status IN ('failed','dissolved') AND created_at < datetime('now', '-7 days') AND type = 'worker'"
+    ).run().changes;
+
+    const reflections = this.db.prepare(
+      "DELETE FROM reflections WHERE created_at < datetime('now', '-30 days')"
+    ).run().changes;
+
+    const directives = this.db.prepare(
+      "DELETE FROM directives WHERE active = 0 AND created_at < datetime('now', '-7 days')"
+    ).run().changes;
+
+    if (tickLog + agents + reflections + directives > 0) {
+      console.log(`[AgentDatabase] Pruned: tick_log=${tickLog}, agents=${agents}, reflections=${reflections}, directives=${directives}`);
+    }
+
+    return { tickLog, agents, reflections, directives };
+  }
 }

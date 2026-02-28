@@ -64,6 +64,8 @@ export interface OrchestratorDeps {
   repoDir?: string;
   /** Thread store for writing orchestrator responses back to chat UI */
   threadStore?: ThreadStore;
+  /** Push SSE events to connected clients (chat_message, etc.) */
+  pushEvent?: (event: string, data: any) => void;
 }
 
 export type OrchestratorAction =
@@ -78,7 +80,6 @@ export type OrchestratorAction =
   | { type: 'escalate'; message: string }
   | { type: 'propose_upgrade'; title: string; description: string }
   | { type: 'commit_code'; message: string }
-  | { type: 'deploy'; projectId: string }
   | { type: 'respond_to_user'; message: string }
   | { type: 'run_scenarios'; category?: string };
 
@@ -844,12 +845,20 @@ export class Orchestrator {
       }
     }
 
-    // Recently failed workers
+    // Recently failed workers + consecutive failure tracking
     if (board.recentlyFailed.length > 0) {
       sections.push('## Recently Failed Workers');
+      const failCountByRole: Record<string, number> = {};
       for (const w of board.recentlyFailed) {
+        failCountByRole[w.role] = (failCountByRole[w.role] || 0) + 1;
         const task = w.rolePrompt ? w.rolePrompt.replace(/\n/g, ' ').slice(0, 120) : (w.lastTask || 'unknown task');
         sections.push(`- ${w.role} ${w.id} failed at ${w.failedAt}. Was working on: ${task}`);
+      }
+      // Warn about roles with repeated failures
+      for (const [role, count] of Object.entries(failCountByRole)) {
+        if (count >= 3) {
+          sections.push(`\n⚠️ WARNING: ${role} has failed ${count} times recently. Consider: fresh session (kill old worker first), different approach, or simpler scope.`);
+        }
       }
       sections.push('');
     }
@@ -1351,13 +1360,6 @@ export class Orchestrator {
         break;
       }
 
-      case 'deploy': {
-        // Phase 105: Deployment is now agent-driven (devops worker calls the API).
-        // This case is kept for backward compatibility but should not be used.
-        console.log(`[Orchestrator ${this.orchestratorId}] Deploy action received — deployment is now handled by devops agent`);
-        break;
-      }
-
       case 'respond_to_user': {
         console.log(`[Orchestrator ${this.orchestratorId}] → User: ${action.message}`);
         // Write response to ThreadStore so it appears in the chat UI
@@ -1371,6 +1373,15 @@ export class Orchestrator {
           } catch (err: any) {
             console.warn(`[Orchestrator ${this.orchestratorId}] ThreadStore write failed: ${err.message?.slice(0, 100)}`);
           }
+        }
+        // Push SSE event so gateway updates in real-time (no page refresh needed)
+        if (this.deps.pushEvent && this._lastThreadId) {
+          this.deps.pushEvent('chat_message', {
+            threadId: this._lastThreadId,
+            role: 'assistant',
+            content: action.message,
+            timestamp: Date.now(),
+          });
         }
         // Also store in MessageBus for API polling fallback
         this.deps.db.sendMessage({
@@ -1555,21 +1566,34 @@ export class Orchestrator {
       console.log(`[Orchestrator ${this.orchestratorId}] Self-check: dissolved ${dissolved} stale orchestrator(s)`);
     }
 
-    // Change 4: Dissolve idle project orchestrators (no workers, no activity > 10 minutes)
-    // lastReportAt is repurposed as lastActivityAt for orchestrators (updated on message receive / worker spawn)
-    const tenMinAgo = new Date(Date.now() - 600000).toISOString();
+    // Dissolve idle project orchestrators (no workers, no activity > 3 minutes)
+    // Also dissolve immediately if all workers are done/failed and no unread messages remain.
+    const threeMinAgo = new Date(Date.now() - 180000).toISOString();
     let idleProjectsDissolved = 0;
     for (const orch of allOrchestrators) {
       if (orch.id === this.orchestratorId) continue;
       if (orch.role !== 'user_project') continue;
       const orchWorkers = this.deps.db.getActiveWorkers(orch.id);
-      if (orchWorkers.length > 0) continue;
-      // Use lastReportAt as lastActivityAt; fall back to createdAt for orchestrators that never processed messages
-      const lastActivity = orch.lastReportAt || orch.createdAt;
-      if (lastActivity < tenMinAgo) {
-        console.log(`[Orchestrator ${this.orchestratorId}] Dissolving idle project orchestrator ${orch.id} (no workers, no activity for >10min, lastActivity=${lastActivity})`);
-        this.deps.orgManager.dissolve(orch.id);
-        idleProjectsDissolved++;
+
+      // Immediate dissolve: all workers done/failed AND no unread messages
+      if (orchWorkers.length === 0) {
+        const allWorkers = this.deps.db.listAgents({ type: 'worker', parentId: orch.id });
+        const allDoneOrFailed = allWorkers.length > 0 && allWorkers.every(w => w.status === 'done' || w.status === 'failed');
+        const unread = this.deps.messageBus.read(orch.id);
+        if (allDoneOrFailed && unread.length === 0) {
+          console.log(`[Orchestrator ${this.orchestratorId}] Dissolving completed project orchestrator ${orch.id} (all workers done, no unread messages)`);
+          this.deps.orgManager.dissolve(orch.id);
+          idleProjectsDissolved++;
+          continue;
+        }
+
+        // Time-based dissolve: no workers, no activity for >3 min
+        const lastActivity = orch.lastReportAt || orch.createdAt;
+        if (lastActivity < threeMinAgo) {
+          console.log(`[Orchestrator ${this.orchestratorId}] Dissolving idle project orchestrator ${orch.id} (no workers, no activity for >3min, lastActivity=${lastActivity})`);
+          this.deps.orgManager.dissolve(orch.id);
+          idleProjectsDissolved++;
+        }
       }
     }
     if (idleProjectsDissolved > 0) {

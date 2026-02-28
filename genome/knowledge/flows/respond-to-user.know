@@ -1,0 +1,32 @@
+flow RespondToUser {
+  summary: "How orchestrator sends results back to the chat UI. ThreadStore write + SSE push (chat_message event). Gateway receives real-time updates without page refresh. Also covers the deterministic auto-respond for devops deploy URLs."
+  trigger: OrchestratorAction
+
+  step orchestrator_action -> threadstore_write {
+    actor: Orchestrator
+    what: "AI returns respond_to_user action with message text. Orchestrator writes to ThreadStore via addMessage(threadId, {role: 'assistant', content, timestamp})."
+    @gotcha("_lastThreadId is tracked from user_request payloads and persisted to SQLite. Survives node restarts.")
+  }
+
+  step threadstore_write -> sse_push {
+    actor: Orchestrator
+    what: "After ThreadStore write, calls deps.pushEvent('chat_message', {threadId, role, content, timestamp}). This pushes to all connected SSE clients."
+  }
+
+  step sse_push -> gateway_display {
+    actor: Gateway
+    what: "Gateway's use-sse.ts receives chat_message event, dispatches 'pando-chat-message' CustomEvent on window. Chat page picks it up and renders the assistant message."
+  }
+
+  step devops_done -> auto_respond {
+    actor: Orchestrator
+    what: "Deterministic path: when a devops worker reports 'done' with a URL in the summary, orchestrator auto-responds with 'Deployment complete! Your app is live at: <URL>' — no AI call needed."
+    @gotcha("This check runs in the tick loop (3b2 block) BEFORE AI is consulted, so it fires even on Tier 1 ticks.")
+  }
+
+  step auto_respond -> threadstore_write {
+    actor: Orchestrator
+    what: "Auto-respond triggers the same respond_to_user execute path: ThreadStore write + SSE push."
+  }
+
+}

@@ -41,6 +41,69 @@
       "nodes": [],
       "content_hash": "f82302d9"
     },
+    "genome/knowledge/flows/chat-proxy-routing.know": {
+      "mtime": 1772315562.8596003,
+      "nodes": [
+        {
+          "_type": "flow",
+          "_name": "ChatProxyRouting",
+          "_source": "genome\\knowledge\\flows\\chat-proxy-routing.know",
+          "_steps": [
+            {
+              "_name": "gateway_request",
+              "_target": "ec2_node",
+              "actor": "User",
+              "what": "User sends 'build me a counter app' via gateway. Gateway forwards to EC2 API (POST /v1/chat/threads/:id/message).",
+              "_next": "ec2_node"
+            },
+            {
+              "_name": "ec2_node",
+              "_target": "classify",
+              "actor": "ApiServer",
+              "what": "EC2 node runs doormanClassify(). Intent = 'build'. But this node has no Claude Code (hasClaudeCodeAuth() = false).",
+              "_next": "classify"
+            },
+            {
+              "_name": "classify",
+              "_target": "p2p_proxy",
+              "_tags": [
+                "@gotcha(\"routeChatProxyP2P returns immediately with 'queued' \u2014 30s timeout for just the handshake, not the full build.\")"
+              ],
+              "actor": "PandoNode",
+              "what": "platform-api.ts calls node.routeChatProxyP2P(message, threadId). This finds shareCompute peers via CapabilityRegistry and sends 'chat_proxy' P2P request-reply.",
+              "_next": "p2p_proxy"
+            },
+            {
+              "_name": "p2p_proxy",
+              "_target": "chat_proxy_handler",
+              "actor": "PandoNode",
+              "what": "Claude-capable node receives 'chat_proxy' handler. Creates project via ProjectStore, calls ensureProjectOrchestrator, routes user_request to orchestrator via MessageBus.",
+              "_next": "chat_proxy_handler"
+            },
+            {
+              "_name": "chat_proxy_handler",
+              "_target": "full_pipeline",
+              "_tags": [
+                "@gotcha(\"Results come back via SSE push (chat_message event) on the node that owns the thread. Cross-node SSE not yet implemented \u2014 remote node results need thread polling.\")"
+              ],
+              "actor": "Orchestrator",
+              "what": "Standard pipeline runs: orchestrator tick \u2192 spawn builder \u2192 builder writes code \u2192 QA tests \u2192 devops deploys \u2192 respond_to_user with deploy URL.",
+              "_next": "full_pipeline"
+            },
+            {
+              "_name": "full_pipeline",
+              "_target": "user_sees_result",
+              "actor": "Gateway",
+              "what": "Gateway chat page receives chat_message SSE event with deploy URL, or user polls thread history. No page refresh needed.",
+              "_next": "user_sees_result"
+            }
+          ],
+          "summary": "P2P chat proxy: How build requests route from gateway \u2192 EC2 (no Claude Code) \u2192 P2P chat_proxy handler \u2192 Claude-capable node \u2192 full pipeline (project creation \u2192 orchestrator \u2192 builder \u2192 deploy). Replaces one-shot routeClaudeTaskP2P which only returned text.",
+          "trigger": "UserBuildRequest"
+        }
+      ],
+      "content_hash": "7a24cdfd"
+    },
     "genome/knowledge/flows/context-pipeline.know": {
       "mtime": 1772271780.2115264,
       "nodes": [
@@ -718,6 +781,76 @@
       ],
       "content_hash": "4154692c"
     },
+    "genome/knowledge/flows/orchestrator-lifecycle.know": {
+      "mtime": 1772315573.6140773,
+      "nodes": [
+        {
+          "_type": "flow",
+          "_name": "OrchestratorLifecycle",
+          "_source": "genome\\knowledge\\flows\\orchestrator-lifecycle.know",
+          "_steps": [
+            {
+              "_name": "project_created",
+              "_target": "orchestrator_instantiated",
+              "actor": "PandoNode",
+              "what": "ensureProjectOrchestrator(projectId) creates DB record + live Orchestrator instance. Starts tick loop (30s for project, 60s for council).",
+              "_next": "orchestrator_instantiated"
+            },
+            {
+              "_name": "orchestrator_instantiated",
+              "_target": "active_phase",
+              "actor": "Orchestrator",
+              "what": "Orchestrator reads inbox, calls AI, spawns workers, manages build pipeline. Activity tracked via lastReportAt (updated on each message-processing tick).",
+              "_next": "active_phase"
+            },
+            {
+              "_name": "active_phase",
+              "_target": "all_workers_done",
+              "actor": "Orchestrator",
+              "what": "All workers report done/failed. Orchestrator clears currentFocus. If devops reported a deploy URL, auto-responds to user.",
+              "_next": "all_workers_done"
+            },
+            {
+              "_name": "all_workers_done",
+              "_target": "immediate_dissolve",
+              "_tags": [
+                "@gotcha(\"The council dissolves OTHER orchestrators, not itself. Council never self-dissolves.\")"
+              ],
+              "actor": "Council",
+              "what": "Council self-check (every 10th tick) scans project orchestrators. If all workers done/failed AND no unread messages \u2192 dissolve immediately. No waiting.",
+              "_next": "immediate_dissolve"
+            },
+            {
+              "_name": "all_workers_done",
+              "_target": "timeout_dissolve",
+              "_tags": [
+                "@gotcha(\"Was 10 min \u2014 reduced to 3 min to prevent 20+ idle orchestrators piling up.\")"
+              ],
+              "actor": "Council",
+              "what": "Fallback: if no workers but inbox not empty, or workers still pending \u2014 dissolve after 3 min idle (no workers, lastActivity > 3 min ago).",
+              "_next": "timeout_dissolve"
+            },
+            {
+              "_name": "immediate_dissolve",
+              "_target": "cleanup",
+              "actor": "OrgManager",
+              "what": "orgManager.dissolve(orchId) sets status='dissolved', stops tick timer, removes from liveOrchestrators map.",
+              "_next": "cleanup"
+            },
+            {
+              "_name": "timeout_dissolve",
+              "_target": "cleanup",
+              "actor": "OrgManager",
+              "what": "Same dissolution path as immediate \u2014 just triggered by timeout instead of completion check.",
+              "_next": "cleanup"
+            }
+          ],
+          "summary": "Project orchestrator lifecycle: creation \u2192 ticking \u2192 auto-dissolution. Orchestrators dissolve immediately when all workers are done/failed and inbox is empty. Fallback: dissolve after 3 min idle. Council self-check runs every 10th tick and enforces dissolution.",
+          "trigger": "ProjectCreation"
+        }
+      ],
+      "content_hash": "11cc8910"
+    },
     "genome/knowledge/flows/peer-exchange.know": {
       "mtime": 1772122702.345909,
       "nodes": [
@@ -961,6 +1094,62 @@
         }
       ],
       "content_hash": "4116f31a"
+    },
+    "genome/knowledge/flows/respond-to-user.know": {
+      "mtime": 1772315568.4863605,
+      "nodes": [
+        {
+          "_type": "flow",
+          "_name": "RespondToUser",
+          "_source": "genome\\knowledge\\flows\\respond-to-user.know",
+          "_steps": [
+            {
+              "_name": "orchestrator_action",
+              "_target": "threadstore_write",
+              "_tags": [
+                "@gotcha(\"_lastThreadId is tracked from user_request payloads and persisted to SQLite. Survives node restarts.\")"
+              ],
+              "actor": "Orchestrator",
+              "what": "AI returns respond_to_user action with message text. Orchestrator writes to ThreadStore via addMessage(threadId, {role: 'assistant', content, timestamp}).",
+              "_next": "threadstore_write"
+            },
+            {
+              "_name": "threadstore_write",
+              "_target": "sse_push",
+              "actor": "Orchestrator",
+              "what": "After ThreadStore write, calls deps.pushEvent('chat_message', {threadId, role, content, timestamp}). This pushes to all connected SSE clients.",
+              "_next": "sse_push"
+            },
+            {
+              "_name": "sse_push",
+              "_target": "gateway_display",
+              "actor": "Gateway",
+              "what": "Gateway's use-sse.ts receives chat_message event, dispatches 'pando-chat-message' CustomEvent on window. Chat page picks it up and renders the assistant message.",
+              "_next": "gateway_display"
+            },
+            {
+              "_name": "devops_done",
+              "_target": "auto_respond",
+              "_tags": [
+                "@gotcha(\"This check runs in the tick loop (3b2 block) BEFORE AI is consulted, so it fires even on Tier 1 ticks.\")"
+              ],
+              "actor": "Orchestrator",
+              "what": "Deterministic path: when a devops worker reports 'done' with a URL in the summary, orchestrator auto-responds with 'Deployment complete! Your app is live at: <URL>' \u2014 no AI call needed.",
+              "_next": "auto_respond"
+            },
+            {
+              "_name": "auto_respond",
+              "_target": "threadstore_write",
+              "actor": "Orchestrator",
+              "what": "Auto-respond triggers the same respond_to_user execute path: ThreadStore write + SSE push.",
+              "_next": "threadstore_write"
+            }
+          ],
+          "summary": "How orchestrator sends results back to the chat UI. ThreadStore write + SSE push (chat_message event). Gateway receives real-time updates without page refresh. Also covers the deterministic auto-respond for devops deploy URLs.",
+          "trigger": "OrchestratorAction"
+        }
+      ],
+      "content_hash": "7e44b257"
     },
     "genome/knowledge/patterns/p2p-storage-array-writes.know": {
       "mtime": 1772281149.5099373,
@@ -2971,9 +3160,9 @@
       "content_hash": "5b6eb1e2"
     },
     "packages/gateway/app/page.tsx": {
-      "mtime": 1772217982.7079067,
+      "mtime": 1772308633.9390101,
       "nodes": [],
-      "content_hash": "34bf4ac2"
+      "content_hash": "01b0a872"
     },
     "packages/gateway/app/projects/page.tsx": {
       "mtime": 1772070909.1659617,
@@ -3041,9 +3230,9 @@
       "content_hash": "d3b32651"
     },
     "packages/gateway/components/ToastSSEBridge.tsx": {
-      "mtime": 1771034656.7032864,
+      "mtime": 1772315404.0900228,
       "nodes": [],
-      "content_hash": "965d54cd"
+      "content_hash": "05be213a"
     },
     "packages/gateway/lib/account-store.ts": {
       "mtime": 1772127664.9107962,
@@ -3071,9 +3260,9 @@
       "content_hash": "87679f36"
     },
     "packages/gateway/lib/use-sse.ts": {
-      "mtime": 1772127664.9138,
+      "mtime": 1772315129.1151686,
       "nodes": [],
-      "content_hash": "6eb69926"
+      "content_hash": "07a96755"
     },
     "packages/gateway/next-env.d.ts": {
       "mtime": 1772296862.4029045,
@@ -3141,9 +3330,9 @@
       "content_hash": "b6386d5e"
     },
     "packages/node/src/api/platform-api.ts": {
-      "mtime": 1772278636.07714,
+      "mtime": 1772315310.9863386,
       "nodes": [],
-      "content_hash": "28dd8208"
+      "content_hash": "bd5400e1"
     },
     "packages/node/src/cli.ts": {
       "mtime": 1772300209.6348763,
@@ -3285,12 +3474,12 @@
       "content_hash": "fcc1fa1a"
     },
     "packages/node/src/core/worker-pool.ts": {
-      "mtime": 1772299662.5847085,
+      "mtime": 1772315339.9443588,
       "nodes": [],
-      "content_hash": "a0425022"
+      "content_hash": "90063735"
     },
     "packages/node/src/index.ts": {
-      "mtime": 1772293684.1786609,
+      "mtime": 1772315265.3409927,
       "nodes": [
         {
           "_type": "entity",
@@ -3325,10 +3514,10 @@
             "StorageBackend"
           ],
           "file": "packages\\node\\src\\index.ts:1",
-          "_content_hash": "0ebb3d40"
+          "_content_hash": "c7b95845"
         }
       ],
-      "content_hash": "0ebb3d40"
+      "content_hash": "c7b95845"
     },
     "packages/node/src/kernel/crash-guard.ts": {
       "mtime": 1772127664.9374683,
@@ -3480,9 +3669,9 @@
       "content_hash": "fea57ec4"
     },
     "packages/node/src/platform/agent-database.ts": {
-      "mtime": 1772299077.8014076,
+      "mtime": 1772315153.5906742,
       "nodes": [],
-      "content_hash": "365c886f"
+      "content_hash": "f169d1c5"
     },
     "packages/node/src/platform/agent-tools.ts": {
       "mtime": 1772216846.500401,
@@ -3560,9 +3749,9 @@
       "content_hash": "6d8b4070"
     },
     "packages/node/src/platform/orchestrator.ts": {
-      "mtime": 1772299140.7944453,
+      "mtime": 1772315363.150932,
       "nodes": [],
-      "content_hash": "5101b91f"
+      "content_hash": "33c05e51"
     },
     "packages/node/src/platform/org-manager.ts": {
       "mtime": 1772285210.4756103,

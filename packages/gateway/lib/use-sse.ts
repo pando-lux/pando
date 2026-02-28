@@ -10,9 +10,8 @@ interface SSECallbacks {
   onTransaction?: (tx: any) => void;
   onProposal?: (proposal: any) => void;
   onVote?: (vote: any) => void;
-  onComment?: (comment: any) => void;
-  onDecision?: (decision: any) => void;
   onActivity?: (activity: any) => void;
+  onChatMessage?: (msg: any) => void;
   onConnected?: () => void;
   onDisconnected?: () => void;
 }
@@ -62,14 +61,6 @@ export function useSSE(callbacks: SSECallbacks) {
       try { cbRef.current.onVote?.(JSON.parse(e.data)); } catch {}
     });
 
-    es.addEventListener("comment", (e) => {
-      try { cbRef.current.onComment?.(JSON.parse(e.data)); } catch {}
-    });
-
-    es.addEventListener("decision", (e) => {
-      try { cbRef.current.onDecision?.(JSON.parse(e.data)); } catch {}
-    });
-
     es.addEventListener("activity", (e) => {
       try { cbRef.current.onActivity?.(JSON.parse(e.data)); } catch {}
     });
@@ -79,20 +70,13 @@ export function useSSE(callbacks: SSECallbacks) {
     const dispatchChat = (e: Event) => {
       try {
         const msg = JSON.parse((e as MessageEvent).data);
+        cbRef.current.onChatMessage?.(msg);
         window.dispatchEvent(new CustomEvent("pando-chat-message", { detail: msg }));
       } catch {}
     };
     es.addEventListener("chat_message", dispatchChat);
     es.addEventListener("manager_output", dispatchChat);
     es.addEventListener("worker_message", dispatchChat);
-
-    // Streaming progress events — partial agent output
-    es.addEventListener("chat_progress", (e: Event) => {
-      try {
-        const msg = JSON.parse((e as MessageEvent).data);
-        window.dispatchEvent(new CustomEvent("pando-chat-progress", { detail: msg }));
-      } catch {}
-    });
 
     es.onopen = () => {
       setSSEConnected(true);

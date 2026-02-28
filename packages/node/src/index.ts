@@ -492,10 +492,18 @@ export class PandoNode {
     }
     this.securityMonitor.start();
 
-    // Periodic sync cleanup
+    // Periodic sync cleanup + database pruning
+    let cleanupCycle = 0;
     this.cleanupTimer = setInterval(() => {
       this.sync?.cleanup();
       this.governance?.cleanup();
+      this.messageBus?.cleanup(7);
+      this.agentDb?.deleteExpiredDiscoveries();
+      // Prune old agent data every 10 minutes (every 10th cycle)
+      cleanupCycle++;
+      if (cleanupCycle % 10 === 0) {
+        this.agentDb?.pruneOldData();
+      }
     }, 60_000);
 
     // Create passive TaskQueue — always available for API + P2P task sync
@@ -687,10 +695,6 @@ export class PandoNode {
       };
     });
 
-    this.requestReply.registerHandler('profile_query', async () => {
-      return []; // Phase 27: ProfileCache removed — agents manage own profiles
-    });
-
     // Phase 98: claude_task — one-shot Claude Code execution for P2P compute routing.
     // Only handles requests when shareCompute=true (user opted in via /contribute claude-code).
     // Receives a prompt, runs claude -p, returns text output. Stateless — no project creation.
@@ -714,6 +718,70 @@ export class PandoNode {
         error: result.error,
         executedBy: this.identity!.peerId,
       };
+    });
+
+    // P2P chat proxy — remote nodes forward full build requests here.
+    // Unlike claude_task (one-shot text), this creates a project and runs the full pipeline.
+    this.requestReply.registerHandler('chat_proxy', async (req) => {
+      if (!this.localCapStore?.isShareCompute()) {
+        return { error: 'This node is not sharing compute.' };
+      }
+      if (!this.messageBus || !this.orgManager || !this.agentDb) {
+        return { error: 'Agent system not available on this node.' };
+      }
+
+      const { message, threadId, tier } = req.payload || {};
+      if (!message) return { error: 'message required' };
+
+      // Create project via project store
+      const projectStore = this.getProjectStore?.();
+      let projectId: string | undefined;
+      if (projectStore) {
+        try {
+          const projName = (message as string).slice(0, 60).replace(/[^a-zA-Z0-9 -]/g, '').trim() || 'P2P Project';
+          const project = await projectStore.createProject({
+            name: projName,
+            description: message as string,
+            ownerId: req.from || 'p2p-remote',
+            visibility: 'listed',
+            tier: 1,
+          });
+          projectId = project.id;
+          console.log(`[chat_proxy] Created project ${projectId} for P2P request from ${req.from}`);
+        } catch (err: any) {
+          console.error(`[chat_proxy] Project creation failed: ${err.message}`);
+          return { error: 'Project creation failed' };
+        }
+      }
+
+      if (!projectId) {
+        return { error: 'No project store available' };
+      }
+
+      // Ensure orchestrator is running and route the message
+      const orchId = await this.ensureProjectOrchestrator(projectId);
+      if (!orchId) {
+        return { error: 'Failed to create orchestrator' };
+      }
+
+      // Update thread if provided
+      if (threadId) {
+        const ts = this.getThreadStore();
+        if (ts) {
+          try { ts.updateThread(threadId, { projectId }); } catch { /* best effort */ }
+        }
+      }
+
+      this.messageBus.send({
+        recipientId: orchId,
+        senderId: 'user',
+        senderType: 'user',
+        type: 'user_request',
+        payload: { message, threadId: threadId || undefined, projectId },
+        priority: 1,
+      });
+
+      return { status: 'queued', projectId, threadId };
     });
 
     // Remote task queries — allows any node to query this node's tasks via P2P
@@ -3092,6 +3160,7 @@ location /apps/${projectId}/ {
       scenarioRunner: this.scenarioRunner || undefined,
       templateRegistry: this.templateRegistry || undefined,
       threadStore: this.threadStore || undefined,
+      pushEvent: (event: string, data: any) => this.apiServer?.pushEvent(event, data),
       apiPort: this.config.apiPort,
       dataDir: this.config.dataDir || join(homedir(), '.pando'),
       repoDir: process.cwd(),
@@ -3639,6 +3708,39 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
 
   getRequestReply(): RequestReplyManager | null {
     return this.requestReply;
+  }
+
+  /**
+   * Route a chat/build request to a peer with Claude Code via P2P chat_proxy.
+   * Unlike routeClaudeTaskP2P (one-shot text), this triggers the full pipeline
+   * on the remote node (project creation → orchestrator → builder → deploy).
+   * Returns immediately with queued status. Results come back via SSE/thread.
+   */
+  async routeChatProxyP2P(message: string, threadId?: string, tier?: string): Promise<{ status: string; projectId?: string; executedBy: string } | null> {
+    if (!this.requestReply) return null;
+    const candidates = this.capabilityRegistry.getAllProfiles().filter(p =>
+      p.shareCompute === true &&
+      p.capabilities.compute_cpu === true &&
+      p.peerId !== this.identity?.peerId
+    );
+    if (candidates.length === 0) return null;
+    const peer = candidates[0];
+    try {
+      const result = await this.requestReply.request(
+        peer.peerId,
+        'chat_proxy',
+        { message, threadId, tier },
+        30_000  // 30s timeout — just queuing, not waiting for build
+      ) as any;
+      if (result?.error || result?.payload?.error) return null;
+      return {
+        status: result.payload?.status || 'queued',
+        projectId: result.payload?.projectId,
+        executedBy: peer.peerId,
+      };
+    } catch {
+      return null;
+    }
   }
 
   /**

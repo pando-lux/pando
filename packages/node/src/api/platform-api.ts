@@ -84,13 +84,14 @@ export async function registerPlatformRoutes(
         }
 
         if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
-          // Phase 98: Try P2P routing to a shareCompute peer before returning error
-          const p2pResult = await node.routeClaudeTaskP2P?.(trimmed);
+          // P2P chat proxy — forward to a Claude-capable node for full pipeline
+          const p2pResult = await node.routeChatProxyP2P?.(trimmed, threadId);
           if (p2pResult) {
+            const routingReply = 'Routing your request to a Claude-capable node. Full pipeline will run — this may take a few minutes...';
             if (threadStore && threadId) {
-              await threadStore.addMessage(threadId, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' as any });
+              await threadStore.addMessage(threadId, { role: 'assistant', content: routingReply, timestamp: Date.now(), tier: 'simple' as any });
             }
-            return { status: 'ok', threadId, reply: p2pResult.output, tier: 'simple', routedTo: p2pResult.executedBy };
+            return { status: 'queued', threadId, reply: routingReply, tier: 'complex', routedTo: p2pResult.executedBy };
           }
           const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
           if (threadStore && threadId) {
@@ -368,16 +369,15 @@ export async function registerPlatformRoutes(
       if (threadMeta?.projectId) {
         // Existing project thread — route directly to manager
         if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
-          // Phase 98: P2P routing — async (don't block HTTP response)
-          if (node.routeClaudeTaskP2P) {
-            const routingReply = 'Routing to a Claude-capable node...';
+          // P2P chat proxy — forward build request for full pipeline on remote node
+          if (node.routeChatProxyP2P) {
+            const routingReply = 'Routing to a Claude-capable node for full build pipeline...';
             await threadStore.addMessage(id, { role: 'assistant', content: routingReply, timestamp: Date.now(), tier: 'simple' });
-            node.routeClaudeTaskP2P(plaintextForProcessing).then(async (p2pResult) => {
-              if (p2pResult) {
-                await threadStore.addMessage(id, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'complex' });
-              } else {
+            node.routeChatProxyP2P(plaintextForProcessing, id).then(async (p2pResult) => {
+              if (!p2pResult) {
                 await threadStore.addMessage(id, { role: 'assistant', content: 'No Claude-capable nodes responded.', timestamp: Date.now(), tier: 'simple' });
               }
+              // On success, the remote node's pipeline will deliver results via SSE/thread
             }).catch(() => {
               threadStore.addMessage(id, { role: 'assistant', content: 'P2P routing failed.', timestamp: Date.now(), tier: 'simple' });
             });
@@ -435,15 +435,12 @@ export async function registerPlatformRoutes(
 
       // Build request — create project, update thread, route to manager
       if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
-        // Phase 98: P2P routing to a shareCompute peer — async (don't block HTTP response)
-        if (node.routeClaudeTaskP2P) {
-          const routingReply = 'Routing your request to a Claude-capable node on the network. This may take a few minutes...';
+        // P2P chat proxy — forward to a Claude-capable node for full build pipeline
+        if (node.routeChatProxyP2P) {
+          const routingReply = 'Routing your build request to a Claude-capable node. Full pipeline will run — this may take a few minutes...';
           await threadStore.addMessage(id, { role: 'assistant', content: routingReply, timestamp: Date.now(), tier: 'simple' });
-          // Fire P2P in background — update thread when result arrives
-          node.routeClaudeTaskP2P(plaintextForProcessing).then(async (p2pResult) => {
-            if (p2pResult) {
-              await threadStore.addMessage(id, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'complex' });
-            } else {
+          node.routeChatProxyP2P(plaintextForProcessing, id).then(async (p2pResult) => {
+            if (!p2pResult) {
               await threadStore.addMessage(id, { role: 'assistant', content: 'No Claude-capable nodes responded. Try again later or run /contribute claude-code on a node.', timestamp: Date.now(), tier: 'simple' });
             }
           }).catch(() => {

@@ -336,10 +336,20 @@ export class WorkerPool {
         const status = effectiveSuccess ? 'done' : 'failed';
         this.db.updateAgent(workerId, { status });
 
-        // Build summary with optional git diff stat
-        let summary = effectiveSuccess
-          ? `Worker completed. Output: ${result.output?.slice(0, 3000) || 'no output'}`
-          : (mergeOk ? (result.error || 'Worker process failed') : `Worker completed but worktree merge failed — changes may be lost`);
+        // Build summary with full error details for orchestrator diagnosis
+        const isResume = !!(currentAgent.sessionId);
+        let summary: string;
+        if (effectiveSuccess) {
+          summary = `Worker completed. Output: ${result.output?.slice(0, 3000) || 'no output'}`;
+        } else if (!mergeOk) {
+          summary = `Worker completed but worktree merge failed — changes may be lost`;
+        } else {
+          const errMsg = result.error?.slice(0, 500) || 'Worker process failed';
+          const exitCode = (result as any).exitCode ?? 'unknown';
+          const stderr = (result as any).stderr?.slice(-500) || '';
+          summary = `FAILED (exit=${exitCode}, resume=${isResume}): ${errMsg}`;
+          if (stderr) summary += `\nStderr (last 500 chars): ${stderr}`;
+        }
         if (effectiveSuccess) {
           try {
             const diffStat = execSync('git diff --stat HEAD~1', {
@@ -381,7 +391,9 @@ export class WorkerPool {
       this.db.updateAgent(workerId, { status: 'failed' });
       console.error(`[WorkerPool] Worker ${workerId} crashed:`, err.message?.slice(0, 200));
 
-      // Notify orchestrator about crash so it can retry or escalate
+      // Notify orchestrator about crash with full error details
+      const crashAgent = this.db.getAgent(workerId);
+      const wasResume = !!(crashAgent?.sessionId);
       try {
         this.messageBus.send({
           recipientId: config.orchestratorId,
@@ -390,7 +402,7 @@ export class WorkerPool {
           type: 'worker_report',
           payload: {
             status: 'failed',
-            summary: `Worker crashed: ${err.message?.slice(0, 500) || 'unknown error'}`,
+            summary: `CRASHED (resume=${wasResume}): ${err.message?.slice(0, 500) || 'unknown error'}${err.stack ? `\nStack: ${err.stack.slice(0, 300)}` : ''}`,
             taskId: config.taskId,
             auto: true,
           },
