@@ -193,7 +193,7 @@ export class OrgManager {
       maxWorkers: config.maxWorkers ?? 10,
       maxChildren: config.maxChildren ?? 5,
       lastReportAt: null,
-      templateId: null,
+      templateId: 'builtin:manager',
     });
 
     return orchestratorId;

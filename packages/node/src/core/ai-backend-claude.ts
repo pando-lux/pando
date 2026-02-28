@@ -71,7 +71,7 @@ export class ClaudeBackend implements AIBackend {
       return { success: false, output: '', backend: this.name, error: 'Claude CLI not found.' };
     }
 
-    const model = (task.options?.model as string) || 'claude-sonnet-4-6';
+    const model = (task.options?.model as string) || 'claude-opus-4-6';
     const workingDir = task.options?.cwd as string | undefined;
 
     const noTools = task.options?.noTools === true;

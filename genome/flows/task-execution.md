@@ -42,7 +42,7 @@ The primary flow: how work gets done on the Pando network.
    → Workspace ready at ~/.pando/agents/{agentId}/workspace/
 
 5. SPAWN WORKER (AgentManager)
-   Spawns `claude -p` with --model claude-sonnet-4-6 and workspace CLAUDE.md.
+   Spawns `claude -p` with --model claude-opus-4-6 and workspace CLAUDE.md.
    Worker follows its own todo list:
      a. Understand the task
      b. Do the work
@@ -106,5 +106,5 @@ Bridge: creates timeout alert → Manager checks PID, checks workspace for parti
 ## Cost
 
 Typical task: ~$0.50-5 (Manager item processing + worker session + optional follow-up items).
-All sessions use `--model claude-sonnet-4-6` (configurable via `DEFAULT_CLAUDE_MODEL`).
+All sessions use `--model claude-opus-4-6` (configurable via `DEFAULT_CLAUDE_MODEL`).
 Bridge-driven model: zero cost when idle (no heartbeat waste).

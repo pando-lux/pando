@@ -43,7 +43,7 @@ How a manager session starts, runs, and recovers from crashes. Driven by the Bri
    If Manager is idle:
      item = bridge.next(managerId)
      spawn: claude -p "<prompt>" --output-format stream-json --verbose
-            --dangerously-skip-permissions --model claude-sonnet-4-6
+            --dangerously-skip-permissions --model claude-opus-4-6
      If sessionId exists: --continue --resume <sessionId>
    If Manager is busy:
      Item waits in queue. FIFO within priority tier.

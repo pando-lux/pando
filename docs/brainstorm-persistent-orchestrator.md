@@ -1,5 +1,14 @@
 # Brainstorm: Persistent Session Orchestrator (2026-02-28)
 
+**STATUS: IMPLEMENTED** — See orchestrator.ts, template-registry.ts (`builtin:manager`), ai-backend-claude.ts.
+
+Key changes from brainstorm:
+- Session rotation: 50 ticks (not 30)
+- 3-layer JSON parser for tool-use output (pure JSON → code fence → backward bracket scan)
+- Boot prompt + tick update pattern (as proposed)
+- All models upgraded to `claude-opus-4-6`
+- Worker auto-reports enriched to 3000 chars + git diff stat
+
 ## The Problem
 
 The current orchestrator is a **stateless, blind CEO**:

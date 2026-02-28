@@ -706,7 +706,7 @@ export class PandoNode {
       const result = await backend.execute({
         type: 'text',
         prompt: fullPrompt,
-        options: { model: model || 'claude-sonnet-4-6' },
+        options: { model: model || 'claude-opus-4-6' },
       });
       return {
         success: result.success,

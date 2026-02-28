@@ -1,4 +1,3 @@
-// TODO: Add orchestrator-level health metrics tracking
 /**
  * Orchestrator — The deterministic tick loop at the heart of the agent system.
  *
@@ -11,13 +10,14 @@
  *   1. Read board (tasks for this orchestrator)
  *   2. Read inbox (unread messages)
  *   3. Classify: Tier 1 (deterministic) or Tier 2 (needs AI judgment)
- *   4. If Tier 2: short, stateless, 1-turn AI call
+ *   4. If Tier 2: session-persistent AI call (boot prompt on first tick, tick update on subsequent)
  *   5. Execute actions returned by AI or determined by code
  *   6. Log the tick
  *
  * Key design decisions:
- *   - No long AI conversations. Each tick is a fresh AI call.
- *   - All state in SQLite. Nothing in memory except the timer handle.
+ *   - Session-persistent AI brain (Opus). First tick = boot prompt with full instructions.
+ *     Subsequent ticks = short board-state update. Session rotates every ~50 ticks.
+ *   - All state in SQLite. Nothing in memory except the timer handle + session ID.
  *   - Same class at all levels. Only the config and rolePrompt differ.
  */
 
@@ -110,6 +110,16 @@ export class Orchestrator {
   private _lastThreadId: string | null = null;
   /** Tick counter for periodic self-check (every 10th tick) */
   private _tickCount = 0;
+  /** Claude Code session ID for persistent context across ticks */
+  private _sessionId: string | null = null;
+  /** Number of ticks within the current session */
+  private _sessionTickCount = 0;
+  /** Consecutive empty ticks (no actions returned by AI) */
+  private _consecutiveEmptyTicks = 0;
+  /** Consecutive parse failures from AI output */
+  private _consecutiveParseFailures = 0;
+  /** Rotate session after this many ticks to keep context fresh */
+  private static readonly SESSION_ROTATION_TICKS = 50;
 
   constructor(
     private orchestratorId: string,
@@ -127,6 +137,13 @@ export class Orchestrator {
     const interval = agent.tickIntervalMs || 60000;
     this.stopped = false;
     this._startTime = Date.now();
+
+    // Clear session on node restart — old process is dead, session unusable.
+    // The AI will get a fresh boot prompt on first tick.
+    this._sessionId = null;
+    this._sessionTickCount = 0;
+    this._consecutiveEmptyTicks = 0;
+    this._consecutiveParseFailures = 0;
 
     // Tick immediately on start, then on interval
     this.tick().catch(err => console.error(`[Orchestrator ${this.orchestratorId}] tick error:`, err));
@@ -483,26 +500,105 @@ export class Orchestrator {
   // =========================================================================
 
   private async callAI(board: BoardState, agent: AgentIdentity): Promise<OrchestratorAction[]> {
-    const backend = this.deps.aiRegistry.getBest('text-generation');
+    const backend = this.deps.aiRegistry.getBest('code-execution');
     if (!backend) {
-      throw new Error('Claude CLI not found.');
+      // Fallback to text-generation if no code-execution backend
+      const textBackend = this.deps.aiRegistry.getBest('text-generation');
+      if (!textBackend) throw new Error('Claude CLI not found.');
+      // Legacy path: stateless text call (no session, no tools)
+      const prompt = this.buildBootPrompt(board, agent);
+      const result = await textBackend.execute({
+        type: 'text',
+        prompt,
+        options: { model: 'claude-opus-4-6', noTools: true },
+      });
+      if (!result.success || !result.output) {
+        throw new Error(result.error ?? 'AI backend returned no output');
+      }
+      return this.parseAIActions(result.output);
     }
 
-    // Build the AI prompt
-    const prompt = this.buildAIPrompt(board, agent);
+    // Session-persistent path: boot prompt on first tick, tick update on subsequent
+    const isBootTick = !this._sessionId;
+    const prompt = isBootTick
+      ? this.buildBootPrompt(board, agent)
+      : this.buildTickUpdate(board, agent);
+
+    if (isBootTick) {
+      console.log(`[Orchestrator ${this.orchestratorId}] Boot tick — full prompt (${prompt.length} chars)`);
+    } else {
+      console.log(`[Orchestrator ${this.orchestratorId}] Tick update — session ${this._sessionId?.slice(0, 8)} (${prompt.length} chars)`);
+    }
 
     const result = await backend.execute({
-      type: 'text',
+      type: 'code',
       prompt,
-      options: { model: 'claude-sonnet-4-6', noTools: true },
+      sessionId: this._sessionId || undefined,
+      options: {
+        model: 'claude-opus-4-6',
+        noTools: false,
+        cwd: agent.workspaceDir || process.cwd(),
+      },
     });
 
+    // Save session ID for future ticks
+    if (result.sessionId) {
+      this._sessionId = result.sessionId;
+      this.deps.db.updateAgent(this.orchestratorId, { sessionId: result.sessionId });
+    }
+
+    // Track cost
+    if (result.cost) {
+      const current = this.deps.db.getAgent(this.orchestratorId);
+      if (current) {
+        this.deps.db.updateAgent(this.orchestratorId, {
+          budgetSpent: (current.budgetSpent || 0) + result.cost,
+        });
+      }
+    }
+
+    this._sessionTickCount++;
+
     if (!result.success || !result.output) {
+      this._consecutiveParseFailures++;
+      if (this._consecutiveParseFailures >= 2) {
+        this.rotateSession('2 consecutive AI failures');
+      }
       throw new Error(result.error ?? 'AI backend returned no output');
     }
 
     // Parse actions from AI output
-    return this.parseAIActions(result.output);
+    const actions = this.parseAIActions(result.output);
+
+    // Session rotation checks
+    if (this._sessionTickCount >= Orchestrator.SESSION_ROTATION_TICKS) {
+      this.rotateSession(`reached ${Orchestrator.SESSION_ROTATION_TICKS} ticks`);
+    }
+
+    // Track empty ticks for session health
+    if (actions.length === 0) {
+      this._consecutiveEmptyTicks++;
+      // If 5 empty ticks but there are pending user requests, session may be confused
+      if (this._consecutiveEmptyTicks >= 5 && board.userRequests.length > 0) {
+        this.rotateSession('5 empty ticks with pending user requests');
+      }
+    } else {
+      this._consecutiveEmptyTicks = 0;
+    }
+
+    this._consecutiveParseFailures = 0;
+    return actions;
+  }
+
+  /**
+   * Rotate session: clear session ID so next tick gets a fresh boot prompt.
+   */
+  private rotateSession(reason: string): void {
+    console.log(`[Orchestrator ${this.orchestratorId}] Session rotation: ${reason} (was session ${this._sessionId?.slice(0, 8) || 'none'}, ${this._sessionTickCount} ticks)`);
+    this._sessionId = null;
+    this._sessionTickCount = 0;
+    this._consecutiveEmptyTicks = 0;
+    this._consecutiveParseFailures = 0;
   }
 
   /** Extract project ID from user requests if they reference a known project. */
@@ -517,39 +613,109 @@ export class Orchestrator {
     return null;
   }
 
-  private buildAIPrompt(board: BoardState, agent: AgentIdentity): string {
+  // =========================================================================
+  // Prompt building (3-method split)
+  // =========================================================================
+
+  /**
+   * Build the full boot prompt for the first tick of a session.
+   * Contains all instructions, available actions, decision guide, and current board state.
+   */
+  private buildBootPrompt(board: BoardState, agent: AgentIdentity): string {
     const sections: string[] = [];
 
     sections.push(`# ROLE: Manager for orchestrator "${agent.role}" (${this.orchestratorId})`);
     sections.push('');
+    sections.push('You are a SESSION-PERSISTENT manager. Your Claude Code session survives across ticks —');
+    sections.push('you remember previous decisions, worker reports, and context from earlier ticks.');
+    sections.push('You are called every ~60 seconds with a board-state update.');
+    sections.push('');
     sections.push('You are the MANAGER of this team. You read reports from your workers, assess the situation, and decide what happens next.');
     sections.push('You do NOT do work yourself — you delegate to specialized workers.');
-    sections.push('You output ONLY a JSON array of action objects. Nothing else.');
-    sections.push('');
-    sections.push('## CRITICAL RULES');
-    sections.push('1. You MUST NOT read, write, or modify any files. You have NO file access.');
-    sections.push('2. You MUST NOT use any tools (Read, Edit, Write, Bash, Grep, etc.).');
-    sections.push('3. For ANY code change, spawn a "builder" worker.');
-    sections.push('4. For verification, spawn a "tester" worker.');
-    sections.push('5. For deployment, spawn a "devops" worker.');
-    sections.push('6. Output ONLY a raw JSON array. No markdown, no backticks, no explanation.');
     sections.push('');
 
-    // Board state
+    // Manager template rolePrompt (if available)
+    if (agent.templateId && this.deps.templateRegistry) {
+      const tmpl = this.deps.templateRegistry.getTemplate(agent.templateId);
+      if (tmpl?.rolePrompt) {
+        sections.push('## Manager Instructions');
+        sections.push(tmpl.rolePrompt);
+        sections.push('');
+      }
+    } else {
+      // Inline rules if no template
+      sections.push('## CRITICAL RULES');
+      sections.push('1. You MUST NOT write, edit, or create any code files. You are a manager, not a developer.');
+      sections.push('2. You CAN read files (Read, Glob, Grep) to understand the codebase before making decisions.');
+      sections.push('3. You CAN run non-destructive Bash commands (git log, git status, ls) for investigation.');
+      sections.push('4. You MUST NOT run destructive commands (rm, git reset, npm install, etc.).');
+      sections.push('5. For ANY code change, spawn a "builder" worker.');
+      sections.push('6. For verification, spawn a "tester" worker.');
+      sections.push('7. For deployment, spawn a "devops" worker.');
+      sections.push('');
+    }
+
+    // Available actions
+    this.appendAvailableActions(sections, agent);
+
+    // Decision guide
+    this.appendDecisionGuide(sections, agent);
+
+    // Current board state
+    this.appendBoardState(sections, board, agent);
+
+    sections.push('After any reasoning or investigation, output your actions as the LAST thing in a markdown code fence:');
+    sections.push('```json');
+    sections.push('[{"type":"spawn_worker","role":"builder","rolePrompt":"Build a landing page with..."}]');
+    sections.push('```');
+    sections.push('If nothing needs to be done:');
+    sections.push('```json');
+    sections.push('[]');
+    sections.push('```');
+
+    return sections.join('\n');
+  }
+
+  /**
+   * Build a short tick update for resumed sessions.
+   * The AI already has full instructions from the boot prompt.
+   */
+  private buildTickUpdate(board: BoardState, agent: AgentIdentity): string {
+    const sections: string[] = [];
+
+    sections.push(`--- TICK UPDATE (tick ${this._sessionTickCount + 1}, ${new Date().toISOString()}) ---`);
+    sections.push('');
+
+    // Current board state
+    this.appendBoardState(sections, board, agent);
+
+    sections.push('Respond with your JSON array of actions in a code fence. If nothing to do:');
+    sections.push('```json');
+    sections.push('[]');
+    sections.push('```');
+
+    return sections.join('\n');
+  }
+
+  /**
+   * Append board state sections (shared between boot prompt and tick update).
+   */
+  private appendBoardState(sections: string[], board: BoardState, agent: AgentIdentity): void {
+    // Board state counts
     sections.push('## Current State');
     sections.push(`Active workers: ${board.activeWorkers}/${board.maxWorkers}`);
     sections.push(`Active tasks: ${board.activeTasks}`);
     sections.push(`Pending tasks: ${board.pendingTasks}`);
     sections.push('');
 
-    // Full team roster — ALL workers under this orchestrator (last 2h + always active/recently-failed)
+    // Full team roster
     {
       const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
       const fifteenMinAgo2 = new Date(Date.now() - 15 * 60 * 1000).toISOString();
       const allTeamWorkers = this.deps.db.listAgents({ type: 'worker', parentId: this.orchestratorId });
       const rosterWorkers = allTeamWorkers.filter(w => {
         if (w.status === 'active') return true;
-        if ((w.updatedAt || w.createdAt || '') >= fifteenMinAgo2) return true; // recently failed/done
+        if ((w.updatedAt || w.createdAt || '') >= fifteenMinAgo2) return true;
         return (w.createdAt || '') >= twoHoursAgo;
       });
       if (rosterWorkers.length > 0) {
@@ -571,7 +737,7 @@ export class Orchestrator {
       }
     }
 
-    // Recently failed workers (Fix 2)
+    // Recently failed workers
     if (board.recentlyFailed.length > 0) {
       sections.push('## Recently Failed Workers');
       for (const w of board.recentlyFailed) {
@@ -581,7 +747,7 @@ export class Orchestrator {
       sections.push('');
     }
 
-    // Overdue workers (Fix 3)
+    // Overdue workers
     if (board.overdueWorkers.length > 0) {
       sections.push('## Overdue Workers (No Report in >10 min)');
       for (const w of board.overdueWorkers) {
@@ -647,7 +813,7 @@ export class Orchestrator {
       sections.push('');
     }
 
-    // Gap 2 fix: Inject lessons into the manager's OWN prompt so it learns from past decisions
+    // Lessons learned
     try {
       const lessons = this.deps.db.getLessons({
         orchestratorId: this.orchestratorId,
@@ -661,7 +827,6 @@ export class Orchestrator {
         }
         sections.push('');
       }
-      // Also inject org-wide knowledge
       const orgKnowledge = this.deps.db.getOrgKnowledge({ category: agent.role, limit: 10 });
       if (orgKnowledge.length > 0) {
         sections.push('## Organizational Knowledge');
@@ -672,14 +837,13 @@ export class Orchestrator {
       }
     } catch { /* non-fatal */ }
 
-    // Genome architecture knowledge — project-specific if registry available, else Pando's
+    // Genome architecture knowledge
     const requestText = board.userRequests.length > 0
       ? board.userRequests.map(r => {
           try { return JSON.parse(r.payload).message || r.payload; } catch { return r.payload; }
         }).join(' ')
       : 'platform maintenance, self-improvement, and issue resolution';
 
-    // Determine which genome to use: project-specific > Pando default
     let activeGenomeBridge = this.deps.genomeBridge || null;
     if (this.deps.genomeBridgeRegistry && agent.projectId) {
       const projectBridge = this.deps.genomeBridgeRegistry.getForProject(agent.projectId);
@@ -703,7 +867,7 @@ export class Orchestrator {
       }
     }
 
-    // Project discoveries — shared memory from workers
+    // Project discoveries
     if (agent.projectId) {
       try {
         const discoveries = this.deps.db.getDiscoveries({ projectId: agent.projectId, limit: 10 });
@@ -724,15 +888,47 @@ export class Orchestrator {
       sections.push('');
     }
 
-    // Phase 105: Available roles from TemplateRegistry
+    // Proactive mode hint
+    const isProactive = board.workerReports.length === 0 &&
+        board.healthAlerts.length === 0 &&
+        board.userRequests.length === 0 &&
+        board.messages.length === 0;
+    if (isProactive) {
+      sections.push('## Proactive Mode — You Are Autonomous');
+      sections.push('');
+      sections.push('Your inbox is empty. This is a REFLECTION tick — you are not waiting for instructions.');
+      sections.push('');
+      sections.push('Review and act on:');
+      sections.push('1. **Directives** (above): Standing orders from the team. Execute them by spawning workers.');
+      sections.push('2. **Failing tests**: If any tests above are failing, spawn a builder to fix them.');
+      sections.push('3. **Lessons with recurring problems**: Spawn a researcher to investigate root causes.');
+      sections.push('4. **Platform health**: Any degraded services? Spawn a builder to fix.');
+      sections.push('5. **Architecture improvements**: Any gaps or tech debt you can identify?');
+      sections.push('');
+      if (board.recentlyFailed.length > 0) {
+        sections.push('Recently failed workers (see above) may have left partial work on disk (uncommitted files, half-written code).');
+        sections.push('Before re-attempting their tasks from scratch, check git status to see what is already done.');
+        sections.push('This avoids duplicating work and ensures partial progress is not lost.');
+        sections.push('');
+      }
+      sections.push('You are the autonomous manager of this node. Don\'t wait for humans — lead.');
+      sections.push('Only return [] if you have genuinely reviewed everything and there is nothing to improve.');
+      sections.push('');
+    }
+  }
+
+  /**
+   * Append available actions section (used in boot prompt only).
+   */
+  private appendAvailableActions(sections: string[], agent: AgentIdentity): void {
+    // Available roles from TemplateRegistry
     const availableRoles: string[] = ['builder', 'tester', 'reviewer', 'researcher', 'devops'];
     if (this.deps.templateRegistry) {
       const templates = this.deps.templateRegistry.listTemplates({ status: 'active' });
-      const roles = [...new Set(templates.map(t => t.role))];
+      const roles = [...new Set(templates.map(t => t.role))].filter(r => r !== 'manager');
       if (roles.length > 0) availableRoles.splice(0, availableRoles.length, ...roles);
     }
 
-    // Available actions
     sections.push('## Available Actions');
     sections.push('');
     sections.push('Each action is a JSON object with a "type" field. Return an array of actions.');
@@ -773,7 +969,12 @@ export class Orchestrator {
       sections.push('  { "type": "commit_code", "message": "commit message" }');
     }
     sections.push('');
-    // Project context for deployment instructions
+  }
+
+  /**
+   * Append decision guide section (used in boot prompt only).
+   */
+  private appendDecisionGuide(sections: string[], agent: AgentIdentity): void {
     const apiPort = this.deps.apiPort || 4000;
     const dataDir = this.deps.dataDir || '~/.pando';
 
@@ -792,7 +993,7 @@ export class Orchestrator {
     sections.push('- Each sub-team gets its own workers, its own QA, its own lessons. You coordinate across teams.');
     sections.push('- Sub-team reports back to you. You decide when ALL teams are done before proceeding to deploy.');
     sections.push('');
-    // Council-specific pipeline: code changes go through governance
+    // Council-specific pipeline
     if (agent.role === 'council' && this.deps.onPropose) {
       sections.push('### Council Pipeline (you are the council):');
       sections.push('When a builder reports code changes:');
@@ -852,57 +1053,69 @@ export class Orchestrator {
       sections.push(`- Auth token file: ${dataDir}/api-token`);
       sections.push('');
     }
-
-    // Proactive autonomy: when inbox is empty but AI is called (reflection tick or directives),
-    // tell the AI it's in proactive mode and should self-improve
-    const isProactive = board.workerReports.length === 0 &&
-        board.healthAlerts.length === 0 &&
-        board.userRequests.length === 0 &&
-        board.messages.length === 0;
-    if (isProactive) {
-      sections.push('## Proactive Mode — You Are Autonomous');
-      sections.push('');
-      sections.push('Your inbox is empty. This is a REFLECTION tick — you are not waiting for instructions.');
-      sections.push('');
-      sections.push('Review and act on:');
-      sections.push('1. **Directives** (above): Standing orders from the team. Execute them by spawning workers.');
-      sections.push('2. **Failing tests**: If any tests above are failing, spawn a builder to fix them.');
-      sections.push('3. **Lessons with recurring problems**: Spawn a researcher to investigate root causes.');
-      sections.push('4. **Platform health**: Any degraded services? Spawn a builder to fix.');
-      sections.push('5. **Architecture improvements**: Any gaps or tech debt you can identify?');
-      sections.push('');
-      if (board.recentlyFailed.length > 0) {
-        sections.push('⚠️  Recently failed workers (see above) may have left **partial work on disk** (uncommitted files, half-written code).');
-        sections.push('Before re-attempting their tasks from scratch, spawn a devops worker to run `git status` and check what is already done.');
-        sections.push('This avoids duplicating work and ensures partial progress is not lost.');
-        sections.push('');
-      }
-      sections.push('You are the autonomous manager of this node. Don\'t wait for humans — lead.');
-      sections.push('Only return [] if you have genuinely reviewed everything and there is nothing to improve.');
-      sections.push('');
-    }
-
-    sections.push('OUTPUT: Return ONLY a JSON array. Example: [{"type":"spawn_worker","role":"builder","rolePrompt":"Build a landing page with..."}]');
-    sections.push('If nothing needs to be done: []');
-
-    return sections.join('\n');
   }
 
+  /**
+   * Parse AI actions from output that may contain text + tool results + JSON.
+   * 3-layer parser: pure JSON → code fence → backward bracket scan.
+   */
   private parseAIActions(output: string): OrchestratorAction[] {
+    // Layer 1: Try pure JSON array (quick path)
     try {
-      // Try to extract JSON array from the output
-      const jsonMatch = output.match(/\[[\s\S]*\]/);
-      if (!jsonMatch) return [];
+      const trimmed = output.trim();
+      if (trimmed.startsWith('[')) {
+        const actions = JSON.parse(trimmed);
+        if (Array.isArray(actions)) {
+          const valid = actions.filter((a: any) => a && typeof a.type === 'string') as OrchestratorAction[];
+          this._consecutiveParseFailures = 0;
+          return valid;
+        }
+      }
+    } catch { /* not pure JSON */ }
 
-      const actions = JSON.parse(jsonMatch[0]);
-      if (!Array.isArray(actions)) return [];
-
-      // Validate each action has a type
-      return actions.filter((a: any) => a && typeof a.type === 'string') as OrchestratorAction[];
-    } catch {
-      console.error(`[Orchestrator ${this.orchestratorId}] Failed to parse AI actions:`, output.slice(0, 200));
-      return [];
+    // Layer 2: Extract from last markdown code fence (```json [...] ```)
+    const fenceMatches = [...output.matchAll(/```(?:json)?\s*\n?([\s\S]*?)```/g)];
+    if (fenceMatches.length > 0) {
+      // Use the LAST fence (AI may have multiple code blocks, actions are at the end)
+      const lastFence = fenceMatches[fenceMatches.length - 1][1].trim();
+      try {
+        const actions = JSON.parse(lastFence);
+        if (Array.isArray(actions)) {
+          const valid = actions.filter((a: any) => a && typeof a.type === 'string') as OrchestratorAction[];
+          this._consecutiveParseFailures = 0;
+          return valid;
+        }
+      } catch { /* fence content not valid JSON */ }
     }
+
+    // Layer 3: Backward scan for last balanced [...] in output
+    try {
+      const lastBracket = output.lastIndexOf(']');
+      if (lastBracket !== -1) {
+        // Walk backwards to find the matching opening bracket
+        let depth = 0;
+        let start = -1;
+        for (let i = lastBracket; i >= 0; i--) {
+          if (output[i] === ']') depth++;
+          if (output[i] === '[') depth--;
+          if (depth === 0) { start = i; break; }
+        }
+        if (start !== -1) {
+          const jsonStr = output.slice(start, lastBracket + 1);
+          const actions = JSON.parse(jsonStr);
+          if (Array.isArray(actions)) {
+            const valid = actions.filter((a: any) => a && typeof a.type === 'string') as OrchestratorAction[];
+            this._consecutiveParseFailures = 0;
+            return valid;
+          }
+        }
+      }
+    } catch { /* backward scan failed */ }
+
+    // All layers failed
+    this._consecutiveParseFailures++;
+    console.error(`[Orchestrator ${this.orchestratorId}] Failed to parse AI actions (attempt ${this._consecutiveParseFailures}):`, output.slice(0, 300));
+    return [];
   }
 
   // =========================================================================

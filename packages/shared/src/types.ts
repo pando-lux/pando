@@ -287,7 +287,7 @@ export const PANDO_PROTOCOL = '/pando/message/1.0.0';
 export const PANDO_PROTOCOL_PING = '/pando/ping/1.0.0';
 
 /** Default Claude model for all spawned agent sessions (manager, scheduler workers, chat) */
-export const DEFAULT_CLAUDE_MODEL = 'claude-sonnet-4-6';
+export const DEFAULT_CLAUDE_MODEL = 'claude-opus-4-6';
 
 export const DEFAULT_CONFIG: NodeConfig = {
   listenPort: 0, // random port

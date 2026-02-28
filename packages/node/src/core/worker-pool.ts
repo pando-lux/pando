@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir, freemem } from 'node:os';
 import { randomUUID } from 'node:crypto';
-import { spawnSync } from 'node:child_process';
+import { execSync, spawnSync } from 'node:child_process';
 
 import type { AgentDatabase, AgentIdentity, AgentType, AgentScope } from '../platform/agent-database.js';
 import type { AIBackendRegistry } from './ai-backend-registry.js';
@@ -299,6 +299,24 @@ export class WorkerPool {
         const status = result.success ? 'done' : 'failed';
         this.db.updateAgent(workerId, { status });
 
+        // Build summary with optional git diff stat
+        let summary = result.success
+          ? `Worker completed. Output: ${result.output?.slice(0, 3000) || 'no output'}`
+          : (result.error || 'Worker process failed');
+        if (result.success) {
+          try {
+            const diffStat = execSync('git diff --stat HEAD~1', {
+              cwd: config.workspaceDir || process.cwd(),
+              encoding: 'utf-8',
+              timeout: 5000,
+              stdio: ['pipe', 'pipe', 'pipe'],
+            }).trim();
+            if (diffStat) {
+              summary += `\n\nGit diff stat:\n${diffStat.slice(0, 500)}`;
+            }
+          } catch { /* no git or no commits — skip */ }
+        }
+
         // Notify orchestrator
         this.messageBus.send({
           recipientId: config.orchestratorId,
@@ -307,9 +325,7 @@ export class WorkerPool {
           type: 'worker_report',
           payload: {
             status: result.success ? 'done' : 'failed',
-            summary: result.success
-              ? `Worker completed. Output: ${result.output?.slice(0, 500) || 'no output'}`
-              : (result.error || 'Worker process failed'),
+            summary,
             taskId: config.taskId,
             auto: true,  // auto-generated, not from worker HTTP report
           },
