@@ -7,10 +7,12 @@ const RESTART_EXIT_CODE = 75;
 import { checkAndRecordStartup, markStable, getStabilityDelay } from './kernel/crash-guard.js';
 import { readRestartReason, clearRestartReason } from './kernel/restart-reason.js';
 import { QaRunner } from './platform/qa-runner.js';
-import { join } from 'node:path';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { homedir } from 'node:os';
 import { writeFileSync, mkdirSync, existsSync, cpSync, rmSync, readFileSync } from 'node:fs';
 import { createConnection } from 'node:net';
+import { spawn as spawnProc } from 'node:child_process';
 
 // @know
 // entity CliEntryPoint {
@@ -131,6 +133,17 @@ const DEFAULT_BOOTSTRAPS: string[] = [
 
 async function main() {
   const args = process.argv.slice(2);
+
+  // Supervisor bootstrap: if not already launched through the supervisor,
+  // re-spawn via supervisor.js so that the node benefits from auto-restart.
+  // The --supervised flag is added by supervisor.ts to prevent infinite loops.
+  if (!args.includes('--supervised')) {
+    const __dir = dirname(fileURLToPath(import.meta.url));
+    const supervisorPath = join(__dir, 'supervisor.js');
+    const sup = spawnProc(process.execPath, [supervisorPath, ...args], { stdio: 'inherit', detached: false });
+    sup.on('exit', (code) => process.exit(code ?? 0));
+    return;
+  }
 
   // Phase 15.5: Crash Guard — detect crash loops and auto-rollback
   const dataDirFlag0 = args.indexOf('--data-dir');
