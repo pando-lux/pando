@@ -13,7 +13,7 @@
 
 **LS-2 recovered**: Rebooted via AWS Lightsail API, code reset to f9a1b879, PM2 running, 3 peers.
 
-**Known bug**: worker-pool assembleContext() writes CLAUDE.md to workspace dir. When council workspace = Pando repo, it overwrites the project CLAUDE.md with worker-specific context.
+**FIXED**: assembleContext() replaced by buildBootPrompt() + Context API. Workers query /v1/context/* on demand. No more CLAUDE.md overwrite.
 
 ## Health
 
