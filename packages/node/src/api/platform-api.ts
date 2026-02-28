@@ -368,11 +368,20 @@ export async function registerPlatformRoutes(
       if (threadMeta?.projectId) {
         // Existing project thread — route directly to manager
         if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
-          // Phase 98: Try P2P routing before returning error
-          const p2pResult = await node.routeClaudeTaskP2P?.(plaintextForProcessing);
-          if (p2pResult) {
-            await threadStore.addMessage(id, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' });
-            return { status: 'ok', threadId: id, reply: p2pResult.output, tier: 'simple', routedTo: p2pResult.executedBy };
+          // Phase 98: P2P routing — async (don't block HTTP response)
+          if (node.routeClaudeTaskP2P) {
+            const routingReply = 'Routing to a Claude-capable node...';
+            await threadStore.addMessage(id, { role: 'assistant', content: routingReply, timestamp: Date.now(), tier: 'simple' });
+            node.routeClaudeTaskP2P(plaintextForProcessing).then(async (p2pResult) => {
+              if (p2pResult) {
+                await threadStore.addMessage(id, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'complex' });
+              } else {
+                await threadStore.addMessage(id, { role: 'assistant', content: 'No Claude-capable nodes responded.', timestamp: Date.now(), tier: 'simple' });
+              }
+            }).catch(() => {
+              threadStore.addMessage(id, { role: 'assistant', content: 'P2P routing failed.', timestamp: Date.now(), tier: 'simple' });
+            });
+            return { status: 'queued', threadId: id, reply: routingReply, tier: 'complex' };
           }
           const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
           await threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
@@ -426,11 +435,21 @@ export async function registerPlatformRoutes(
 
       // Build request — create project, update thread, route to manager
       if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
-        // Phase 98: Try P2P routing to a shareCompute peer before returning error
-        const p2pResult = await node.routeClaudeTaskP2P?.(plaintextForProcessing);
-        if (p2pResult) {
-          await threadStore.addMessage(id, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' });
-          return { status: 'ok', threadId: id, reply: p2pResult.output, tier: 'simple', routedTo: p2pResult.executedBy };
+        // Phase 98: P2P routing to a shareCompute peer — async (don't block HTTP response)
+        if (node.routeClaudeTaskP2P) {
+          const routingReply = 'Routing your request to a Claude-capable node on the network. This may take a few minutes...';
+          await threadStore.addMessage(id, { role: 'assistant', content: routingReply, timestamp: Date.now(), tier: 'simple' });
+          // Fire P2P in background — update thread when result arrives
+          node.routeClaudeTaskP2P(plaintextForProcessing).then(async (p2pResult) => {
+            if (p2pResult) {
+              await threadStore.addMessage(id, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'complex' });
+            } else {
+              await threadStore.addMessage(id, { role: 'assistant', content: 'No Claude-capable nodes responded. Try again later or run /contribute claude-code on a node.', timestamp: Date.now(), tier: 'simple' });
+            }
+          }).catch(() => {
+            threadStore.addMessage(id, { role: 'assistant', content: 'P2P routing failed. Please try again.', timestamp: Date.now(), tier: 'simple' });
+          });
+          return { status: 'queued', threadId: id, reply: routingReply, tier: 'complex' };
         }
         const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
         await threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
