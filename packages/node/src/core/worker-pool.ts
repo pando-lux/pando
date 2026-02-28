@@ -20,7 +20,7 @@
 
 import { existsSync, mkdirSync, writeFileSync, rmSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { homedir, freemem, totalmem } from 'node:os';
+import { homedir, freemem } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 
