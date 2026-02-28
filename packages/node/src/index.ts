@@ -3484,6 +3484,10 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     return this.contentSafetyReviewer;
   }
 
+  getGenomeBridge(): GenomeBridge | null {
+    return this.genomeBridge;
+  }
+
   // ----------------------------------------------------------
   // Health Monitor (Phase 9 — self-healing foundation)
   // ----------------------------------------------------------

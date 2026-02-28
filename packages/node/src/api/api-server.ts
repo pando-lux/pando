@@ -28,6 +28,7 @@ import type { RequestActor } from '@pando/shared';
 import { registerKernelRoutes } from './kernel-api.js';
 import { registerCoreRoutes } from './core-api.js';
 import { registerPlatformRoutes } from './platform-api.js';
+import { registerContextRoutes } from './context-api.js';
 import type { RouteHelpers } from './middleware/auth.js';
 
 // ── Phase 86: JWT-Style Self-Verifying Auth Tokens ───────────────────────
@@ -133,6 +134,10 @@ const PUBLIC_ENDPOINTS: string[] = [
   '/council',
   '/council/minutes',
   '/capabilities/infrastructure',
+  '/context/identity',
+  '/context/project',
+  '/context/lessons',
+  '/context/team',
 ];
 
 /** Parametric public endpoints matched by prefix (GET only). */
@@ -839,6 +844,12 @@ Be friendly and helpful. Keep answers short.`
       });
       // Worker MCP routes (task, report, identity)
       registerWorkerRoutes(v1, () => this.agentDb!);
+      // Context API routes (identity, project, lessons, team, discover)
+      registerContextRoutes(v1, {
+        getDb: () => this.agentDb!,
+        getGenomeBridge: () => this.node.getGenomeBridge(),
+        apiPort: this.node.getApiPort(),
+      });
     }, { prefix: '/v1' });
 
     await this.fastify.listen({ port: config.port, host: config.host });

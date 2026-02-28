@@ -844,4 +844,57 @@ export class AgentDatabase {
       SELECT * FROM reflections WHERE orchestrator_id = ? ORDER BY created_at DESC LIMIT ?
     `).all(orchestratorId, limit).map(rowToReflection);
   }
+
+  // =========================================================================
+  // Discoveries (shared project memory)
+  // =========================================================================
+
+  addDiscovery(discovery: { projectId: string; workerId: string; category: DiscoveryCategory; content: string; confidence?: number; fileScope?: string[]; expiresAt?: string }): number {
+    const now = new Date().toISOString();
+    // UPSERT — if same project+content exists, bump confidence instead of duplicating
+    const existing = this.db.prepare(
+      'SELECT id, confidence FROM project_discoveries WHERE project_id = ? AND content = ?'
+    ).get(discovery.projectId, discovery.content) as any;
+
+    if (existing) {
+      const newConf = Math.min(1.0, existing.confidence + 0.1);
+      this.db.prepare('UPDATE project_discoveries SET confidence = ?, worker_id = ? WHERE id = ?')
+        .run(newConf, discovery.workerId, existing.id);
+      return existing.id;
+    }
+
+    const result = this.db.prepare(`
+      INSERT INTO project_discoveries (project_id, worker_id, category, content, confidence, file_scope, created_at, expires_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      discovery.projectId, discovery.workerId, discovery.category, discovery.content,
+      discovery.confidence ?? 0.7,
+      discovery.fileScope ? JSON.stringify(discovery.fileScope) : null,
+      now, discovery.expiresAt ?? null
+    );
+    return Number(result.lastInsertRowid);
+  }
+
+  getDiscoveries(filter: { projectId: string; category?: DiscoveryCategory; minConfidence?: number; limit?: number }): Discovery[] {
+    const now = new Date().toISOString();
+    let sql = 'SELECT * FROM project_discoveries WHERE project_id = ? AND confidence >= ? AND (expires_at IS NULL OR expires_at > ?)';
+    const params: any[] = [filter.projectId, filter.minConfidence ?? 0.3, now];
+
+    if (filter.category) { sql += ' AND category = ?'; params.push(filter.category); }
+
+    sql += ' ORDER BY confidence DESC, created_at DESC LIMIT ?';
+    params.push(filter.limit ?? 20);
+
+    return this.db.prepare(sql).all(...params).map(rowToDiscovery);
+  }
+
+  adjustDiscoveryConfidence(id: number, delta: number): void {
+    this.db.prepare('UPDATE project_discoveries SET confidence = MAX(0, MIN(1, confidence + ?)) WHERE id = ?').run(delta, id);
+  }
+
+  deleteExpiredDiscoveries(): number {
+    const now = new Date().toISOString();
+    const result = this.db.prepare('DELETE FROM project_discoveries WHERE expires_at IS NOT NULL AND expires_at < ?').run(now);
+    return result.changes;
+  }
 }
