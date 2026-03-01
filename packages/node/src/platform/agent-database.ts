@@ -684,7 +684,24 @@ export class AgentDatabase {
   cleanupStaleAgents(): { cleaned: number; interruptedWorkers: Array<{ id: string; parentId: string; role: string; rolePrompt: string | null; sessionId: string | null; currentTaskId: string | null }> } {
     const now = new Date().toISOString();
 
-    // Non-persistent active/spawning agents → failed
+    // Capture workers that were active/spawning under persistent orchestrators BEFORE resetting them.
+    // These are interrupted workers whose tasks silently disappeared — orchestrators need to know.
+    const interruptedRows = this.db.prepare(`
+      SELECT id, parent_id, role, role_prompt, session_id, current_task_id FROM agent_identity
+      WHERE type = 'worker' AND status IN ('active', 'spawning')
+      AND parent_id IN (SELECT id FROM agent_identity WHERE type = 'orchestrator' AND persistent = 1)
+    `).all() as Array<{ id: string; parent_id: string; role: string; role_prompt: string | null; session_id: string | null; current_task_id: string | null }>;
+
+    // Workers under persistent orchestrators: reset active/spawning/idle to 'done'
+    // PRESERVE session_id — this is the key to session resume across restarts
+    // MUST run before the blanket Rule 1 below, otherwise workers (persistent=0) get caught by Rule 1 first
+    const r3 = this.db.prepare(`
+      UPDATE agent_identity SET status = 'done', pid = NULL, updated_at = ?
+      WHERE type = 'worker' AND status IN ('active', 'spawning', 'idle')
+      AND parent_id IN (SELECT id FROM agent_identity WHERE type = 'orchestrator' AND persistent = 1)
+    `).run(now);
+
+    // Non-persistent active/spawning agents → failed (workers under persistent orchestrators already handled above)
     const r1 = this.db.prepare(`
       UPDATE agent_identity SET status = 'failed', updated_at = ?
       WHERE persistent = 0 AND status IN ('active', 'spawning', 'idle')
@@ -695,22 +712,6 @@ export class AgentDatabase {
     const r2 = this.db.prepare(`
       UPDATE agent_identity SET status = 'pending', pid = NULL, updated_at = ?
       WHERE type = 'orchestrator' AND persistent = 1 AND status IN ('active', 'spawning')
-    `).run(now);
-
-    // Capture workers that were active/spawning under persistent orchestrators BEFORE resetting them.
-    // These are interrupted workers whose tasks silently disappeared — orchestrators need to know.
-    const interruptedRows = this.db.prepare(`
-      SELECT id, parent_id, role, role_prompt, session_id, current_task_id FROM agent_identity
-      WHERE type = 'worker' AND status IN ('active', 'spawning')
-      AND parent_id IN (SELECT id FROM agent_identity WHERE type = 'orchestrator' AND persistent = 1)
-    `).all() as Array<{ id: string; parent_id: string; role: string; role_prompt: string | null; session_id: string | null; current_task_id: string | null }>;
-
-    // Workers under persistent orchestrators: reset active/spawning to 'done'
-    // PRESERVE session_id — this is the key to session resume across restarts
-    const r3 = this.db.prepare(`
-      UPDATE agent_identity SET status = 'done', pid = NULL, updated_at = ?
-      WHERE type = 'worker' AND status IN ('active', 'spawning')
-      AND parent_id IN (SELECT id FROM agent_identity WHERE type = 'orchestrator' AND persistent = 1)
     `).run(now);
 
     // Clean unread messages for truly dead agents (failed non-persistent)
@@ -1135,6 +1136,12 @@ export class AgentDatabase {
     let agents = this.db.prepare(
       "DELETE FROM agent_identity WHERE status IN ('done','failed','dissolved') AND created_at < datetime('now', '-1 day') AND type = 'worker'"
     ).run().changes;
+
+    // Prune dissolved orchestrators older than 1 day (prevents unbounded accumulation)
+    const orchPruned = this.db.prepare(
+      "DELETE FROM agent_identity WHERE type = 'orchestrator' AND status = 'dissolved' AND created_at < datetime('now', '-1 day')"
+    ).run().changes;
+    agents += orchPruned;
 
     // Aggressive pruning when worker count exceeds 20
     const totalWorkers = this.db.prepare("SELECT COUNT(*) as cnt FROM agent_identity WHERE type = 'worker'").get() as any;
