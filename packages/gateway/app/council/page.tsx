@@ -102,7 +102,7 @@ function parseActions(actionsStr: string): string[] {
   try {
     const parsed = JSON.parse(actionsStr);
     if (Array.isArray(parsed)) {
-      return parsed.map((a: { type?: string; action?: string }) => a.type || a.action || "unknown");
+      return parsed.map((a: any) => typeof a === 'string' ? a : (a.type || a.action || 'unknown'));
     }
     if (typeof parsed === "object" && parsed !== null) {
       return [parsed.type || parsed.action || "unknown"];
@@ -130,6 +130,7 @@ export default function CouncilPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [expandedLessons, setExpandedLessons] = useState<Set<number>>(new Set());
+  const [showHistorical, setShowHistorical] = useState(false);
 
   const fetchData = useCallback(async () => {
     try {
@@ -254,19 +255,11 @@ export default function CouncilPage() {
             </div>
 
             {/* 3. Active Workers */}
-            <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl overflow-hidden">
-              <div className="px-4 py-3 border-b border-neutral-800">
-                <h2 className="text-sm font-semibold text-neutral-300">
-                  Active Workers
-                </h2>
-              </div>
-              {data.workers.length === 0 ? (
-                <div className="px-4 py-8 text-center">
-                  <p className="text-sm text-neutral-500">
-                    No workers currently spawned.
-                  </p>
-                </div>
-              ) : (
+            {(() => {
+              const activeStatuses = new Set(["active", "idle", "spawning"]);
+              const activeWorkers = data.workers.filter((w) => activeStatuses.has(w.status?.toLowerCase()));
+              const historicalWorkers = data.workers.filter((w) => !activeStatuses.has(w.status?.toLowerCase()));
+              const renderWorkerTable = (workers: Worker[]) => (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
@@ -278,7 +271,7 @@ export default function CouncilPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-neutral-800">
-                      {data.workers.map((w) => (
+                      {workers.map((w) => (
                         <tr key={w.id} className="hover:bg-neutral-800/30 transition">
                           <td className="px-4 py-2.5 font-mono text-neutral-200">
                             {w.role}
@@ -301,8 +294,45 @@ export default function CouncilPage() {
                     </tbody>
                   </table>
                 </div>
-              )}
-            </div>
+              );
+              return (
+                <>
+                  <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-neutral-800">
+                      <h2 className="text-sm font-semibold text-neutral-300">
+                        Active Workers
+                        <span className="ml-2 text-xs font-normal text-neutral-500">
+                          ({activeWorkers.length} active{historicalWorkers.length > 0 ? `, ${historicalWorkers.length} done/failed` : ""})
+                        </span>
+                      </h2>
+                    </div>
+                    {activeWorkers.length === 0 ? (
+                      <div className="px-4 py-8 text-center">
+                        <p className="text-sm text-neutral-500">
+                          No workers currently active.
+                        </p>
+                      </div>
+                    ) : (
+                      renderWorkerTable(activeWorkers)
+                    )}
+                  </div>
+                  {historicalWorkers.length > 0 && (
+                    <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl overflow-hidden">
+                      <button
+                        onClick={() => setShowHistorical(!showHistorical)}
+                        className="w-full px-4 py-3 flex items-center justify-between hover:bg-neutral-800/30 transition"
+                      >
+                        <h2 className="text-sm font-semibold text-neutral-500">
+                          Historical Workers ({historicalWorkers.length})
+                        </h2>
+                        <span className="text-neutral-600 text-xs">{showHistorical ? "▲" : "▼"}</span>
+                      </button>
+                      {showHistorical && renderWorkerTable(historicalWorkers)}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
 
             {/* 4. Recent Decisions (Tier 2 Ticks) */}
             <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl overflow-hidden">
