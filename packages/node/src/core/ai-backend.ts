@@ -33,4 +33,5 @@ export interface AIResult {
   sessionId?: string;       // Backend may return a session ID for resumption
   cost?: number;
   error?: string;
+  exitCode?: number;
 }

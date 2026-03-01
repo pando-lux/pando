@@ -217,6 +217,7 @@ export class ClaudeBackend implements AIBackend {
           sessionId: capturedSessionId || task.sessionId,
           cost: costUsd > 0 ? costUsd : undefined,
           error: success ? undefined : `Process exited with code ${code}`,
+          exitCode: code ?? undefined,
         });
       });
     });

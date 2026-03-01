@@ -300,7 +300,7 @@ export class WorkerPool {
         const status = effectiveSuccess ? 'idle' : 'failed';
         const updateFields: any = { status };
         if (!effectiveSuccess) {
-          updateFields.exitCode = (result as any).exitCode ?? null;
+          updateFields.exitCode = result.exitCode ?? null;
           updateFields.errorSummary = (result.error || result.output || 'Unknown failure').slice(0, 500);
           updateFields.failedAt = new Date().toISOString();
         }
@@ -315,7 +315,7 @@ export class WorkerPool {
           summary = `Worker completed but worktree merge failed — changes may be lost`;
         } else {
           const errMsg = result.error?.slice(0, 500) || 'Worker process failed';
-          const exitCode = (result as any).exitCode ?? 'unknown';
+          const exitCode = result.exitCode ?? 'unknown';
           const stderr = (result as any).stderr?.slice(-500) || '';
           summary = `FAILED (exit=${exitCode}, resume=${isResume}): ${errMsg}`;
           if (stderr) summary += `\nStderr (last 500 chars): ${stderr}`;
