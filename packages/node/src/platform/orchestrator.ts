@@ -298,6 +298,9 @@ export class Orchestrator {
         } catch (aiErr: any) {
           aiError = aiErr.message || 'Unknown AI error';
           console.error(`[Orchestrator ${this.orchestratorId}] AI call failed: ${aiError}`);
+          if (aiError?.includes('Tick timeout')) {
+            this.rotateSession('tick timeout — AI call exceeded 10 minutes');
+          }
           // Messages already consumed — log the failure but don't return silently
           // The orchestrator will see the worker states on next tick
         }
@@ -662,16 +665,24 @@ export class Orchestrator {
       console.log(`[Orchestrator ${this.orchestratorId}] Tick update — session ${this._sessionId?.slice(0, 8)} (${prompt.length} chars)`);
     }
 
-    const result = await backend.execute({
-      type: 'code',
-      prompt,
-      sessionId: this._sessionId || undefined,
-      options: {
-        model: 'claude-opus-4-6',
-        noTools: false,
-        cwd: agent.workspaceDir || process.cwd(),
-      },
+    const TICK_TIMEOUT_MS = 10 * 60 * 1000;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      const timer = setTimeout(() => reject(new Error('Tick timeout: AI call exceeded 10 minutes')), TICK_TIMEOUT_MS);
+      timer.unref();
     });
+    const result = await Promise.race([
+      backend.execute({
+        type: 'code',
+        prompt,
+        sessionId: this._sessionId || undefined,
+        options: {
+          model: 'claude-opus-4-6',
+          noTools: false,
+          cwd: agent.workspaceDir || process.cwd(),
+        },
+      }),
+      timeoutPromise,
+    ]);
 
     // Save session ID for future ticks
     if (result.sessionId) {
