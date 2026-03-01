@@ -1344,6 +1344,28 @@ export class Orchestrator {
 
       case 'propose_upgrade': {
         if (this.deps.onPropose) {
+          // Build verification gate — abort proposal if build fails
+          try {
+            execSync('npm run build', {
+              cwd: process.cwd(),
+              timeout: 120000,
+              stdio: 'pipe',
+            });
+            console.log(`[Orchestrator ${this.orchestratorId}] Build verification passed — proceeding with proposal`);
+          } catch (buildErr) {
+            console.log(`[Orchestrator ${this.orchestratorId}] Build verification failed before propose_upgrade — aborting proposal`);
+            this.deps.messageBus.send({
+              recipientId: this.orchestratorId,
+              senderId: this.orchestratorId,
+              senderType: 'orchestrator',
+              type: 'health_alert',
+              payload: {
+                severity: 'critical',
+                message: 'Build verification failed before propose_upgrade — proposal aborted',
+              },
+            });
+            break;
+          }
           await this.deps.onPropose(action.title, action.description);
         }
         break;
