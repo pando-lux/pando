@@ -161,13 +161,13 @@ export default function AppsPage() {
     const results = await Promise.allSettled(
       apps.map(async (app) => {
         try {
-          // Use a short timeout; many apps may be on external S3 with CORS
-          const controller = new AbortController();
-          const timer = setTimeout(() => controller.abort(), 8000);
-          const r = await fetch(app.deploymentUrl, { method: "HEAD", signal: controller.signal, mode: "no-cors" });
-          clearTimeout(timer);
-          // no-cors returns opaque response — if we get here, it's reachable
-          return { id: app.id, status: r.type === "opaque" || r.ok ? "ok" : "error" };
+          const r = await fetch("/api/apps/check", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ url: app.deploymentUrl }),
+          });
+          const data = await r.json();
+          return { id: app.id, status: data.status === "ok" ? "ok" : "error" };
         } catch {
           return { id: app.id, status: "error" };
         }
