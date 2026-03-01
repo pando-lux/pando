@@ -728,3 +728,57 @@ EC2 54.82.241.132: 4e8e59cc
 EC2 34.201.82.126: 4e8e59cc
 PROBLEMS: none detected
 --- END CHECK #21 ---
+
+--- CHECK #22 @ 2026-03-01T13:19:10Z ---
+WINDOWS: UP | peers=0 | uptime=1min
+AGENTS: 3 active, 1 failed, 1 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+  orch-qa-user-56af137b | qa-user | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T13:17:01.549Z | orch-council-fee5437 tick#2154 T1 | none
+  2026-03-01T13:16:03.546Z | orch-council-fee5437 tick#2153 T2 | ["commit_code","record_lesson"]
+  2026-03-01T13:13:27.456Z | orch-council-fee5437 tick#2152 T1 | none
+OBSERVER LAST: tick#11 T2 @ 2026-03-01T13:09:47.621Z | ["create_directive","record_lesson"]
+GIT HEAD: c83b702d Scenario runner: add expected status validation to E2E tests (→ NNN syntax)
+EC2 54.82.241.132: c83b702d
+EC2 34.201.82.126: c83b702d
+PROBLEMS: none detected
+--- END CHECK #22 ---
+
+--- CHECK #22 @ 2026-03-01T13:19:54Z ---
+WINDOWS: UP | peers=1 | uptime=2min
+AGENTS: 3 active, 1 failed, 1 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+  orch-qa-user-56af137b | qa-user | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T13:19:32.137Z | orch-council-fee5437 tick#2155 T1 | none
+  2026-03-01T13:17:01.549Z | orch-council-fee5437 tick#2154 T1 | none
+  2026-03-01T13:16:03.546Z | orch-council-fee5437 tick#2153 T2 | ["commit_code","record_lesson"]
+OBSERVER LAST: tick#11 T2 @ 2026-03-01T13:09:47.621Z | ["create_directive","record_lesson"]
+GIT HEAD: c83b702d Scenario runner: add expected status validation to E2E tests (→ NNN syntax)
+EC2 54.82.241.132: c83b702d
+EC2 34.201.82.126: c83b702d
+PROBLEMS: none detected
+--- END CHECK #22 ---
+
+--- CHECK #23 @ 2026-03-01T13:24:18Z ---
+WINDOWS: UP | peers=2 | uptime=6min
+AGENTS: 3 active, 1 failed, 1 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+  orch-qa-user-56af137b | qa-user | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T13:20:32.135Z | orch-council-fee5437 tick#2156 T1 | none
+  2026-03-01T13:19:32.137Z | orch-council-fee5437 tick#2155 T1 | none
+  2026-03-01T13:17:01.549Z | orch-council-fee5437 tick#2154 T1 | none
+OBSERVER LAST: tick#11 T2 @ 2026-03-01T13:09:47.621Z | ["create_directive","record_lesson"]
+GIT HEAD: c83b702d Scenario runner: add expected status validation to E2E tests (→ NNN syntax)
+EC2 54.82.241.132: c83b702d
+EC2 34.201.82.126: c83b702d
+PROBLEMS: none detected
+--- END CHECK #23 ---
