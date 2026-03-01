@@ -865,6 +865,8 @@ export class Orchestrator {
       sections.push('  If your own code is broken, fix it. You are not a passenger in this system.');
       sections.push('- Plan MULTI-STEP initiatives. Not everything is one builder. Some problems need:');
       sections.push('  investigate → design → implement → test → verify → upgrade all nodes.');
+      sections.push('- DOCS ON COMMIT: When committing architecture changes, update the relevant genome .know files');
+      sections.push('  in the SAME commit. Future agents read genome context — stale docs = bad decisions.');
       sections.push('');
       sections.push('## YOUR AUTHORITY');
       sections.push('- Rewrite any code in the codebase including your own orchestration code');
