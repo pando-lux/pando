@@ -2203,7 +2203,20 @@ location /apps/${projectId}/ {
             const currentCommit = (execSync('git rev-parse HEAD', {
               cwd: process.cwd(), encoding: 'utf8', timeout: 5000,
             }) as string).trim();
-            if (currentCommit === builtCommit) return; // build matches HEAD — nothing to do
+            if (currentCommit === builtCommit) {
+              // Build matches HEAD, but did the build change since this process started?
+              if (builtCommit !== initialCommit) {
+                const activeWorkers = this.workerPool?.getActiveWorkerCount() ?? 0;
+                if (activeWorkers > 0) {
+                  console.log(`[self-restart] Build updated since startup (was=${initialCommit.slice(0, 8)}, now=${builtCommit.slice(0, 8)}) but ${activeWorkers} worker(s) active — deferring`);
+                  return;
+                }
+                console.log(`[self-restart] Build updated since startup (was=${initialCommit.slice(0, 8)}, now=${builtCommit.slice(0, 8)}) — restarting (exit ${RESTART_EXIT_CODE})`);
+                clearInterval(selfRestartInterval);
+                process.exit(RESTART_EXIT_CODE);
+              }
+              return;
+            }
             const activeWorkers = this.workerPool?.getActiveWorkerCount() ?? 0;
             if (activeWorkers > 0) {
               console.log(`[self-restart] Stale build detected (built=${builtCommit.slice(0, 8)}, head=${currentCommit.slice(0, 8)}) but ${activeWorkers} worker(s) active — deferring restart`);
