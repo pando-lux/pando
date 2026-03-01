@@ -66,6 +66,8 @@ export interface OrchestratorDeps {
   threadStore?: ThreadStore;
   /** Push SSE events to connected clients (chat_message, etc.) */
   pushEvent?: (event: string, data: any) => void;
+  /** Send chat result back to originating node via P2P */
+  sendChatResult?: (peerId: string, threadId: string, message: string) => Promise<void>;
   /** Get connected peer count for system health (council) */
   getPeerCount?: () => number;
 }
@@ -120,6 +122,8 @@ export class Orchestrator {
   private _startTime: number = 0;
   /** Track the most recent threadId from user requests for respond_to_user */
   private _lastThreadId: string | null = null;
+  /** Track the originating peer for cross-node chat result delivery */
+  private _originPeerId: string | null = null;
   /** Tick counter for periodic self-check (every 10th tick) */
   private _tickCount = 0;
   /** Claude Code session ID for persistent context across ticks */
@@ -478,6 +482,9 @@ export class Orchestrator {
           this._lastThreadId = payload.threadId;
           // Persist to SQLite so threadId survives node restarts
           this.deps.db.setMetadata(this.orchestratorId, JSON.stringify({ lastThreadId: payload.threadId }));
+        }
+        if (payload.originPeerId) {
+          this._originPeerId = payload.originPeerId;
         }
       } catch { /* ignore */ }
     }
@@ -1592,6 +1599,10 @@ export class Orchestrator {
             content: action.message,
             timestamp: Date.now(),
           });
+        }
+        // Cross-node result delivery: send result back to originating node via P2P
+        if (this.deps.sendChatResult && this._originPeerId && this._lastThreadId) {
+          this.deps.sendChatResult(this._originPeerId, this._lastThreadId, action.message).catch(() => {});
         }
         // Also store in MessageBus for API polling fallback
         this.deps.db.sendMessage({

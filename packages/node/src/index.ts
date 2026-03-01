@@ -734,11 +734,30 @@ export class PandoNode {
         senderId: 'user',
         senderType: 'user',
         type: 'user_request',
-        payload: { message, threadId: threadId || undefined, projectId },
+        payload: { message, threadId: threadId || undefined, projectId, originPeerId: req.from },
         priority: 1,
       });
 
       return { status: 'queued', projectId, threadId };
+    });
+
+    // P2P chat result — remote orchestrator sends back the AI response to the originating node.
+    this.requestReply.registerHandler('chat_result', async (req) => {
+      const { threadId, message: content } = req.payload || {};
+      if (!threadId || !content) return { error: 'threadId and message required' };
+      // Fire SSE so the local gateway user sees the result
+      this.apiServer?.pushEvent('chat_message', {
+        threadId,
+        role: 'assistant',
+        content,
+        timestamp: Date.now(),
+      });
+      // Also write to local ThreadStore for persistence
+      const ts = this.getThreadStore();
+      if (ts) {
+        ts.addMessage(threadId, { role: 'assistant', content, timestamp: Date.now() }).catch(() => {});
+      }
+      return { status: 'delivered' };
     });
 
     // Remote task queries — allows any node to query this node's tasks via P2P
@@ -3118,6 +3137,15 @@ location /apps/${projectId}/ {
       templateRegistry: this.templateRegistry || undefined,
       threadStore: this.threadStore || undefined,
       pushEvent: (event: string, data: any) => this.apiServer?.pushEvent(event, data),
+      sendChatResult: async (peerId: string, threadId: string, message: string) => {
+        if (this.requestReply) {
+          try {
+            await this.requestReply.request(peerId, 'chat_result', { threadId, message }, 10_000);
+          } catch (err: any) {
+            console.warn(`[chat_result] Failed to send result to ${peerId.slice(0, 12)}: ${err.message?.slice(0, 100)}`);
+          }
+        }
+      },
       getPeerCount: () => this.network?.getPeers()?.length ?? 0,
       apiPort: this.config.apiPort,
       dataDir: this.config.dataDir || join(homedir(), '.pando'),
