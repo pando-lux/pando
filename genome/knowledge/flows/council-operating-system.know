@@ -30,8 +30,8 @@ flow OrchestratorSystem {
 
   step tick_execute -> spawn_workers {
     actor: WorkerPool
-    what: "WorkerPool.spawn() resolves agent template from TemplateRegistry, then creates or resumes a Claude Code child process. Injects a slim boot prompt (~500 tokens) with identity, task, and context API endpoints. Workers query /v1/context/* on demand for project architecture, lessons, and team state. Workers persist sessions — resumed for related tasks via SessionStrategy. Workers communicate via HTTP: GET /worker/:id/task, POST /worker/:id/report, GET /worker/:id/identity, GET /context/project, GET /context/lessons, GET /context/team, POST /context/discover."
-    @gotcha("Workers are persistent team members, not disposable. Session IDs saved to SQLite. Resume workers for related tasks to preserve accumulated context. Only rotate when context is exhausted or domain changes.")
+    what: "WorkerPool.spawn() resolves agent template from TemplateRegistry, then creates a new Claude Code child process. Each spawn creates a new Claude Code session with a full boot prompt (~500 tokens) containing identity, task, and context API endpoints. Workers do not resume previous sessions. Workers query /v1/context/* on demand for project architecture, lessons, and team state. Workers communicate via HTTP: GET /worker/:id/task, POST /worker/:id/report, GET /worker/:id/identity, GET /context/project, GET /context/lessons, GET /context/team, POST /context/discover."
+    @gotcha("Workers are always fresh — each task gets a clean session. Lessons from previous sessions accumulate in SQLite and are injected via Context API, so knowledge is preserved without session resumption.")
     @gotcha("Phase 105: Role prompts come from TemplateRegistry (SQLite agent_templates table), not hardcoded DEFAULT_ROLE_PROMPTS. Custom templates can be created via POST /v1/templates.")
   }
 
@@ -76,7 +76,7 @@ concept MessageBus {
 }
 
 concept WorkerPool {
-  description: "Spawn/resume Claude Code worker processes. Manages child_process lifecycle with session persistence. buildBootPrompt() generates a slim ~500-token prompt — workers query /v1/context/* for project architecture, lessons, and discoveries on demand. Workers persist sessions in SQLite — resumed for related tasks, rotated when domain changes. Claude Code is a network resource: discovered via CapabilityProfile (shareCompute: true), not required on every node."
+  description: "Spawn fresh Claude Code worker processes. Each task gets a clean session with full boot prompt (~500 tokens) — workers query /v1/context/* for project architecture, lessons, and discoveries on demand. Workers are always fresh; lessons from previous sessions accumulate in SQLite and are injected via Context API. Claude Code is a network resource: discovered via CapabilityProfile (shareCompute: true), not required on every node."
   defined_in: "packages/node/src/core/worker-pool.ts"
   used_by: [Orchestrator, AgentTools]
 }
@@ -112,9 +112,9 @@ concept TierClassification {
 }
 
 decision THIN_AGENT_THICK_ORCHESTRATOR {
-  context: "Old system had thick Agent class (1,279 lines) with complex state management. New system needed simpler orchestration with persistent workers."
-  choice: "Persistent workers (session resume, context preservation) + thick orchestrator (deterministic tick loop, all state in SQLite). Claude Code is a discovered network resource, not a node requirement."
-  why: "80% of orchestration is deterministic (routing, status checks). Only 20% needs AI. Workers persist sessions via SQLite — resumed for related tasks to preserve accumulated knowledge. Any node with Claude Code contributed (shareCompute: true) can run the council."
+  context: "Old system had thick Agent class (1,279 lines) with complex state management. New system needed simpler orchestration with fresh workers."
+  choice: "Fresh workers (clean session per task, knowledge via Context API) + thick orchestrator (deterministic tick loop, all state in SQLite). Claude Code is a discovered network resource, not a node requirement."
+  why: "80% of orchestration is deterministic (routing, status checks). Only 20% needs AI. Workers are always fresh — each spawn gets a clean session. Lessons from previous sessions accumulate in SQLite and are injected via Context API. Any node with Claude Code contributed (shareCompute: true) can run the council."
   date: "2026-02-27"
 }
 
@@ -132,11 +132,11 @@ decision CLAUDE_CODE_AS_NETWORK_RESOURCE {
   date: "2026-02-27"
 }
 
-decision PERSISTENT_WORKERS {
-  context: "Workers were killed after each task. Next task on same codebase started from zero. Builder who just learned the storage layer gets deleted, replacement starts blind."
-  choice: "Workers are persistent team members. Sessions saved to SQLite (sessionId). Resume via claude --continue --resume <sessionId> for related tasks. Rotate only when context exhausted or domain changes completely."
-  why: "Workers accumulate valuable context — codebase understanding, file locations, gotchas discovered. Throwing this away is wasteful. Lessons in SQLite capture some knowledge, but a resumed session has the full mental model. Team members should persist."
-  date: "2026-02-27"
+decision FRESH_WORKERS {
+  context: "Workers were initially made persistent with session resume. This added complexity (SessionStrategy, session tracking) without proportional benefit — Context API and lessons in SQLite provide knowledge continuity without stale session baggage."
+  choice: "Workers are always fresh. Each spawn creates a new Claude Code session with a full boot prompt. Workers do not resume previous sessions. Lessons from previous sessions accumulate in SQLite and are injected into future workers via Context API (/v1/context/lessons, /v1/context/project)."
+  why: "Fresh sessions avoid stale context accumulation, reduce complexity (no SessionStrategy or session tracking needed), and still preserve knowledge through the lessons/discoveries system in SQLite. Each task gets a clean mental model with relevant historical knowledge injected on demand."
+  date: "2026-03-01"
 }
 
 decision PROJECT_ORCHESTRATOR_PIPELINE {
