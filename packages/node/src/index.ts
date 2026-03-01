@@ -3370,13 +3370,14 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     if (existingQaUser) {
       this.qaUserOrchId = existingQaUser.id;
       this.agentDb.updateAgent(existingQaUser.id, { status: 'active' });
+      this.agentDb.updateAgent(existingQaUser.id, { tickIntervalMs: 300000 });
       console.log(`[agents] QA User Agent rehydrated: ${this.qaUserOrchId}`);
     } else {
       this.qaUserOrchId = this.orgManager.createOrchestrator({
         role: 'qa-user',
         level: 0,
         scope: 'public',
-        tickIntervalMs: 900000, // 15 minutes
+        tickIntervalMs: 300000, // 5 minutes (dev mode)
         maxWorkers: 2,
         maxChildren: 0,
         persistent: true,
@@ -3386,7 +3387,7 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       console.log(`[agents] QA User Agent created: ${this.qaUserOrchId}`);
     }
     this.instantiateOrchestrator(this.qaUserOrchId);
-    console.log('[agents] QA User Agent tick loop started (15min interval)');
+    console.log('[agents] QA User Agent tick loop started (5min interval)');
 
     // Phase 104: Rehydrate persistent project orchestrators from DB
     // Check both 'active' and 'pending' (pending = survived restart, needs reactivation)
