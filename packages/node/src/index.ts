@@ -79,12 +79,16 @@ import type { StorageBackend } from './core/storage-backend.js';
 import { AIBackendRegistry } from './core/ai-backend-registry.js';
 import { ClaudeBackend } from './core/ai-backend-claude.js';
 import { OllamaBackend } from './core/ai-backend-ollama.js';
+import { OrchestratorProcessManager } from './platform/orchestrator-manager.js';
 import { LocalEnvironment } from './kernel/local-environment.js';
 import { toString as uint8ArrayToString } from 'uint8arrays';
 import { join } from 'node:path';
 import { homedir, freemem, totalmem } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { execSync } from 'node:child_process';
+import { execSync, exec as execCb } from 'node:child_process';
+import { promisify } from 'node:util';
+
+const execAsync = promisify(execCb);
 import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 
 /** Phase 68.2: Single constant for the node-level manager ID. */
@@ -137,6 +141,7 @@ export class PandoNode {
   private councilOrchId: string | null = null;
   private observerOrchId: string | null = null;
   private qaUserOrchId: string | null = null;
+  private orchestratorManager: OrchestratorProcessManager | null = null;
   private emissionWitness: EmissionWitness | null = null;
   private securityMonitor: SecurityMonitor | null = null;
   private resourceProofChallenger: ResourceProofChallenger | null = null;
@@ -3336,9 +3341,114 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       console.log(`[agents] Council orchestrator created: ${this.councilOrchId}`);
     }
 
-    // Phase 104: Use the unified factory to instantiate the council orchestrator
-    this.councilOrchestrator = this.instantiateOrchestrator(this.councilOrchId);
-    console.log('[agents] Council orchestrator tick loop started');
+    // ---------------------------------------------------------------------------
+    // Phase 200: Process-isolated orchestrators
+    // System orchestrators (council, observer, qa-user) run in their own child
+    // processes. The main process stays responsive for API, P2P, and networking.
+    // ---------------------------------------------------------------------------
+
+    // Read API token for scenario runner in child processes
+    let apiToken = '';
+    try {
+      const tokenPath = join(dataDir, 'api-token');
+      if (existsSync(tokenPath)) apiToken = readFileSync(tokenPath, 'utf-8').trim();
+    } catch { /* no token */ }
+
+    // Async onCommit for process manager (non-blocking git/build)
+    const asyncOnCommit = async (message: string): Promise<boolean> => {
+      try {
+        const cwd = process.cwd();
+        await execAsync('git add -A -- ":(exclude)CLAUDE.md"', { cwd, timeout: 10000 });
+        const { stdout: status } = await execAsync('git status --porcelain', { cwd, timeout: 5000 });
+        if (!status.trim()) {
+          console.log('[orchestrator] Nothing to commit');
+          try {
+            await execAsync('git push origin master', { cwd, timeout: 30000 });
+            console.log('[orchestrator] Pushed orphaned commits to origin');
+          } catch (pushErr: any) {
+            console.warn('[orchestrator] Push failed (non-fatal):', pushErr.message?.slice(0, 100));
+          }
+          return false;
+        }
+        await execAsync(`git commit -m "${message.replace(/"/g, '\\"')}"`, { cwd, timeout: 30000 });
+        console.log(`[orchestrator] Committed: ${message}`);
+        try {
+          await execAsync('git push origin master', { cwd, timeout: 30000 });
+          console.log('[orchestrator] Pushed to origin');
+        } catch (pushErr: any) {
+          console.warn('[orchestrator] Push failed (non-fatal):', pushErr.message?.slice(0, 100));
+        }
+        // Post-commit: rebuild (async — doesn't block main event loop)
+        try {
+          console.log('[orchestrator] Post-commit build starting...');
+          await execAsync('npm run build', { cwd, timeout: 120000 });
+          console.log('[orchestrator] Post-commit build succeeded');
+        } catch (buildErr: any) {
+          console.error('[orchestrator] Post-commit build FAILED — reverting commit');
+          try {
+            await execAsync('git revert --no-edit HEAD', { cwd, timeout: 15000 });
+            console.log('[orchestrator] Reverted broken commit');
+          } catch (revertErr: any) {
+            console.error('[orchestrator] Revert failed:', revertErr.message?.slice(0, 100));
+          }
+          return false;
+        }
+        // Post-build: recompile genome
+        try {
+          await execAsync('python genome.py compile . 2>/dev/null || python3 genome.py compile . 2>/dev/null', {
+            cwd, timeout: 15000,
+          });
+          this.genomeBridgeRegistry?.reloadAll();
+          console.log('[orchestrator] Genome recompiled + bridge reloaded');
+        } catch { /* Python not available */ }
+        return true;
+      } catch (err: any) {
+        console.error('[orchestrator] Commit failed:', err.message?.slice(0, 200));
+        return false;
+      }
+    };
+
+    // Async onPropose
+    const asyncOnPropose = this.upgradeProtocol
+      ? async (title: string, description: string) => {
+          await this.upgradeProtocol!.createUpgradeProposal(`${title}: ${description}`);
+        }
+      : (this.governance
+          ? async (title: string, description: string) => {
+              await this.governance!.createProposal(title, description);
+            }
+          : undefined);
+
+    // Create the process manager
+    this.orchestratorManager = new OrchestratorProcessManager({
+      workerPool: this.workerPool,
+      messageBus: this.messageBus,
+      orgManager: this.orgManager,
+      onCommit: asyncOnCommit,
+      onPropose: asyncOnPropose,
+      pushEvent: (event: string, data: any) => this.apiServer?.pushEvent(event, data),
+      sendChatResult: async (peerId: string, threadId: string, message: string) => {
+        if (this.requestReply) {
+          try {
+            await this.requestReply.request(peerId, 'chat_result', { threadId, message }, 10_000);
+          } catch (err: any) {
+            console.warn(`[chat_result] Failed to send to ${peerId.slice(0, 12)}: ${err.message?.slice(0, 100)}`);
+          }
+        }
+      },
+      threadStore: this.threadStore || undefined,
+      getPeerCount: () => this.network?.getPeers()?.length ?? 0,
+      apiPort: this.config.apiPort,
+      dataDir,
+      repoDir: process.cwd(),
+      graphPath: join(process.cwd(), 'output', 'graph.json'),
+      apiToken,
+    });
+    console.log('[agents] OrchestratorProcessManager initialized');
+
+    // Start council in its own process
+    this.orchestratorManager.startOrchestrator(this.councilOrchId, true);
+    console.log('[agents] Council orchestrator forked to child process');
 
     // Find existing observer orchestrator or create new
     const existingObserver = this.agentDb.listAgents({ role: 'observer', type: 'orchestrator' })
@@ -3361,8 +3471,8 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       });
       console.log(`[agents] Observer orchestrator created: ${this.observerOrchId}`);
     }
-    this.instantiateOrchestrator(this.observerOrchId);
-    console.log('[agents] Observer orchestrator tick loop started (10min interval)');
+    this.orchestratorManager.startOrchestrator(this.observerOrchId!);
+    console.log('[agents] Observer orchestrator forked to child process (5min interval)');
 
     // Find existing QA User Agent orchestrator or create new
     const existingQaUser = this.agentDb.listAgents({ role: 'qa-user', type: 'orchestrator' })
@@ -3386,8 +3496,8 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       });
       console.log(`[agents] QA User Agent created: ${this.qaUserOrchId}`);
     }
-    this.instantiateOrchestrator(this.qaUserOrchId);
-    console.log('[agents] QA User Agent tick loop started (5min interval)');
+    this.orchestratorManager.startOrchestrator(this.qaUserOrchId!);
+    console.log('[agents] QA User Agent forked to child process (5min interval)');
 
     // Phase 104: Rehydrate persistent project orchestrators from DB
     // Check both 'active' and 'pending' (pending = survived restart, needs reactivation)
@@ -4103,7 +4213,12 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       this.networkState.stop();
       this.networkState = null;
     }
-    // Phase 104: Stop ALL live orchestrators (council + project)
+    // Phase 200: Stop process-isolated orchestrators
+    if (this.orchestratorManager) {
+      await this.orchestratorManager.stopAll();
+      this.orchestratorManager = null;
+    }
+    // Phase 104: Stop ALL live orchestrators (project orchestrators still in-process)
     for (const [, orch] of this.liveOrchestrators) {
       orch.stop();
     }
