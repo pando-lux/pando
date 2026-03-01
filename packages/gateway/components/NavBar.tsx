@@ -66,7 +66,7 @@ export default function NavBar() {
               </span>
             )}
           </a>
-          <nav className="hidden sm:flex items-center gap-1">
+          <nav className="hidden lg:flex items-center gap-1">
             {links.map(({ href, label }) => {
               const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
               return (
@@ -88,7 +88,7 @@ export default function NavBar() {
         <div className="flex items-center gap-3">
           {/* Auth state display */}
           {!loading && (
-            <div className="hidden sm:flex items-center gap-2">
+            <div className="hidden lg:flex items-center gap-2">
               {isClaimed ? (
                 <>
                   <span className="text-xs text-neutral-500 dark:text-neutral-400 font-mono">
@@ -122,7 +122,7 @@ export default function NavBar() {
           <ThemeToggle />
           <button
             onClick={() => setMenuOpen(!menuOpen)}
-            className="sm:hidden p-2 rounded-lg bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 text-neutral-600 dark:text-neutral-400 transition"
+            className="lg:hidden p-2 rounded-lg bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 text-neutral-600 dark:text-neutral-400 transition"
             aria-label="Toggle menu"
           >
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -143,7 +143,7 @@ export default function NavBar() {
         </div>
       </div>
       {menuOpen && (
-        <nav className="sm:hidden px-6 pb-3 flex flex-col gap-1">
+        <nav className="lg:hidden px-6 pb-3 flex flex-col gap-1">
           {links.map(({ href, label }) => {
             const active = href === "/" ? pathname === "/" : pathname.startsWith(href);
             return (

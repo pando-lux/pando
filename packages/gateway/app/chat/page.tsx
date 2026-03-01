@@ -159,7 +159,7 @@ function ChatPage() {
   const [threads, setThreads] = useState<ThreadMeta[]>([]);
   const [threadsLoading, setThreadsLoading] = useState(true);
   const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
-  const [showSidebar, setShowSidebar] = useState(true);
+  const [showSidebar, setShowSidebar] = useState(false);
   const [unreadThreads, setUnreadThreads] = useState<Set<string>>(new Set());
   const [activityLog, setActivityLog] = useState<string[]>([]);
   const activityLogRef = useRef<string[]>([]);
