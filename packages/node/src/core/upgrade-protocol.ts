@@ -287,8 +287,14 @@ export class UpgradeProtocol {
     // Step 4: Verify commit hash if provided (governance-approved hash)
     // Soft check only — orphan branch pushes produce different hashes, so log warning but proceed
     if (commitHash && remoteSha !== commitHash && !remoteSha.startsWith(commitHash) && !commitHash.startsWith(remoteSha.slice(0, commitHash.length))) {
-      console.error(`[upgrade] Hash mismatch: governance approved ${commitHash.slice(0, 12)}, but origin/master is ${remoteSha.slice(0, 12)} — aborting upgrade`);
-      return { success: false, message: `Hash mismatch: governance approved ${commitHash} but origin/master is ${remoteSha}` };
+      // Check if proposed commit is an ancestor of origin/master (already incorporated)
+      try {
+        this.git(`merge-base --is-ancestor ${commitHash} origin/master`);
+        console.log(`[upgrade] Proposed commit ${commitHash.slice(0, 12)} is ancestor of origin/master (${remoteSha.slice(0, 12)}) — upgrading to latest`);
+      } catch {
+        console.error(`[upgrade] Hash mismatch: governance approved ${commitHash.slice(0, 12)}, but origin/master is ${remoteSha.slice(0, 12)} and commit is not an ancestor — aborting upgrade`);
+        return { success: false, message: `Hash mismatch: governance approved ${commitHash} but origin/master is ${remoteSha}` };
+      }
     }
 
     // Step 5: Reset to origin/master (stash uncommitted changes first)
@@ -617,6 +623,13 @@ export class UpgradeProtocol {
         // Skip if already applied or if we're already at this version
         if (this.hasApplied(commitHash)) continue;
         if (currentVersion.startsWith(commitHash) || commitHash.startsWith(currentVersion.slice(0, commitHash.length))) continue;
+        // Skip if this commit is already in our git history (ancestor of HEAD)
+        try {
+          this.git(`merge-base --is-ancestor ${commitHash} HEAD`);
+          this.appliedProposalIds.add(commitHash);
+          this.saveState();
+          continue;
+        } catch { /* not an ancestor — proceed with upgrade */ }
         // Skip if pinned
         if (this.pinnedVersion) continue;
 
