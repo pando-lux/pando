@@ -5,7 +5,7 @@
  * Phase 43: Multi-Node Gateway — Discovery, Failover, Smart Routing.
  *
  * Bootstrap from PANDO_NODES (comma-separated) or PANDO_NODE_URL (single, backward compat).
- * Discovers additional nodes via GET /network/capabilities on the primary node.
+ * Discovers additional nodes via GET /v1/network/capabilities on the primary node.
  */
 
 export interface NodeEntry {
@@ -73,8 +73,10 @@ class NodePool {
     const envUrls = nodeList?.length ? nodeList : singleNode ? [singleNode] : [];
     const combined = new Set([...envUrls, ...FALLBACK_SEEDS]);
     const urls = combined.size > 0 ? Array.from(combined) : ['http://127.0.0.1:4000'];
-    this.primaryUrl = urls[0];
-    for (const url of urls) {
+    // Sanitize: replace 'localhost' with '127.0.0.1' to avoid IPv6 resolution issues on Windows
+    const sanitized = urls.map(u => u.replace('://localhost', '://127.0.0.1'));
+    this.primaryUrl = sanitized[0];
+    for (const url of sanitized) {
       this.nodes.set(url, defaultEntry(url));
     }
   }
@@ -205,7 +207,7 @@ class NodePool {
     const checks = Array.from(this.nodes.entries()).map(async ([url, entry]) => {
       const start = Date.now();
       try {
-        const res = await fetch(`${url}/status`, {
+        const res = await fetch(`${url}/v1/status`, {
           signal: AbortSignal.timeout(5000),
         });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -250,7 +252,7 @@ class NodePool {
 
     for (const sourceUrl of tryUrls) {
       try {
-        const res = await fetch(`${sourceUrl}/network/capabilities`, {
+        const res = await fetch(`${sourceUrl}/v1/network/capabilities`, {
           signal: AbortSignal.timeout(10000),
         });
         if (!res.ok) continue;
@@ -283,7 +285,7 @@ class NodePool {
           // Verify immediately
           try {
             const start = Date.now();
-            const check = await fetch(`${url}/status`, {
+            const check = await fetch(`${url}/v1/status`, {
               signal: AbortSignal.timeout(5000),
             });
             if (check.ok) {
