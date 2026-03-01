@@ -196,10 +196,16 @@ export function registerContextRoutes(
     let genomeContext: string | null = null;
     const registry = deps.getGenomeBridgeRegistry?.();
     if (registry && projectId) {
-      // Try project-specific genome first, fall back to Pando's
       const projectBridge = registry.getForProject(projectId);
       if (projectBridge?.isLoaded() && task) {
         genomeContext = projectBridge.contextForTask({ taskDescription: task });
+      }
+      // Fallback: user-project workers get Pando's general architecture context
+      if (!genomeContext && task) {
+        const pandoBridge = registry.getPandoBridge();
+        if (pandoBridge?.isLoaded()) {
+          genomeContext = pandoBridge.contextForTask({ taskDescription: task });
+        }
       }
     } else {
       // No registry — use single genome bridge (backward compat)
