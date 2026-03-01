@@ -3928,6 +3928,73 @@ export async function registerPlatformRoutes(
       return { orchestratorId: orchId, role: agent.role, status: agent.status, workers: workers.length, lastTickAt: agent.lastTickAt };
     });
 
+    // GET /council/dashboard — aggregated dashboard data
+    fastify.get('/council/dashboard', async (_request: any, reply: any) => {
+      const db = getAgentDb();
+      const orchId = node.getCouncilOrchId();
+      if (!db || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
+
+      const agent = db.getAgent(orchId);
+      if (!agent) return reply.code(503).send({ error: 'Council orchestrator not found' });
+
+      // Workers under council
+      const allWorkers = db.listAgents({ type: 'worker' as any, parentId: orchId });
+      const workers = allWorkers.map((w: any) => ({
+        id: w.id, role: w.role, status: w.status,
+        spawnedAt: w.createdAt, lastReportAt: w.lastReportAt || w.updatedAt,
+        lastReport: w.lastReport?.slice(0, 200) || null,
+      }));
+
+      // Recent Tier 2 ticks (last 15)
+      const allTicks = db.getTickLog(orchId, 50);
+      const recentTicks = allTicks
+        .filter((t: any) => t.tier === 2)
+        .slice(0, 15)
+        .map((t: any) => ({
+          tickNumber: t.tickNumber, tier: t.tier,
+          actions: t.actionsTaken, durationMs: t.durationMs, at: t.createdAt,
+        }));
+
+      // Recent commits (git log)
+      let recentCommits: Array<{hash: string; message: string}> = [];
+      try {
+        const { execSync } = await import('node:child_process');
+        const gitLog = execSync('git log --oneline -10', { encoding: 'utf-8', timeout: 5000 });
+        recentCommits = gitLog.trim().split('\n').filter(Boolean).map(line => {
+          const spaceIdx = line.indexOf(' ');
+          return { hash: line.slice(0, spaceIdx), message: line.slice(spaceIdx + 1) };
+        });
+      } catch { /* git not available */ }
+
+      // Lessons (last 10)
+      const lessons = db.getLessons({ orchestratorId: orchId, limit: 10 })
+        .map((l: any) => ({ lesson: l.lesson, source: l.source, confidence: l.confidence, createdAt: l.createdAt }));
+
+      // Network status
+      const identity = node.getIdentity();
+
+      return {
+        council: {
+          orchestratorId: orchId,
+          status: agent.status,
+          role: agent.role,
+          lastTickAt: agent.lastTickAt,
+          sessionId: agent.sessionId?.slice(0, 8) || null,
+          createdAt: agent.createdAt,
+          budgetSpent: agent.budgetSpent || 0,
+        },
+        workers,
+        recentTicks,
+        recentCommits,
+        network: {
+          peerId: identity?.peerId?.slice(0, 16) || null,
+          peers: node.getNetwork()?.getPeers()?.length ?? 0,
+          uptime: process.uptime(),
+        },
+        lessons,
+      };
+    });
+
     // GET /council/minutes — tick log as minutes (with full data from tick_log table)
     fastify.get('/council/minutes', async (_request: any, reply: any) => {
       const db = getAgentDb();
