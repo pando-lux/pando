@@ -311,15 +311,36 @@ export class Orchestrator {
       }
 
       // 3. Execute actions
+      let commitSucceeded = false;
       for (const action of actions) {
         try {
           const shouldContinue = await this.execute(action, agent);
+          if (action.type === 'commit_code' && shouldContinue !== false) {
+            commitSucceeded = true;
+          }
           if (shouldContinue === false) {
             console.log(`[Orchestrator ${this.orchestratorId}] Action ${action.type} signaled stop — skipping remaining actions`);
             break;
           }
         } catch (err: any) {
           console.error(`[Orchestrator ${this.orchestratorId}] action error (${action.type}):`, err.message?.slice(0, 200));
+        }
+      }
+
+      // 3a. Auto-propose after commit: prevent governance gap
+      // If AI returned commit_code but no propose_upgrade, auto-trigger it.
+      const hadPropose = actions.some(a => a.type === 'propose_upgrade');
+      if (commitSucceeded && !hadPropose && this.deps.onPropose) {
+        const commitAction = actions.find(a => a.type === 'commit_code') as any;
+        const commitMsg = commitAction?.message || 'Committed changes';
+        console.log(`[Orchestrator ${this.orchestratorId}] Auto-proposing upgrade: commit_code without propose_upgrade`);
+        try {
+          await this.execute(
+            { type: 'propose_upgrade', title: `[Auto-upgrade] ${commitMsg.slice(0, 80)}`, description: `Auto-proposed: commit_code executed without corresponding propose_upgrade.\n\nCommit: ${commitMsg}` } as OrchestratorAction,
+            agent,
+          );
+        } catch (err: any) {
+          console.warn(`[Orchestrator ${this.orchestratorId}] Auto-propose failed: ${err.message?.slice(0, 200)}`);
         }
       }
 
