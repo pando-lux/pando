@@ -15,9 +15,9 @@
 
 **Fix**: Add `'idle'` to protected status list in `kill()` and `cleanup()`. Two lines.
 
-**Status**: [~] Directive sent to council 2026-03-01
+**Status**: [x] Fixed (commit d5b7a471) — `idle` added to protected status list in `kill()` and `cleanup()`
 
-**Deeper fix needed**: Define a formal state machine for workers:
+**Deeper fix (optional)**: Define a formal state machine for workers:
 - `spawning` → `active` → `idle` (reported done, available for reuse) → `done` (final)
 - `spawning` → `active` → `failed` (process died or reported failure) → (prunable)
 - Only `kill()` and `cleanup()` can set `failed`. Only the report endpoint can set `idle`. Only orchestrator dissolution can set `done`.
@@ -53,7 +53,7 @@ The `chat_proxy` handler should create a local-only project record. ThreadStore 
 
 Option A is simplest. The `chat_proxy` response already returns `{ status: 'queued', projectId }`. When the build completes, the building node should send a P2P `chat_result` message back.
 
-**Status**: [ ] Not started
+**Status**: [x] Fixed (commit 65b2ed2f) — Option A implemented: `chat_proxy` passes `originPeerId`, building node sends `chat_result` P2P message back, originating node fires SSE + writes to ThreadStore
 
 ---
 
@@ -65,7 +65,7 @@ Option A is simplest. The `chat_proxy` response already returns `{ status: 'queu
 
 **Fix**: Debug ResourceRegistry startup. Check if `start()` is called. Check if the DB path is correct.
 
-**Status**: [ ] Not started
+**Status**: [x] Not a bug — ResourceRegistry uses shared ledger DB (`this.ledger.getDatabase()`), not a separate file. The 0-byte `resource-registry.db` is a pre-Phase 69 leftover.
 
 ---
 
@@ -75,7 +75,7 @@ Option A is simplest. The `chat_proxy` response already returns `{ status: 'queu
 
 **Fix**: `pruneOldData()` exists but only prunes workers older than 7 days. Add: after dissolution or when worker count > 20, prune `done`/`failed` workers older than 24h. Keep last 5 per role for context.
 
-**Status**: [ ] Not started (pruneOldData wired but threshold too conservative)
+**Status**: [x] Fixed (commit 8be757ad) — 24h threshold (was 7d), aggressive pruning when >20 workers, keeps last 5 per role per orchestrator
 
 ---
 

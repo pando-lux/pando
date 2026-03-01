@@ -388,7 +388,10 @@ export class WorkerPool {
       claudeBackend.onPid = onPidOrig;
       this.activeProcesses.delete(workerId);
       this.workerPids.delete(workerId);  // stop tracking memory
-      this.db.updateAgent(workerId, { status: 'failed', pid: null });
+      const agentBeforeCrash = this.db.getAgent(workerId);
+      if (!agentBeforeCrash || !['done', 'failed', 'dissolved'].includes(agentBeforeCrash.status)) {
+        this.db.updateAgent(workerId, { status: 'failed', pid: null });
+      }
       console.error(`[WorkerPool] Worker ${workerId} crashed:`, err.message?.slice(0, 200));
 
       // Notify orchestrator about crash with full error details
@@ -410,9 +413,14 @@ export class WorkerPool {
         });
       } catch { /* best-effort notification */ }
 
-      // Issue 8: Clean up worktree on failure (discard changes)
+      // Issue 8: Clean up worktree — merge if worker reported done, discard if truly failed
       if (worktreePath) {
-        this.cleanupWorktree(workerId, worktreePath);
+        const doneBeforeCleanup = this.db.getAgent(workerId);
+        if (doneBeforeCleanup?.status === 'done') {
+          try { this.mergeAndCleanupWorktree(workerId, worktreePath, true); } catch { this.cleanupWorktree(workerId, worktreePath); }
+        } else {
+          this.cleanupWorktree(workerId, worktreePath);
+        }
       }
     });
 
