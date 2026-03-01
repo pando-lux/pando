@@ -172,8 +172,9 @@ export function registerWorkerRoutes(
     db.updateAgent(agent.id, { lastReportAt: new Date().toISOString() });
 
     // If done or failed, update worker status
+    // Done workers go 'idle' (persistent — available for reassignment) instead of 'done'
     if (body.status === 'done') {
-      db.updateAgent(agent.id, { status: 'done' });
+      db.updateAgent(agent.id, { status: 'idle' });
     } else if (body.status === 'failed') {
       db.updateAgent(agent.id, { status: 'failed' });
     }

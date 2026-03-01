@@ -114,7 +114,7 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
   - **CEO** (council orchestrator): Executes — spawns workers, ships code, manages projects.
   - **Governance** (governance.ts): Guards — 4 deterministic security checks before auto-approve: security file check, change size + QA check, build verify, kernel protection delay. Blocks bad changes.
   - **Observer** (observer orchestrator): Watches inward — audits architecture, verifies design intent matches reality, creates persistent directives for CEO with findings. Cannot write code.
-  - **QA User Agent** (qa-user orchestrator): Watches outward — tests gateway UI from a human perspective using Playwright. Spawns qa-tester workers every 15 min. Reports UX issues, bugs, stale data to CEO via directives. Cannot write code or deploy.
+  - **QA User Agent** (qa-user orchestrator): Watches outward — tests gateway UI from a human perspective using Playwright. Spawns qa-tester workers every 5 min. Reports UX issues, bugs, stale data to CEO via directives. Cannot write code or deploy.
   - **Self-check dissolution rule**: Council self-check (every 10th tick) dissolves stale orchestrators. Persistent orchestrators (observer, qa-user) are **exempt** — `if (orch.persistent) continue;` guards in both the stale-check loop and OOM prevention loop. Only project orchestrators dissolve when idle.
 - **Verify-before-deploy hardening**: ScenarioRunner crash now ABORTS proposal (not silent pass-through). Upgrade-protocol hash mismatch returns failure (can't pull unapproved code). Proposal descriptions include test result audit trail.
 
@@ -130,7 +130,26 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
 | **AIBackendRegistry** | `core/ai-backend-registry.ts` | Pluggable AI backends. Default model: `claude-opus-4-6`. |
 | **GenomeBridge** | `platform/genome-bridge.ts` | Reads compiled genome knowledge graph (`output/graph.json`). Provides `contextForTask()` — architecture context injected into worker boot prompts and council AI prompts. |
 | **ScenarioRunner** | `platform/scenario-runner.ts` | Reads test scenarios from genome graph. Executes API regression tests via fetch. Wired into self-sustaining loop after upgrade. |
-| **QA User Agent** | `platform/orchestrator.ts` (role=`qa-user`) | Autonomous UI tester. Spawns Playwright workers every 15 min to test gateway pages from a human perspective. Reports to CEO via directives. |
+| **QA User Agent** | `platform/orchestrator.ts` (role=`qa-user`) | Autonomous UI tester. Spawns Playwright workers every 5 min to test gateway pages from a human perspective. Reports to CEO via directives. |
+| **OrchestratorProcessManager** | `platform/orchestrator-manager.ts` | Forks system orchestrators (council, observer, qa-user) into separate child processes. IPC bridge for actions needing main process (spawn_worker, commit_code, push_event). Auto-restart on crash. |
+| **orchestrator-process** | `platform/orchestrator-process.ts` | Child process entry point. Creates own AgentDatabase, MessageBus, AIBackendRegistry (WAL-mode SQLite). Proxies workerPool and commit/propose via IPC. |
+
+### Process Isolation Architecture (Phase 200 — live)
+
+System orchestrators run in separate child processes via `fork()`. The main Node.js process handles only infrastructure (API, P2P, SQLite coordination, worker management). AI calls never block the main event loop.
+
+```
+Main Process (PID 1)                  Child Processes
+├── HTTP API (Fastify)                ├── Council (PID 2) — CEO brain, 60s tick
+├── P2P Network (libp2p)             ├── Observer (PID 3) — architecture audit, 5min tick
+├── WorkerPool (spawn/kill)           └── QA Agent (PID 4) — UX testing, 5min tick
+├── Governance (deterministic)
+├── OrchestratorProcessManager        IPC Protocol:
+│   └── Handles IPC from children     Child → Parent: spawn_worker, commit_code, push_event
+└── SQLite (WAL mode)                 Parent → Child: start, stop, peer_count, action_result
+```
+
+Each child creates its own `AgentDatabase`, `MessageBus`, `AIBackendRegistry` (WAL mode allows concurrent access). Actions needing main-process resources (worker spawning, git operations, P2P messaging) go through IPC request/response. Project orchestrators still run in-process (for now).
 
 ### Context Architecture (Phase 106 — live)
 
@@ -291,7 +310,7 @@ Witness-based emission — peers must attest that work happened before Lux is mi
 | **Core** | `core/ai-backend-claude.ts`, `core/ai-backend-registry.ts`, `core/storage-backend.ts`, `core/deploy-manager.ts`, `core/upgrade-protocol.ts`, `core/payment-gate.ts`, `core/request-reply.ts` |
 | **Platform** | `platform/agent-tools.ts` (HTTP API), `platform/genome-bridge.ts` (reads compiled genome graph), `platform/scenario-runner.ts` (automated test runner from graph), `platform/resource-router.ts`, `platform/content-registry.ts`, `platform/thread-store.ts`, `platform/capability-detector.ts` |
 | **API** | `api/api-server.ts`, `api/kernel-api.ts`, `api/core-api.ts`, `api/platform-api.ts` |
-| **Agent (new)** | `platform/orchestrator.ts`, `platform/org-manager.ts`, `core/worker-pool.ts`, `core/worker-mcp.ts`, `core/message-bus.ts` |
+| **Agent** | `platform/orchestrator.ts`, `platform/orchestrator-manager.ts` (process isolation), `platform/orchestrator-process.ts` (child entry), `platform/org-manager.ts`, `core/worker-pool.ts`, `core/worker-mcp.ts`, `core/message-bus.ts` |
 | **Shared** | `packages/shared/src/types.ts`, `packages/shared/src/crypto.ts` |
 | **Ledger** | `packages/ledger/src/index.ts`, `packages/ledger/src/transactions.ts` |
 | **Gateway** | `packages/gateway/app/page.tsx`, `packages/gateway/lib/node-connection.ts` |

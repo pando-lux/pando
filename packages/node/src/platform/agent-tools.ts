@@ -144,8 +144,9 @@ export function registerAgentRoutes(
     if (!agent) return reply.code(404).send({ error: `Agent ${id} not found` });
 
     // Update worker status
+    // Done workers go 'idle' (persistent — available for reassignment) instead of 'done'
     if (status === 'done' || status === 'complete') {
-      db.updateAgent(id, { status: 'done' });
+      db.updateAgent(id, { status: 'idle' });
     } else if (status === 'failed') {
       db.updateAgent(id, { status: 'failed' });
     }

@@ -76,7 +76,7 @@ export type OrchestratorAction =
   | { type: 'spawn_worker'; role: string; templateId?: string; taskId?: string; fileScope?: string[]; rolePrompt?: string }
   | { type: 'kill_worker'; workerId: string }
   | { type: 'create_task'; title: string; description: string; priority?: number }
-  | { type: 'assign_task'; taskId: string; workerId: string }
+  | { type: 'assign_task'; workerId: string; task: string }
   | { type: 'send_message'; recipientId: string; message: string }
   | { type: 'create_team'; role: string; rolePrompt?: string }
   | { type: 'dissolve_team'; orchestratorId: string }
@@ -851,13 +851,82 @@ export class Orchestrator {
       sections.push('- Wait for the devops worker to report ready before spawning qa-testers');
       sections.push('- Gateway URL for ALL tests: http://127.0.0.1:3222 (NOT localhost, NOT port 3000)');
       sections.push('');
-      sections.push('## TESTING CYCLE (rotate priorities each tick)');
-      sections.push('1. FIRST-TIME USER JOURNEY: Landing → register → build app → see result');
-      sections.push('2. CORE FLOWS: Chat works? Projects load? Wallet shows balance?');
-      sections.push('3. DEPLOYED APPS: Visit actual deployed apps — do they work?');
-      sections.push('4. ERROR STATES: What if node is down? API errors? Empty states?');
-      sections.push('5. DATA QUALITY: Stale projects? Dead deploy links? Zombie data?');
-      sections.push('6. VISUAL/UX AUDIT: Loading states? Responsive? Friendly errors?');
+      sections.push('## TESTING MATURITY LEVELS (escalate when clean)');
+      sections.push('');
+      sections.push('You operate at 4 levels. Start at the highest level where issues still exist.');
+      sections.push('When a level is clean (2+ consecutive ticks with no new findings), move up.');
+      sections.push('');
+      sections.push('LEVEL 1 — BUG HUNTING: "Does it work?"');
+      sections.push('  Pages load, buttons work, forms submit, no console errors, no timeouts.');
+      sections.push('  → If bugs found: report as [QA BUG]');
+      sections.push('');
+      sections.push('LEVEL 2 — FLOW OPTIMIZATION: "Can a human accomplish their goal?"');
+      sections.push('  Count clicks to complete a task. Find dead ends. Audit copy for jargon.');
+      sections.push('  Check empty states. Test as a FIRST-TIME user with zero context.');
+      sections.push('  → If issues found: report as [QA UX_ISSUE]');
+      sections.push('');
+      sections.push('LEVEL 3 — FEATURE GAPS: "What is obviously missing?"');
+      sections.push('  Compare to what users expect from modern apps. What would make someone');
+      sections.push('  say "wait, I can\'t do X?" Think: search, filters, sharing, notifications,');
+      sections.push('  undo, keyboard shortcuts, mobile responsiveness.');
+      sections.push('  → If gaps found: report as [QA MISSING_FEATURE]');
+      sections.push('');
+      sections.push('LEVEL 4 — POLISH: "Would someone enjoy using this?"');
+      sections.push('  Visual consistency, information hierarchy, cognitive load, micro-interactions.');
+      sections.push('  The "would I show this to a friend?" test.');
+      sections.push('  → If issues found: report as [QA POLISH]');
+      sections.push('');
+      sections.push('Track your current level in record_lesson. Example:');
+      sections.push('  "QA maturity: Level 2 (Flow Optimization). Level 1 clean since tick #25."');
+      sections.push('');
+      sections.push('## USER JOURNEY SCORING');
+      sections.push('');
+      sections.push('Rate every journey you test on these dimensions (1-5 scale):');
+      sections.push('');
+      sections.push('  FINDABILITY:  Can the user find this feature? (navigation, labels, search)');
+      sections.push('  CLARITY:      Does the user understand what to do? (copy, layout, prompts)');
+      sections.push('  EFFICIENCY:   How many clicks/steps to complete? (fewer = better)');
+      sections.push('  FEEDBACK:     Does the system tell the user what happened? (success, error, progress)');
+      sections.push('  RECOVERY:     If something goes wrong, can the user recover? (back button, undo, retry)');
+      sections.push('');
+      sections.push('Record scores in your directive reports:');
+      sections.push('  "Journey: Build first app. FIND:3 CLEAR:2 EFFIC:4 FEED:1 RECOV:2. Total: 12/25.');
+      sections.push('   Bottleneck: zero feedback after clicking Build. User waits 30s with no indication."');
+      sections.push('');
+      sections.push('Journeys to score (rotate each session):');
+      sections.push('  J1: New visitor → understand what Pando is → decide to try it');
+      sections.push('  J2: Guest → open chat → ask to build something → see result');
+      sections.push('  J3: User → register → log in → see their stuff');
+      sections.push('  J4: User → check wallet → understand balance → send Lux');
+      sections.push('  J5: User → view governance → understand a proposal → vote');
+      sections.push('  J6: User → find a deployed app → use it → understand who built it');
+      sections.push('  J7: User → check what agents are doing → understand the activity');
+      sections.push('  J8: User → find help/docs → learn how to run their own node');
+      sections.push('');
+      sections.push('## AVOID DUPLICATE REPORTS');
+      sections.push('');
+      sections.push('Before creating a directive, check:');
+      sections.push('1. Your recent qa_test_runs — did you already test this URL with same result?');
+      sections.push('2. Your recent directives — did you already report this issue?');
+      sections.push('3. If a directive was COMPLETED for this issue, verify the fix worked before re-reporting.');
+      sections.push('');
+      sections.push('When revisiting a fixed issue:');
+      sections.push('  - If fix works: record_qa_result with status "passed" and note "Fix verified for D#XX"');
+      sections.push('  - If fix incomplete: new directive referencing original: "[QA BUG] D#XX regression — ..."');
+      sections.push('');
+      sections.push('## WHEN EVERYTHING WORKS');
+      sections.push('');
+      sections.push('If you complete a full test cycle and find zero bugs:');
+      sections.push('  1. Don\'t stop. Escalate to the next maturity level.');
+      sections.push('  2. Pick a user journey you haven\'t scored yet and do a deep dive.');
+      sections.push('  3. Compare the current UX to what a first-time user would expect.');
+      sections.push('  4. Ask: "If I showed this to someone who has never heard of Pando,');
+      sections.push('     what would confuse them in the first 30 seconds?"');
+      sections.push('  5. Think about what is MISSING, not just what is broken.');
+      sections.push('');
+      sections.push('You should ALWAYS have something to report. If all bugs are fixed,');
+      sections.push('the product still is not perfect — there are always improvements.');
+      sections.push('A mature QA agent finds fewer bugs and more opportunities.');
       sections.push('');
       sections.push('## HOW TO SPAWN QA TESTERS');
       sections.push('Give workers SPECIFIC human scenarios:');
@@ -870,24 +939,47 @@ export class Orchestrator {
       sections.push('Workers have Playwright MCP tools (browser_navigate, browser_snapshot,');
       sections.push('browser_click, browser_type, browser_take_screenshot).');
       sections.push('');
-      sections.push('## GATEWAY PAGES (Priority order)');
-      sections.push('P1 (core): /, /login, /register, /chat, /projects, /wallet');
-      sections.push('P2 (features): /marketplace, /council, /governance, /apps, /explore/*');
-      sections.push('P3 (admin): /agents, /monitor, /scheduler, /network, /resources');
+      sections.push('## GATEWAY PAGES — COVERAGE MAP');
+      sections.push('');
+      sections.push('Track which pages you tested at which maturity level.');
+      sections.push('Rotate through all pages before re-testing any page.');
+      sections.push('');
+      sections.push('TIER 1 — Core (test every session):');
+      sections.push('  /           Landing page — first impression, CTA clarity');
+      sections.push('  /chat       Chat — the core product experience');
+      sections.push('  /projects   Project list — user work dashboard');
+      sections.push('  /wallet     Wallet — Lux balance, send, history');
+      sections.push('  /login      Auth — login flow, error handling');
+      sections.push('  /register   Auth — registration, onboarding');
+      sections.push('');
+      sections.push('TIER 2 — Features (test every 2-3 sessions):');
+      sections.push('  /governance   Proposals, voting, reviews');
+      sections.push('  /council      AI orchestrator dashboard');
+      sections.push('  /apps         Deployed applications directory');
+      sections.push('  /marketplace  Browsable project catalog');
+      sections.push('  /explore      Network overview hub');
+      sections.push('  /explore/*    Activity, economy, health, tasks, how-it-works');
+      sections.push('  /search       Global search');
+      sections.push('');
+      sections.push('TIER 3 — Admin/Info (test weekly):');
+      sections.push('  /agents       Agent hierarchy and status');
+      sections.push('  /monitor      Health metrics and alerts');
+      sections.push('  /scheduler    Task queue and timeline');
+      sections.push('  /network      Peer topology and capabilities');
+      sections.push('  /resources    Available compute/storage');
+      sections.push('  /services     Shared services catalog');
+      sections.push('  /content      Published content registry');
+      sections.push('  /capacity     Supply/demand analytics');
+      sections.push('  /dev          API reference docs');
+      sections.push('  /node-setup   Setup guide');
+      sections.push('');
+      sections.push('Record coverage in lessons: "Tested /governance at Level 2. Last: tick #30."');
       sections.push('');
       sections.push('## REPORTING (via create_directive to CEO)');
       sections.push('Format: [QA {TYPE}] Priority: {HIGH|MEDIUM|LOW} — {summary}');
-      sections.push('Types: BUG, UX_ISSUE, MISSING_FEATURE, STALE_DATA, PERFORMANCE');
+      sections.push('Types: BUG, UX_ISSUE, MISSING_FEATURE, POLISH, STALE_DATA, PERFORMANCE');
       sections.push('');
       sections.push('Include: Evidence (screenshot/test ID), Impact (who affected), Suggestion (concrete fix).');
-      sections.push('');
-      sections.push('## FEATURE SUGGESTIONS');
-      sections.push('When you notice missing UX, suggest it:');
-      sections.push('"[QA MISSING_FEATURE] Priority: HIGH — Chat has no loading indicator while');
-      sections.push('waiting for AI. Users see nothing for 30s. Suggest: streaming text or spinner."');
-      sections.push('');
-      sections.push('## STALE CLEANUP');
-      sections.push('Find stale data → create directive. Do NOT delete anything yourself.');
       sections.push('');
     } else if (isObserver) {
       sections.push(`# YOU ARE THE OBSERVER — Chief Architect Agent of the Pando Network (${this.orchestratorId})`);
@@ -932,6 +1024,25 @@ export class Orchestrator {
       sections.push('  investigate → design → implement → test → verify → upgrade all nodes.');
       sections.push('- DOCS ON COMMIT: When committing architecture changes, update the relevant genome .know files');
       sections.push('  in the SAME commit. Future agents read genome context — stale docs = bad decisions.');
+      sections.push('');
+      sections.push('## WORKER MANAGEMENT');
+      sections.push('');
+      sections.push('Workers are PERSISTENT. They don\'t die after one task — they go idle.');
+      sections.push('');
+      sections.push('REUSE first, spawn only if needed:');
+      sections.push('1. Check "Your Agents" section for IDLE workers matching the role you need');
+      sections.push('2. If idle worker exists: use assign_task to reuse their session and codebase knowledge');
+      sections.push('3. If no idle worker for that role: use spawn_worker to create a fresh one');
+      sections.push('');
+      sections.push('One problem at a time:');
+      sections.push('- Pick the HIGHEST PRIORITY directive');
+      sections.push('- Assign to ONE worker (builder for code, tester for verification)');
+      sections.push('- Wait for their report before starting the next problem');
+      sections.push('- Commit after each fix, not in batches');
+      sections.push('');
+      sections.push('Workers are as smart as you. Give them the specific problem, not a data dump.');
+      sections.push('GOOD: "Fix decryptMessage() in thread-store.ts — crashes on null encryption key for guest threads"');
+      sections.push('BAD: "Fix all the bugs in the system"');
       sections.push('');
       sections.push('## YOUR AUTHORITY');
       sections.push('- Rewrite any code in the codebase including your own orchestration code');
@@ -1086,48 +1197,39 @@ export class Orchestrator {
     sections.push(`Pending tasks: ${board.pendingTasks}`);
     sections.push('');
 
-    // Full team roster
+    // Agent roster — lean: only active + idle workers with counts
     {
-      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
-      const fifteenMinAgo2 = new Date(Date.now() - 15 * 60 * 1000).toISOString();
       const allTeamWorkers = this.deps.db.listAgents({ type: 'worker', parentId: this.orchestratorId });
-      const rosterWorkers = allTeamWorkers.filter(w => {
-        if (w.status === 'active') return true;
-        if ((w.updatedAt || w.createdAt || '') >= fifteenMinAgo2) return true;
-        return (w.createdAt || '') >= twoHoursAgo;
-      });
-      if (rosterWorkers.length > 0) {
-        sections.push('## Your Team');
-        const now = Date.now();
-        for (const w of rosterWorkers) {
-          const spawnedMs = w.createdAt ? new Date(w.createdAt).getTime() : now;
-          const ageMin = Math.round((now - spawnedMs) / 60000);
-          const ageStr = ageMin < 60 ? `${ageMin}min ago` : `${Math.round(ageMin / 60)}h ago`;
-          const lastReport = w.lastReportAt
-            ? new Date(w.lastReportAt).toISOString().slice(11, 16)
-            : 'never';
-          const taskSnippet = w.rolePrompt
-            ? w.rolePrompt.replace(/\n/g, ' ').slice(0, 80)
-            : (w.currentTaskId || 'no task');
-          sections.push(`- ${w.role} ${w.id}: ${w.status.toUpperCase()} (spawned ${ageStr}, last report: ${lastReport}) — ${taskSnippet}`);
+      const activeWorkers = allTeamWorkers.filter(w => w.status === 'active');
+      const idleWorkers = allTeamWorkers.filter(w => w.status === 'idle');
+      const failedCount = allTeamWorkers.filter(w => w.status === 'failed').length;
+      const doneCount = allTeamWorkers.filter(w => w.status === 'done').length;
+
+      if (activeWorkers.length > 0 || idleWorkers.length > 0 || failedCount > 0) {
+        sections.push('## Your Agents');
+        sections.push(`Summary: ${activeWorkers.length} active, ${idleWorkers.length} idle, ${doneCount} done, ${failedCount} failed`);
+        for (const w of activeWorkers) {
+          const task = (w.rolePrompt || '').replace(/\n/g, ' ').slice(0, 80);
+          sections.push(`- ${w.role} ${w.id}: ACTIVE — ${task}`);
+        }
+        for (const w of idleWorkers) {
+          sections.push(`- ${w.role} ${w.id}: IDLE (available for new task)`);
         }
         sections.push('');
       }
     }
 
-    // Recently failed workers + consecutive failure tracking
+    // Recently failed workers — summary by role (not per-worker detail)
     if (board.recentlyFailed.length > 0) {
       sections.push('## Recently Failed Workers');
       const failCountByRole: Record<string, number> = {};
       for (const w of board.recentlyFailed) {
         failCountByRole[w.role] = (failCountByRole[w.role] || 0) + 1;
-        const task = w.rolePrompt ? w.rolePrompt.replace(/\n/g, ' ').slice(0, 120) : (w.lastTask || 'unknown task');
-        sections.push(`- ${w.role} ${w.id} failed at ${w.failedAt}. Was working on: ${task}`);
       }
-      // Warn about roles with repeated failures
       for (const [role, count] of Object.entries(failCountByRole)) {
+        sections.push(`- ${role}: ${count} failures`);
         if (count >= 3) {
-          sections.push(`\n⚠️ WARNING: ${role} has failed ${count} times recently. Consider: fresh session (kill old worker first), different approach, or simpler scope.`);
+          sections.push(`  ⚠️ WARNING: ${role} has failed ${count} times. Consider different approach or simpler scope.`);
         }
       }
       sections.push('');
@@ -1208,7 +1310,8 @@ export class Orchestrator {
         const age = Math.round((Date.now() - new Date(d.createdAt).getTime()) / 60000);
         const overdue = d.timesSeen >= 5 ? ' **OVERDUE — ACT NOW OR REJECT WITH REASON**' : '';
         const seen = d.timesSeen > 0 ? ` (seen ${d.timesSeen}x, ${age}min old)` : ` (NEW, ${age}min old)`;
-        sections.push(`- [D#${d.id}]${seen}${overdue}: ${d.content}`);
+        const summary = d.content.replace(/\n/g, ' ').slice(0, 120);
+        sections.push(`- [D#${d.id}]${seen}${overdue}: ${summary}...`);
       }
       sections.push('');
       sections.push('To complete: { "type": "complete_directive", "directiveId": <id>, "summary": "what was done" }');
@@ -1254,7 +1357,7 @@ export class Orchestrator {
       if (projectBridge?.isLoaded()) activeGenomeBridge = projectBridge;
     }
 
-    if (activeGenomeBridge?.isLoaded()) {
+    if (activeGenomeBridge?.isLoaded() && agent.projectId) {
       const ctx = activeGenomeBridge.contextForTask({ taskDescription: requestText });
       if (ctx) {
         sections.push('## Architecture Knowledge');
@@ -1434,9 +1537,12 @@ export class Orchestrator {
     sections.push('');
     sections.push('### For spawning workers (ALWAYS use these for any real work):');
     sections.push(`Available roles: ${availableRoles.join(', ')}`);
-    sections.push('- spawn_worker: Spawn a Claude Code worker');
+    sections.push('- spawn_worker: Spawn a FRESH Claude Code worker');
     sections.push('  { "type": "spawn_worker", "role": "<role>", "rolePrompt": "description of the task" }');
     sections.push('  Common: role="builder" for code, role="tester" for QA, role="devops" for deployment');
+    sections.push('- assign_task: Send a new task to an IDLE worker (reuses their session + context)');
+    sections.push('  { "type": "assign_task", "workerId": "worker-builder-abc123", "task": "Fix the encryption bug in thread-store.ts" }');
+    sections.push('  PREFER this over spawn_worker when an idle worker exists — reuses their codebase knowledge.');
     sections.push('- kill_worker: Stop a worker');
     sections.push('  { "type": "kill_worker", "workerId": "worker-builder-abc123" }');
     sections.push('');
@@ -1675,7 +1781,12 @@ export class Orchestrator {
       }
 
       case 'assign_task': {
-        this.deps.db.updateAgent(action.workerId, { currentTaskId: action.taskId });
+        try {
+          await this.deps.workerPool.assignTask(action.workerId, action.task);
+          console.log(`[Orchestrator ${this.orchestratorId}] Assigned task to idle worker: ${action.workerId}`);
+        } catch (err: any) {
+          console.warn(`[Orchestrator ${this.orchestratorId}] assign_task failed: ${err.message}, will spawn fresh`);
+        }
         break;
       }
 

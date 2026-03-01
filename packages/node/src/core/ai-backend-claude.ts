@@ -91,9 +91,9 @@ export class ClaudeBackend implements AIBackend {
       args.unshift('--resume', task.sessionId);
     }
 
-    // End-of-options separator + positional prompt argument.
-    // Must come last so prompts starting with dashes aren't parsed as flags.
-    args.push('--', task.prompt);
+    // Prompt is piped via stdin (not CLI args) to avoid OS command-line length
+    // limits (Windows: 32K chars). claude -p reads from stdin when no positional
+    // prompt argument is provided.
 
     const env: Record<string, string> = { ...(process.env as Record<string, string>) };
     env.PATH = AUGMENTED_PATH;
@@ -105,9 +105,15 @@ export class ClaudeBackend implements AIBackend {
       const child = spawn(claudePath, args, {
         cwd: workingDir,
         env,
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: ['pipe', 'pipe', 'pipe'],
         windowsHide: true,
       });
+
+      // Pipe prompt via stdin (no size limit — fixes ENAMETOOLONG on Windows)
+      if (child.stdin) {
+        child.stdin.write(task.prompt);
+        child.stdin.end();
+      }
 
       if (child.pid) this.onPid?.(child.pid);
 

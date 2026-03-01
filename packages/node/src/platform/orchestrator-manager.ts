@@ -222,6 +222,11 @@ export class OrchestratorProcessManager {
         return true;
       }
 
+      case 'assign_task': {
+        await this.deps.workerPool.assignTask(data.workerId, data.task);
+        return true;
+      }
+
       case 'commit_code': {
         if (!this.deps.onCommit) throw new Error('No onCommit callback configured');
         return this.deps.onCommit(data.message);

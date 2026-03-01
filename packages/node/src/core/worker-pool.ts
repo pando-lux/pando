@@ -293,7 +293,8 @@ export class WorkerPool {
       // If worker didn't report via HTTP (crashed or timed out), auto-report
       if (currentAgent.status === 'active' || currentAgent.status === 'spawning') {
         const effectiveSuccess = result.success && mergeOk;
-        const status = effectiveSuccess ? 'done' : 'failed';
+        // Successful workers go 'idle' (persistent — available for reassignment)
+        const status = effectiveSuccess ? 'idle' : 'failed';
         this.db.updateAgent(workerId, { status });
 
         // Build summary with full error details for orchestrator diagnosis
@@ -341,8 +342,7 @@ export class WorkerPool {
         console.log(`[WorkerPool] Auto-reported ${status} for worker ${workerId} to orchestrator`);
       }
 
-      // Clear session ID so next spawn for this role starts fresh
-      this.db.updateAgent(workerId, { sessionId: null });
+      // Keep sessionId — idle workers can be resumed with assign_task
     }).catch((err) => {
       claudeBackend.onProgress = onProgressOrig;
       claudeBackend.onPid = onPidOrig;
@@ -680,6 +680,17 @@ export class WorkerPool {
     if (reaped > 0) {
       console.log(`[WorkerPool] Reaped ${reaped} dead worker(s) with stale 'active' status`);
     }
+
+    // Retire workers idle > 30 min (free up session resources)
+    const idleTimeout = 30 * 60 * 1000;
+    const idleWorkers = this.db.listAgents({ type: 'worker', status: 'idle' });
+    for (const w of idleWorkers) {
+      const idleSince = new Date(w.updatedAt || w.createdAt || '0').getTime();
+      if (Date.now() - idleSince > idleTimeout) {
+        this.db.updateAgent(w.id, { status: 'done', sessionId: undefined });
+        console.log(`[WorkerPool] Retired idle worker ${w.id} (idle ${Math.round((Date.now() - idleSince) / 60000)}min)`);
+      }
+    }
   }
 
   /**
@@ -791,6 +802,13 @@ export class WorkerPool {
     lines.push(`  curl -s -X POST ${base}/worker/${workerId}/report -H "Content-Type: application/json" --data-raw '{"status":"done","summary":"<what you did>","filesChanged":["list","of","files"]}'`);
     lines.push('');
 
+    // Learning
+    lines.push('## Learning');
+    lines.push('After completing each task, save what you learned about the module:');
+    lines.push(`  curl -s -X POST ${base}/context/discover -H "Content-Type: application/json" -d '{"agentId":"${workerId}","projectId":"${projectId || '__pando__'}","category":"module:<filename>","content":"<what you learned about this file/module>","confidence":0.8}'`);
+    lines.push('This helps you and future workers be more effective on similar tasks.');
+    lines.push('');
+
     // Universal rules
     lines.push('## Rules');
     lines.push('- Query project context (above) before writing any code.');
@@ -802,6 +820,171 @@ export class WorkerPool {
     lines.push('Start working now.');
 
     return lines.join('\n');
+  }
+
+  /**
+   * Find an idle worker matching the given role under a specific orchestrator.
+   * Returns the worker ID or null if none available.
+   */
+  findIdleWorker(role: string, orchestratorId: string): string | null {
+    const workers = this.db.listAgents({
+      type: 'worker',
+      role,
+      parentId: orchestratorId,
+    }).filter(w => w.status === 'idle');
+    if (workers.length === 0) return null;
+    // Most recently active = freshest context
+    workers.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+    return workers[0].id;
+  }
+
+  /**
+   * Assign a new task to an idle worker, resuming their existing session.
+   * Throws if worker is not idle or has no session to resume.
+   */
+  async assignTask(workerId: string, task: string): Promise<void> {
+    const worker = this.db.getAgent(workerId);
+    if (!worker) throw new Error(`Worker ${workerId} not found`);
+    if (worker.status !== 'idle') throw new Error(`Worker ${workerId} is ${worker.status}, not idle`);
+    if (!worker.sessionId) {
+      throw new Error(`Worker ${workerId} has no session to resume`);
+    }
+
+    // Gather relevant lessons for context
+    let lessonText = '';
+    try {
+      const lessons = this.db.getLessons({
+        orchestratorId: worker.parentId || undefined,
+        limit: 5,
+      });
+      if (lessons.length > 0) {
+        lessonText = '\n\nRelevant lessons from past tasks:\n' +
+          lessons.map((l: any) => `- ${l.lesson}`).join('\n');
+      }
+    } catch { /* non-fatal */ }
+
+    this.db.updateAgent(workerId, { status: 'active', rolePrompt: task });
+
+    const prompt = [
+      `--- NEW TASK ASSIGNED ---`,
+      ``,
+      task,
+      lessonText,
+      ``,
+      `When done, report via POST http://127.0.0.1:${this.apiPort}/v1/worker/${workerId}/report`,
+      `Include: { "status": "done"|"failed", "summary": "what you did" }`,
+    ].join('\n');
+
+    const backend = this.aiRegistry.getBest('code-execution');
+    if (!backend) throw new Error('No code-execution backend available');
+
+    const claudeBackend = backend as any;
+    const onProgressOrig = claudeBackend.onProgress;
+    const onPidOrig = claudeBackend.onPid;
+
+    claudeBackend.onPid = (pid: number) => {
+      this.db.updateAgent(workerId, { pid, status: 'active' });
+      this.workerPids.set(workerId, pid);
+    };
+
+    // Resume the worker's existing session
+    const resultPromise = backend.execute({
+      type: 'code',
+      prompt,
+      sessionId: worker.sessionId,
+      options: {
+        cwd: worker.workspaceDir || process.cwd(),
+        model: 'claude-opus-4-6',
+      },
+    });
+
+    // Track the process for killing
+    this.activeProcesses.set(workerId, {
+      kill: () => {
+        const agent = this.db.getAgent(workerId);
+        if (agent?.pid) {
+          try { process.kill(agent.pid, 'SIGTERM'); } catch { /* already dead */ }
+        }
+      },
+    });
+
+    console.log(`[WorkerPool] Resumed idle worker ${workerId} with new task`);
+
+    // Handle completion asynchronously (mirrors spawn pattern)
+    resultPromise.then((result: AIResult) => {
+      claudeBackend.onProgress = onProgressOrig;
+      claudeBackend.onPid = onPidOrig;
+      this.activeProcesses.delete(workerId);
+      this.workerPids.delete(workerId);
+
+      const currentAgent = this.db.getAgent(workerId);
+      if (!currentAgent) return;
+
+      if (result.sessionId) {
+        this.db.updateAgent(workerId, { sessionId: result.sessionId });
+      }
+      if (result.cost) {
+        this.db.updateAgent(workerId, { budgetSpent: (currentAgent.budgetSpent || 0) + result.cost });
+      }
+
+      console.log(`[WorkerPool] Resumed worker ${workerId} finished — success=${result.success}, cost=$${result.cost?.toFixed(4) || '0'}`);
+
+      // Auto-report if worker didn't report via HTTP
+      if (currentAgent.status === 'active') {
+        const effectiveSuccess = result.success;
+        const status = effectiveSuccess ? 'idle' : 'failed';
+        this.db.updateAgent(workerId, { status });
+
+        let summary: string;
+        if (effectiveSuccess) {
+          summary = `Worker completed. Output: ${result.output?.slice(0, 3000) || 'no output'}`;
+        } else {
+          summary = `FAILED: ${result.error?.slice(0, 500) || 'Worker process failed'}`;
+        }
+
+        if (worker.parentId) {
+          this.messageBus.send({
+            recipientId: worker.parentId,
+            senderId: workerId,
+            senderType: 'worker',
+            type: 'worker_report',
+            payload: {
+              status: effectiveSuccess ? 'done' : 'failed',
+              summary,
+              auto: true,
+            },
+            priority: effectiveSuccess ? 1 : 0,
+          });
+        }
+      }
+    }).catch((err) => {
+      claudeBackend.onProgress = onProgressOrig;
+      claudeBackend.onPid = onPidOrig;
+      this.activeProcesses.delete(workerId);
+      this.workerPids.delete(workerId);
+      const agentBeforeCrash = this.db.getAgent(workerId);
+      if (!agentBeforeCrash || !['done', 'failed', 'dissolved', 'idle'].includes(agentBeforeCrash.status)) {
+        this.db.updateAgent(workerId, { status: 'failed', pid: null });
+      }
+      console.error(`[WorkerPool] Resumed worker ${workerId} crashed:`, err.message?.slice(0, 200));
+
+      if (worker.parentId) {
+        try {
+          this.messageBus.send({
+            recipientId: worker.parentId,
+            senderId: workerId,
+            senderType: 'worker',
+            type: 'worker_report',
+            payload: {
+              status: 'failed',
+              summary: `CRASHED (resumed): ${err.message?.slice(0, 500) || 'unknown error'}`,
+              auto: true,
+            },
+            priority: 0,
+          });
+        } catch { /* best-effort notification */ }
+      }
+    });
   }
 
 }
