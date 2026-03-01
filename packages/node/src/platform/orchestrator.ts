@@ -137,6 +137,7 @@ export class Orchestrator {
   private _consecutiveEmptyTicks = 0;
   /** Consecutive parse failures from AI output */
   private _consecutiveParseFailures = 0;
+  private _proactiveDirty: boolean = true;
   /** Rotate session after this many ticks to keep context fresh */
   private static readonly SESSION_ROTATION_TICKS = 200;
 
@@ -284,6 +285,9 @@ export class Orchestrator {
       // 1a. Health monitoring (always Tier 1 — deterministic, no AI call)
       await this.runHealthMonitoring(board);
 
+      const hasInboxItems = board.workerReports.length > 0 || board.healthAlerts.length > 0 || board.userRequests.length > 0 || board.messages.length > 0 || board.interruptedWorkers.length > 0;
+      if (hasInboxItems) this._proactiveDirty = true;
+
       // 2. Classify: Tier 1 (deterministic) or Tier 2 (AI judgment)
       const tier = this.classify(board);
 
@@ -311,6 +315,10 @@ export class Orchestrator {
           // Messages already consumed — log the failure but don't return silently
           // The orchestrator will see the worker states on next tick
         }
+      }
+
+      if (tier === 2 && !hasInboxItems && this._tickCount % 5 === 0) {
+        this._proactiveDirty = false;
       }
 
       // 3. Execute actions
@@ -635,17 +643,12 @@ export class Orchestrator {
 
     // Reflection tick — every 5th tick (~5 min), think proactively
     // Council gets a deeper audit cycle every 10th tick
-    if (this._tickCount > 0 && this._tickCount % 5 === 0) {
-      return 2;
-    }
-
-    // Council proactive audit — even if workers are busy, audit every 10th tick
-    const agent = this.deps.db.getAgent(this.orchestratorId);
-    if (agent?.role === 'council' && this._tickCount > 0 && this._tickCount % 10 === 0) {
+    if (this._tickCount > 0 && this._tickCount % 5 === 0 && this._proactiveDirty) {
       return 2;
     }
 
     // Observer is ALWAYS Tier 2 — its entire purpose is proactive AI investigation
+    const agent = this.deps.db.getAgent(this.orchestratorId);
     if (agent?.role === 'observer') {
       return 2;
     }
