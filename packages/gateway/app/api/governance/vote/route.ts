@@ -3,6 +3,13 @@ import { getNodeConnection } from "@/lib/node-connection";
 
 export async function POST(req: Request) {
   try {
+    const userToken = req.headers.get("X-User-Token");
+    if (!userToken) {
+      return NextResponse.json(
+        { error: "Authentication required to participate in governance" },
+        { status: 401 }
+      );
+    }
     const { proposalId, choice, reasoning } = await req.json();
     if (!proposalId || !choice) {
       return NextResponse.json(
