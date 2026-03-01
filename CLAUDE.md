@@ -110,10 +110,12 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
   - Actions: `complete_directive`, `reject_directive`, `create_directive` (create for another orchestrator).
   - Columns: `status`, `times_seen`, `acknowledged_at`, `completed_at`, `rejection_reason`.
   - **Rule**: NEVER use send_message for findings that must be acted on. Use create_directive instead. Messages are fire-and-forget; directives persist.
-- **Three-actor governance model**:
+- **Four-actor governance model**:
   - **CEO** (council orchestrator): Executes — spawns workers, ships code, manages projects.
   - **Governance** (governance.ts): Guards — 4 deterministic security checks before auto-approve: security file check, change size + QA check, build verify, kernel protection delay. Blocks bad changes.
-  - **Observer** (observer orchestrator): Watches — audits architecture, verifies design intent matches reality, creates persistent directives for CEO with findings. Cannot write code.
+  - **Observer** (observer orchestrator): Watches inward — audits architecture, verifies design intent matches reality, creates persistent directives for CEO with findings. Cannot write code.
+  - **QA User Agent** (qa-user orchestrator): Watches outward — tests gateway UI from a human perspective using Playwright. Spawns qa-tester workers every 15 min. Reports UX issues, bugs, stale data to CEO via directives. Cannot write code or deploy.
+  - **Self-check dissolution rule**: Council self-check (every 10th tick) dissolves stale orchestrators. Persistent orchestrators (observer, qa-user) are **exempt** — `if (orch.persistent) continue;` guards in both the stale-check loop and OOM prevention loop. Only project orchestrators dissolve when idle.
 - **Verify-before-deploy hardening**: ScenarioRunner crash now ABORTS proposal (not silent pass-through). Upgrade-protocol hash mismatch returns failure (can't pull unapproved code). Proposal descriptions include test result audit trail.
 
 ### Agent system components
@@ -122,12 +124,13 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
 |---|---|---|
 | **AgentDatabase** | `platform/agent-database.ts` | SQLite storage for agents, messages, lessons, reflections, tick logs. Single source of truth. |
 | **Orchestrator** | `platform/orchestrator.ts` | Deterministic tick loop with session-persistent AI brain. Tier 1 (deterministic) or Tier 2 (Opus with tools). Session rotates every ~50 ticks. Same class at every hierarchy level. |
-| **WorkerPool** | `core/worker-pool.ts` | Spawn/resume Claude Code workers. Workers persist sessions — resumed for related tasks, rotated when domain changes. |
+| **WorkerPool** | `core/worker-pool.ts` | Spawn fresh Claude Code workers. Each task gets a clean session with full boot prompt. |
 | **MessageBus** | `core/message-bus.ts` | SQLite-backed persistent message routing. Priority, type-based, sender validation. |
 | **OrgManager** | `platform/org-manager.ts` | Hierarchy: create/dissolve orchestrators, route messages, authority inheritance. |
 | **AIBackendRegistry** | `core/ai-backend-registry.ts` | Pluggable AI backends. Default model: `claude-opus-4-6`. |
 | **GenomeBridge** | `platform/genome-bridge.ts` | Reads compiled genome knowledge graph (`output/graph.json`). Provides `contextForTask()` — architecture context injected into worker boot prompts and council AI prompts. |
 | **ScenarioRunner** | `platform/scenario-runner.ts` | Reads test scenarios from genome graph. Executes API regression tests via fetch. Wired into self-sustaining loop after upgrade. |
+| **QA User Agent** | `platform/orchestrator.ts` (role=`qa-user`) | Autonomous UI tester. Spawns Playwright workers every 15 min to test gateway pages from a human perspective. Reports to CEO via directives. |
 
 ### Context Architecture (Phase 106 — live)
 
@@ -143,8 +146,8 @@ The genome is a knowledge graph compiled from `.know` files. Test scenarios live
 ### Claude Code as a network resource
 Claude Code is a **contributed resource**, not a node requirement. Most nodes won't have it. The network discovers which nodes have Claude Code via CapabilityProfile (`shareCompute: true`, `sharedCapabilities: ["claude-code"]`). The council runs on whichever node has Claude Code available — it doesn't matter which one. `/contribute claude-code` makes a node available for AI work.
 
-### Worker persistence
-**ALL workers are persistent team members** — builders, testers, reviewers, researchers, devops. Every role resumes when possible. On first spawn: fresh session. On every subsequent spawn for the same role + orchestrator: `--continue --resume <sessionId>`. Session IDs are saved to SQLite. Resumed workers get a short task prompt (they already know the codebase). Fresh workers get full boot prompt context. Workers are only fresh when no prior session exists for that role. Lessons extracted from each session also accumulate in SQLite and get injected into future workers as a safety net.
+### Worker lifecycle
+**Workers are always fresh.** Each spawn creates a new Claude Code session with a full boot prompt. Workers do not resume previous sessions — each task gets a clean context. Lessons from previous sessions accumulate in SQLite and are injected into future workers' context API responses.
 
 ### Key principle
 **State lives in SQLite, AI brain lives in session.** Orchestrators are deterministic code (setInterval) that resume a persistent Claude Code session each tick. The session provides memory across ticks; SQLite provides ground truth. Sessions rotate every ~50 ticks. Every tick is logged. Lessons, worker sessions, and orchestrator sessions persist across runs.
