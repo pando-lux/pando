@@ -2079,7 +2079,8 @@ location /apps/${projectId}/ {
 
       console.log(`[${message.type}] from ${from.slice(0, 16)}...`);
       if (message.payload) {
-        console.log(`  payload: ${JSON.stringify(message.payload)}`);
+        const payloadStr = JSON.stringify(message.payload);
+        console.log(`  payload: ${payloadStr.length > 500 ? payloadStr.slice(0, 500) + '...[' + payloadStr.length + ' bytes]' : payloadStr}`);
       }
 
       // Ensure the sending peer has an account
@@ -2120,7 +2121,10 @@ location /apps/${projectId}/ {
 
       // Phase 93: Direct TCP stream request/reply (replaces GossipSub for unicast P2P calls)
       if (message.type === MessageType.REQUEST_REPLY_REQUEST || message.type === MessageType.REQUEST_REPLY_REPLY) {
-        this.requestReply?.handleDirectMessage(message, from).catch(() => {});
+        console.log(`[request-reply] Direct TCP ${message.type} from ${from.slice(0, 16)}, payload keys: ${Object.keys(message.payload || {}).join(',')}`);
+        this.requestReply?.handleDirectMessage(message, from).catch((err) => {
+          console.error(`[request-reply] handleDirectMessage error from ${from.slice(0, 16)}: ${err.message}`);
+        });
       }
 
       // Phase 92: Direct TCP stream capability profile exchange
