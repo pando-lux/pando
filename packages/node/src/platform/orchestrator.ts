@@ -327,7 +327,7 @@ export class Orchestrator {
       for (const action of actions) {
         try {
           const shouldContinue = await this.execute(action, agent);
-          if (action.type === 'commit_code' && shouldContinue !== false) {
+          if (action.type === 'commit_code' && shouldContinue === true) {
             commitSucceeded = true;
           }
           if (shouldContinue === false) {
@@ -1629,7 +1629,7 @@ export class Orchestrator {
   // Action execution
   // =========================================================================
 
-  private async execute(action: OrchestratorAction, agent: AgentIdentity): Promise<void | false> {
+  private async execute(action: OrchestratorAction, agent: AgentIdentity): Promise<void | boolean> {
     switch (action.type) {
       case 'spawn_worker': {
         const workerId = await this.deps.workerPool.spawn({
@@ -1794,11 +1794,11 @@ export class Orchestrator {
         if (this.deps.onCommit) {
           const success = await this.deps.onCommit(action.message);
           if (!success) {
-            console.log(`[Orchestrator ${this.orchestratorId}] commit_code failed — skipping remaining actions`);
-            return false;
+            console.log(`[Orchestrator ${this.orchestratorId}] commit_code had nothing to commit or failed`);
+            break;
           }
         }
-        break;
+        return true;
       }
 
       case 'respond_to_user': {
