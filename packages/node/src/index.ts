@@ -3118,6 +3118,7 @@ location /apps/${projectId}/ {
       templateRegistry: this.templateRegistry || undefined,
       threadStore: this.threadStore || undefined,
       pushEvent: (event: string, data: any) => this.apiServer?.pushEvent(event, data),
+      getPeerCount: () => this.network?.getPeers()?.length ?? 0,
       apiPort: this.config.apiPort,
       dataDir: this.config.dataDir || join(homedir(), '.pando'),
       repoDir: process.cwd(),
