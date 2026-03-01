@@ -19,9 +19,11 @@ export async function POST(req: Request) {
     const result = await node.transfer(to.trim(), amount, userToken || undefined);
     return NextResponse.json(result);
   } catch (err: any) {
+    const msg = err.message || 'Transfer failed';
+    const isClientError = /not found|invalid|unknown|no account|insufficient/i.test(msg);
     return NextResponse.json(
-      { error: err.message || "Transfer failed" },
-      { status: 500 }
+      { error: msg },
+      { status: isClientError ? 400 : 500 }
     );
   }
 }

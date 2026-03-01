@@ -113,20 +113,21 @@ export default function WalletPage() {
           ) : (
             <p className="text-4xl font-bold text-amber-500 dark:text-amber-400">{balance !== null ? balance.toLocaleString(undefined, { maximumFractionDigits: 2 }) : "0"} <span className="text-lg text-neutral-500">Lux</span></p>
           )}
+          {balance === 0 && <p className="text-xs text-neutral-500 mt-2">Earn Lux by contributing compute, relaying data, or receiving transfers from peers.</p>}
         </div>
 
         {/* Send Lux */}
         <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4 space-y-3">
           <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">Send Lux</h2>
           <form onSubmit={handleSend} className="space-y-3">
-            <div className="flex gap-3">
+            <div className="flex flex-col sm:flex-row gap-3">
               <div className="flex-1">
                 <input type="text" list="peer-list" value={recipient} onChange={e => setRecipient(e.target.value)}
                   placeholder="Recipient peer ID" className="w-full bg-neutral-200 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50" />
                 <datalist id="peer-list">{peers.map(p => <option key={p.peerId} value={p.peerId}>{shortId(p.peerId)}</option>)}</datalist>
               </div>
               <input type="number" step="any" min="0" value={amount} onChange={e => setAmount(e.target.value)}
-                placeholder="Amount" className="w-32 bg-neutral-200 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50" />
+                placeholder="Amount" className="w-full sm:w-32 bg-neutral-200 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50" />
             </div>
             <div className="flex items-center gap-3">
               <button type="submit" disabled={sending || !recipient.trim() || !amount.trim()}
