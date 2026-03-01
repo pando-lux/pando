@@ -173,7 +173,7 @@ export function registerWorkerRoutes(
 
     // If done or failed, update worker status
     if (body.status === 'done') {
-      db.updateAgent(agent.id, { status: 'idle' });
+      db.updateAgent(agent.id, { status: 'done' });
     } else if (body.status === 'failed') {
       db.updateAgent(agent.id, { status: 'failed' });
     }

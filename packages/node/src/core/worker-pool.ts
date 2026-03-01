@@ -341,7 +341,7 @@ export class WorkerPool {
       this.activeProcesses.delete(workerId);
       this.workerPids.delete(workerId);  // stop tracking memory
       const agentBeforeCrash = this.db.getAgent(workerId);
-      if (!agentBeforeCrash || !['done', 'failed', 'dissolved'].includes(agentBeforeCrash.status)) {
+      if (!agentBeforeCrash || !['done', 'failed', 'dissolved', 'idle'].includes(agentBeforeCrash.status)) {
         this.db.updateAgent(workerId, { status: 'failed', pid: null });
       }
       console.error(`[WorkerPool] Worker ${workerId} crashed:`, err.message?.slice(0, 200));

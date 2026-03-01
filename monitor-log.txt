@@ -379,3 +379,103 @@ EC2 34.201.82.126: 4b3e3687
 PROBLEMS:
   !! CEO stale: last tick 10min ago
 --- END CHECK #11 ---
+
+--- CHECK #12 @ 2026-03-01T12:27:56Z ---
+WINDOWS: UP | peers=1 | uptime=1min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:25:20.472Z | orch-council-fee5437 tick#2135 T2 | ["commit_code","record_lesson"]
+  2026-03-01T12:13:41.211Z | orch-council-fee5437 tick#2134 T1 | none
+  2026-03-01T12:13:00.893Z | orch-council-fee5437 tick#2133 T2 | none
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: 16b73412 Update CLAUDE.md: worker lifecycle docs match reality (fresh workers, no session resume)
+EC2 54.82.241.132: 16b73412
+EC2 34.201.82.126: 4b3e3687
+PROBLEMS: none detected
+--- END CHECK #12 ---
+
+--- CHECK #12 @ 2026-03-01T12:28:45Z ---
+WINDOWS: UP | peers=1 | uptime=2min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:25:20.472Z | orch-council-fee5437 tick#2135 T2 | ["commit_code","record_lesson"]
+  2026-03-01T12:13:41.211Z | orch-council-fee5437 tick#2134 T1 | none
+  2026-03-01T12:13:00.893Z | orch-council-fee5437 tick#2133 T2 | none
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: 16b73412 Update CLAUDE.md: worker lifecycle docs match reality (fresh workers, no session resume)
+EC2 54.82.241.132: 16b73412
+EC2 34.201.82.126: 4b3e3687
+PROBLEMS: none detected
+--- END CHECK #12 ---
+
+--- CHECK #13 @ 2026-03-01T12:33:05Z ---
+WINDOWS: UP | peers=2 | uptime=6min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:25:20.472Z | orch-council-fee5437 tick#2135 T2 | ["commit_code","record_lesson"]
+  2026-03-01T12:13:41.211Z | orch-council-fee5437 tick#2134 T1 | none
+  2026-03-01T12:13:00.893Z | orch-council-fee5437 tick#2133 T2 | none
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: 5c8e5b5a Add docs-on-commit rule to CEO boot prompt
+EC2 54.82.241.132: 16b73412
+EC2 34.201.82.126: 16b73412
+PROBLEMS:
+  !! CEO stale: last tick 8min ago
+--- END CHECK #13 ---
+
+--- CHECK #13 @ 2026-03-01T12:33:52Z ---
+WINDOWS: UP | peers=2 | uptime=7min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:25:20.472Z | orch-council-fee5437 tick#2135 T2 | ["commit_code","record_lesson"]
+  2026-03-01T12:13:41.211Z | orch-council-fee5437 tick#2134 T1 | none
+  2026-03-01T12:13:00.893Z | orch-council-fee5437 tick#2133 T2 | none
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: 5c8e5b5a Add docs-on-commit rule to CEO boot prompt
+EC2 54.82.241.132: 16b73412
+EC2 34.201.82.126: 16b73412
+PROBLEMS:
+  !! CEO stale: last tick 9min ago
+--- END CHECK #13 ---
+
+--- CHECK #14 @ 2026-03-01T12:38:12Z ---
+WINDOWS: UP | peers=2 | uptime=1min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:35:28.277Z | orch-council-fee5437 tick#2137 T1 | none
+  2026-03-01T12:35:15.582Z | orch-council-fee5437 tick#2136 T2 | ["spawn_worker","record_lesson"]
+  2026-03-01T12:25:20.472Z | orch-council-fee5437 tick#2135 T2 | ["commit_code","record_lesson"]
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: 5c8e5b5a Add docs-on-commit rule to CEO boot prompt
+EC2 54.82.241.132: 16b73412
+EC2 34.201.82.126: 16b73412
+PROBLEMS: none detected
+--- END CHECK #14 ---
+
+--- CHECK #14 @ 2026-03-01T12:38:59Z ---
+WINDOWS: UP | peers=2 | uptime=2min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:35:28.277Z | orch-council-fee5437 tick#2137 T1 | none
+  2026-03-01T12:35:15.582Z | orch-council-fee5437 tick#2136 T2 | ["spawn_worker","record_lesson"]
+  2026-03-01T12:25:20.472Z | orch-council-fee5437 tick#2135 T2 | ["commit_code","record_lesson"]
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: 5c8e5b5a Add docs-on-commit rule to CEO boot prompt
