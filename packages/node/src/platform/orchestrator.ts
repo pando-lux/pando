@@ -1134,26 +1134,46 @@ export class Orchestrator {
         board.userRequests.length === 0 &&
         board.messages.length === 0;
     if (isProactive) {
-      sections.push('## Proactive Mode — You Are Autonomous');
-      sections.push('');
-      sections.push('Your inbox is empty. This is a REFLECTION tick — you are not waiting for instructions.');
-      sections.push('');
-      sections.push('Review and act on:');
-      sections.push('1. **Directives** (above): Standing orders from the team. Execute them by spawning workers.');
-      sections.push('2. **Failing tests**: If any tests above are failing, spawn a builder to fix them.');
-      sections.push('3. **Lessons with recurring problems**: Spawn a researcher to investigate root causes.');
-      sections.push('4. **Platform health**: Any degraded services? Spawn a builder to fix.');
-      sections.push('5. **Architecture improvements**: Any gaps or tech debt you can identify?');
-      sections.push('');
-      if (board.recentlyFailed.length > 0) {
-        sections.push('Recently failed workers (see above) may have left partial work on disk (uncommitted files, half-written code).');
-        sections.push('Before re-attempting their tasks from scratch, check git status to see what is already done.');
-        sections.push('This avoids duplicating work and ensures partial progress is not lost.');
+      const councilProactive = agent.role === 'council';
+      if (councilProactive) {
+        sections.push('## CEO Audit Tick — Inbox Empty');
+        sections.push('');
+        sections.push('No incoming messages. This is YOUR time to think strategically.');
+        sections.push('');
+        sections.push('AUDIT CHECKLIST:');
+        sections.push('1. **Data integrity**: Is the System Health data above accurate? High failure rates = investigate, don\'t retry.');
+        sections.push('2. **Directives** (if any above): Execute them. These are suggestions from humans — evaluate and act.');
+        sections.push('3. **Failing tests**: If genome scenarios are failing, fix them.');
+        sections.push('4. **Architecture debt**: What patterns keep causing bugs? Can you fix the root cause?');
+        sections.push('5. **Network health**: Are all peers connected? Any nodes behind on commits?');
+        sections.push('6. **Self-improvement**: Is this prompt missing something? Is the tick loop optimal? Fix your own infrastructure.');
+        sections.push('');
+        if (board.recentlyFailed.length > 0) {
+          sections.push('Recently failed workers may have left partial work. Check git status before re-attempting.');
+          sections.push('');
+        }
+        sections.push('You are the CEO. Return [] ONLY if you have genuinely audited everything and the network is healthy.');
+        sections.push('');
+      } else {
+        sections.push('## Proactive Mode — You Are Autonomous');
+        sections.push('');
+        sections.push('Your inbox is empty. This is a REFLECTION tick — you are not waiting for instructions.');
+        sections.push('');
+        sections.push('Review and act on:');
+        sections.push('1. **Directives** (above): Standing orders from the team. Execute them by spawning workers.');
+        sections.push('2. **Failing tests**: If any tests above are failing, spawn a builder to fix them.');
+        sections.push('3. **Lessons with recurring problems**: Spawn a researcher to investigate root causes.');
+        sections.push('4. **Platform health**: Any degraded services? Spawn a builder to fix.');
+        sections.push('5. **Architecture improvements**: Any gaps or tech debt you can identify?');
+        sections.push('');
+        if (board.recentlyFailed.length > 0) {
+          sections.push('Recently failed workers may have left partial work on disk. Check git status before re-attempting.');
+          sections.push('');
+        }
+        sections.push('You are the autonomous manager of this node. Don\'t wait for humans — lead.');
+        sections.push('Only return [] if you have genuinely reviewed everything and there is nothing to improve.');
         sections.push('');
       }
-      sections.push('You are the autonomous manager of this node. Don\'t wait for humans — lead.');
-      sections.push('Only return [] if you have genuinely reviewed everything and there is nothing to improve.');
-      sections.push('');
     }
   }
 
