@@ -1366,6 +1366,31 @@ export class Orchestrator {
             });
             break;
           }
+
+          // Scenario test verification gate — abort proposal if API scenarios fail
+          if (this.deps.scenarioRunner) {
+            try {
+              const result = await this.deps.scenarioRunner.runCategory('api');
+              if (result.failed > 0) {
+                console.log(`[Orchestrator ${this.orchestratorId}] Scenario verification failed: ${result.failed}/${result.total} API scenarios failed — aborting proposal`);
+                this.deps.messageBus.send({
+                  recipientId: this.orchestratorId,
+                  senderId: this.orchestratorId,
+                  senderType: 'orchestrator',
+                  type: 'health_alert',
+                  payload: {
+                    severity: 'critical',
+                    message: `Scenario verification failed: ${result.failed}/${result.total} API scenarios failed before propose_upgrade — proposal aborted`,
+                  },
+                });
+                break;
+              }
+              console.log(`[Orchestrator ${this.orchestratorId}] Scenario verification passed: ${result.passed}/${result.total} API scenarios passed`);
+            } catch (scenarioErr) {
+              console.warn(`[Orchestrator ${this.orchestratorId}] Scenario runner error (non-blocking):`, scenarioErr);
+            }
+          }
+
           await this.deps.onPropose(action.title, action.description);
         }
         break;
