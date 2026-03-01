@@ -156,6 +156,21 @@ export interface Reflection {
 
 export type DiscoveryCategory = 'convention' | 'gotcha' | 'dependency' | 'pattern' | 'decision';
 
+export interface QaTestRun {
+  id: number;
+  orchestratorId: string;
+  workerId: string | null;
+  testType: string;            // 'page_load', 'ux_flow', 'api', 'user_journey'
+  targetUrl: string;
+  status: string;              // 'passed', 'failed', 'error', 'timeout'
+  consoleErrors: string | null;
+  screenshotPath: string | null;
+  errorDetail: string | null;
+  uxNotes: string | null;      // AI's subjective UX observations
+  durationMs: number;
+  createdAt: string;
+}
+
 export interface Discovery {
   id: number;
   projectId: string;
@@ -346,6 +361,24 @@ const SCHEMA = `
   );
 
   CREATE INDEX IF NOT EXISTS idx_governance_audit_proposal ON governance_audit(proposal_id);
+
+  CREATE TABLE IF NOT EXISTS qa_test_runs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    orchestrator_id TEXT NOT NULL,
+    worker_id TEXT,
+    test_type TEXT NOT NULL,
+    target_url TEXT NOT NULL,
+    status TEXT NOT NULL,
+    console_errors TEXT,
+    screenshot_path TEXT,
+    error_detail TEXT,
+    ux_notes TEXT,
+    duration_ms INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_qa_runs_orch ON qa_test_runs(orchestrator_id, created_at);
+  CREATE INDEX IF NOT EXISTS idx_qa_runs_target ON qa_test_runs(target_url, created_at);
 `;
 
 // ---------------------------------------------------------------------------
@@ -484,6 +517,23 @@ function rowToDiscovery(row: any): Discovery {
     fileScope: row.file_scope,
     createdAt: row.created_at,
     expiresAt: row.expires_at,
+  };
+}
+
+function rowToQaTestRun(row: any): QaTestRun {
+  return {
+    id: row.id,
+    orchestratorId: row.orchestrator_id,
+    workerId: row.worker_id,
+    testType: row.test_type,
+    targetUrl: row.target_url,
+    status: row.status,
+    consoleErrors: row.console_errors,
+    screenshotPath: row.screenshot_path,
+    errorDetail: row.error_detail,
+    uxNotes: row.ux_notes,
+    durationMs: row.duration_ms,
+    createdAt: row.created_at,
   };
 }
 
@@ -1111,5 +1161,73 @@ export class AgentDatabase {
     return this.db.prepare(
       `SELECT * FROM governance_audit WHERE proposal_id = ? ORDER BY id`
     ).all(proposalId);
+  }
+
+  // =========================================================================
+  // QA Test Runs
+  // =========================================================================
+
+  addQaTestRun(run: {
+    orchestratorId: string;
+    workerId?: string;
+    testType: string;
+    targetUrl: string;
+    status: string;
+    consoleErrors?: string;
+    screenshotPath?: string;
+    errorDetail?: string;
+    uxNotes?: string;
+    durationMs?: number;
+  }): number {
+    const now = new Date().toISOString();
+    const result = this.db.prepare(`
+      INSERT INTO qa_test_runs (orchestrator_id, worker_id, test_type, target_url, status, console_errors, screenshot_path, error_detail, ux_notes, duration_ms, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      run.orchestratorId, run.workerId ?? null, run.testType, run.targetUrl,
+      run.status, run.consoleErrors ?? null, run.screenshotPath ?? null,
+      run.errorDetail ?? null, run.uxNotes ?? null, run.durationMs ?? 0, now,
+    );
+    return Number(result.lastInsertRowid);
+  }
+
+  getQaTestRuns(filter: {
+    orchestratorId?: string;
+    targetUrl?: string;
+    status?: string;
+    since?: string;
+    limit?: number;
+  }): QaTestRun[] {
+    let sql = 'SELECT * FROM qa_test_runs WHERE 1=1';
+    const params: any[] = [];
+
+    if (filter.orchestratorId) { sql += ' AND orchestrator_id = ?'; params.push(filter.orchestratorId); }
+    if (filter.targetUrl) { sql += ' AND target_url = ?'; params.push(filter.targetUrl); }
+    if (filter.status) { sql += ' AND status = ?'; params.push(filter.status); }
+    if (filter.since) { sql += ' AND created_at >= ?'; params.push(filter.since); }
+
+    sql += ' ORDER BY created_at DESC LIMIT ?';
+    params.push(filter.limit ?? 50);
+
+    return this.db.prepare(sql).all(...params).map(rowToQaTestRun);
+  }
+
+  getQaTestCoverage(orchestratorId: string): Array<{ targetUrl: string; lastTestedAt: string; lastStatus: string; totalRuns: number }> {
+    return this.db.prepare(`
+      SELECT
+        target_url,
+        MAX(created_at) as last_tested_at,
+        (SELECT status FROM qa_test_runs q2 WHERE q2.target_url = q1.target_url AND q2.orchestrator_id = ? ORDER BY created_at DESC LIMIT 1) as last_status,
+        COUNT(*) as total_runs
+      FROM qa_test_runs q1
+      WHERE orchestrator_id = ?
+      GROUP BY target_url
+      ORDER BY last_tested_at ASC
+    `).all(orchestratorId, orchestratorId).map((row: any) => ({
+      targetUrl: row.target_url,
+      lastTestedAt: row.last_tested_at,
+      lastStatus: row.last_status,
+      totalRuns: row.total_runs,
+    }));
   }
 }

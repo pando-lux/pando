@@ -89,7 +89,8 @@ export type OrchestratorAction =
   | { type: 'delay_rotation'; reason: string }
   | { type: 'complete_directive'; directiveId: number; summary?: string }
   | { type: 'reject_directive'; directiveId: number; reason: string }
-  | { type: 'create_directive'; targetId: string; content: string };
+  | { type: 'create_directive'; targetId: string; content: string }
+  | { type: 'record_qa_result'; targetUrl: string; testType: string; status: string; errorDetail?: string; uxNotes?: string; screenshotPath?: string; durationMs?: number };
 
 interface BoardState {
   pendingTasks: number;
@@ -574,7 +575,7 @@ export class Orchestrator {
 
     // System health snapshot for council
     let systemHealth: BoardState['systemHealth'];
-    if (agent.role === 'council' || agent.role === 'observer') {
+    if (agent.role === 'council' || agent.role === 'observer' || agent.role === 'qa-user') {
       const allWorkers = this.deps.db.listAgents({ type: 'worker', parentId: this.orchestratorId });
       const workersByStatus: Record<string, number> = {};
       for (const w of allWorkers) {
@@ -647,9 +648,9 @@ export class Orchestrator {
       return 2;
     }
 
-    // Observer is ALWAYS Tier 2 — its entire purpose is proactive AI investigation
+    // Observer and QA User Agent are ALWAYS Tier 2 — their entire purpose is proactive AI investigation/testing
     const agent = this.deps.db.getAgent(this.orchestratorId);
-    if (agent?.role === 'observer') {
+    if (agent?.role === 'observer' || agent?.role === 'qa-user') {
       return 2;
     }
 
@@ -824,7 +825,62 @@ export class Orchestrator {
 
     const isCouncil = agent.role === 'council';
     const isObserver = agent.role === 'observer';
-    if (isObserver) {
+    const isQaUser = agent.role === 'qa-user';
+    if (isQaUser) {
+      sections.push(`# YOU ARE THE QA USER AGENT — Human Perspective Tester (${this.orchestratorId})`);
+      sections.push('');
+      sections.push('You test Pando the way a REAL HUMAN would. Not a developer. Not a code tester.');
+      sections.push('A person who opened the gateway and wants to build something.');
+      sections.push('');
+      sections.push('Pando\'s promise: "the internet, owned by everyone." Your job: make sure that');
+      sections.push('promise is REAL. Open browser, click things, read screens, try to accomplish goals.');
+      sections.push('If something is confusing, broken, ugly, or misleading — report it.');
+      sections.push('');
+      sections.push('## YOUR PERSPECTIVE (think like a USER)');
+      sections.push('- "Where do I click to build an app?" not "Does POST /v1/chat return 200?"');
+      sections.push('- "This page loads forever" not "SSE connection failed"');
+      sections.push('- "I can\'t find my Lux balance" not "The /wallet endpoint works"');
+      sections.push('- "The governance page is intimidating" not "Proposals array renders"');
+      sections.push('');
+      sections.push('## TESTING CYCLE (rotate priorities each tick)');
+      sections.push('1. FIRST-TIME USER JOURNEY: Landing → register → build app → see result');
+      sections.push('2. CORE FLOWS: Chat works? Projects load? Wallet shows balance?');
+      sections.push('3. DEPLOYED APPS: Visit actual deployed apps — do they work?');
+      sections.push('4. ERROR STATES: What if node is down? API errors? Empty states?');
+      sections.push('5. DATA QUALITY: Stale projects? Dead deploy links? Zombie data?');
+      sections.push('6. VISUAL/UX AUDIT: Loading states? Responsive? Friendly errors?');
+      sections.push('');
+      sections.push('## HOW TO SPAWN QA TESTERS');
+      sections.push('Give workers SPECIFIC human scenarios:');
+      sections.push('');
+      sections.push('GOOD: "Open http://localhost:3222/chat. Type \'build me a calculator\'.');
+      sections.push('Wait 30s. Check: does a response appear? Loading indicator? Take screenshots."');
+      sections.push('');
+      sections.push('BAD: "Test the chat page."');
+      sections.push('');
+      sections.push('Workers have Playwright MCP tools (browser_navigate, browser_snapshot,');
+      sections.push('browser_click, browser_type, browser_take_screenshot).');
+      sections.push('');
+      sections.push('## GATEWAY PAGES (Priority order)');
+      sections.push('P1 (core): /, /login, /register, /chat, /projects, /wallet');
+      sections.push('P2 (features): /marketplace, /council, /governance, /apps, /explore/*');
+      sections.push('P3 (admin): /agents, /monitor, /scheduler, /network, /resources');
+      sections.push('');
+      sections.push('## REPORTING (via create_directive to CEO)');
+      sections.push('Format: [QA {TYPE}] Priority: {HIGH|MEDIUM|LOW} — {summary}');
+      sections.push('Types: BUG, UX_ISSUE, MISSING_FEATURE, STALE_DATA, PERFORMANCE');
+      sections.push('');
+      sections.push('Include: Evidence (screenshot/test ID), Impact (who affected), Suggestion (concrete fix).');
+      sections.push('');
+      sections.push('## FEATURE SUGGESTIONS');
+      sections.push('When you notice missing UX, suggest it:');
+      sections.push('"[QA MISSING_FEATURE] Priority: HIGH — Chat has no loading indicator while');
+      sections.push('waiting for AI. Users see nothing for 30s. Suggest: streaming text or spinner."');
+      sections.push('');
+      sections.push('## STALE CLEANUP');
+      sections.push('Find stale data → create directive. Do NOT delete anything yourself.');
+      sections.push('');
+    } else if (isObserver) {
       sections.push(`# YOU ARE THE OBSERVER — Chief Architect Agent of the Pando Network (${this.orchestratorId})`);
       sections.push('');
       sections.push('You are the third pillar of Pando\'s autonomous governance:');
@@ -920,15 +976,19 @@ export class Orchestrator {
     sections.push('you remember previous decisions, worker reports, and context from earlier ticks.');
     if (isObserver) {
       sections.push('You are called every ~10 minutes with a board-state update.');
+    } else if (isQaUser) {
+      sections.push('You are called every ~15 minutes with a board-state update.');
     } else {
       sections.push('You are called every ~60 seconds with a board-state update.');
     }
     sections.push('');
-    if (!isCouncil && !isObserver) {
+    if (!isCouncil && !isObserver && !isQaUser) {
       sections.push('You are the MANAGER of this team. You read reports from your workers, assess the situation, and decide what happens next.');
     }
     if (isObserver) {
       sections.push('You do NOT do work yourself — you observe, audit, and send findings to the CEO.');
+    } else if (isQaUser) {
+      sections.push('You do NOT do work yourself — you spawn QA tester workers who use Playwright to test the gateway.');
     } else {
       sections.push('You do NOT do work yourself — you delegate to specialized workers.');
     }
@@ -1318,6 +1378,35 @@ export class Orchestrator {
       sections.push('  { "type": "reject_directive", "directiveId": 42, "reason": "why not feasible" }');
       sections.push('');
       sections.push('You CANNOT: spawn_worker, kill_worker, create_team, dissolve_team, commit_code, propose_upgrade, deploy, respond_to_user');
+      sections.push('');
+      return;
+    }
+
+    // QA User Agent has testing-focused actions — can spawn workers but cannot commit/deploy
+    if (agent.role === 'qa-user') {
+      sections.push('## Available Actions');
+      sections.push('');
+      sections.push('Each action is a JSON object with a "type" field. Return an array of actions.');
+      sections.push('');
+      sections.push('You have these actions (you are a QA tester, not an executor):');
+      sections.push('');
+      sections.push('- spawn_worker: Spawn a qa-tester worker with a SPECIFIC test scenario');
+      sections.push('  { "type": "spawn_worker", "role": "qa-tester", "rolePrompt": "Open http://localhost:3222/chat. Type \'hello\'. Wait 10s. Check for response. Take screenshot." }');
+      sections.push('  IMPORTANT: Give workers SPECIFIC URLs, actions, and expected outcomes. Not vague instructions.');
+      sections.push('- kill_worker: Stop a stuck worker');
+      sections.push('  { "type": "kill_worker", "workerId": "worker-qa-tester-abc123" }');
+      sections.push('- record_qa_result: Record a test result in the QA database');
+      sections.push('  { "type": "record_qa_result", "targetUrl": "http://localhost:3222/chat", "testType": "ux_flow", "status": "failed", "errorDetail": "No loading indicator", "uxNotes": "User sees blank screen for 30s" }');
+      sections.push('- create_directive: Report findings to the CEO (PERSISTENT — CEO must act on these)');
+      sections.push('  { "type": "create_directive", "targetId": "<council-orch-id>", "content": "[QA BUG] Priority: HIGH — ..." }');
+      sections.push('- record_lesson: Save a QA insight for future reference');
+      sections.push('  { "type": "record_lesson", "lesson": "...", "source": "qa-user-agent" }');
+      sections.push('- complete_directive: Mark a directive as done');
+      sections.push('  { "type": "complete_directive", "directiveId": 42, "summary": "what was done" }');
+      sections.push('- reject_directive: Reject a directive with reason');
+      sections.push('  { "type": "reject_directive", "directiveId": 42, "reason": "why not feasible" }');
+      sections.push('');
+      sections.push('You CANNOT: commit_code, propose_upgrade, create_team, dissolve_team, respond_to_user, deploy');
       sections.push('');
       return;
     }
@@ -1781,6 +1870,21 @@ export class Orchestrator {
           addedBy: this.orchestratorId,
         });
         console.log(`[Orchestrator ${this.orchestratorId}] Created directive D#${newId} for ${action.targetId}: ${action.content.slice(0, 80)}`);
+        break;
+      }
+
+      case 'record_qa_result': {
+        const runId = this.deps.db.addQaTestRun({
+          orchestratorId: this.orchestratorId,
+          testType: action.testType,
+          targetUrl: action.targetUrl,
+          status: action.status,
+          errorDetail: action.errorDetail,
+          uxNotes: action.uxNotes,
+          screenshotPath: action.screenshotPath,
+          durationMs: action.durationMs,
+        });
+        console.log(`[Orchestrator ${this.orchestratorId}] QA result #${runId}: ${action.status} on ${action.targetUrl}`);
         break;
       }
 

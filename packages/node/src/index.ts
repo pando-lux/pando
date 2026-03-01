@@ -136,6 +136,7 @@ export class PandoNode {
   private councilOrchestrator: Orchestrator | null = null;
   private councilOrchId: string | null = null;
   private observerOrchId: string | null = null;
+  private qaUserOrchId: string | null = null;
   private emissionWitness: EmissionWitness | null = null;
   private securityMonitor: SecurityMonitor | null = null;
   private resourceProofChallenger: ResourceProofChallenger | null = null;
@@ -3362,6 +3363,30 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     }
     this.instantiateOrchestrator(this.observerOrchId);
     console.log('[agents] Observer orchestrator tick loop started (10min interval)');
+
+    // Find existing QA User Agent orchestrator or create new
+    const existingQaUser = this.agentDb.listAgents({ role: 'qa-user', type: 'orchestrator' })
+      .find(a => a.status === 'pending' || a.status === 'active');
+    if (existingQaUser) {
+      this.qaUserOrchId = existingQaUser.id;
+      this.agentDb.updateAgent(existingQaUser.id, { status: 'active' });
+      console.log(`[agents] QA User Agent rehydrated: ${this.qaUserOrchId}`);
+    } else {
+      this.qaUserOrchId = this.orgManager.createOrchestrator({
+        role: 'qa-user',
+        level: 0,
+        scope: 'public',
+        tickIntervalMs: 900000, // 15 minutes
+        maxWorkers: 2,
+        maxChildren: 0,
+        persistent: true,
+        nodeId: this.identity?.peerId || undefined,
+        rolePrompt: 'QA User Agent — tests from human perspective using Playwright',
+      });
+      console.log(`[agents] QA User Agent created: ${this.qaUserOrchId}`);
+    }
+    this.instantiateOrchestrator(this.qaUserOrchId);
+    console.log('[agents] QA User Agent tick loop started (15min interval)');
 
     // Phase 104: Rehydrate persistent project orchestrators from DB
     // Check both 'active' and 'pending' (pending = survived restart, needs reactivation)

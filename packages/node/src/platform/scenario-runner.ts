@@ -339,7 +339,7 @@ export class ScenarioRunner {
       const stepStart = Date.now();
 
       // Try to extract API call from step description
-      const apiMatch = step.match(/^(GET|POST|PUT|DELETE|PATCH)\s+(\S+)/i);
+      const apiMatch = step.match(/^(GET|POST|PUT|DELETE|PATCH)\s+(\S+)(?:.*?(?:→|->)\s*(\d{3}))?/i);
       if (apiMatch) {
         const method = apiMatch[1].toUpperCase();
         let path = apiMatch[2];
@@ -364,11 +364,14 @@ export class ScenarioRunner {
           });
           clearTimeout(timeout);
 
-          const pass = response.ok || response.status < 500;
+          const expectedStatus = apiMatch[3] ? parseInt(apiMatch[3], 10) : null;
+          const pass = expectedStatus ? response.status === expectedStatus : (response.ok || response.status < 500);
           steps.push({
             name: step.slice(0, 80),
             status: pass ? 'pass' : 'fail',
-            output: `${response.status} ${response.statusText}`,
+            output: expectedStatus
+              ? `${response.status} ${response.statusText} (expected ${expectedStatus})`
+              : `${response.status} ${response.statusText}`,
             durationMs: Date.now() - stepStart,
           });
           if (!pass) allPass = false;

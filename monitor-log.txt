@@ -517,3 +517,214 @@ EC2 54.82.241.132: 4e8e59cc
 EC2 34.201.82.126: 4e8e59cc
 PROBLEMS: none detected
 --- END CHECK #15 ---
+
+--- CHECK #16 @ 2026-03-01T12:48:27Z ---
+WINDOWS: UP | peers=2 | uptime=1min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:40:15.579Z | orch-council-fee5437 tick#2138 T2 | ["commit_code","record_lesson"]
+  2026-03-01T12:35:28.277Z | orch-council-fee5437 tick#2137 T1 | none
+  2026-03-01T12:35:15.582Z | orch-council-fee5437 tick#2136 T2 | ["spawn_worker","record_lesson"]
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: 2281dd05 Align CLAUDE.md worker docs with reality: fresh workers, no session resume
+EC2 54.82.241.132: 4e8e59cc
+EC2 34.201.82.126: 4e8e59cc
+PROBLEMS:
+  !! CEO stale: last tick 8min ago
+--- END CHECK #16 ---
+
+--- CHECK #16 @ 2026-03-01T12:49:12Z ---
+WINDOWS: UP | peers=2 | uptime=1min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:40:15.579Z | orch-council-fee5437 tick#2138 T2 | ["commit_code","record_lesson"]
+  2026-03-01T12:35:28.277Z | orch-council-fee5437 tick#2137 T1 | none
+  2026-03-01T12:35:15.582Z | orch-council-fee5437 tick#2136 T2 | ["spawn_worker","record_lesson"]
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: 2281dd05 Align CLAUDE.md worker docs with reality: fresh workers, no session resume
+EC2 54.82.241.132: 4e8e59cc
+EC2 34.201.82.126: 4e8e59cc
+PROBLEMS:
+  !! CEO stale: last tick 9min ago
+--- END CHECK #16 ---
+
+--- CHECK #17 @ 2026-03-01T12:53:34Z ---
+WINDOWS: UP | peers=2 | uptime=6min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:40:15.579Z | orch-council-fee5437 tick#2138 T2 | ["commit_code","record_lesson"]
+  2026-03-01T12:35:28.277Z | orch-council-fee5437 tick#2137 T1 | none
+  2026-03-01T12:35:15.582Z | orch-council-fee5437 tick#2136 T2 | ["spawn_worker","record_lesson"]
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: 2281dd05 Align CLAUDE.md worker docs with reality: fresh workers, no session resume
+EC2 54.82.241.132: 4e8e59cc
+EC2 34.201.82.126: 4e8e59cc
+PROBLEMS:
+  !! CEO stale: last tick 13min ago
+--- END CHECK #17 ---
+
+--- CHECK #17 @ 2026-03-01T12:54:19Z ---
+WINDOWS: UP | peers=2 | uptime=6min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:40:15.579Z | orch-council-fee5437 tick#2138 T2 | ["commit_code","record_lesson"]
+  2026-03-01T12:35:28.277Z | orch-council-fee5437 tick#2137 T1 | none
+  2026-03-01T12:35:15.582Z | orch-council-fee5437 tick#2136 T2 | ["spawn_worker","record_lesson"]
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: 2281dd05 Align CLAUDE.md worker docs with reality: fresh workers, no session resume
+EC2 54.82.241.132: 4e8e59cc
+EC2 34.201.82.126: 4e8e59cc
+PROBLEMS:
+  !! CEO stale: last tick 14min ago
+--- END CHECK #17 ---
+
+--- CHECK #18 @ 2026-03-01T12:58:41Z ---
+WINDOWS: UP | peers=2 | uptime=11min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:58:34.099Z | orch-council-fee5437 tick#2139 T2 | none
+  2026-03-01T12:40:15.579Z | orch-council-fee5437 tick#2138 T2 | ["commit_code","record_lesson"]
+  2026-03-01T12:35:28.277Z | orch-council-fee5437 tick#2137 T1 | none
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: 2281dd05 Align CLAUDE.md worker docs with reality: fresh workers, no session resume
+EC2 54.82.241.132: 4e8e59cc
+EC2 34.201.82.126: 4e8e59cc
+PROBLEMS: none detected
+--- END CHECK #18 ---
+
+--- CHECK #18 @ 2026-03-01T12:59:26Z ---
+WINDOWS: UP | peers=2 | uptime=12min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:58:34.099Z | orch-council-fee5437 tick#2139 T2 | none
+  2026-03-01T12:40:15.579Z | orch-council-fee5437 tick#2138 T2 | ["commit_code","record_lesson"]
+  2026-03-01T12:35:28.277Z | orch-council-fee5437 tick#2137 T1 | none
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: 2281dd05 Align CLAUDE.md worker docs with reality: fresh workers, no session resume
+EC2 54.82.241.132: 4e8e59cc
+EC2 34.201.82.126: 4e8e59cc
+PROBLEMS: none detected
+--- END CHECK #18 ---
+
+--- CHECK #19 @ 2026-03-01T13:03:48Z ---
+WINDOWS: UP | peers=2 | uptime=16min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T13:03:27.292Z | orch-council-fee5437 tick#2144 T1 | none
+  2026-03-01T13:02:40.296Z | orch-council-fee5437 tick#2143 T2 | ["complete_directive"]
+  2026-03-01T13:02:17.571Z | orch-council-fee5437 tick#2142 T2 | ["complete_directive","record_lesson"]
+OBSERVER LAST: tick#10 T2 @ 2026-03-01T13:01:35.085Z | ["create_directive","record_lesson"]
+GIT HEAD: 2281dd05 Align CLAUDE.md worker docs with reality: fresh workers, no session resume
+EC2 54.82.241.132: 4e8e59cc
+EC2 34.201.82.126: 4e8e59cc
+PROBLEMS: none detected
+--- END CHECK #19 ---
+
+--- CHECK #19 @ 2026-03-01T13:04:33Z ---
+WINDOWS: UP | peers=2 | uptime=17min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T13:04:27.303Z | orch-council-fee5437 tick#2145 T1 | none
+  2026-03-01T13:03:27.292Z | orch-council-fee5437 tick#2144 T1 | none
+  2026-03-01T13:02:40.296Z | orch-council-fee5437 tick#2143 T2 | ["complete_directive"]
+OBSERVER LAST: tick#10 T2 @ 2026-03-01T13:01:35.085Z | ["create_directive","record_lesson"]
+GIT HEAD: 2281dd05 Align CLAUDE.md worker docs with reality: fresh workers, no session resume
+EC2 54.82.241.132: 4e8e59cc
+EC2 34.201.82.126: 4e8e59cc
+PROBLEMS: none detected
+--- END CHECK #19 ---
+
+--- CHECK #20 @ 2026-03-01T13:08:56Z ---
+WINDOWS: UP | peers=2 | uptime=21min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T13:08:27.336Z | orch-council-fee5437 tick#2149 T1 | none
+  2026-03-01T13:07:27.328Z | orch-council-fee5437 tick#2148 T1 | none
+  2026-03-01T13:06:27.313Z | orch-council-fee5437 tick#2147 T1 | none
+OBSERVER LAST: tick#10 T2 @ 2026-03-01T13:01:35.085Z | ["create_directive","record_lesson"]
+GIT HEAD: 2281dd05 Align CLAUDE.md worker docs with reality: fresh workers, no session resume
+EC2 54.82.241.132: 4e8e59cc
+EC2 34.201.82.126: 4e8e59cc
+PROBLEMS: none detected
+--- END CHECK #20 ---
+
+--- CHECK #20 @ 2026-03-01T13:09:40Z ---
+WINDOWS: UP | peers=2 | uptime=22min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: 1 active
+  D#56 [pending] seen=0x: [OBSERVER AUDIT #7] SCENARIO RUNNER MODULE EFFECTIVENESS — CRITICAL
+
+FINDING: 
+RECENT TICKS:
+  2026-03-01T13:09:27.342Z | orch-council-fee5437 tick#2150 T1 | none
+  2026-03-01T13:08:27.336Z | orch-council-fee5437 tick#2149 T1 | none
+  2026-03-01T13:07:27.328Z | orch-council-fee5437 tick#2148 T1 | none
+OBSERVER LAST: tick#10 T2 @ 2026-03-01T13:01:35.085Z | ["create_directive","record_lesson"]
+GIT HEAD: 2281dd05 Align CLAUDE.md worker docs with reality: fresh workers, no session resume
+EC2 54.82.241.132: 4e8e59cc
+EC2 34.201.82.126: 4e8e59cc
+PROBLEMS: none detected
+--- END CHECK #20 ---
+
+--- CHECK #21 @ 2026-03-01T13:14:03Z ---
+WINDOWS: UP | peers=2 | uptime=26min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T13:13:27.456Z | orch-council-fee5437 tick#2152 T1 | none
+  2026-03-01T13:12:38.296Z | orch-council-fee5437 tick#2151 T2 | ["spawn_worker","complete_directive","complete_directive"]
+  2026-03-01T13:09:47.621Z | orch-observer-16f61c tick#11 T2 | ["create_directive","record_lesson"]
+OBSERVER LAST: tick#11 T2 @ 2026-03-01T13:09:47.621Z | ["create_directive","record_lesson"]
+GIT HEAD: 2281dd05 Align CLAUDE.md worker docs with reality: fresh workers, no session resume
+EC2 54.82.241.132: 4e8e59cc
+EC2 34.201.82.126: 4e8e59cc
+PROBLEMS: none detected
+--- END CHECK #21 ---
+
+--- CHECK #21 @ 2026-03-01T13:14:47Z ---
+WINDOWS: UP | peers=2 | uptime=27min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T13:13:27.456Z | orch-council-fee5437 tick#2152 T1 | none
+  2026-03-01T13:12:38.296Z | orch-council-fee5437 tick#2151 T2 | ["spawn_worker","complete_directive","complete_directive"]
+  2026-03-01T13:09:47.621Z | orch-observer-16f61c tick#11 T2 | ["create_directive","record_lesson"]
+OBSERVER LAST: tick#11 T2 @ 2026-03-01T13:09:47.621Z | ["create_directive","record_lesson"]
+GIT HEAD: 2281dd05 Align CLAUDE.md worker docs with reality: fresh workers, no session resume
+EC2 54.82.241.132: 4e8e59cc
+EC2 34.201.82.126: 4e8e59cc
+PROBLEMS: none detected
+--- END CHECK #21 ---
