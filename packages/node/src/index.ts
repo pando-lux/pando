@@ -696,33 +696,7 @@ export class PandoNode {
       };
     });
 
-    // Phase 98: claude_task — one-shot Claude Code execution for P2P compute routing.
-    // Only handles requests when shareCompute=true (user opted in via /contribute claude-code).
-    // Receives a prompt, runs claude -p, returns text output. Stateless — no project creation.
-    this.requestReply.registerHandler('claude_task', async (req) => {
-      if (!this.localCapStore?.isShareCompute()) {
-        return { error: 'This node is not sharing compute. Use /contribute claude-code to opt in.' };
-      }
-      const { prompt, context, model } = req.payload || {};
-      if (!prompt) return { error: 'prompt required' };
-      const { ClaudeBackend } = await import('./core/ai-backend-claude.js');
-      const backend = new ClaudeBackend();
-      const fullPrompt = context ? `${context}\n\n${prompt}` : prompt;
-      const result = await backend.execute({
-        type: 'text',
-        prompt: fullPrompt,
-        options: { model: model || 'claude-opus-4-6' },
-      });
-      return {
-        success: result.success,
-        output: result.output,
-        error: result.error,
-        executedBy: this.identity!.peerId,
-      };
-    });
-
     // P2P chat proxy — remote nodes forward full build requests here.
-    // Unlike claude_task (one-shot text), this creates a project and runs the full pipeline.
     this.requestReply.registerHandler('chat_proxy', async (req) => {
       if (!this.localCapStore?.isShareCompute()) {
         return { error: 'This node is not sharing compute.' };
@@ -3695,8 +3669,7 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
 
   /**
    * Route a chat/build request to a peer with Claude Code via P2P chat_proxy.
-   * Unlike routeClaudeTaskP2P (one-shot text), this triggers the full pipeline
-   * on the remote node (project creation → orchestrator → builder → deploy).
+   * Triggers the full pipeline on the remote node (project creation → orchestrator → builder → deploy).
    * Returns immediately with queued status. Results come back via SSE/thread.
    */
   async routeChatProxyP2P(message: string, threadId?: string, tier?: string): Promise<{ status: string; projectId?: string; executedBy: string } | null> {
@@ -3721,36 +3694,6 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
         projectId: result.payload?.projectId,
         executedBy: peer.peerId,
       };
-    } catch {
-      return null;
-    }
-  }
-
-  /**
-   * Phase 98: Route a compute task to a peer that has shareCompute=true and compute_cpu capability.
-   * Used when the local node has no Claude Code. Returns the peer's output or null if no peer found.
-   * Timeout: 5 minutes (collect-and-return — no streaming in V1).
-   */
-  async routeClaudeTaskP2P(prompt: string, context?: string): Promise<{ output: string; executedBy: string } | null> {
-    if (!this.requestReply) return null;
-    // Find peers that have opted in to sharing compute
-    const candidates = this.capabilityRegistry.getAllProfiles().filter(p =>
-      p.shareCompute === true &&
-      p.capabilities.compute_cpu === true &&
-      p.peerId !== this.identity?.peerId
-    );
-    if (candidates.length === 0) return null;
-    // Pick first available candidate
-    const peer = candidates[0];
-    try {
-      const result = await this.requestReply.request(
-        peer.peerId,
-        'claude_task',
-        { prompt, context },
-        5 * 60 * 1000  // 5 min timeout
-      ) as any;
-      if (result?.error || result?.payload?.error) return null;
-      return { output: result.payload?.output || '', executedBy: result.payload?.executedBy || peer.peerId };
     } catch {
       return null;
     }
