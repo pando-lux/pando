@@ -1883,34 +1883,8 @@ export class GovernanceSync {
     }
     this.agentDb?.logGovernanceCheck(proposalId, 'security_file_check', 'pass', undefined, changedFiles.length, totalLinesChanged);
 
-    // CHECK 2: Change size check — large changes require QA
-    if (totalLinesChanged > 300) {
-      // Check if a tester agent ran recently (last 30 min) under the same parent
-      try {
-        const thirtyMinAgo = Date.now() - 30 * 60 * 1000;
-        const parentId = proposal.proposedBy;
-        const row = this.db.prepare(
-          `SELECT COUNT(*) as cnt FROM agents WHERE role = 'tester' AND parent_id = ? AND updated_at > ?`
-        ).get(parentId, thirtyMinAgo) as any;
-        if (!row || row.cnt === 0) {
-          const reason = 'QA required for large changes (>300 lines)';
-          this.agentDb?.logGovernanceCheck(proposalId, 'change_size_check', 'fail', reason, changedFiles.length, totalLinesChanged);
-          return { approved: false, reason, kernelDelay: false };
-        }
-      } catch {
-        // AgentDatabase table may not exist in this DB — skip check
-        console.warn('[governance] WARNING: Could not query agents table for QA check, skipping');
-      }
-    }
-    this.agentDb?.logGovernanceCheck(proposalId, 'change_size_check', 'pass', undefined, changedFiles.length, totalLinesChanged);
-
-    // CHECK 3: Build verify
-    if (proposal.upgradePayload && (proposal.upgradePayload as any).buildPassed === false) {
-      const reason = 'Build must pass before approval';
-      this.agentDb?.logGovernanceCheck(proposalId, 'build_verify', 'fail', reason, changedFiles.length, totalLinesChanged);
-      return { approved: false, reason, kernelDelay: false };
-    }
-    this.agentDb?.logGovernanceCheck(proposalId, 'build_verify', 'pass', undefined, changedFiles.length, totalLinesChanged);
+    // CHECK 2 & 3 removed: were dead code (wrong DB, nonexistent field).
+    // Real safety gates: orchestrator pre-commit build, scenario runner, kernel delay below.
 
     // CHECK 4: Kernel protection — delay if kernel files modified
     const kernelFilesChanged = changedFiles.some(f => f.includes('kernel/'));
