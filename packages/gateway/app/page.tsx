@@ -14,13 +14,13 @@ export default function LandingPage() {
   }, []);
 
   return (
-    <div className="min-h-screen bg-neutral-950 text-neutral-100">
+    <div className="min-h-screen bg-white dark:bg-neutral-950 text-neutral-900 dark:text-neutral-100">
       {/* Nav */}
       <nav className="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
         <span className="text-xl font-bold tracking-tight">pando</span>
-        <div className="flex items-center gap-6 text-sm text-neutral-400">
-          <a href="#features" className="hover:text-neutral-100 transition-colors">Features</a>
-          <a href="#how" className="hover:text-neutral-100 transition-colors">How it works</a>
+        <div className="flex items-center gap-6 text-sm text-neutral-500 dark:text-neutral-400">
+          <a href="#features" className="hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">Features</a>
+          <a href="#how" className="hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">How it works</a>
           <Link
             href="/login"
             className="px-4 py-2 bg-amber-500 text-neutral-950 rounded-lg font-medium hover:bg-amber-400 transition-colors"
@@ -32,16 +32,16 @@ export default function LandingPage() {
 
       {/* Hero */}
       <section className="px-6 pt-24 pb-32 max-w-4xl mx-auto text-center">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-neutral-800/60 text-sm text-neutral-400 mb-8">
-          <span className={`w-2 h-2 rounded-full ${peers !== null && peers > 0 ? "bg-green-400" : "bg-neutral-600"}`} />
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-neutral-200/60 dark:bg-neutral-800/60 text-sm text-neutral-500 dark:text-neutral-400 mb-8">
+          <span className={`w-2 h-2 rounded-full ${peers !== null && peers > 0 ? "bg-green-400" : "bg-neutral-400 dark:bg-neutral-600"}`} />
           {peers !== null ? `${peers} peers online` : "Connecting..."}
         </div>
         <h1 className="text-5xl sm:text-7xl font-bold tracking-tight leading-tight mb-6">
           The internet,
           <br />
-          <span className="text-amber-400">owned by everyone.</span>
+          <span className="text-amber-500 dark:text-amber-400">owned by everyone.</span>
         </h1>
-        <p className="text-lg sm:text-xl text-neutral-400 max-w-2xl mx-auto mb-10 leading-relaxed">
+        <p className="text-lg sm:text-xl text-neutral-500 dark:text-neutral-400 max-w-2xl mx-auto mb-10 leading-relaxed">
           Pando is a decentralized network where AI builds, humans earn, and
           nobody tracks you. Open source. No ads. No barriers.
         </p>
@@ -56,7 +56,7 @@ export default function LandingPage() {
             href="https://github.com/pando-lux/pando"
             target="_blank"
             rel="noopener noreferrer"
-            className="px-6 py-3 border border-neutral-700 rounded-lg font-semibold hover:border-neutral-500 hover:text-white transition-colors text-lg"
+            className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-lg font-semibold hover:border-neutral-400 dark:hover:border-neutral-500 hover:text-neutral-900 dark:hover:text-white transition-colors text-lg"
           >
             View source
           </a>
@@ -64,7 +64,7 @@ export default function LandingPage() {
       </section>
 
       {/* Features */}
-      <section id="features" className="px-6 py-24 max-w-6xl mx-auto">
+      <section id="features" className="px-6 py-16 max-w-6xl mx-auto">
         <h2 className="text-3xl font-bold text-center mb-16">
           What makes Pando different
         </h2>
@@ -106,11 +106,11 @@ export default function LandingPage() {
           ].map((f) => (
             <div
               key={f.title}
-              className="p-6 rounded-2xl bg-neutral-900/50 border border-neutral-800 hover:border-neutral-700 transition-colors"
+              className="p-6 rounded-2xl bg-neutral-100/50 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 transition-colors"
             >
               <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center mb-4">
                 <svg
-                  className="w-5 h-5 text-amber-400"
+                  className="w-5 h-5 text-amber-500 dark:text-amber-400"
                   fill="none"
                   viewBox="0 0 24 24"
                   strokeWidth={1.5}
@@ -120,14 +120,14 @@ export default function LandingPage() {
                 </svg>
               </div>
               <h3 className="text-lg font-semibold mb-2">{f.title}</h3>
-              <p className="text-neutral-400 leading-relaxed">{f.desc}</p>
+              <p className="text-neutral-500 dark:text-neutral-400 leading-relaxed">{f.desc}</p>
             </div>
           ))}
         </div>
       </section>
 
       {/* How it works */}
-      <section id="how" className="px-6 py-24 max-w-4xl mx-auto">
+      <section id="how" className="px-6 py-16 max-w-4xl mx-auto">
         <h2 className="text-3xl font-bold text-center mb-16">
           How it works
         </h2>
@@ -155,7 +155,7 @@ export default function LandingPage() {
               </span>
               <div>
                 <h3 className="text-xl font-semibold mb-1">{s.title}</h3>
-                <p className="text-neutral-400 leading-relaxed">{s.desc}</p>
+                <p className="text-neutral-500 dark:text-neutral-400 leading-relaxed">{s.desc}</p>
               </div>
             </div>
           ))}
@@ -163,10 +163,10 @@ export default function LandingPage() {
       </section>
 
       {/* CTA */}
-      <section className="px-6 py-24 max-w-4xl mx-auto text-center">
-        <div className="p-12 rounded-2xl bg-gradient-to-b from-neutral-900 to-neutral-950 border border-neutral-800">
+      <section className="px-6 py-16 max-w-4xl mx-auto text-center">
+        <div className="p-12 rounded-2xl bg-gradient-to-b from-neutral-100 to-neutral-50 dark:from-neutral-900 dark:to-neutral-950 border border-neutral-200 dark:border-neutral-800">
           <h2 className="text-3xl font-bold mb-4">Ready to try Pando?</h2>
-          <p className="text-neutral-400 mb-8 max-w-lg mx-auto">
+          <p className="text-neutral-500 dark:text-neutral-400 mb-8 max-w-lg mx-auto">
             No sign-up required. Open the chat, describe what you want, and
             watch AI build it.
           </p>
@@ -180,7 +180,7 @@ export default function LandingPage() {
       </section>
 
       {/* Footer */}
-      <footer className="px-6 py-8 max-w-6xl mx-auto border-t border-neutral-800">
+      <footer className="px-6 py-8 max-w-6xl mx-auto border-t border-neutral-200 dark:border-neutral-800">
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-neutral-500">
           <span>Pando — The Open Network</span>
           <div className="flex items-center gap-6">
@@ -188,14 +188,14 @@ export default function LandingPage() {
               href="https://github.com/pando-lux/pando"
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-neutral-300 transition-colors"
+              className="hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
             >
               GitHub
             </a>
-            <Link href="/network" className="hover:text-neutral-300 transition-colors">
+            <Link href="/network" className="hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors">
               Network
             </Link>
-            <Link href="/governance" className="hover:text-neutral-300 transition-colors">
+            <Link href="/governance" className="hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors">
               Governance
             </Link>
           </div>
