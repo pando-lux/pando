@@ -124,22 +124,22 @@ export async function registerPlatformRoutes(
 
       // Intent is 'build' — create project, run preflight, spawn per-project manager
       if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
-        // Phase 98: Try P2P routing to a shareCompute peer before returning error
-        const p2pResult = await node.routeClaudeTaskP2P?.(trimmed);
+        // P2P chat proxy — forward to a Claude-capable node for full pipeline
+        threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        if (threadStore) {
+          threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
+          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
+        }
+        const p2pResult = await node.routeChatProxyP2P?.(trimmed, threadId, String(classification.tier || 1));
         if (p2pResult) {
+          const routingReply = 'Routing your request to a Claude-capable node. Full pipeline will run — this may take a few minutes...';
           if (threadStore) {
-            threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-            threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
-            await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
-            await threadStore.addMessage(threadId, { role: 'assistant', content: p2pResult.output, timestamp: Date.now(), tier: 'simple' as any });
+            await threadStore.addMessage(threadId, { role: 'assistant', content: routingReply, timestamp: Date.now(), tier: 'simple' as any });
           }
-          return { status: 'ok', threadId, reply: p2pResult.output, tier: 'simple', routedTo: p2pResult.executedBy };
+          return { status: 'queued', threadId, reply: routingReply, tier: 'complex', routedTo: p2pResult.executedBy };
         }
         const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
         if (threadStore) {
-          threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-          threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
-          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
           await threadStore.addMessage(threadId, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' as any });
         }
         return { status: 'ok', threadId, reply: noAgentReply, tier: 'simple' };
