@@ -92,10 +92,10 @@ function truncate(str: string, len: number): string {
 
 function statusColor(status: string): string {
   const s = status?.toLowerCase() || "";
-  if (s === "active" || s === "idle" || s === "running") return "bg-emerald-500/20 text-emerald-400 border-emerald-500/30";
-  if (s === "failed" || s === "error") return "bg-red-500/20 text-red-400 border-red-500/30";
-  if (s === "done" || s === "completed" || s === "dissolved") return "bg-neutral-500/20 text-neutral-400 border-neutral-500/30";
-  return "bg-amber-500/20 text-amber-400 border-amber-500/30";
+  if (s === "active" || s === "idle" || s === "running") return "bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30";
+  if (s === "failed" || s === "error") return "bg-red-500/10 dark:bg-red-500/20 text-red-600 dark:text-red-400 border-red-500/30";
+  if (s === "done" || s === "completed" || s === "dissolved") return "bg-neutral-500/10 dark:bg-neutral-500/20 text-neutral-600 dark:text-neutral-400 border-neutral-500/30";
+  return "bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30";
 }
 
 function parseActions(actionsStr: string): string[] {
@@ -115,12 +115,12 @@ function parseActions(actionsStr: string): string[] {
 }
 
 function actionBadgeColor(action: string): string {
-  if (action.includes("spawn")) return "bg-blue-500/20 text-blue-400 border-blue-500/30";
-  if (action.includes("commit")) return "bg-emerald-500/20 text-emerald-400 border-emerald-500/30";
-  if (action.includes("propose") || action.includes("upgrade")) return "bg-purple-500/20 text-purple-400 border-purple-500/30";
-  if (action.includes("respond")) return "bg-cyan-500/20 text-cyan-400 border-cyan-500/30";
-  if (action.includes("dissolve") || action.includes("kill")) return "bg-red-500/20 text-red-400 border-red-500/30";
-  return "bg-amber-500/20 text-amber-400 border-amber-500/30";
+  if (action.includes("spawn")) return "bg-blue-500/10 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 border-blue-500/30";
+  if (action.includes("commit")) return "bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30";
+  if (action.includes("propose") || action.includes("upgrade")) return "bg-purple-500/10 dark:bg-purple-500/20 text-purple-600 dark:text-purple-400 border-purple-500/30";
+  if (action.includes("respond")) return "bg-cyan-500/10 dark:bg-cyan-500/20 text-cyan-600 dark:text-cyan-400 border-cyan-500/30";
+  if (action.includes("dissolve") || action.includes("kill")) return "bg-red-500/10 dark:bg-red-500/20 text-red-600 dark:text-red-400 border-red-500/30";
+  return "bg-amber-500/10 dark:bg-amber-500/20 text-amber-600 dark:text-amber-400 border-amber-500/30";
 }
 
 /* -- Page ---------------------------------------------------- */
@@ -172,15 +172,15 @@ export default function CouncilPage() {
   /* -- Render ------------------------------------------------ */
 
   return (
-    <div className="min-h-screen bg-neutral-950">
+    <div className="min-h-screen bg-white dark:bg-neutral-950">
       <NavBar />
       <main className="max-w-6xl mx-auto p-4 sm:p-6 space-y-6">
         {/* 1. Header */}
         <div>
-          <h1 className="text-2xl font-bold text-neutral-100">
+          <h1 className="text-2xl font-bold text-neutral-900 dark:text-neutral-100">
             Council Dashboard
           </h1>
-          <p className="text-sm text-neutral-400 mt-1">
+          <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-1">
             Real-time view of the autonomous AI council. Auto-refreshes every 30s.
           </p>
         </div>
@@ -188,7 +188,7 @@ export default function CouncilPage() {
         {/* Loading */}
         {loading && (
           <div className="text-center py-16 text-neutral-500">
-            <div className="inline-block w-6 h-6 border-2 border-neutral-600 border-t-neutral-300 rounded-full animate-spin mb-3" />
+            <div className="inline-block w-6 h-6 border-2 border-neutral-300 dark:border-neutral-600 border-t-neutral-600 dark:border-t-neutral-300 rounded-full animate-spin mb-3" />
             <p className="text-sm">Loading council data...</p>
           </div>
         )}
@@ -196,7 +196,7 @@ export default function CouncilPage() {
         {/* Error */}
         {!loading && error && (
           <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-5 text-center">
-            <p className="text-sm text-red-400">{error}</p>
+            <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
             <p className="text-xs text-neutral-500 mt-1">
               Make sure a Pando node is running and reachable.
             </p>
@@ -207,7 +207,7 @@ export default function CouncilPage() {
           <>
             {/* 2. Status Bar */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-              <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl p-3 text-center">
+              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center">
                 <p className="text-xs text-neutral-500 mb-1">Status</p>
                 <div className="flex items-center justify-center gap-2">
                   <span
@@ -217,38 +217,38 @@ export default function CouncilPage() {
                         : "bg-neutral-500"
                     }`}
                   />
-                  <span className="text-sm font-semibold text-neutral-200 capitalize">
+                  <span className="text-sm font-semibold text-neutral-700 dark:text-neutral-200 capitalize">
                     {data.council.status || "--"}
                   </span>
                 </div>
               </div>
 
-              <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl p-3 text-center">
+              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center">
                 <p className="text-xs text-neutral-500 mb-1">Session</p>
-                <p className="text-xs font-mono text-neutral-300">
+                <p className="text-xs font-mono text-neutral-600 dark:text-neutral-300">
                   {data.council.sessionId
                     ? truncate(data.council.sessionId, 12)
                     : "none"}
                 </p>
               </div>
 
-              <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl p-3 text-center">
+              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center">
                 <p className="text-xs text-neutral-500 mb-1">Uptime</p>
-                <p className="text-sm font-mono font-bold text-neutral-200">
+                <p className="text-sm font-mono font-bold text-neutral-700 dark:text-neutral-200">
                   {formatUptime(data.network.uptime)}
                 </p>
               </div>
 
-              <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl p-3 text-center">
+              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center">
                 <p className="text-xs text-neutral-500 mb-1">Peers</p>
-                <p className="text-lg font-mono font-bold text-indigo-400">
+                <p className="text-lg font-mono font-bold text-indigo-600 dark:text-indigo-400">
                   {data.network.peers}
                 </p>
               </div>
 
-              <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl p-3 text-center col-span-2 sm:col-span-1">
+              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center col-span-2 sm:col-span-1">
                 <p className="text-xs text-neutral-500 mb-1">Budget Spent</p>
-                <p className="text-sm font-mono font-bold text-amber-400">
+                <p className="text-sm font-mono font-bold text-amber-600 dark:text-amber-400">
                   ${data.council.budgetSpent?.toFixed(2) ?? "0.00"}
                 </p>
               </div>
@@ -263,17 +263,17 @@ export default function CouncilPage() {
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
-                      <tr className="text-xs text-neutral-500 border-b border-neutral-800">
+                      <tr className="text-xs text-neutral-500 border-b border-neutral-200 dark:border-neutral-800">
                         <th className="text-left px-4 py-2 font-medium">Role</th>
                         <th className="text-left px-4 py-2 font-medium">Status</th>
                         <th className="text-left px-4 py-2 font-medium">Spawned</th>
                         <th className="text-left px-4 py-2 font-medium">Last Report</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-neutral-800">
+                    <tbody className="divide-y divide-neutral-200 dark:divide-neutral-800">
                       {workers.map((w) => (
-                        <tr key={w.id} className="hover:bg-neutral-800/30 transition">
-                          <td className="px-4 py-2.5 font-mono text-neutral-200">
+                        <tr key={w.id} className="hover:bg-neutral-100 dark:hover:bg-neutral-800/30 transition">
+                          <td className="px-4 py-2.5 font-mono text-neutral-700 dark:text-neutral-200">
                             {w.role}
                           </td>
                           <td className="px-4 py-2.5">
@@ -283,10 +283,10 @@ export default function CouncilPage() {
                               {w.status}
                             </span>
                           </td>
-                          <td className="px-4 py-2.5 text-neutral-400 text-xs">
+                          <td className="px-4 py-2.5 text-neutral-500 dark:text-neutral-400 text-xs">
                             {relativeTime(w.spawnedAt)}
                           </td>
-                          <td className="px-4 py-2.5 text-neutral-400 text-xs max-w-xs truncate">
+                          <td className="px-4 py-2.5 text-neutral-500 dark:text-neutral-400 text-xs max-w-xs truncate">
                             {w.lastReport ? truncate(w.lastReport, 80) : "--"}
                           </td>
                         </tr>
@@ -297,9 +297,9 @@ export default function CouncilPage() {
               );
               return (
                 <>
-                  <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl overflow-hidden">
-                    <div className="px-4 py-3 border-b border-neutral-800">
-                      <h2 className="text-sm font-semibold text-neutral-300">
+                  <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden">
+                    <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
+                      <h2 className="text-sm font-semibold text-neutral-600 dark:text-neutral-300">
                         Active Workers
                         <span className="ml-2 text-xs font-normal text-neutral-500">
                           ({activeWorkers.length} active{historicalWorkers.length > 0 ? `, ${historicalWorkers.length} done/failed` : ""})
@@ -317,10 +317,10 @@ export default function CouncilPage() {
                     )}
                   </div>
                   {historicalWorkers.length > 0 && (
-                    <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl overflow-hidden">
+                    <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden">
                       <button
                         onClick={() => setShowHistorical(!showHistorical)}
-                        className="w-full px-4 py-3 flex items-center justify-between hover:bg-neutral-800/30 transition"
+                        className="w-full px-4 py-3 flex items-center justify-between hover:bg-neutral-100 dark:hover:bg-neutral-800/30 transition"
                       >
                         <h2 className="text-sm font-semibold text-neutral-500">
                           Historical Workers ({historicalWorkers.length})
@@ -335,9 +335,9 @@ export default function CouncilPage() {
             })()}
 
             {/* 4. Recent Decisions (Tier 2 Ticks) */}
-            <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl overflow-hidden">
-              <div className="px-4 py-3 border-b border-neutral-800">
-                <h2 className="text-sm font-semibold text-neutral-300">
+            <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
+                <h2 className="text-sm font-semibold text-neutral-600 dark:text-neutral-300">
                   Recent Decisions
                 </h2>
               </div>
@@ -348,7 +348,7 @@ export default function CouncilPage() {
                   </p>
                 </div>
               ) : (
-                <div className="divide-y divide-neutral-800">
+                <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
                   {tier2Ticks.map((tick) => {
                     const actions = parseActions(tick.actions);
                     return (
@@ -388,9 +388,9 @@ export default function CouncilPage() {
             </div>
 
             {/* 5. Recent Commits */}
-            <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl overflow-hidden">
-              <div className="px-4 py-3 border-b border-neutral-800">
-                <h2 className="text-sm font-semibold text-neutral-300">
+            <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
+                <h2 className="text-sm font-semibold text-neutral-600 dark:text-neutral-300">
                   Recent Commits
                 </h2>
               </div>
@@ -399,13 +399,13 @@ export default function CouncilPage() {
                   <p className="text-sm text-neutral-500">No recent commits.</p>
                 </div>
               ) : (
-                <div className="divide-y divide-neutral-800">
+                <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
                   {recentCommits.map((c) => (
                     <div key={c.hash} className="px-4 py-2.5 flex items-start gap-3">
-                      <span className="text-xs font-mono text-indigo-400 shrink-0 mt-0.5">
+                      <span className="text-xs font-mono text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5">
                         {c.hash?.slice(0, 8)}
                       </span>
-                      <span className="text-sm text-neutral-300">
+                      <span className="text-sm text-neutral-600 dark:text-neutral-300">
                         {c.message}
                       </span>
                     </div>
@@ -415,14 +415,14 @@ export default function CouncilPage() {
             </div>
 
             {/* 6. Network */}
-            <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl p-4">
-              <h2 className="text-sm font-semibold text-neutral-300 mb-3">
+            <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-4">
+              <h2 className="text-sm font-semibold text-neutral-600 dark:text-neutral-300 mb-3">
                 Network
               </h2>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
                 <div>
                   <p className="text-xs text-neutral-500 mb-0.5">Peer ID</p>
-                  <p className="font-mono text-neutral-300 text-xs">
+                  <p className="font-mono text-neutral-600 dark:text-neutral-300 text-xs">
                     {data.network.peerId
                       ? truncate(data.network.peerId, 20)
                       : "--"}
@@ -430,11 +430,11 @@ export default function CouncilPage() {
                 </div>
                 <div>
                   <p className="text-xs text-neutral-500 mb-0.5">Connected Peers</p>
-                  <p className="font-mono text-neutral-200">{data.network.peers}</p>
+                  <p className="font-mono text-neutral-700 dark:text-neutral-200">{data.network.peers}</p>
                 </div>
                 <div>
                   <p className="text-xs text-neutral-500 mb-0.5">Uptime</p>
-                  <p className="font-mono text-neutral-200">
+                  <p className="font-mono text-neutral-700 dark:text-neutral-200">
                     {formatUptime(data.network.uptime)}
                   </p>
                 </div>
@@ -442,9 +442,9 @@ export default function CouncilPage() {
             </div>
 
             {/* 7. Lessons Learned */}
-            <div className="bg-neutral-900/50 border border-neutral-800 rounded-xl overflow-hidden">
-              <div className="px-4 py-3 border-b border-neutral-800">
-                <h2 className="text-sm font-semibold text-neutral-300">
+            <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden">
+              <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800">
+                <h2 className="text-sm font-semibold text-neutral-600 dark:text-neutral-300">
                   Lessons Learned
                 </h2>
               </div>
@@ -455,22 +455,22 @@ export default function CouncilPage() {
                   </p>
                 </div>
               ) : (
-                <div className="divide-y divide-neutral-800">
+                <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
                   {lessons.map((l, idx) => {
                     const expanded = expandedLessons.has(idx);
                     return (
                       <button
                         key={idx}
                         onClick={() => toggleLesson(idx)}
-                        className="w-full text-left px-4 py-3 hover:bg-neutral-800/30 transition"
+                        className="w-full text-left px-4 py-3 hover:bg-neutral-100 dark:hover:bg-neutral-800/30 transition"
                       >
                         <div className="flex items-start gap-2">
                           {l.source && (
-                            <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full font-medium border bg-violet-500/20 text-violet-400 border-violet-500/30 mt-0.5">
+                            <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full font-medium border bg-violet-500/10 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400 border-violet-500/30 mt-0.5">
                               {l.source}
                             </span>
                           )}
-                          <span className="text-sm text-neutral-300 flex-1">
+                          <span className="text-sm text-neutral-600 dark:text-neutral-300 flex-1">
                             {expanded ? l.lesson : truncate(l.lesson, 100)}
                           </span>
                           <span className="text-neutral-600 text-xs shrink-0 mt-0.5">
