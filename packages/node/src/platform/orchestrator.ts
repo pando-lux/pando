@@ -2044,6 +2044,7 @@ export class Orchestrator {
 
     for (const orch of allOrchestrators) {
       if (orch.id === this.orchestratorId) continue;
+      if (orch.persistent) continue; // never dissolve persistent system orchestrators (observer, qa-user)
       const workers = this.deps.db.getActiveWorkers(orch.id);
       const isStale = workers.length === 0 &&
         (!orch.lastTickAt || orch.lastTickAt < sixtyMinAgo);
@@ -2124,6 +2125,7 @@ export class Orchestrator {
     const allOrchestrators = this.deps.db.listAgents({ type: 'orchestrator', status: 'active' });
     for (const orch of allOrchestrators) {
       if (orch.id === this.orchestratorId) continue;
+      if (orch.persistent) continue; // never dissolve persistent system orchestrators
       const workers = this.deps.db.getActiveWorkers(orch.id);
       if (workers.length === 0) {
         this.deps.orgManager.dissolve(orch.id);

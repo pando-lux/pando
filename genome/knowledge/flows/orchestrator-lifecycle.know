@@ -21,6 +21,7 @@ flow OrchestratorLifecycle {
     actor: Council
     what: "Council self-check (every 10th tick) scans project orchestrators. If all workers done/failed AND no unread messages → dissolve immediately. No waiting."
     @gotcha("The council dissolves OTHER orchestrators, not itself. Council never self-dissolves.")
+    @gotcha("Persistent orchestrators (observer, qa-user) are EXEMPT from dissolution. Both the stale-check loop and OOM prevention loop skip orch.persistent === true. Without this guard, observer/qa-user get dissolved as 'stale' because they have 0 workers and their lastTickAt may be old during boot.")
   }
 
   step all_workers_done -> timeout_dissolve {
