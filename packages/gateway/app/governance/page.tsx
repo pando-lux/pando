@@ -1,7 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import NavBar from "@/components/NavBar";
+import { useAuth } from "@/lib/auth-context";
 
 /* -- Types ------------------------------------------------- */
 
@@ -153,11 +154,18 @@ function reviewerStatusCls(s: string): string {
 /* -- Main Page ---------------------------------------------- */
 
 export default function GovernancePage() {
+  const { token } = useAuth();
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [proposalsLoading, setProposalsLoading] = useState(true);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [detail, setDetail] = useState<Proposal | null>(null);
   const [stats, setStats] = useState<GovernanceStats | null>(null);
+
+  // Pagination & filtering
+  const [page, setPage] = useState(1);
+  const PAGE_SIZE = 25;
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<string>("all");
 
   // Reviews and reviewers for expanded proposal
   const [reviews, setReviews] = useState<ProposalReview[]>([]);
@@ -267,6 +275,26 @@ export default function GovernancePage() {
     return () => clearInterval(i);
   }, [fetchProposals, fetchStats]);
 
+  /* -- Filtered & paginated proposals ----------------------- */
+
+  const filteredProposals = useMemo(() => {
+    let result = proposals;
+    if (search) {
+      const q = search.toLowerCase();
+      result = result.filter(p => p.title.toLowerCase().includes(q));
+    }
+    if (statusFilter !== "all") {
+      result = result.filter(p => p.status === statusFilter);
+    }
+    return result;
+  }, [proposals, search, statusFilter]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredProposals.length / PAGE_SIZE));
+  const paginatedProposals = filteredProposals.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  // Reset page when filters change
+  useEffect(() => { setPage(1); }, [search, statusFilter]);
+
   /* -- Actions ---------------------------------------------- */
 
   async function handlePropose(e: React.FormEvent) {
@@ -275,7 +303,7 @@ export default function GovernancePage() {
     setSubmitting(true); setSubmitMsg(null);
     try {
       const res = await fetch("/api/governance/propose", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", ...(token ? { "X-User-Token": token } : {}) },
         body: JSON.stringify({ title: title.trim(), description: desc.trim() }),
       });
       if (res.ok) {
@@ -292,7 +320,7 @@ export default function GovernancePage() {
   async function handleVote(proposalId: string, choice: string) {
     try {
       const res = await fetch("/api/governance/vote", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", ...(token ? { "X-User-Token": token } : {}) },
         body: JSON.stringify({ proposalId, choice }),
       });
       if (res.ok) {
@@ -310,7 +338,7 @@ export default function GovernancePage() {
     setCommenting(true);
     try {
       const res = await fetch("/api/governance/comment", {
-        method: "POST", headers: { "Content-Type": "application/json" },
+        method: "POST", headers: { "Content-Type": "application/json", ...(token ? { "X-User-Token": token } : {}) },
         body: JSON.stringify({ proposalId, content: commentText.trim() }),
       });
       if (res.ok) { setCommentText(""); fetchDetail(proposalId); }
@@ -399,11 +427,37 @@ export default function GovernancePage() {
               </span>
             )}
           </div>
-          {proposals.length === 0 ? (
-            <div className="px-4 py-8 text-center text-sm text-neutral-500">{proposalsLoading ? "Loading proposals..." : "No proposals yet"}</div>
+
+          {/* Search & Filter */}
+          <div className="px-4 py-3 border-b border-neutral-300 dark:border-neutral-800 flex items-center gap-3">
+            <input
+              type="text"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Search proposals..."
+              className="flex-1 bg-neutral-200 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+            />
+            <select
+              value={statusFilter}
+              onChange={e => setStatusFilter(e.target.value)}
+              className="bg-neutral-200 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-1.5 text-xs text-neutral-900 dark:text-neutral-100 focus:outline-none focus:ring-2 focus:ring-amber-500/50"
+            >
+              <option value="all">All statuses</option>
+              <option value="active">Active</option>
+              <option value="in_review">In Review</option>
+              <option value="passed">Passed</option>
+              <option value="approved">Approved</option>
+              <option value="rejected">Rejected</option>
+              <option value="revision_requested">Revision Requested</option>
+              <option value="expired">Expired</option>
+            </select>
+          </div>
+
+          {paginatedProposals.length === 0 ? (
+            <div className="px-4 py-8 text-center text-sm text-neutral-500">{proposalsLoading ? "Loading proposals..." : (search || statusFilter !== "all") ? "No matching proposals" : "No proposals yet"}</div>
           ) : (
             <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
-              {proposals.map(p => (
+              {paginatedProposals.map(p => (
                 <div key={p.id}>
                   {/* Proposal row */}
                   <button onClick={() => toggle(p.id)} className="w-full px-4 py-3 text-left hover:bg-neutral-100 dark:hover:bg-neutral-800/50 transition overflow-hidden">
@@ -695,6 +749,29 @@ export default function GovernancePage() {
                   )}
                 </div>
               ))}
+            </div>
+          )}
+
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="px-4 py-3 border-t border-neutral-300 dark:border-neutral-800 flex items-center justify-between">
+              <button
+                onClick={() => setPage(p => Math.max(1, p - 1))}
+                disabled={page <= 1}
+                className="bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50"
+              >
+                Prev
+              </button>
+              <span className="text-xs text-neutral-500 font-mono">
+                Page {page} of {totalPages}
+              </span>
+              <button
+                onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                disabled={page >= totalPages}
+                className="bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 text-neutral-700 dark:text-neutral-300 rounded-lg px-3 py-1.5 text-xs font-medium transition disabled:opacity-50"
+              >
+                Next
+              </button>
             </div>
           )}
         </div>
