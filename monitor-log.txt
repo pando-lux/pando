@@ -309,3 +309,73 @@ EC2 54.82.241.132: 4b3e3687
 EC2 34.201.82.126: 4b3e3687
 PROBLEMS: none detected
 --- END CHECK #9 ---
+
+--- CHECK #10 @ 2026-03-01T12:17:42Z ---
+WINDOWS: UP | peers=2 | uptime=1min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:13:41.211Z | orch-council-fee5437 tick#2134 T1 | none
+  2026-03-01T12:13:00.893Z | orch-council-fee5437 tick#2133 T2 | none
+  2026-03-01T12:12:27.185Z | orch-council-fee5437 tick#2132 T2 | ["spawn_worker","record_lesson"]
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: d8ebbffa Proactive dirty flag: skip wasteful reflection ticks when nothing changed
+EC2 54.82.241.132: 4b3e3687
+EC2 34.201.82.126: 4b3e3687
+PROBLEMS: none detected
+--- END CHECK #10 ---
+
+--- CHECK #10 @ 2026-03-01T12:18:32Z ---
+WINDOWS: UP | peers=2 | uptime=2min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:13:41.211Z | orch-council-fee5437 tick#2134 T1 | none
+  2026-03-01T12:13:00.893Z | orch-council-fee5437 tick#2133 T2 | none
+  2026-03-01T12:12:27.185Z | orch-council-fee5437 tick#2132 T2 | ["spawn_worker","record_lesson"]
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: d8ebbffa Proactive dirty flag: skip wasteful reflection ticks when nothing changed
+EC2 54.82.241.132: 4b3e3687
+EC2 34.201.82.126: 4b3e3687
+PROBLEMS: none detected
+--- END CHECK #10 ---
+
+--- CHECK #11 @ 2026-03-01T12:22:49Z ---
+WINDOWS: UP | peers=2 | uptime=6min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:13:41.211Z | orch-council-fee5437 tick#2134 T1 | none
+  2026-03-01T12:13:00.893Z | orch-council-fee5437 tick#2133 T2 | none
+  2026-03-01T12:12:27.185Z | orch-council-fee5437 tick#2132 T2 | ["spawn_worker","record_lesson"]
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: d8ebbffa Proactive dirty flag: skip wasteful reflection ticks when nothing changed
+EC2 54.82.241.132: 4b3e3687
+EC2 34.201.82.126: 4b3e3687
+PROBLEMS:
+  !! CEO stale: last tick 9min ago
+--- END CHECK #11 ---
+
+--- CHECK #11 @ 2026-03-01T12:23:38Z ---
+WINDOWS: UP | peers=2 | uptime=7min
+AGENTS: 2 active, 1 failed, 0 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T12:13:41.211Z | orch-council-fee5437 tick#2134 T1 | none
+  2026-03-01T12:13:00.893Z | orch-council-fee5437 tick#2133 T2 | none
+  2026-03-01T12:12:27.185Z | orch-council-fee5437 tick#2132 T2 | ["spawn_worker","record_lesson"]
+OBSERVER LAST: tick#9 T2 @ 2026-03-01T11:57:14.459Z | ["record_lesson"]
+GIT HEAD: d8ebbffa Proactive dirty flag: skip wasteful reflection ticks when nothing changed
+EC2 54.82.241.132: 4b3e3687
+EC2 34.201.82.126: 4b3e3687
+PROBLEMS:
+  !! CEO stale: last tick 10min ago
+--- END CHECK #11 ---
