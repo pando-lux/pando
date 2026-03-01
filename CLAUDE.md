@@ -97,6 +97,24 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
 - **P2P chat proxy**: EC2 nodes without Claude Code forward build requests via `chat_proxy` P2P handler to Claude-capable nodes. The remote node runs the full pipeline (project creation → orchestrator → builder → deploy). Replaces old one-shot `routeClaudeTaskP2P`.
 - **Database cleanup**: 60s timer prunes read messages (>7d), expired discoveries. Every 10 min: prunes tick_log (>7d), failed/dissolved workers (>7d), old reflections (>30d), inactive directives (>7d).
 - **Builder error tracking**: Worker failure reports include exit code, stderr, and resume status. Orchestrator AI prompt warns when a role has failed 3+ times consecutively.
+- **Governance security gate**: 4 deterministic checks before auto-approve in dev mode: (1) proposal has valid commit hash, (2) code compiles (npm run build), (3) scenario tests pass (ScenarioRunner), (4) git diff is non-empty. Blocks auto-approve if any check fails. Logged to governance_audit table.
+- **Observer orchestrator**: Autonomous observer agent (role='observer') created on boot alongside council. 5-min tick interval. Always Tier 2 (AI). Proactively audits architecture, finds bugs, reports issues as directives to council. Cannot spawn workers — observation only.
+- **Auto-propose after commit**: commit_code action automatically triggers propose_upgrade in the same tick. Prevents governance gaps where committed code sits unproposed for days.
+- **Persistent directives (CRITICAL ARCHITECTURE)**: Directives are the primary mechanism for persistent cross-agent communication. They survive session rotations, node restarts, and crashes (stored in SQLite).
+  - Status lifecycle: `pending` → `acknowledged` → `completed` / `rejected`
+  - `pending`: New directive, never seen by AI. Forces Tier 2 tick.
+  - `acknowledged`: AI has seen it (times_seen incremented). Rides along on natural Tier 2 ticks.
+  - `completed`: AI explicitly marked done via `complete_directive(id, summary)`.
+  - `rejected`: AI explicitly declined via `reject_directive(id, reason)`.
+  - After 5 ticks without completion → shown as **OVERDUE** in AI prompt, forces Tier 2.
+  - Actions: `complete_directive`, `reject_directive`, `create_directive` (create for another orchestrator).
+  - Columns: `status`, `times_seen`, `acknowledged_at`, `completed_at`, `rejection_reason`.
+  - **Rule**: NEVER use send_message for findings that must be acted on. Use create_directive instead. Messages are fire-and-forget; directives persist.
+- **Three-actor governance model**:
+  - **CEO** (council orchestrator): Executes — spawns workers, ships code, manages projects.
+  - **Governance** (governance.ts): Guards — 4 deterministic security checks before auto-approve: security file check, change size + QA check, build verify, kernel protection delay. Blocks bad changes.
+  - **Observer** (observer orchestrator): Watches — audits architecture, verifies design intent matches reality, creates persistent directives for CEO with findings. Cannot write code.
+- **Verify-before-deploy hardening**: ScenarioRunner crash now ABORTS proposal (not silent pass-through). Upgrade-protocol hash mismatch returns failure (can't pull unapproved code). Proposal descriptions include test result audit trail.
 
 ### Agent system components
 
