@@ -3303,7 +3303,7 @@ location /apps/${projectId}/ {
       this.agentDb,
       this.aiBackendRegistry,
       this.messageBus,
-      { dataDir, apiPort: this.config.apiPort, genomeBridge: this.genomeBridge, genomeBridgeRegistry: this.genomeBridgeRegistry ?? undefined, templateRegistry: this.templateRegistry },
+      { dataDir, apiPort: this.config.apiPort, genomeBridge: this.genomeBridge, genomeBridgeRegistry: this.genomeBridgeRegistry ?? undefined, templateRegistry: this.templateRegistry, isRestartPending: () => this.restartPending },
     );
     console.log('[agents] WorkerPool initialized');
 

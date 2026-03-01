@@ -84,18 +84,20 @@ export class WorkerPool {
 
   private reapInterval: NodeJS.Timeout | null = null;
   private watchdogInterval: NodeJS.Timeout | null = null;
+  private isRestartPending: (() => boolean) | null = null;
 
   constructor(
     private db: AgentDatabase,
     private aiRegistry: AIBackendRegistry,
     private messageBus: MessageBus,
-    opts?: { dataDir?: string; apiPort?: number; genomeBridge?: GenomeBridge; genomeBridgeRegistry?: GenomeBridgeRegistry; templateRegistry?: TemplateRegistry },
+    opts?: { dataDir?: string; apiPort?: number; genomeBridge?: GenomeBridge; genomeBridgeRegistry?: GenomeBridgeRegistry; templateRegistry?: TemplateRegistry; isRestartPending?: () => boolean },
   ) {
     this.dataDir = opts?.dataDir || join(homedir(), '.pando');
     this.apiPort = opts?.apiPort || 4000;
     this.genomeBridgeRegistry = opts?.genomeBridgeRegistry || null;
     this.genomeBridge = opts?.genomeBridge || this.genomeBridgeRegistry?.getPandoBridge() || null;
     this.templateRegistry = opts?.templateRegistry || null;
+    this.isRestartPending = opts?.isRestartPending || null;
 
     // Periodically reap workers whose processes have died without reporting back
     this.reapInterval = setInterval(() => this.cleanup(), 30_000);
@@ -135,6 +137,12 @@ export class WorkerPool {
       const freeMB = Math.round(freeRam / (1024 * 1024));
       console.warn(`[WorkerPool] Spawn rejected for role "${config.role}": only ${freeMB}MB free RAM (need 3GB). Skipping.`);
       throw new Error(`Insufficient free RAM to spawn worker: ${freeMB}MB free, 3 GB required`);
+    }
+
+    // ── Restart guard: refuse to spawn if node restart is pending ────────
+    if (this.isRestartPending?.()) {
+      console.warn(`[WorkerPool] Spawn rejected for role "${config.role}": node restart pending. Workers would run on stale code.`);
+      throw new Error('Node restart pending — cannot spawn new workers');
     }
 
     // Phase 105: Resolve template for this role
