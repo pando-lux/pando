@@ -735,15 +735,19 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       return {
         proposals: proposals.map(p => {
           const votes = gov.getVotes(p.id);
+          const decision = gov.getDecision(p.id);
+          const approveCount = votes.filter(v => v.choice === 'approve').length;
+          const rejectCount = votes.filter(v => v.choice === 'reject').length;
+          const abstainCount = votes.filter(v => v.choice === 'abstain').length;
           return {
             ...p,
             votes: {
-              approve: votes.filter(v => v.choice === 'approve').length,
-              reject: votes.filter(v => v.choice === 'reject').length,
-              abstain: votes.filter(v => v.choice === 'abstain').length,
+              approve: approveCount || (decision?.votesFor ?? 0),
+              reject: rejectCount || (decision?.votesAgainst ?? 0),
+              abstain: abstainCount || (decision?.votesAbstain ?? 0),
             },
             commentCount: gov.getComments(p.id).length,
-            decision: gov.getDecision(p.id) || null,
+            decision: decision || null,
           };
         }),
       };
@@ -757,15 +761,19 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       return {
         proposals: proposals.map(p => {
           const votes = gov.getVotes(p.id);
+          const decision = gov.getDecision(p.id);
+          const approveCount = votes.filter(v => v.choice === 'approve').length;
+          const rejectCount = votes.filter(v => v.choice === 'reject').length;
+          const abstainCount = votes.filter(v => v.choice === 'abstain').length;
           return {
             ...p,
             votes: {
-              approve: votes.filter(v => v.choice === 'approve').length,
-              reject: votes.filter(v => v.choice === 'reject').length,
-              abstain: votes.filter(v => v.choice === 'abstain').length,
+              approve: approveCount || (decision?.votesFor ?? 0),
+              reject: rejectCount || (decision?.votesAgainst ?? 0),
+              abstain: abstainCount || (decision?.votesAbstain ?? 0),
             },
             commentCount: gov.getComments(p.id).length,
-            decision: gov.getDecision(p.id) || null,
+            decision: decision || null,
           };
         }),
       };

@@ -36,6 +36,7 @@ export default function ExplorePage() {
   const [health, setHealth] = useState<HealthMetrics | null>(null);
   const [proposalCount, setProposalCount] = useState<number>(0);
   const [appsCount, setAppsCount] = useState<number | null>(null);
+  const [loaded, setLoaded] = useState(false);
 
   const fetchData = useCallback(async () => {
     const [s, sc, as_, h, gov, apps] = await Promise.all([
@@ -56,6 +57,7 @@ export default function ExplorePage() {
       setProposalCount(active);
     }
     if (apps) setAppsCount(apps.total ?? 0);
+    setLoaded(true);
   }, []);
 
   useEffect(() => {
@@ -169,7 +171,7 @@ export default function ExplorePage() {
                 {card.stat ? (
                   <p className="text-xs text-neutral-500 dark:text-neutral-500 font-mono">{card.stat}</p>
                 ) : (
-                  <div className="h-4 w-24 rounded bg-neutral-200 dark:bg-neutral-800 animate-pulse" />
+                  loaded ? <p className="text-xs text-neutral-500 font-mono">—</p> : <div className="h-4 w-24 rounded bg-neutral-200 dark:bg-neutral-800 animate-pulse" />
                 )}
               </a>
             );
