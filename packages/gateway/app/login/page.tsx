@@ -12,6 +12,7 @@ export default function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [success, setSuccess] = useState(false);
 
   // If already claimed (logged in), redirect to home
   useEffect(() => {
@@ -36,7 +37,8 @@ export default function LoginPage() {
     try {
       const result = await login(identifier.trim(), password);
       if (result.success) {
-        router.push("/");
+        setSuccess(true);
+        setTimeout(() => router.push("/"), 1500);
       } else {
         setError(result.error || "Login failed");
       }
@@ -105,11 +107,17 @@ export default function LoginPage() {
 
             <button
               type="submit"
-              disabled={submitting || !identifier.trim() || !password}
+              disabled={submitting || success || !identifier.trim() || !password}
               className="w-full py-2.5 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-black font-medium text-sm transition"
             >
               {submitting ? "Signing in..." : "Login"}
             </button>
+
+            {success && (
+              <div className="px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-sm text-center">
+                Welcome back! Redirecting...
+              </div>
+            )}
           </form>
 
           <div className="text-center">

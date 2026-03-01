@@ -13,6 +13,7 @@ export default function RegisterPage() {
   const [confirmPassword, setConfirmPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [success, setSuccess] = useState(false);
 
   // If already claimed (logged in), redirect to home
   useEffect(() => {
@@ -49,7 +50,8 @@ export default function RegisterPage() {
     try {
       const result = await claim(password, username.trim());
       if (result.success) {
-        router.push("/");
+        setSuccess(true);
+        setTimeout(() => router.push("/"), 1500);
       } else {
         setError(result.error || "Registration failed");
       }
@@ -136,11 +138,17 @@ export default function RegisterPage() {
 
             <button
               type="submit"
-              disabled={submitting || !username.trim() || !password || !confirmPassword}
+              disabled={submitting || success || !username.trim() || !password || !confirmPassword}
               className="w-full py-2.5 rounded-lg bg-amber-500 hover:bg-amber-600 disabled:opacity-50 disabled:cursor-not-allowed text-black font-medium text-sm transition"
             >
               {submitting ? "Creating account..." : "Sign up"}
             </button>
+
+            {success && (
+              <div className="px-3 py-2 rounded-lg bg-emerald-500/10 border border-emerald-500/20 text-emerald-600 dark:text-emerald-400 text-sm text-center">
+                Account created! Redirecting...
+              </div>
+            )}
           </form>
 
           <div className="text-center">

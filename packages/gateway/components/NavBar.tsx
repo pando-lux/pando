@@ -89,12 +89,6 @@ export default function NavBar() {
             <div className="hidden sm:flex items-center gap-2">
               {isClaimed ? (
                 <>
-                  <a
-                    href="/wallet"
-                    className="text-xs px-2.5 py-1 rounded-full text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800 transition"
-                  >
-                    Wallet
-                  </a>
                   <span className="text-xs text-neutral-500 dark:text-neutral-400 font-mono">
                     {user?.username || truncatePeerId(user?.peerId || "")}
                   </span>
