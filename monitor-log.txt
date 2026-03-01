@@ -782,3 +782,59 @@ EC2 54.82.241.132: c83b702d
 EC2 34.201.82.126: c83b702d
 PROBLEMS: none detected
 --- END CHECK #23 ---
+
+--- CHECK #23 @ 2026-03-01T13:25:01Z ---
+WINDOWS: DOWN
+AGENTS: PARSE ERROR
+DIRECTIVES: PARSE ERROR
+RECENT TICKS:
+  2026-03-01T13:20:32.135Z | orch-council-fee5437 tick#2156 T1 | none
+  2026-03-01T13:19:32.137Z | orch-council-fee5437 tick#2155 T1 | none
+  2026-03-01T13:17:01.549Z | orch-council-fee5437 tick#2154 T1 | none
+OBSERVER LAST: tick#11 T2 @ 2026-03-01T13:09:47.621Z | ["create_directive","record_lesson"]
+GIT HEAD: a1754708 Docs: four-actor governance model, worker lifecycle correction in CLAUDE.md
+EC2 54.82.241.132: c83b702d
+EC2 34.201.82.126: c83b702d
+PROBLEMS:
+  !! CEO stale: last tick 5min ago
+--- END CHECK #23 ---
+
+--- CHECK #24 @ 2026-03-01T13:29:25Z ---
+WINDOWS: UP | peers=1 | uptime=1min
+AGENTS: 3 active, 1 failed, 1 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+  orch-qa-user-56af137b | qa-user | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T13:26:41.493Z | orch-council-fee5437 tick#2158 T1 | none
+  2026-03-01T13:25:43.483Z | orch-council-fee5437 tick#2157 T2 | ["commit_code","record_lesson"]
+  2026-03-01T13:20:32.135Z | orch-council-fee5437 tick#2156 T1 | none
+OBSERVER LAST: tick#11 T2 @ 2026-03-01T13:09:47.621Z | ["create_directive","record_lesson"]
+GIT HEAD: a1754708 Docs: four-actor governance model, worker lifecycle correction in CLAUDE.md
+EC2 54.82.241.132: c83b702d
+EC2 34.201.82.126: a1754708
+PROBLEMS: none detected
+--- END CHECK #24 ---
+
+=== MONITOR COMPLETE 2026-03-01T13:29:32Z ===
+
+--- CHECK #24 @ 2026-03-01T13:30:38Z ---
+WINDOWS: UP | peers=1 | uptime=3min
+AGENTS: 3 active, 1 failed, 1 workers running
+  orch-council-fee5437a | council | active
+  orch-observer-16f61c43 | observer | active
+  orch-qa-user-56af137b | qa-user | active
+DIRECTIVES: none active
+RECENT TICKS:
+  2026-03-01T13:30:38.464Z | orch-council-fee5437 tick#2160 T1 | none
+  2026-03-01T13:29:38.466Z | orch-council-fee5437 tick#2159 T1 | none
+  2026-03-01T13:26:41.493Z | orch-council-fee5437 tick#2158 T1 | none
+OBSERVER LAST: tick#11 T2 @ 2026-03-01T13:09:47.621Z | ["create_directive","record_lesson"]
+GIT HEAD: a1754708 Docs: four-actor governance model, worker lifecycle correction in CLAUDE.md
+EC2 54.82.241.132: a1754708
+EC2 34.201.82.126: a1754708
+PROBLEMS: none detected
+--- END CHECK #24 ---
+
+=== MONITOR COMPLETE 2026-03-01T13:30:46Z ===
