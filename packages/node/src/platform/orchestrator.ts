@@ -103,7 +103,7 @@ interface BoardState {
   userRequests: InboxMessage[];
   peerDisconnects: InboxMessage[];
   directives: Array<{ id: number; content: string; status: string; timesSeen: number; createdAt: string }>;
-  recentlyFailed: Array<{ id: string; role: string; failedAt: string; lastTask: string | null; rolePrompt: string | null }>;
+  recentlyFailed: Array<{ id: string; role: string; failedAt: string; lastTask: string | null; rolePrompt: string | null; exitCode: number | null; errorSummary: string | null }>;
   overdueWorkers: Array<{ id: string; role: string; spawnedAt: string; lastReportAt: string | null }>;
   interruptedWorkers: Array<{ workerId: string; role: string; rolePrompt: string | null; sessionId: string | null }>;
   /** System health snapshot — only populated for council */
@@ -545,9 +545,11 @@ export class Orchestrator {
       .map(w => ({
         id: w.id,
         role: w.role,
-        failedAt: w.updatedAt || w.createdAt,
+        failedAt: w.failedAt || w.updatedAt || w.createdAt,
         lastTask: w.currentTaskId || null,
         rolePrompt: w.rolePrompt ? w.rolePrompt.slice(0, 200) : null,
+        exitCode: w.exitCode ?? null,
+        errorSummary: w.errorSummary ? w.errorSummary.slice(0, 300) : null,
       }));
 
     // Overdue workers: active >10 min with no lastReportAt update
@@ -1348,6 +1350,12 @@ export class Orchestrator {
         sections.push(`- ${role}: ${count} failures`);
         if (count >= 3) {
           sections.push(`  ⚠️ WARNING: ${role} has failed ${count} times. Consider different approach or simpler scope.`);
+        }
+      }
+      // Show error details for each recent failure
+      for (const w of board.recentlyFailed) {
+        if (w.errorSummary) {
+          sections.push(`  ${w.role} (${w.id.slice(-8)}): exit=${w.exitCode ?? '?'} — ${w.errorSummary.slice(0, 200)}`);
         }
       }
       sections.push('');

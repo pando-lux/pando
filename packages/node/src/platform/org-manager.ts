@@ -193,6 +193,9 @@ export class OrgManager {
       maxWorkers: config.maxWorkers ?? 10,
       maxChildren: config.maxChildren ?? 5,
       lastReportAt: null,
+      exitCode: null,
+      errorSummary: null,
+      failedAt: null,
       templateId: 'builtin:manager',
     });
 

@@ -181,6 +181,9 @@ export class WorkerPool {
       maxWorkers: 0,
       maxChildren: 0,
       lastReportAt: null,
+      exitCode: null,
+      errorSummary: null,
+      failedAt: null,
     });
 
     console.log(`[WorkerPool] Creating fresh ${config.role} worker ${workerId}`);
@@ -295,7 +298,13 @@ export class WorkerPool {
         const effectiveSuccess = result.success && mergeOk;
         // Successful workers go 'idle' (persistent — available for reassignment)
         const status = effectiveSuccess ? 'idle' : 'failed';
-        this.db.updateAgent(workerId, { status });
+        const updateFields: any = { status };
+        if (!effectiveSuccess) {
+          updateFields.exitCode = (result as any).exitCode ?? null;
+          updateFields.errorSummary = (result.error || result.output || 'Unknown failure').slice(0, 500);
+          updateFields.failedAt = new Date().toISOString();
+        }
+        this.db.updateAgent(workerId, updateFields);
 
         // Build summary with full error details for orchestrator diagnosis
         const isResume = !!(currentAgent.sessionId);
@@ -350,7 +359,13 @@ export class WorkerPool {
       this.workerPids.delete(workerId);  // stop tracking memory
       const agentBeforeCrash = this.db.getAgent(workerId);
       if (!agentBeforeCrash || !['done', 'failed', 'dissolved', 'idle'].includes(agentBeforeCrash.status)) {
-        this.db.updateAgent(workerId, { status: 'failed', pid: null });
+        this.db.updateAgent(workerId, {
+          status: 'failed',
+          pid: null,
+          exitCode: null,
+          errorSummary: (err.message || 'Worker process crashed').slice(0, 500),
+          failedAt: new Date().toISOString(),
+        });
       }
       console.error(`[WorkerPool] Worker ${workerId} crashed:`, err.message?.slice(0, 200));
 
@@ -964,7 +979,13 @@ export class WorkerPool {
       this.workerPids.delete(workerId);
       const agentBeforeCrash = this.db.getAgent(workerId);
       if (!agentBeforeCrash || !['done', 'failed', 'dissolved', 'idle'].includes(agentBeforeCrash.status)) {
-        this.db.updateAgent(workerId, { status: 'failed', pid: null });
+        this.db.updateAgent(workerId, {
+          status: 'failed',
+          pid: null,
+          exitCode: null,
+          errorSummary: (err.message || 'Resumed worker crashed').slice(0, 500),
+          failedAt: new Date().toISOString(),
+        });
       }
       console.error(`[WorkerPool] Resumed worker ${workerId} crashed:`, err.message?.slice(0, 200));
 

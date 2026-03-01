@@ -68,6 +68,11 @@ export interface AgentIdentity {
   // Worker-specific
   lastReportAt: string | null;
 
+  // Worker failure diagnostics
+  exitCode: number | null;
+  errorSummary: string | null;
+  failedAt: string | null;
+
   // Template link (Phase 105)
   templateId: string | null;
 
@@ -218,6 +223,10 @@ const SCHEMA = `
     max_children INTEGER NOT NULL DEFAULT 5,
 
     last_report_at TEXT,
+
+    exit_code INTEGER,
+    error_summary TEXT,
+    failed_at TEXT,
 
     created_at TEXT NOT NULL,
     updated_at TEXT,
@@ -411,6 +420,9 @@ function rowToIdentity(row: any): AgentIdentity {
     maxWorkers: row.max_workers,
     maxChildren: row.max_children,
     lastReportAt: row.last_report_at,
+    exitCode: row.exit_code ?? null,
+    errorSummary: row.error_summary ?? null,
+    failedAt: row.failed_at ?? null,
     templateId: row.template_id || null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -730,7 +742,9 @@ export class AgentDatabase {
       pid: 'pid', persistent: 'persistent',
       tickIntervalMs: 'tick_interval_ms', lastTickAt: 'last_tick_at',
       maxWorkers: 'max_workers', maxChildren: 'max_children',
-      lastReportAt: 'last_report_at', templateId: 'template_id',
+      lastReportAt: 'last_report_at',
+      exitCode: 'exit_code', errorSummary: 'error_summary', failedAt: 'failed_at',
+      templateId: 'template_id',
     };
 
     for (const [key, val] of Object.entries(fields)) {
