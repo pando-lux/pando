@@ -1468,15 +1468,52 @@ location /apps/${projectId}/ {
 
     // Phase 69 (follow-up): P2P credential proxy handler — EC2 nodes decrypt code_repository credentials
     // for non-secure nodes that lack CREDENTIAL_MASTER_KEY. Only code_repository type is allowed.
+    // Security hardening: peer validation, audit logging, rate limiting.
+    const credentialRateLimit = new Map<string, { count: number; resetAt: number }>();
     this.requestReply.registerHandler('pando/get-credential', async (req) => {
       const { resourceId, type } = req.payload || {};
-      if (!resourceId) return { error: 'Missing resourceId' };
+      const peerId = req.from || '';
+
+      // 1. Peer validation: only connected peers can request credentials
+      const libp2p = this.network.getLibp2p();
+      const connectedPeers = new Set(
+        (libp2p?.getConnections() || []).map(c => c.remotePeer.toString())
+      );
+      const allowed = connectedPeers.has(peerId);
+      if (!allowed) {
+        console.log(`[credential-proxy] DENIED: peer=${peerId.slice(0, 16)} resource=${resourceId} type=${type}`);
+        return { error: 'Access denied: peer not connected' };
+      }
+
+      // 2. Rate limiting: max 10 requests per peer per minute
+      const now = Date.now();
+      let bucket = credentialRateLimit.get(peerId);
+      if (!bucket || now >= bucket.resetAt) {
+        bucket = { count: 0, resetAt: now + 60_000 };
+        credentialRateLimit.set(peerId, bucket);
+      }
+      bucket.count++;
+      if (bucket.count > 10) {
+        console.log(`[credential-proxy] DENIED: peer=${peerId.slice(0, 16)} resource=${resourceId} type=${type} (rate limited)`);
+        return { error: 'Rate limited' };
+      }
+
+      if (!resourceId) {
+        console.log(`[credential-proxy] DENIED: peer=${peerId.slice(0, 16)} resource=${resourceId} type=${type} (missing resourceId)`);
+        return { error: 'Missing resourceId' };
+      }
       // Security: only proxy code_repository credentials (GitHub PAT). S3/MongoDB MUST stay on EC2.
-      if (type !== 'code_repository') return { error: 'Credential type not proxyable' };
+      if (type !== 'code_repository') {
+        console.log(`[credential-proxy] DENIED: peer=${peerId.slice(0, 16)} resource=${resourceId} type=${type} (type not proxyable)`);
+        return { error: 'Credential type not proxyable' };
+      }
       const credStore = (this as any)._credentialStore as import('./core/credential-store.js').CredentialStore | undefined;
       if (!credStore?.hasDecryptionCapability()) return { error: 'This node cannot decrypt credentials' };
       const credential = await credStore.getCredential(resourceId);
       if (!credential) return { error: 'Credential not found or decryption failed' };
+
+      // 3. Audit log: successful credential access
+      console.log(`[credential-proxy] GRANTED: peer=${peerId.slice(0, 16)} resource=${resourceId} type=${type}`);
       return { credential };
     });
 
