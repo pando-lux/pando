@@ -301,7 +301,7 @@ flow CouncilBoot {
 
   step instantiate -> start_tick_loop {
     actor: Orchestrator
-    what: "orch.start() begins setInterval tick loop (60s for council). First tick gets full boot prompt with instructions. Subsequent ticks get short board-state update. Session rotates every ~50 ticks."
+    what: "orch.start() begins setInterval tick loop (60s for council). First tick gets full boot prompt with instructions. Subsequent ticks get short board-state update. Session rotates every ~200 ticks."
   }
 
   step start_tick_loop -> rehydrate_projects {

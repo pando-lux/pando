@@ -24,7 +24,7 @@ flow ProjectPipeline {
 
   step ensure_workspace -> instantiate_orchestrator {
     actor: PandoNode
-    what: "ensureProjectOrchestrator(projectId) calls OrgManager.getOrchestratorForProject() for DB record, then instantiateOrchestrator() for live instance. Factory wires project-scoped callbacks: onCommit (git in workspace → GitHub push), onDeploy (S3/PM2+nginx)."
+    what: "ensureProjectOrchestrator(projectId) calls OrgManager.getOrchestratorForProject() for DB record, then instantiateOrchestrator() for live instance. Factory wires project-scoped callbacks: onCommit (git in workspace → GitHub push). Deployment is agent-driven (devops worker calls deploy API directly)."
     @gotcha("Same Orchestrator class as council. Only callbacks differ.")
   }
 
@@ -61,7 +61,7 @@ flow ProjectPipeline {
 
   step commit -> deploy {
     actor: Orchestrator
-    what: "After commit, orchestrator may trigger deploy action. onDeploy callback: POST /v1/projects/:id/deploy → P2P discovery → compute peer → S3 (tier 1) or PM2+nginx (tier 2)."
+    what: "After commit, orchestrator spawns a devops worker to handle deployment. The devops agent calls POST /v1/projects/:id/deploy directly (agent-driven, no hardcoded callback). Deploy routes via P2P discovery → compute peer → S3 (tier 1) or PM2+nginx (tier 2)."
   }
 
   step deploy -> respond {
