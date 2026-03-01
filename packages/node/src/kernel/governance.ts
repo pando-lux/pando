@@ -11,6 +11,7 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
+import { execSync } from 'node:child_process';
 import type Database from 'better-sqlite3';
 import type { PandoNetwork } from './network.js';
 import type { PandoMessage, GovernanceProposal, GovernanceComment, GovernanceVote, GovernanceDecision, VoteChoice, AgentHello, AgentCapabilities, Transaction, ActivityRecord, ModelAttestation, NodeIdentity, WeightedVoteResult, ReviewerCandidacy, ProposalCategory, ProposalReview, ReviewRecommendation, ReviewSummary, UpgradePayload } from '@pando/shared';
@@ -1784,23 +1785,120 @@ export class GovernanceSync {
 
     // Phase 73: Auto-approve upgrade proposals when active peers < threshold
     if (category === 'upgrade' && proposal.upgradePayload) {
+      // Security validation before auto-approve
+      const validation = this.validateUpgradeProposal(proposal);
+      if (!validation.approved) {
+        console.log(`[governance] Upgrade proposal "${safeTitle}" REJECTED: ${validation.reason}`);
+        proposal.status = 'rejected';
+        this.stmtUpdateProposalStatus.run('rejected', proposal.id);
+        return proposal;
+      }
+
       const activePeers = this.network.getPeerCount() + 1;
       if (activePeers <= this.upgradeAutoApproveThreshold) {
-        console.log(`[governance] Dev mode: auto-approving upgrade "${safeTitle}" (${activePeers} peers <= threshold ${this.upgradeAutoApproveThreshold})`);
-        proposal.status = 'passed';
-        this.stmtUpdateProposalStatus.run('passed', proposal.id);
-        const decision: GovernanceDecision = {
-          proposalId: proposal.id, outcome: 'passed',
-          votesFor: 1, votesAgainst: 0, votesAbstain: 0, decidedAt: Date.now(),
+        const approveUpgrade = () => {
+          console.log(`[governance] Dev mode: auto-approving upgrade "${safeTitle}" (${activePeers} peers <= threshold ${this.upgradeAutoApproveThreshold})`);
+          proposal.status = 'passed';
+          this.stmtUpdateProposalStatus.run('passed', proposal.id);
+          const decision: GovernanceDecision = {
+            proposalId: proposal.id, outcome: 'passed',
+            votesFor: 1, votesAgainst: 0, votesAbstain: 0, decidedAt: Date.now(),
+          };
+          this.decisions.set(proposal.id, decision);
+          this.stmtInsertDecision.run(decision.proposalId, decision.outcome, decision.votesFor, decision.votesAgainst, decision.votesAbstain, decision.decidedAt);
+          this.broadcastDecision(decision).catch(() => {});
+          this.onUpgradeApprovedCallback?.(proposal);
         };
-        this.decisions.set(proposal.id, decision);
-        this.stmtInsertDecision.run(decision.proposalId, decision.outcome, decision.votesFor, decision.votesAgainst, decision.votesAbstain, decision.decidedAt);
-        this.broadcastDecision(decision).catch(() => {});
-        this.onUpgradeApprovedCallback?.(proposal);
+
+        if (validation.kernelDelay) {
+          console.log(`[governance] Kernel protection: delaying auto-approve by 60s for "${safeTitle}"`);
+          setTimeout(() => { approveUpgrade(); }, 60000);
+        } else {
+          approveUpgrade();
+        }
       }
     }
 
     return proposal;
+  }
+
+  /**
+   * Deterministic security checks for upgrade proposals.
+   * Runs BEFORE auto-approve to catch security-sensitive changes, large unreviewed diffs, and build failures.
+   */
+  private validateUpgradeProposal(proposal: GovernanceProposal): { approved: boolean; reason: string; kernelDelay: boolean } {
+    const SECURITY_FILES = [
+      'credential-store.ts', 'credential-vault.ts', 'request-reply.ts',
+      'guardrails.ts', 'security-monitor.ts', 'governance.ts',
+    ];
+
+    let changedFiles: string[] = [];
+    let totalLinesChanged = 0;
+
+    // Parse git diff for changed files and line counts (fail-open if git unavailable)
+    try {
+      const diffOutput = execSync('git diff HEAD~1 --name-only', { encoding: 'utf-8', timeout: 10000 });
+      changedFiles = diffOutput.trim().split('\n').filter(f => f.length > 0);
+    } catch (err) {
+      console.warn('[governance] WARNING: git diff --name-only failed, skipping file-based checks:', (err as Error).message);
+    }
+
+    try {
+      const statOutput = execSync('git diff HEAD~1 --stat', { encoding: 'utf-8', timeout: 10000 });
+      // Last line of git diff --stat looks like: " 5 files changed, 120 insertions(+), 30 deletions(-)"
+      const statMatch = statOutput.match(/(\d+)\s+insertions?\(\+\).*?(\d+)\s+deletions?\(-\)/);
+      if (statMatch) {
+        totalLinesChanged = parseInt(statMatch[1], 10) + parseInt(statMatch[2], 10);
+      }
+    } catch (err) {
+      console.warn('[governance] WARNING: git diff --stat failed, skipping size check:', (err as Error).message);
+    }
+
+    // CHECK 1: Security file check
+    if (changedFiles.length > 0) {
+      const changedSecurityFiles = changedFiles.filter(f => {
+        const basename = f.split('/').pop() || '';
+        return SECURITY_FILES.includes(basename);
+      });
+      if (changedSecurityFiles.length > 0) {
+        const desc = (proposal.description || '').toLowerCase();
+        if (!desc.includes('security') && !desc.includes('credential')) {
+          return { approved: false, reason: 'Security-sensitive files modified without security justification', kernelDelay: false };
+        }
+      }
+    }
+
+    // CHECK 2: Change size check — large changes require QA
+    if (totalLinesChanged > 300) {
+      // Check if a tester agent ran recently (last 30 min) under the same parent
+      try {
+        const thirtyMinAgo = Date.now() - 30 * 60 * 1000;
+        const parentId = proposal.proposedBy;
+        const row = this.db.prepare(
+          `SELECT COUNT(*) as cnt FROM agents WHERE role = 'tester' AND parent_id = ? AND updated_at > ?`
+        ).get(parentId, thirtyMinAgo) as any;
+        if (!row || row.cnt === 0) {
+          return { approved: false, reason: 'QA required for large changes (>300 lines)', kernelDelay: false };
+        }
+      } catch {
+        // AgentDatabase table may not exist in this DB — skip check
+        console.warn('[governance] WARNING: Could not query agents table for QA check, skipping');
+      }
+    }
+
+    // CHECK 3: Build verify
+    if (proposal.upgradePayload && (proposal.upgradePayload as any).buildPassed === false) {
+      return { approved: false, reason: 'Build must pass before approval', kernelDelay: false };
+    }
+
+    // CHECK 4: Kernel protection — delay if kernel files modified
+    const kernelFilesChanged = changedFiles.some(f => f.includes('kernel/'));
+    if (kernelFilesChanged) {
+      console.log('[governance] WARNING: Kernel file modified — applying 60s delay before approval');
+      return { approved: true, reason: 'Kernel files modified — delayed approval', kernelDelay: true };
+    }
+
+    return { approved: true, reason: 'All checks passed', kernelDelay: false };
   }
 
   /**
