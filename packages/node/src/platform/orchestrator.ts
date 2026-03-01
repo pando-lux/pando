@@ -977,7 +977,7 @@ export class Orchestrator {
     if (isObserver) {
       sections.push('You are called every ~10 minutes with a board-state update.');
     } else if (isQaUser) {
-      sections.push('You are called every ~5 minutes with a board-state update.');
+      sections.push('You are called every ~15 minutes with a board-state update.');
     } else {
       sections.push('You are called every ~60 seconds with a board-state update.');
     }
