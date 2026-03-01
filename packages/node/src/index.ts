@@ -135,6 +135,7 @@ export class PandoNode {
   private orgManager: OrgManager | null = null;
   private councilOrchestrator: Orchestrator | null = null;
   private councilOrchId: string | null = null;
+  private observerOrchId: string | null = null;
   private emissionWitness: EmissionWitness | null = null;
   private securityMonitor: SecurityMonitor | null = null;
   private resourceProofChallenger: ResourceProofChallenger | null = null;
@@ -3324,6 +3325,30 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     // Phase 104: Use the unified factory to instantiate the council orchestrator
     this.councilOrchestrator = this.instantiateOrchestrator(this.councilOrchId);
     console.log('[agents] Council orchestrator tick loop started');
+
+    // Find existing observer orchestrator or create new
+    const existingObserver = this.agentDb.listAgents({ role: 'observer', type: 'orchestrator' })
+      .find(a => a.status === 'pending' || a.status === 'active');
+    if (existingObserver) {
+      this.observerOrchId = existingObserver.id;
+      this.agentDb.updateAgent(existingObserver.id, { status: 'active' });
+      console.log(`[agents] Observer orchestrator rehydrated: ${this.observerOrchId}`);
+    } else {
+      this.observerOrchId = this.orgManager.createOrchestrator({
+        role: 'observer',
+        level: 0,
+        scope: 'public',
+        tickIntervalMs: 600000, // 10 minutes
+        maxWorkers: 0,
+        maxChildren: 0,
+        persistent: true,
+        nodeId: this.identity?.peerId || undefined,
+        rolePrompt: 'You are the Observer — Pando\'s Chief Architect Agent. You independently audit the system and send findings as directives to the CEO. You CANNOT write code, commit, spawn workers, or propose upgrades. You observe and suggest.',
+      });
+      console.log(`[agents] Observer orchestrator created: ${this.observerOrchId}`);
+    }
+    this.instantiateOrchestrator(this.observerOrchId);
+    console.log('[agents] Observer orchestrator tick loop started (10min interval)');
 
     // Phase 104: Rehydrate persistent project orchestrators from DB
     // Check both 'active' and 'pending' (pending = survived restart, needs reactivation)

@@ -530,7 +530,7 @@ export class Orchestrator {
 
     // System health snapshot for council
     let systemHealth: BoardState['systemHealth'];
-    if (agent.role === 'council') {
+    if (agent.role === 'council' || agent.role === 'observer') {
       const allWorkers = this.deps.db.listAgents({ type: 'worker', parentId: this.orchestratorId });
       const workersByStatus: Record<string, number> = {};
       for (const w of allWorkers) {
@@ -777,7 +777,31 @@ export class Orchestrator {
     const sections: string[] = [];
 
     const isCouncil = agent.role === 'council';
-    if (isCouncil) {
+    const isObserver = agent.role === 'observer';
+    if (isObserver) {
+      sections.push(`# YOU ARE THE OBSERVER — Chief Architect Agent of the Pando Network (${this.orchestratorId})`);
+      sections.push('');
+      sections.push('You are the third pillar of Pando\'s autonomous governance:');
+      sections.push('- CEO executes: spawns workers, ships code, manages projects');
+      sections.push('- Governance guards: reviews proposals, rejects insecure changes');
+      sections.push('- You observe: watch everything, verify intent matches reality, suggest improvements');
+      sections.push('');
+      sections.push('You CAN: Read files, query APIs, read SQLite, run scenario tests, send directives to CEO');
+      sections.push('You CANNOT: Write code, commit, push, deploy, spawn workers, kill processes, propose upgrades');
+      sections.push('');
+      sections.push('## YOUR AUDIT CYCLE (rotate through these):');
+      sections.push('1. SYSTEM HEALTH: Check all nodes, peer mesh, CEO ticking, stuck workers');
+      sections.push('2. CEO DECISION QUALITY: Analyze last 20 ticks, QA patterns, lesson recording');
+      sections.push('3. MODULE EFFECTIVENESS: Verify one module works as designed');
+      sections.push('4. ARCHITECTURE DRIFT: Compare genome docs to actual code');
+      sections.push('5. CREATIVE IMPROVEMENT: Think freely about bottlenecks and improvements');
+      sections.push('');
+      sections.push('Send findings as directives: POST /v1/council/directive');
+      sections.push('Format: [OBSERVER AUDIT #{cycle}] {type} — FINDING, EVIDENCE, IMPACT, SUGGESTION, PRIORITY');
+      sections.push('');
+      sections.push('You tick every 10 minutes. One audit per tick. Be thorough but concise.');
+      sections.push('');
+    } else if (isCouncil) {
       sections.push(`# YOU ARE THE COUNCIL — Autonomous CEO of the Pando Network (${this.orchestratorId})`);
       sections.push('');
       sections.push('YOU OWN THIS PLATFORM. No human tells you what to fix. No human approves your decisions.');
@@ -846,12 +870,20 @@ export class Orchestrator {
     }
     sections.push('You are a SESSION-PERSISTENT AI. Your Claude Code session survives across ticks —');
     sections.push('you remember previous decisions, worker reports, and context from earlier ticks.');
-    sections.push('You are called every ~60 seconds with a board-state update.');
+    if (isObserver) {
+      sections.push('You are called every ~10 minutes with a board-state update.');
+    } else {
+      sections.push('You are called every ~60 seconds with a board-state update.');
+    }
     sections.push('');
-    if (!isCouncil) {
+    if (!isCouncil && !isObserver) {
       sections.push('You are the MANAGER of this team. You read reports from your workers, assess the situation, and decide what happens next.');
     }
-    sections.push('You do NOT do work yourself — you delegate to specialized workers.');
+    if (isObserver) {
+      sections.push('You do NOT do work yourself — you observe, audit, and send findings to the CEO.');
+    } else {
+      sections.push('You do NOT do work yourself — you delegate to specialized workers.');
+    }
     sections.push('');
 
     // Manager template rolePrompt (if available)
@@ -1209,6 +1241,23 @@ export class Orchestrator {
    * Append available actions section (used in boot prompt only).
    */
   private appendAvailableActions(sections: string[], agent: AgentIdentity): void {
+    // Observer has severely restricted actions — observe only
+    if (agent.role === 'observer') {
+      sections.push('## Available Actions');
+      sections.push('');
+      sections.push('Each action is a JSON object with a "type" field. Return an array of actions.');
+      sections.push('');
+      sections.push('You have ONLY two actions (you are an observer, not an executor):');
+      sections.push('- send_message: Send a directive or finding to the CEO (council orchestrator)');
+      sections.push('  { "type": "send_message", "recipientId": "...", "message": "[OBSERVER AUDIT #N] ..." }');
+      sections.push('- record_lesson: Save an architectural insight for future reference');
+      sections.push('  { "type": "record_lesson", "lesson": "...", "source": "observer-audit" }');
+      sections.push('');
+      sections.push('You CANNOT: spawn_worker, kill_worker, create_team, dissolve_team, commit_code, propose_upgrade, deploy, respond_to_user');
+      sections.push('');
+      return;
+    }
+
     // Available roles from TemplateRegistry
     const availableRoles: string[] = ['builder', 'tester', 'reviewer', 'researcher', 'devops'];
     if (this.deps.templateRegistry) {

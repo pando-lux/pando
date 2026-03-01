@@ -3986,6 +3986,19 @@ export async function registerPlatformRoutes(
       // Network status
       const identity = node.getIdentity();
 
+      // Include observer in dashboard
+      let observer: { orchestratorId: string; status: string; lastTickAt: string | null; createdAt: string } | null = null;
+      const observerAgent = db.listAgents({ role: 'observer', type: 'orchestrator' })
+        .find((a: any) => a.status === 'active');
+      if (observerAgent) {
+        observer = {
+          orchestratorId: observerAgent.id,
+          status: observerAgent.status,
+          lastTickAt: observerAgent.lastTickAt ? new Date(observerAgent.lastTickAt).toISOString() : null,
+          createdAt: new Date(observerAgent.createdAt).toISOString(),
+        };
+      }
+
       return {
         council: {
           orchestratorId: orchId,
@@ -4005,6 +4018,7 @@ export async function registerPlatformRoutes(
           uptime: process.uptime(),
         },
         lessons,
+        observer,
       };
     });
 
