@@ -1,0 +1,252 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - banner [ref=e3]:
+      - generic [ref=e4]:
+        - generic [ref=e5]:
+          - link "Pando 4/4" [ref=e55] [cursor=pointer]:
+            - /url: /
+            - text: Pando
+            - generic [ref=e58]: 4/4
+          - navigation [ref=e7]:
+            - link "Home" [ref=e8] [cursor=pointer]:
+              - /url: /
+            - link "Chat" [ref=e9] [cursor=pointer]:
+              - /url: /chat
+            - link "Projects" [ref=e10] [cursor=pointer]:
+              - /url: /projects
+            - link "Apps" [ref=e11] [cursor=pointer]:
+              - /url: /apps
+            - link "Wallet" [ref=e12] [cursor=pointer]:
+              - /url: /wallet
+            - link "Network" [ref=e13] [cursor=pointer]:
+              - /url: /network
+            - link "Governance" [ref=e14] [cursor=pointer]:
+              - /url: /governance
+            - link "Marketplace" [ref=e15] [cursor=pointer]:
+              - /url: /marketplace
+            - link "Explore" [ref=e16] [cursor=pointer]:
+              - /url: /explore
+            - link "Dev" [ref=e17] [cursor=pointer]:
+              - /url: /dev
+        - generic [ref=e18]:
+          - generic [ref=e59]:
+            - link "Login" [ref=e60] [cursor=pointer]:
+              - /url: /login
+            - link "Sign up" [ref=e61] [cursor=pointer]:
+              - /url: /register
+          - button "Switch to light mode" [active] [ref=e274]:
+            - img [ref=e20]
+    - main [ref=e22]:
+      - heading "Network" [level=1] [ref=e23]
+      - generic [ref=e24]:
+        - generic [ref=e25]:
+          - paragraph [ref=e26]: Connected Peers
+          - paragraph [ref=e27]: "3"
+        - generic [ref=e28]:
+          - paragraph [ref=e29]: Known Nodes
+          - paragraph [ref=e30]: "4"
+          - paragraph [ref=e62]: 2 compute · 2 relay
+        - generic [ref=e31]:
+          - paragraph [ref=e32]: Total Supply
+          - paragraph [ref=e33]: 28,783.45 Lux
+        - generic [ref=e34]:
+          - paragraph [ref=e35]: Total Accounts
+          - paragraph [ref=e36]: "238"
+      - generic [ref=e63]:
+        - generic [ref=e64]:
+          - paragraph [ref=e65]: Requests Sent
+          - paragraph
+        - generic [ref=e66]:
+          - paragraph [ref=e67]: Requests Received
+          - paragraph
+      - generic [ref=e37]:
+        - heading "Reputation Leaderboard" [level=2] [ref=e39]
+        - generic [ref=e40]:
+          - generic [ref=e68]:
+            - generic [ref=e69]: "#"
+            - generic [ref=e70]: Node
+            - generic [ref=e71]: Score
+            - generic [ref=e72]: Tasks Done
+            - generic [ref=e73]: Build Pass
+            - generic [ref=e74]: Last Active
+          - generic [ref=e75]:
+            - generic [ref=e76]: "1"
+            - generic [ref=e77]: 12D3KooW…U1QUmX
+            - generic [ref=e78]: "308.0"
+            - generic [ref=e79]: "149"
+            - generic [ref=e80]: 100%
+            - generic [ref=e81]: 4d ago
+          - generic [ref=e82]:
+            - generic [ref=e83]: "2"
+            - generic [ref=e84]: 12D3KooW…2TnueP
+            - generic [ref=e85]: "250.0"
+            - generic [ref=e86]: "120"
+            - generic [ref=e87]: 100%
+            - generic [ref=e88]: 4d ago
+          - generic [ref=e89]:
+            - generic [ref=e90]: "3"
+            - generic [ref=e91]: 12D3KooW…bP6ov3
+            - generic [ref=e92]: "110.0"
+            - generic [ref=e93]: "50"
+            - generic [ref=e94]: 100%
+            - generic [ref=e95]: 2d ago
+          - generic [ref=e96]:
+            - generic [ref=e97]: "4"
+            - generic [ref=e98]: 12D3KooW…NM9PjT
+            - generic [ref=e99]: "25.0"
+            - generic [ref=e100]:
+              - text: "156"
+              - generic [ref=e101]: (99 failed)
+            - generic [ref=e102]: 100%
+            - generic [ref=e103]: 3d ago
+          - generic [ref=e104]:
+            - generic [ref=e105]: "5"
+            - generic [ref=e106]: 12D3KooW…b8RZNQ
+            - generic [ref=e107]: "14.0"
+            - generic [ref=e108]: "2"
+            - generic [ref=e109]: 100%
+            - generic [ref=e110]: 4d ago
+          - generic [ref=e111]:
+            - generic [ref=e112]: "6"
+            - generic [ref=e113]: 12D3KooW…Y53yM3
+            - generic [ref=e114]: "0.0"
+            - generic [ref=e115]: "0"
+            - generic [ref=e116]: —
+            - generic [ref=e117]: 6d ago
+          - generic [ref=e118]:
+            - generic [ref=e119]: "7"
+            - generic [ref=e120]: 12D3KooW…jBEoFS
+            - generic [ref=e121]: "0.0"
+            - generic [ref=e122]: "0"
+            - generic [ref=e123]: —
+            - generic [ref=e124]: 5d ago
+          - generic [ref=e125]:
+            - generic [ref=e126]: "8"
+            - generic [ref=e127]: 12D3KooW…DC4QVP
+            - generic [ref=e128]: "0.0"
+            - generic [ref=e129]: "0"
+            - generic [ref=e130]: —
+            - generic [ref=e131]: just now
+          - generic [ref=e132]:
+            - generic [ref=e133]: "9"
+            - generic [ref=e134]: 12D3KooW…PeJ33d
+            - generic [ref=e135]: "0.0"
+            - generic [ref=e136]: "0"
+            - generic [ref=e137]: —
+            - generic [ref=e138]: just now
+          - generic [ref=e139]:
+            - generic [ref=e140]: "10"
+            - generic [ref=e141]: 12D3KooW…e26pRW
+            - generic [ref=e142]: "0.0"
+            - generic [ref=e143]: "0"
+            - generic [ref=e144]: —
+            - generic [ref=e145]: just now
+          - generic [ref=e146]:
+            - generic [ref=e147]: "11"
+            - generic [ref=e148]: 12D3KooW…ALM2Lu
+            - generic [ref=e149]: "-21.0"
+            - generic [ref=e150]:
+              - text: "154"
+              - generic [ref=e151]: (113 failed)
+            - generic [ref=e152]: 100%
+            - generic [ref=e153]: 3d ago
+          - generic [ref=e154]:
+            - generic [ref=e155]: "12"
+            - generic [ref=e156]: 12D3KooW…Pmyfdy
+            - generic [ref=e157]: "-23.0"
+            - generic [ref=e158]:
+              - text: "156"
+              - generic [ref=e159]: (115 failed)
+            - generic [ref=e160]: 100%
+            - generic [ref=e161]: 3d ago
+          - generic [ref=e162]:
+            - generic [ref=e163]: "13"
+            - generic [ref=e164]: 12D3KooW…tpMQSv
+            - generic [ref=e165]: "-337.0"
+            - generic [ref=e166]:
+              - text: "14"
+              - generic [ref=e167]: (125 failed)
+            - generic [ref=e168]: 100%
+            - generic [ref=e169]: 1d ago
+          - generic [ref=e170]:
+            - generic [ref=e171]: "14"
+            - generic [ref=e172]: 12D3KooW…ioMGDP
+            - generic [ref=e173]: "-3936.0"
+            - generic [ref=e174]:
+              - text: "0"
+              - generic [ref=e175]: (1312 failed)
+            - generic [ref=e176]: —
+            - generic [ref=e177]: 1d ago
+      - generic [ref=e178]:
+        - generic [ref=e179]:
+          - heading "Network Capability Map" [level=2] [ref=e180]
+          - generic [ref=e181]: 4 known nodes
+        - generic [ref=e182]:
+          - generic [ref=e183]:
+            - generic [ref=e184]: Node
+            - generic [ref=e185]: Role
+            - generic [ref=e186]: Capabilities
+            - generic [ref=e187]: Updated
+          - generic [ref=e198]:
+            - generic [ref=e199]:
+              - text: 12D3KooWLMno…
+              - generic [ref=e200]: 34.201.82.126
+            - generic [ref=e201]:
+              - generic [ref=e202]: compute
+              - generic [ref=e203]: keys
+            - generic [ref=e204]:
+              - generic [ref=e205]: storage
+              - generic [ref=e206]: gateway
+            - generic [ref=e207]: just now
+          - generic [ref=e188]:
+            - generic [ref=e189]:
+              - text: 12D3KooWDRjG…
+              - generic [ref=e190]: 54.82.241.132
+            - generic [ref=e191]:
+              - generic [ref=e192]: compute
+              - generic [ref=e193]: keys
+            - generic [ref=e194]:
+              - generic [ref=e195]: storage
+              - generic [ref=e196]: gateway
+            - generic [ref=e197]: just now
+          - generic [ref=e217]:
+            - generic [ref=e218]:
+              - text: 12D3KooWFR7A…
+              - generic [ref=e219]: "@pando"
+            - generic [ref=e221]: relay
+            - generic [ref=e222]:
+              - generic [ref=e223]: compute cpu
+              - generic [ref=e224]: storage
+              - generic [ref=e225]: gateway
+            - generic [ref=e226]: just now
+          - generic [ref=e208]:
+            - generic [ref=e209]:
+              - text: 12D3KooWJ6J1…
+              - generic [ref=e210]: 54.164.43.155
+            - generic [ref=e212]: relay
+            - generic [ref=e213]:
+              - generic [ref=e214]: storage
+              - generic [ref=e215]: gateway
+            - generic [ref=e216]: just now
+      - generic [ref=e41]:
+        - heading "Connected Peers" [level=2] [ref=e43]
+        - generic [ref=e44]:
+          - generic [ref=e246]:
+            - generic [ref=e247]: Peer ID
+            - generic [ref=e248]: Balance
+            - generic [ref=e249]: Connected
+          - button "12D3KooW…DC4QVP 1.65 Lux just now" [ref=e267]:
+            - generic [ref=e252]: 12D3KooW…DC4QVP
+            - generic [ref=e253]: 1.65 Lux
+            - generic [ref=e254]: just now
+          - button "12D3KooW…PeJ33d 0.01 Lux just now" [ref=e269]:
+            - generic [ref=e270]: 12D3KooW…PeJ33d
+            - generic [ref=e271]: 0.01 Lux
+            - generic [ref=e272]: just now
+          - button "12D3KooW…e26pRW 0.01 Lux just now" [ref=e273]:
+            - generic [ref=e257]: 12D3KooW…e26pRW
+            - generic [ref=e258]: 0.01 Lux
+            - generic [ref=e259]: just now
+  - button "Open Next.js Dev Tools" [ref=e50] [cursor=pointer]:
+    - img [ref=e51]
+  - alert [ref=e54]

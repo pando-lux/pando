@@ -830,6 +830,14 @@ export class Orchestrator {
     const isQaUser = agent.role === 'qa-user';
     if (isQaUser) {
       sections.push(`# YOU ARE THE QA USER AGENT — Human Perspective Tester (${this.orchestratorId})`);
+      // Look up council ID early so we can tell QA who the CEO is
+      let qaCouncilId = '<council-orch-id>';
+      try {
+        const councils = this.deps.db.listAgents({ role: 'council', type: 'orchestrator' });
+        const activeCouncil = councils.find(c => c.status === 'active' || c.status === 'pending');
+        if (activeCouncil) qaCouncilId = activeCouncil.id;
+      } catch { /* non-fatal */ }
+      sections.push(`The CEO orchestrator ID is: ${qaCouncilId}`);
       sections.push('');
       sections.push('You test Pando the way a REAL HUMAN would. Not a developer. Not a code tester.');
       sections.push('A person who opened the gateway and wants to build something.');
@@ -1652,6 +1660,14 @@ export class Orchestrator {
 
     // QA User Agent has testing-focused actions — can spawn workers but cannot commit/deploy
     if (agent.role === 'qa-user') {
+      // Look up council orchestrator ID so QA agent can target directives correctly
+      let councilId = '<council-orch-id>';
+      try {
+        const councils = this.deps.db.listAgents({ role: 'council', type: 'orchestrator' });
+        const activeCouncil = councils.find(c => c.status === 'active' || c.status === 'pending');
+        if (activeCouncil) councilId = activeCouncil.id;
+      } catch { /* non-fatal */ }
+
       sections.push('## Available Actions');
       sections.push('');
       sections.push('Each action is a JSON object with a "type" field. Return an array of actions.');
@@ -1666,7 +1682,7 @@ export class Orchestrator {
       sections.push('- record_qa_result: Record a test result in the QA database');
       sections.push('  { "type": "record_qa_result", "targetUrl": "http://localhost:3222/chat", "testType": "ux_flow", "status": "failed", "errorDetail": "No loading indicator", "uxNotes": "User sees blank screen for 30s" }');
       sections.push('- create_directive: Report findings to the CEO (PERSISTENT — CEO must act on these)');
-      sections.push('  { "type": "create_directive", "targetId": "<council-orch-id>", "content": "[QA BUG] Priority: HIGH — ..." }');
+      sections.push(`  { "type": "create_directive", "targetId": "${councilId}", "content": "[QA BUG] Priority: HIGH — ..." }`);
       sections.push('- record_lesson: Save a QA insight for future reference');
       sections.push('  { "type": "record_lesson", "lesson": "...", "source": "qa-user-agent" }');
       sections.push('- complete_directive: Mark a directive as done');
