@@ -53,6 +53,8 @@ export interface OrchestratorManagerDeps {
   graphPath?: string;
   /** API token for scenario runner */
   apiToken?: string;
+  /** Start an orchestrator (used by create_team IPC action) */
+  startOrchestrator?: (orchId: string, isCouncil: boolean) => Promise<void>;
 }
 
 interface ManagedProcess {
@@ -95,9 +97,11 @@ export class OrchestratorProcessManager {
     }
 
     const modulePath = join(__dirname, 'orchestrator-process.js');
+    const childEnv = { ...process.env };
+    delete childEnv.PANDO_STORAGE_URL;
     const child = fork(modulePath, [], {
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
-      env: { ...process.env },
+      env: childEnv,
     });
 
     const managed: ManagedProcess = {
@@ -161,6 +165,7 @@ export class OrchestratorProcessManager {
   private async handleChildMessage(orchestratorId: string, msg: any): Promise<void> {
     if (msg.type === 'ready') {
       console.log(`[orch-manager] ${orchestratorId} ready in PID ${msg.pid}`);
+      this.restartCounts.delete(orchestratorId);
       return;
     }
 
@@ -231,6 +236,15 @@ export class OrchestratorProcessManager {
       case 'send_chat_result': {
         if (!this.deps.sendChatResult) throw new Error('No sendChatResult callback');
         await this.deps.sendChatResult(data.peerId, data.threadId, data.message);
+        return true;
+      }
+
+      case 'create_team': {
+        // Start the new orchestrator's tick loop in the main process
+        const orchId = data.orchestratorId;
+        if (orchId && this.deps.startOrchestrator) {
+          await this.deps.startOrchestrator(orchId, false);
+        }
         return true;
       }
 
