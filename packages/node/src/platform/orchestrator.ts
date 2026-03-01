@@ -607,6 +607,11 @@ export class Orchestrator {
       return 2;
     }
 
+    // Observer is ALWAYS Tier 2 — its entire purpose is proactive AI investigation
+    if (agent?.role === 'observer') {
+      return 2;
+    }
+
     // Recently failed or overdue workers need AI attention immediately
     if (board.recentlyFailed.length > 0 || board.overdueWorkers.length > 0) {
       return 2;
