@@ -31,6 +31,9 @@ interface PaymentGateLike {
 interface AgentManagerLike {
   spawnAgent(opts: any): Promise<string | null>;
 }
+interface AgentDbLike {
+  logGovernanceCheck(proposalId: string, checkName: string, result: string, reason?: string, changedFiles?: number, linesChanged?: number): void;
+}
 
 export const TOPIC_GOVERNANCE = 'pando/governance';
 export const TOPIC_AGENT = 'pando/agents';
@@ -195,6 +198,9 @@ export class GovernanceSync {
   // Phase 30.2: AgentManagerLike for spawning reviewer agents
   private agentManager: AgentManagerLike | null = null;
 
+  // Governance audit logging (optional — set via setAgentDb)
+  private agentDb: AgentDbLike | null = null;
+
   // Phase 30.3: Review tracking (proposalId → reviews)
   private reviews: Map<string, Map<string, ProposalReview>> = new Map();
 
@@ -253,6 +259,11 @@ export class GovernanceSync {
   setAgentManager(am: AgentManagerLike): void {
     this.agentManager = am;
     console.log('[governance] AgentManager connected — reviewer agent spawning enabled');
+  }
+
+  /** Set the AgentDatabase for governance audit logging. */
+  setAgentDb(db: AgentDbLike): void {
+    this.agentDb = db;
   }
 
   // ── Phase 73: Upgrade auto-approve configuration ──
@@ -1832,6 +1843,7 @@ export class GovernanceSync {
       'guardrails.ts', 'security-monitor.ts', 'governance.ts',
     ];
 
+    const proposalId = proposal.id;
     let changedFiles: string[] = [];
     let totalLinesChanged = 0;
 
@@ -1863,10 +1875,13 @@ export class GovernanceSync {
       if (changedSecurityFiles.length > 0) {
         const desc = (proposal.description || '').toLowerCase();
         if (!desc.includes('security') && !desc.includes('credential')) {
-          return { approved: false, reason: 'Security-sensitive files modified without security justification', kernelDelay: false };
+          const reason = 'Security-sensitive files modified without security justification';
+          this.agentDb?.logGovernanceCheck(proposalId, 'security_file_check', 'fail', reason, changedFiles.length, totalLinesChanged);
+          return { approved: false, reason, kernelDelay: false };
         }
       }
     }
+    this.agentDb?.logGovernanceCheck(proposalId, 'security_file_check', 'pass', undefined, changedFiles.length, totalLinesChanged);
 
     // CHECK 2: Change size check — large changes require QA
     if (totalLinesChanged > 300) {
@@ -1878,25 +1893,33 @@ export class GovernanceSync {
           `SELECT COUNT(*) as cnt FROM agents WHERE role = 'tester' AND parent_id = ? AND updated_at > ?`
         ).get(parentId, thirtyMinAgo) as any;
         if (!row || row.cnt === 0) {
-          return { approved: false, reason: 'QA required for large changes (>300 lines)', kernelDelay: false };
+          const reason = 'QA required for large changes (>300 lines)';
+          this.agentDb?.logGovernanceCheck(proposalId, 'change_size_check', 'fail', reason, changedFiles.length, totalLinesChanged);
+          return { approved: false, reason, kernelDelay: false };
         }
       } catch {
         // AgentDatabase table may not exist in this DB — skip check
         console.warn('[governance] WARNING: Could not query agents table for QA check, skipping');
       }
     }
+    this.agentDb?.logGovernanceCheck(proposalId, 'change_size_check', 'pass', undefined, changedFiles.length, totalLinesChanged);
 
     // CHECK 3: Build verify
     if (proposal.upgradePayload && (proposal.upgradePayload as any).buildPassed === false) {
-      return { approved: false, reason: 'Build must pass before approval', kernelDelay: false };
+      const reason = 'Build must pass before approval';
+      this.agentDb?.logGovernanceCheck(proposalId, 'build_verify', 'fail', reason, changedFiles.length, totalLinesChanged);
+      return { approved: false, reason, kernelDelay: false };
     }
+    this.agentDb?.logGovernanceCheck(proposalId, 'build_verify', 'pass', undefined, changedFiles.length, totalLinesChanged);
 
     // CHECK 4: Kernel protection — delay if kernel files modified
     const kernelFilesChanged = changedFiles.some(f => f.includes('kernel/'));
     if (kernelFilesChanged) {
       console.log('[governance] WARNING: Kernel file modified — applying 60s delay before approval');
+      this.agentDb?.logGovernanceCheck(proposalId, 'kernel_protection', 'pass_delayed', 'Kernel files modified — delayed approval', changedFiles.length, totalLinesChanged);
       return { approved: true, reason: 'Kernel files modified — delayed approval', kernelDelay: true };
     }
+    this.agentDb?.logGovernanceCheck(proposalId, 'kernel_protection', 'pass', undefined, changedFiles.length, totalLinesChanged);
 
     return { approved: true, reason: 'All checks passed', kernelDelay: false };
   }

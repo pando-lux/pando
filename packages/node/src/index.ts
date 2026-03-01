@@ -3351,7 +3351,7 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
         role: 'observer',
         level: 0,
         scope: 'public',
-        tickIntervalMs: 600000, // 10 minutes
+        tickIntervalMs: 300000, // 5 minutes
         maxWorkers: 0,
         maxChildren: 0,
         persistent: true,
@@ -3391,6 +3391,11 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     // Phase 30: Wire PaymentGate to Governance for proposal staking
     if (this.paymentGate && this.governance) {
       this.governance.setPaymentGate(this.paymentGate);
+    }
+
+    // Wire AgentDatabase to Governance for audit logging
+    if (this.agentDb && this.governance) {
+      this.governance.setAgentDb(this.agentDb);
     }
 
     // Phase 30.2: Wire WorkerPool to Governance for reviewer agent spawning

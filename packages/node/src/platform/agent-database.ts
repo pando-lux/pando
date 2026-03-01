@@ -326,6 +326,19 @@ const SCHEMA = `
 
   CREATE INDEX IF NOT EXISTS idx_discoveries_project ON project_discoveries(project_id, created_at);
   CREATE INDEX IF NOT EXISTS idx_discoveries_worker ON project_discoveries(worker_id);
+
+  CREATE TABLE IF NOT EXISTS governance_audit (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    proposal_id TEXT NOT NULL,
+    check_name TEXT NOT NULL,
+    result TEXT NOT NULL,
+    reason TEXT,
+    changed_files INTEGER,
+    lines_changed INTEGER,
+    created_at TEXT DEFAULT (datetime('now'))
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_governance_audit_proposal ON governance_audit(proposal_id);
 `;
 
 // ---------------------------------------------------------------------------
@@ -1011,5 +1024,27 @@ export class AgentDatabase {
     }
 
     return { tickLog, agents, reflections, directives };
+  }
+
+  // ── Governance Audit ──────────────────────────────────────────────────────
+
+  logGovernanceCheck(
+    proposalId: string,
+    checkName: string,
+    result: string,
+    reason?: string,
+    changedFiles?: number,
+    linesChanged?: number,
+  ): void {
+    this.db.prepare(
+      `INSERT INTO governance_audit (proposal_id, check_name, result, reason, changed_files, lines_changed)
+       VALUES (?, ?, ?, ?, ?, ?)`
+    ).run(proposalId, checkName, result, reason ?? null, changedFiles ?? null, linesChanged ?? null);
+  }
+
+  getGovernanceAudit(proposalId: string): any[] {
+    return this.db.prepare(
+      `SELECT * FROM governance_audit WHERE proposal_id = ? ORDER BY id`
+    ).all(proposalId);
   }
 }
