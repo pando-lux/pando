@@ -431,7 +431,7 @@ export class WorkerPool {
     this.workerPids.delete(workerId);
 
     const agent = this.db.getAgent(workerId);
-    if (agent && !['done', 'failed', 'dissolved'].includes(agent.status)) {
+    if (agent && !['done', 'failed', 'dissolved', 'idle'].includes(agent.status)) {
       this.db.updateAgent(workerId, { status: 'failed', pid: null });
     }
   }
@@ -672,6 +672,10 @@ export class WorkerPool {
           // EPERM = process exists but we can't signal it → still alive
         }
         if (!alive) {
+          // Re-read agent status to avoid race: worker may have transitioned
+          // to idle/done between the listAgents query and now
+          const current = this.db.getAgent(worker.id);
+          if (current && ['done', 'failed', 'dissolved', 'idle'].includes(current.status)) continue;
           this.db.updateAgent(worker.id, {
             status: 'failed',
             pid: null,
