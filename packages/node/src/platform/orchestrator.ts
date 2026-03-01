@@ -86,7 +86,9 @@ export type OrchestratorAction =
   | { type: 'commit_code'; message: string }
   | { type: 'respond_to_user'; message: string }
   | { type: 'run_scenarios'; category?: string }
-  | { type: 'delay_rotation'; reason: string };
+  | { type: 'delay_rotation'; reason: string }
+  | { type: 'complete_directive'; directiveId: number; summary?: string }
+  | { type: 'reject_directive'; directiveId: number; reason: string };
 
 interface BoardState {
   pendingTasks: number;
@@ -98,7 +100,7 @@ interface BoardState {
   healthAlerts: InboxMessage[];
   userRequests: InboxMessage[];
   peerDisconnects: InboxMessage[];
-  directives: Array<{ id: number; content: string }>;
+  directives: Array<{ id: number; content: string; status: string; timesSeen: number; createdAt: string }>;
   recentlyFailed: Array<{ id: string; role: string; failedAt: string; lastTask: string | null; rolePrompt: string | null }>;
   overdueWorkers: Array<{ id: string; role: string; spawnedAt: string; lastReportAt: string | null }>;
   interruptedWorkers: Array<{ workerId: string; role: string; rolePrompt: string | null; sessionId: string | null }>;
@@ -396,15 +398,14 @@ export class Orchestrator {
         }
       }
 
-      // 3c. Issue MASTER-FIX-2: Deactivate directives after successful Tier 2
-      // Directives are standing orders — once the AI has seen them and produced
-      // actions, they are consumed. This prevents the same directives from
-      // triggering Tier 2 every single tick forever.
+      // 3c. Directive persistence: acknowledge directives after AI sees them.
+      // Directives are NOT deactivated on sight — they persist until explicitly
+      // completed or rejected via complete_directive / reject_directive actions.
       if (tier === 2 && !aiError && board.directives.length > 0) {
         for (const d of board.directives) {
-          this.deps.db.deactivateDirective(d.id);
+          this.deps.db.acknowledgeDirective(d.id);
         }
-        console.log(`[Orchestrator ${this.orchestratorId}] Deactivated ${board.directives.length} directive(s) after Tier 2 tick`);
+        console.log(`[Orchestrator ${this.orchestratorId}] Acknowledged ${board.directives.length} directive(s) (persist until completed/rejected)`);
       }
 
       // 4. Reflect on any worker completions (extract lessons)
@@ -589,7 +590,7 @@ export class Orchestrator {
       healthAlerts,
       userRequests,
       peerDisconnects,
-      directives: directives.map(d => ({ id: d.id, content: d.content })),
+      directives: directives.map(d => ({ id: d.id, content: d.content, status: d.status, timesSeen: d.timesSeen, createdAt: d.createdAt })),
       recentlyFailed,
       overdueWorkers,
       interruptedWorkers,
@@ -624,8 +625,10 @@ export class Orchestrator {
       return 1;
     }
 
-    // Active directives = standing orders → think
-    if (board.directives.length > 0) {
+    // New/overdue directives force Tier 2. Acknowledged ones ride along on natural Tier 2 ticks.
+    const newDirectives = board.directives.filter(d => d.status === 'pending');
+    const overdueDirectives = board.directives.filter(d => d.timesSeen >= 5);
+    if (newDirectives.length > 0 || overdueDirectives.length > 0) {
       return 2;
     }
 
@@ -1123,12 +1126,19 @@ export class Orchestrator {
       sections.push('');
     }
 
-    // Directives
+    // Directives (persistent until explicitly completed or rejected)
     if (board.directives.length > 0) {
-      sections.push('## Directives');
+      sections.push('## Directives (PERSISTENT — must complete_directive or reject_directive each one)');
       for (const d of board.directives) {
-        sections.push(`- ${d.content}`);
+        const age = Math.round((Date.now() - new Date(d.createdAt).getTime()) / 60000);
+        const overdue = d.timesSeen >= 5 ? ' **OVERDUE — ACT NOW OR REJECT WITH REASON**' : '';
+        const seen = d.timesSeen > 0 ? ` (seen ${d.timesSeen}x, ${age}min old)` : ` (NEW, ${age}min old)`;
+        sections.push(`- [D#${d.id}]${seen}${overdue}: ${d.content}`);
       }
+      sections.push('');
+      sections.push('To complete: { "type": "complete_directive", "directiveId": <id>, "summary": "what was done" }');
+      sections.push('To reject: { "type": "reject_directive", "directiveId": <id>, "reason": "why not doing this" }');
+      sections.push('Directives persist across session rotations until you explicitly complete or reject them.');
       sections.push('');
     }
 
@@ -1291,6 +1301,10 @@ export class Orchestrator {
       sections.push('  { "type": "send_message", "recipientId": "...", "message": "[OBSERVER AUDIT #N] ..." }');
       sections.push('- record_lesson: Save an architectural insight for future reference');
       sections.push('  { "type": "record_lesson", "lesson": "...", "source": "observer-audit" }');
+      sections.push('- complete_directive: Mark a directive as done');
+      sections.push('  { "type": "complete_directive", "directiveId": 42, "summary": "what was done" }');
+      sections.push('- reject_directive: Reject a directive with reason');
+      sections.push('  { "type": "reject_directive", "directiveId": 42, "reason": "why not feasible" }');
       sections.push('');
       sections.push('You CANNOT: spawn_worker, kill_worker, create_team, dissolve_team, commit_code, propose_upgrade, deploy, respond_to_user');
       sections.push('');
@@ -1344,6 +1358,13 @@ export class Orchestrator {
       sections.push('- commit_code: Commit current changes to git');
       sections.push('  { "type": "commit_code", "message": "commit message" }');
     }
+    sections.push('');
+    sections.push('### For directive management (IMPORTANT — directives persist until you act):');
+    sections.push('- complete_directive: Mark a directive as done');
+    sections.push('  { "type": "complete_directive", "directiveId": 42, "summary": "what was done" }');
+    sections.push('- reject_directive: Reject a directive with reason');
+    sections.push('  { "type": "reject_directive", "directiveId": 42, "reason": "why not feasible" }');
+    sections.push('  Directives WILL NOT go away until you complete or reject them. Do not ignore them.');
     const isCouncilActions = this.deps.db.getAgent(this.orchestratorId)?.role === 'council';
     if (isCouncilActions) {
       sections.push('');
@@ -1722,6 +1743,20 @@ export class Orchestrator {
         // Council can delay session rotation when doing deep work
         console.log(`[Orchestrator ${this.orchestratorId}] Session rotation delayed: ${action.reason}`);
         this._sessionTickCount = Math.max(0, this._sessionTickCount - 50);
+        break;
+      }
+
+      case 'complete_directive': {
+        const did = action.directiveId;
+        this.deps.db.completeDirective(did, action.summary);
+        console.log(`[Orchestrator ${this.orchestratorId}] Directive D#${did} COMPLETED: ${action.summary || '(no summary)'}`);
+        break;
+      }
+
+      case 'reject_directive': {
+        const did = action.directiveId;
+        this.deps.db.rejectDirective(did, action.reason);
+        console.log(`[Orchestrator ${this.orchestratorId}] Directive D#${did} REJECTED: ${action.reason}`);
         break;
       }
 

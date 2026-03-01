@@ -127,13 +127,20 @@ export interface OrgKnowledge {
   lastUsedAt: string | null;
 }
 
+export type DirectiveStatus = 'pending' | 'acknowledged' | 'in_progress' | 'completed' | 'rejected';
+
 export interface Directive {
   id: number;
   targetId: string | null;     // orchestrator ID, or null = all
   content: string;
   addedBy: string;
-  active: boolean;
+  active: boolean;             // legacy compat: true if status is pending/acknowledged/in_progress
+  status: DirectiveStatus;
+  timesSeen: number;
+  rejectionReason: string | null;
   createdAt: string;
+  acknowledgedAt: string | null;
+  completedAt: string | null;
 }
 
 export interface Reflection {
@@ -437,13 +444,19 @@ function rowToOrgKnowledge(row: any): OrgKnowledge {
 }
 
 function rowToDirective(row: any): Directive {
+  const status = row.status || (row.active ? 'pending' : 'completed');
   return {
     id: row.id,
     targetId: row.target_id,
     content: row.content,
     addedBy: row.added_by,
-    active: !!row.active,
+    active: status === 'pending' || status === 'acknowledged' || status === 'in_progress',
+    status: status as DirectiveStatus,
+    timesSeen: row.times_seen || 0,
+    rejectionReason: row.rejection_reason || null,
     createdAt: row.created_at,
+    acknowledgedAt: row.acknowledged_at || null,
+    completedAt: row.completed_at || null,
   };
 }
 
@@ -522,6 +535,22 @@ export class AgentDatabase {
     try {
       this.db.exec('UPDATE directives SET active = 0 WHERE id IN (8,9,10,11,12,13) AND active = 1');
     } catch { /* table may not exist yet */ }
+
+    // Directive persistence: Migrate — add status lifecycle columns to directives
+    try {
+      const dCols = this.db.pragma('table_info(directives)') as any[];
+      if (!dCols.some((c: any) => c.name === 'status')) {
+        this.db.exec(`ALTER TABLE directives ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'`);
+        this.db.exec(`ALTER TABLE directives ADD COLUMN times_seen INTEGER NOT NULL DEFAULT 0`);
+        this.db.exec(`ALTER TABLE directives ADD COLUMN rejection_reason TEXT`);
+        this.db.exec(`ALTER TABLE directives ADD COLUMN acknowledged_at TEXT`);
+        this.db.exec(`ALTER TABLE directives ADD COLUMN completed_at TEXT`);
+        // Migrate existing data: active=1 → pending, active=0 → completed
+        this.db.exec(`UPDATE directives SET status = 'completed' WHERE active = 0`);
+        this.db.exec(`UPDATE directives SET status = 'pending' WHERE active = 1`);
+        console.log('[agents] Migrated: added directive status lifecycle columns');
+      }
+    } catch { /* column already exists or migration not needed */ }
   }
 
   close(): void {
@@ -901,13 +930,49 @@ export class AgentDatabase {
   getDirectives(targetId?: string): Directive[] {
     return this.db.prepare(`
       SELECT * FROM directives
-      WHERE active = 1 AND (target_id = ? OR target_id IS NULL)
+      WHERE status IN ('pending', 'acknowledged', 'in_progress')
+        AND (target_id = ? OR target_id IS NULL)
       ORDER BY created_at ASC
     `).all(targetId ?? null).map(rowToDirective);
   }
 
+  /** Mark directive as seen by the AI. Increments times_seen counter. */
+  acknowledgeDirective(id: number): void {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE directives
+      SET status = CASE WHEN status = 'pending' THEN 'acknowledged' ELSE status END,
+          times_seen = times_seen + 1,
+          acknowledged_at = COALESCE(acknowledged_at, ?),
+          active = 1
+      WHERE id = ?
+    `).run(now, id);
+  }
+
+  /** Mark directive as completed with summary. */
+  completeDirective(id: number, summary?: string): void {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE directives
+      SET status = 'completed', active = 0, completed_at = ?,
+          rejection_reason = COALESCE(?, rejection_reason)
+      WHERE id = ?
+    `).run(now, summary ?? null, id);
+  }
+
+  /** Mark directive as explicitly rejected with reason. */
+  rejectDirective(id: number, reason: string): void {
+    const now = new Date().toISOString();
+    this.db.prepare(`
+      UPDATE directives
+      SET status = 'rejected', active = 0, completed_at = ?, rejection_reason = ?
+      WHERE id = ?
+    `).run(now, reason, id);
+  }
+
+  /** Legacy compat — maps to completeDirective. */
   deactivateDirective(id: number): void {
-    this.db.prepare('UPDATE directives SET active = 0 WHERE id = ?').run(id);
+    this.completeDirective(id);
   }
 
   // =========================================================================
@@ -1016,7 +1081,7 @@ export class AgentDatabase {
     ).run().changes;
 
     const directives = this.db.prepare(
-      "DELETE FROM directives WHERE active = 0 AND created_at < datetime('now', '-7 days')"
+      "DELETE FROM directives WHERE (active = 0 OR status IN ('completed', 'rejected')) AND created_at < datetime('now', '-7 days')"
     ).run().changes;
 
     if (tickLog + agents + reflections + directives > 0) {
