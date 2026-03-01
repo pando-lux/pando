@@ -88,7 +88,8 @@ export type OrchestratorAction =
   | { type: 'run_scenarios'; category?: string }
   | { type: 'delay_rotation'; reason: string }
   | { type: 'complete_directive'; directiveId: number; summary?: string }
-  | { type: 'reject_directive'; directiveId: number; reason: string };
+  | { type: 'reject_directive'; directiveId: number; reason: string }
+  | { type: 'create_directive'; targetId: string; content: string };
 
 interface BoardState {
   pendingTasks: number;
@@ -1296,11 +1297,16 @@ export class Orchestrator {
       sections.push('');
       sections.push('Each action is a JSON object with a "type" field. Return an array of actions.');
       sections.push('');
-      sections.push('You have ONLY two actions (you are an observer, not an executor):');
-      sections.push('- send_message: Send a directive or finding to the CEO (council orchestrator)');
-      sections.push('  { "type": "send_message", "recipientId": "...", "message": "[OBSERVER AUDIT #N] ..." }');
+      sections.push('You have these actions (you are an observer, not an executor):');
+      sections.push('');
+      sections.push('- create_directive: Create a PERSISTENT finding/suggestion for the CEO');
+      sections.push('  { "type": "create_directive", "targetId": "<council-orch-id>", "content": "[OBSERVER AUDIT #N] ..." }');
+      sections.push('  IMPORTANT: Use create_directive, NOT send_message. Directives persist until the CEO explicitly');
+      sections.push('  completes or rejects them. Messages are fire-and-forget and get lost on session rotation.');
       sections.push('- record_lesson: Save an architectural insight for future reference');
       sections.push('  { "type": "record_lesson", "lesson": "...", "source": "observer-audit" }');
+      sections.push('- send_message: For informal/non-critical communication only');
+      sections.push('  { "type": "send_message", "recipientId": "...", "message": "..." }');
       sections.push('- complete_directive: Mark a directive as done');
       sections.push('  { "type": "complete_directive", "directiveId": 42, "summary": "what was done" }');
       sections.push('- reject_directive: Reject a directive with reason');
@@ -1364,7 +1370,9 @@ export class Orchestrator {
     sections.push('  { "type": "complete_directive", "directiveId": 42, "summary": "what was done" }');
     sections.push('- reject_directive: Reject a directive with reason');
     sections.push('  { "type": "reject_directive", "directiveId": 42, "reason": "why not feasible" }');
-    sections.push('  Directives WILL NOT go away until you complete or reject them. Do not ignore them.');
+    sections.push('- create_directive: Create a persistent directive for another orchestrator');
+    sections.push('  { "type": "create_directive", "targetId": "orch-id", "content": "what needs to be done" }');
+    sections.push('  Directives WILL NOT go away until the target explicitly completes or rejects them.');
     const isCouncilActions = this.deps.db.getAgent(this.orchestratorId)?.role === 'council';
     if (isCouncilActions) {
       sections.push('');
@@ -1757,6 +1765,17 @@ export class Orchestrator {
         const did = action.directiveId;
         this.deps.db.rejectDirective(did, action.reason);
         console.log(`[Orchestrator ${this.orchestratorId}] Directive D#${did} REJECTED: ${action.reason}`);
+        break;
+      }
+
+      case 'create_directive': {
+        // Create a persistent directive for another orchestrator (e.g., observer → CEO)
+        const newId = this.deps.db.addDirective({
+          targetId: action.targetId,
+          content: action.content,
+          addedBy: this.orchestratorId,
+        });
+        console.log(`[Orchestrator ${this.orchestratorId}] Created directive D#${newId} for ${action.targetId}: ${action.content.slice(0, 80)}`);
         break;
       }
 
