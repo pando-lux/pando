@@ -703,9 +703,9 @@ export class AgentDatabase {
 
     // Non-persistent active/spawning agents → failed (workers under persistent orchestrators already handled above)
     const r1 = this.db.prepare(`
-      UPDATE agent_identity SET status = 'failed', updated_at = ?
+      UPDATE agent_identity SET status = 'failed', error_summary = 'Marked failed by restart cleanup', failed_at = ?, updated_at = ?
       WHERE persistent = 0 AND status IN ('active', 'spawning', 'idle')
-    `).run(now);
+    `).run(now, now);
 
     // Persistent orchestrators: reset to 'pending' (will be rehydrated on boot)
     // DO NOT delete — they carry project association and identity

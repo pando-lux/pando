@@ -650,9 +650,12 @@ export class WorkerPool {
    * Called on startup and every 30 seconds to reap dead workers.
    */
   cleanup(): void {
-    const activeWorkers = this.db.listAgents({ type: 'worker', status: 'active' });
+    const workersToCheck = [
+      ...this.db.listAgents({ type: 'worker', status: 'active' }),
+      ...this.db.listAgents({ type: 'worker', status: 'idle' }),
+    ];
     let reaped = 0;
-    for (const worker of activeWorkers) {
+    for (const worker of workersToCheck) {
       if (worker.pid && !this.activeProcesses.has(worker.id)) {
         // Check if process is actually running
         // process.kill(pid, 0) throws ESRCH if dead, EPERM if alive-but-unpermitted
@@ -667,33 +670,44 @@ export class WorkerPool {
           // Re-read agent status to avoid race: worker may have transitioned
           // to idle/done between the listAgents query and now
           const current = this.db.getAgent(worker.id);
-          if (current && ['done', 'failed', 'dissolved', 'idle'].includes(current.status)) continue;
-          this.db.updateAgent(worker.id, {
-            status: 'failed',
-            pid: null,
-          });
-          // Notify parent orchestrator so it can decide to retry or escalate
-          if (worker.parentId) {
-            this.messageBus.send({
-              recipientId: worker.parentId,
-              senderId: worker.id,
-              senderType: 'worker',
-              type: 'worker_report',
-              payload: {
-                status: 'failed',
-                summary: 'Worker process died unexpectedly (reaped — process no longer running)',
-                taskId: worker.currentTaskId,
-                auto: true,
-              },
-              priority: 0,
+          if (current && ['done', 'failed', 'dissolved'].includes(current.status)) continue;
+          if (current && current.status === 'idle') {
+            // Idle worker with dead PID: task completed, process just exited while waiting
+            this.db.updateAgent(worker.id, {
+              status: 'done',
+              pid: null,
             });
+          } else {
+            // Active worker with dead PID: unexpected death
+            this.db.updateAgent(worker.id, {
+              status: 'failed',
+              pid: null,
+              errorSummary: 'Process died unexpectedly (reaped by cleanup)',
+              failedAt: new Date().toISOString(),
+            });
+            // Notify parent orchestrator so it can decide to retry or escalate
+            if (worker.parentId) {
+              this.messageBus.send({
+                recipientId: worker.parentId,
+                senderId: worker.id,
+                senderType: 'worker',
+                type: 'worker_report',
+                payload: {
+                  status: 'failed',
+                  summary: 'Worker process died unexpectedly (reaped — process no longer running)',
+                  taskId: worker.currentTaskId,
+                  auto: true,
+                },
+                priority: 0,
+              });
+            }
           }
           reaped++;
         }
       }
     }
     if (reaped > 0) {
-      console.log(`[WorkerPool] Reaped ${reaped} dead worker(s) with stale 'active' status`);
+      console.log(`[WorkerPool] Reaped ${reaped} dead worker(s) with stale active/idle status`);
     }
 
     // Retire workers idle > 30 min (free up session resources)
