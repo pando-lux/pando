@@ -10,6 +10,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@libp2p/peer-id": "^5.0.0",
     "@pando/shared": "*",
     "better-sqlite3": "^11.0.0"
   },

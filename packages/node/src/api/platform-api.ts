@@ -1792,6 +1792,18 @@ export async function registerPlatformRoutes(
         balance = ledger.accounts.getBalance(peerId);
         const account = ledger.accounts.get(peerId);
         if (account) publicKey = account.publicKey;
+        // Fallback: if publicKey is the placeholder 'remote-peer', extract real key from peerId
+        if (!publicKey || publicKey === 'remote-peer') {
+          try {
+            const { peerIdFromString } = await import('@libp2p/peer-id');
+            const peerIdObj = peerIdFromString(peerId);
+            if (peerIdObj.publicKey?.raw) {
+              publicKey = Buffer.from(peerIdObj.publicKey.raw).toString('base64');
+            }
+          } catch {
+            // Leave as-is if extraction fails
+          }
+        }
         const authFields = ledger.accounts.getAuthFields(peerId);
         if (authFields) {
           username = authFields.username || undefined;

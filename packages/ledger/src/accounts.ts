@@ -1,6 +1,7 @@
 import type Database from 'better-sqlite3';
 import type { Account } from '@pando/shared';
 import { roundLux } from '@pando/shared';
+import { peerIdFromString } from '@libp2p/peer-id';
 
 export class AccountStore {
   private db: Database.Database;
@@ -140,7 +141,16 @@ export class AccountStore {
 
     // Create account if it doesn't exist
     if (!this.exists(peerId)) {
-      this.create(peerId, 'remote-peer');
+      let extractedKey = 'remote-peer';
+      try {
+        const peerIdObj = peerIdFromString(peerId);
+        if (peerIdObj.publicKey?.raw) {
+          extractedKey = Buffer.from(peerIdObj.publicKey.raw).toString('base64');
+        }
+      } catch {
+        // Extraction failed — fall back to 'remote-peer' so P2P sync isn't broken
+      }
+      this.create(peerId, extractedKey);
     }
 
     this.db.prepare(
