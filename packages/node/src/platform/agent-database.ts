@@ -979,9 +979,24 @@ export class AgentDatabase {
       "DELETE FROM tick_log WHERE created_at < datetime('now', '-7 days')"
     ).run().changes;
 
-    const agents = this.db.prepare(
-      "DELETE FROM agent_identity WHERE status IN ('failed','dissolved') AND created_at < datetime('now', '-7 days') AND type = 'worker'"
+    let agents = this.db.prepare(
+      "DELETE FROM agent_identity WHERE status IN ('done','failed','dissolved') AND created_at < datetime('now', '-1 day') AND type = 'worker'"
     ).run().changes;
+
+    // Aggressive pruning when worker count exceeds 20
+    const totalWorkers = this.db.prepare("SELECT COUNT(*) as cnt FROM agent_identity WHERE type = 'worker'").get() as any;
+    if (totalWorkers?.cnt > 20) {
+      const excess = this.db.prepare(`
+        DELETE FROM agent_identity WHERE type = 'worker' AND status IN ('done','failed','dissolved')
+        AND id NOT IN (
+          SELECT id FROM (
+            SELECT id, ROW_NUMBER() OVER (PARTITION BY parent_id, role ORDER BY created_at DESC) as rn
+            FROM agent_identity WHERE type = 'worker' AND status IN ('done','failed','dissolved')
+          ) WHERE rn <= 5
+        )
+      `).run().changes;
+      if (excess > 0) agents += excess;
+    }
 
     const reflections = this.db.prepare(
       "DELETE FROM reflections WHERE created_at < datetime('now', '-30 days')"
