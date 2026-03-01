@@ -67,6 +67,7 @@ import { UserAccountStore } from './platform/user-accounts.js';
 import { ProjectStore } from './platform/project-store.js';
 import { ProjectRegistry, TOPIC_PROJECTS } from './platform/project-registry.js';
 import { RevenueEngine } from './platform/revenue-engine.js';
+import { randomUUID } from 'node:crypto';
 import { ContributionTracker } from './platform/contribution-tracker.js';
 import { GenomeAgent } from './platform/genome-agent.js';
 // Council replaced by Orchestrator
@@ -733,30 +734,12 @@ export class PandoNode {
       const { message, threadId, tier } = req.payload || {};
       if (!message) return { error: 'message required' };
 
-      // Create project via project store
-      const projectStore = this.getProjectStore?.();
-      let projectId: string | undefined;
-      if (projectStore) {
-        try {
-          const projName = (message as string).slice(0, 60).replace(/[^a-zA-Z0-9 -]/g, '').trim() || 'P2P Project';
-          const project = await projectStore.createProject({
-            name: projName,
-            description: message as string,
-            ownerId: req.from || 'p2p-remote',
-            visibility: 'listed',
-            tier: 1,
-          });
-          projectId = project.id;
-          console.log(`[chat_proxy] Created project ${projectId} for P2P request from ${req.from}`);
-        } catch (err: any) {
-          console.error(`[chat_proxy] Project creation failed: ${err.message}`);
-          return { error: 'Project creation failed' };
-        }
-      }
-
-      if (!projectId) {
-        return { error: 'No project store available' };
-      }
+      // Generate project ID locally — skip MongoDB to avoid circular P2P proxy calls.
+      // When EC2 (no Claude Code) forwards to Windows (has Claude Code) via chat_proxy,
+      // calling projectStore.createProject() would P2P-proxy back to EC2 → timeout.
+      // The orchestrator only needs a projectId string; full MongoDB record is not required.
+      const projectId = randomUUID();
+      console.log(`[chat_proxy] Generated local projectId ${projectId} for P2P request from ${req.from}`);
 
       // Ensure orchestrator is running and route the message
       const orchId = await this.ensureProjectOrchestrator(projectId);

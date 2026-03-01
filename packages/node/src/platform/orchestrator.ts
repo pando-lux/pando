@@ -1384,17 +1384,18 @@ export class Orchestrator {
 
       case 'respond_to_user': {
         console.log(`[Orchestrator ${this.orchestratorId}] → User: ${action.message}`);
-        // Write response to ThreadStore so it appears in the chat UI
+        // Write response to ThreadStore (fire-and-forget — don't block SSE push).
+        // On P2PStorageBackend nodes, this can fail with 'unable to open database file'
+        // or hang waiting for peer response. The SSE push below is more important.
         if (this.deps.threadStore && this._lastThreadId) {
-          try {
-            await this.deps.threadStore.addMessage(this._lastThreadId, {
-              role: 'assistant',
-              content: action.message,
-              timestamp: Date.now(),
-            });
-          } catch (err: any) {
-            console.warn(`[Orchestrator ${this.orchestratorId}] ThreadStore write failed: ${err.message?.slice(0, 100)}`);
-          }
+          const tid = this._lastThreadId;
+          this.deps.threadStore.addMessage(tid, {
+            role: 'assistant',
+            content: action.message,
+            timestamp: Date.now(),
+          }).catch((err: any) => {
+            console.warn(`[Orchestrator ${this.orchestratorId}] ThreadStore write failed (non-blocking): ${err.message?.slice(0, 100)}`);
+          });
         }
         // Push SSE event so gateway updates in real-time (no page refresh needed)
         if (this.deps.pushEvent && this._lastThreadId) {
