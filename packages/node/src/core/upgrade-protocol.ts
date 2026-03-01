@@ -287,7 +287,8 @@ export class UpgradeProtocol {
     // Step 4: Verify commit hash if provided (governance-approved hash)
     // Soft check only — orphan branch pushes produce different hashes, so log warning but proceed
     if (commitHash && remoteSha !== commitHash && !remoteSha.startsWith(commitHash) && !commitHash.startsWith(remoteSha.slice(0, commitHash.length))) {
-      console.warn(`[upgrade] Hash note: governance approved ${commitHash.slice(0, 12)}, origin/master is ${remoteSha.slice(0, 12)} (orphan branch or different repo — proceeding anyway)`);
+      console.error(`[upgrade] Hash mismatch: governance approved ${commitHash.slice(0, 12)}, but origin/master is ${remoteSha.slice(0, 12)} — aborting upgrade`);
+      return { success: false, message: `Hash mismatch: governance approved ${commitHash} but origin/master is ${remoteSha}` };
     }
 
     // Step 5: Reset to origin/master (stash uncommitted changes first)

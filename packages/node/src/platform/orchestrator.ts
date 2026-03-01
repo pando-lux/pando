@@ -1591,6 +1591,7 @@ export class Orchestrator {
           }
 
           // Scenario test verification gate — abort proposal if API scenarios fail
+          let scenarioSummary = '';
           if (this.deps.scenarioRunner) {
             try {
               const result = await this.deps.scenarioRunner.runCategory('api');
@@ -1609,12 +1610,25 @@ export class Orchestrator {
                 break;
               }
               console.log(`[Orchestrator ${this.orchestratorId}] Scenario verification passed: ${result.passed}/${result.total} API scenarios passed`);
+              scenarioSummary = ` [build: PASS, scenarios: ${result.passed}/${result.passed + result.failed} passed]`;
             } catch (scenarioErr) {
-              console.warn(`[Orchestrator ${this.orchestratorId}] Scenario runner error (non-blocking):`, scenarioErr);
+              console.error(`[Orchestrator ${this.orchestratorId}] Scenario runner crashed — aborting proposal:`, scenarioErr);
+              this.deps.messageBus.send({
+                recipientId: this.orchestratorId,
+                senderId: this.orchestratorId,
+                senderType: 'orchestrator',
+                type: 'health_alert',
+                payload: {
+                  severity: 'critical',
+                  message: `Scenario runner crashed before propose_upgrade — proposal aborted: ${scenarioErr instanceof Error ? scenarioErr.message : String(scenarioErr)}`,
+                },
+              });
+              break;
             }
           }
 
-          await this.deps.onPropose(action.title, action.description);
+          const proposalDescription = action.description + (scenarioSummary || ' [build: PASS]');
+          await this.deps.onPropose(action.title, proposalDescription);
         }
         break;
       }
