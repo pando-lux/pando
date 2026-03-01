@@ -177,7 +177,7 @@
       "content_hash": "f0e0c078"
     },
     "genome/knowledge/flows/council-operating-system.know": {
-      "mtime": 1772300621.583408,
+      "mtime": 1772363760.683966,
       "nodes": [
         {
           "_type": "flow",
@@ -272,7 +272,7 @@
           "_type": "concept",
           "_name": "OrchestratorAction",
           "_source": "genome\\knowledge\\flows\\council-operating-system.know",
-          "description": "Union type of 13 action types an orchestrator can take per tick: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy (legacy/noop), respond_to_user, run_scenarios. Returned from deterministic() (Tier 1) or parseAIActions() (Tier 2).",
+          "description": "Union type of 15 action types an orchestrator can take per tick: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy (legacy/noop), respond_to_user, run_scenarios, complete_directive, reject_directive. Returned from deterministic() (Tier 1) or parseAIActions() (Tier 2).",
           "defined_in": "packages/node/src/platform/orchestrator.ts",
           "used_by": [
             "Orchestrator"
@@ -330,7 +330,7 @@
           "_type": "concept",
           "_name": "AgentDatabase",
           "_source": "genome\\knowledge\\flows\\council-operating-system.know",
-          "description": "SQLite-backed storage with 8 tables: agent_identity, agent_templates, message_inbox, tick_log, lessons, org_knowledge, directives, reflections. Single file at ~/.pando/agents.db. WAL mode, prepared statements. Phase 105: agent_templates table stores reusable role definitions.",
+          "description": "SQLite-backed storage with 9 tables: agent_identity, agent_templates, message_inbox, tick_log, lessons, org_knowledge, directives, reflections, governance_audit. Single file at ~/.pando/agents.db. WAL mode, prepared statements. Phase 105: agent_templates table stores reusable role definitions. governance_audit table logs security gate results for each proposal.",
           "defined_in": "packages/node/src/platform/agent-database.ts",
           "used_by": [
             "MessageBus",
@@ -340,6 +340,27 @@
             "AgentTools",
             "PlatformApi",
             "TemplateRegistry"
+          ]
+        },
+        {
+          "_type": "concept",
+          "_name": "GovernanceSecurityGate",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "description": "4 deterministic checks in validateUpgradeProposal() before auto-approve: (1) valid commit hash, (2) npm run build passes, (3) ScenarioRunner tests pass, (4) git diff non-empty. Any failure blocks auto-approve. Results logged to governance_audit table in AgentDatabase. Runs in dev mode only (< 8 peers).",
+          "defined_in": "packages/node/src/kernel/governance.ts",
+          "used_by": [
+            "GovernanceSync"
+          ]
+        },
+        {
+          "_type": "concept",
+          "_name": "ObserverOrchestrator",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "description": "Autonomous observer agent (role='observer') created alongside council on boot. 5-min tick interval (tickIntervalMs: 300000). Always classified as Tier 2 (AI judgment). Proactively audits architecture, code quality, and system health. Reports findings as directives to council via MessageBus. Cannot spawn workers \u2014 observation and reporting only.",
+          "defined_in": "packages/node/src/platform/orchestrator.ts",
+          "used_by": [
+            "PandoNode",
+            "Orchestrator"
           ]
         },
         {
@@ -541,13 +562,16 @@
             },
             {
               "_name": "ai_sees_directives",
-              "_target": "deactivate",
-              "actor": "AgentTools",
-              "what": "After orchestrator processes directives, deactivateDirective(id) sets active=0. GET /council/directives shows current active directives.",
-              "_next": "deactivate"
+              "_target": "complete_or_reject",
+              "_tags": [
+                "@gotcha(\"Directives are PERSISTENT. They appear in every tick's AI prompt until the AI explicitly completes or rejects them. This prevents directives from being silently ignored.\")"
+              ],
+              "actor": "Orchestrator",
+              "what": "AI returns complete_directive(id, summary) or reject_directive(id, reason) actions. complete_directive sets status='completed' with completedAt timestamp and summary. reject_directive sets status='rejected' with reason. Directives persist across session rotations until explicitly completed or rejected \u2014 they do NOT disappear on their own.",
+              "_next": "complete_or_reject"
             }
           ],
-          "summary": "Directives are standing orders injected into the orchestrator's AI prompt. They persist in SQLite until explicitly deactivated after processing.",
+          "summary": "Directives are standing orders injected into the orchestrator's AI prompt. They persist in SQLite until explicitly completed or rejected by the AI via complete_directive/reject_directive actions.",
           "trigger": "HumanDirective"
         },
         {
@@ -692,7 +716,7 @@
           "trigger": "WorkerCompletion"
         }
       ],
-      "content_hash": "a81aba5b"
+      "content_hash": "82d05968"
     },
     "genome/knowledge/flows/node-onboarding.know": {
       "mtime": 1772122710.7784405,
@@ -2729,6 +2753,11 @@
       "nodes": [],
       "content_hash": "1457a439"
     },
+    "packages/gateway/app/api/council/dashboard/route.ts": {
+      "mtime": 1772349701.324425,
+      "nodes": [],
+      "content_hash": "5db61e64"
+    },
     "packages/gateway/app/api/council/directive/route.ts": {
       "mtime": 1772168966.1038158,
       "nodes": [],
@@ -3070,9 +3099,9 @@
       "content_hash": "f26dc9cb"
     },
     "packages/gateway/app/council/page.tsx": {
-      "mtime": 1772136174.335641,
+      "mtime": 1772352094.688457,
       "nodes": [],
-      "content_hash": "8fda47de"
+      "content_hash": "20b7af2c"
     },
     "packages/gateway/app/dev/page.tsx": {
       "mtime": 1772065558.4424982,
@@ -3265,7 +3294,7 @@
       "content_hash": "07a96755"
     },
     "packages/gateway/next-env.d.ts": {
-      "mtime": 1772296862.4029045,
+      "mtime": 1772352134.02518,
       "nodes": [],
       "content_hash": "2a74d390"
     },
@@ -3330,9 +3359,9 @@
       "content_hash": "b6386d5e"
     },
     "packages/node/src/api/platform-api.ts": {
-      "mtime": 1772315310.9863386,
+      "mtime": 1772354955.3300908,
       "nodes": [],
-      "content_hash": "bd5400e1"
+      "content_hash": "089ef483"
     },
     "packages/node/src/cli.ts": {
       "mtime": 1772300209.6348763,
@@ -3459,9 +3488,9 @@
       "content_hash": "23f6666f"
     },
     "packages/node/src/core/upgrade-protocol.ts": {
-      "mtime": 1772294716.7871046,
+      "mtime": 1772358927.8499625,
       "nodes": [],
-      "content_hash": "122b1594"
+      "content_hash": "687649f8"
     },
     "packages/node/src/core/version-protocol.ts": {
       "mtime": 1772127664.935471,
@@ -3474,12 +3503,12 @@
       "content_hash": "fcc1fa1a"
     },
     "packages/node/src/core/worker-pool.ts": {
-      "mtime": 1772315339.9443588,
+      "mtime": 1772351084.295527,
       "nodes": [],
-      "content_hash": "90063735"
+      "content_hash": "90e28b33"
     },
     "packages/node/src/index.ts": {
-      "mtime": 1772315265.3409927,
+      "mtime": 1772361686.8789632,
       "nodes": [
         {
           "_type": "entity",
@@ -3514,10 +3543,10 @@
             "StorageBackend"
           ],
           "file": "packages\\node\\src\\index.ts:1",
-          "_content_hash": "c7b95845"
+          "_content_hash": "188633ac"
         }
       ],
-      "content_hash": "c7b95845"
+      "content_hash": "188633ac"
     },
     "packages/node/src/kernel/crash-guard.ts": {
       "mtime": 1772127664.9374683,
@@ -3530,9 +3559,9 @@
       "content_hash": "fb34a75f"
     },
     "packages/node/src/kernel/governance.ts": {
-      "mtime": 1772294289.9436407,
+      "mtime": 1772361677.1039443,
       "nodes": [],
-      "content_hash": "ade42d40"
+      "content_hash": "7f57a979"
     },
     "packages/node/src/kernel/guardrails.ts": {
       "mtime": 1772127664.9405558,
@@ -3669,9 +3698,9 @@
       "content_hash": "fea57ec4"
     },
     "packages/node/src/platform/agent-database.ts": {
-      "mtime": 1772315153.5906742,
+      "mtime": 1772362698.5555675,
       "nodes": [],
-      "content_hash": "f169d1c5"
+      "content_hash": "50bfab6d"
     },
     "packages/node/src/platform/agent-tools.ts": {
       "mtime": 1772216846.500401,
@@ -3749,9 +3778,9 @@
       "content_hash": "6d8b4070"
     },
     "packages/node/src/platform/orchestrator.ts": {
-      "mtime": 1772315363.150932,
+      "mtime": 1772362564.0797715,
       "nodes": [],
-      "content_hash": "33c05e51"
+      "content_hash": "85647dd8"
     },
     "packages/node/src/platform/org-manager.ts": {
       "mtime": 1772285210.4756103,

@@ -58,7 +58,7 @@ flow OrchestratorSystem {
 }
 
 concept OrchestratorAction {
-  description: "Union type of 13 action types an orchestrator can take per tick: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy (legacy/noop), respond_to_user, run_scenarios. Returned from deterministic() (Tier 1) or parseAIActions() (Tier 2)."
+  description: "Union type of 15 action types an orchestrator can take per tick: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy (legacy/noop), respond_to_user, run_scenarios, complete_directive, reject_directive. Returned from deterministic() (Tier 1) or parseAIActions() (Tier 2)."
   defined_in: "packages/node/src/platform/orchestrator.ts"
   used_by: [Orchestrator]
 }
@@ -88,9 +88,21 @@ concept OrgManager {
 }
 
 concept AgentDatabase {
-  description: "SQLite-backed storage with 8 tables: agent_identity, agent_templates, message_inbox, tick_log, lessons, org_knowledge, directives, reflections. Single file at ~/.pando/agents.db. WAL mode, prepared statements. Phase 105: agent_templates table stores reusable role definitions."
+  description: "SQLite-backed storage with 9 tables: agent_identity, agent_templates, message_inbox, tick_log, lessons, org_knowledge, directives, reflections, governance_audit. Single file at ~/.pando/agents.db. WAL mode, prepared statements. Phase 105: agent_templates table stores reusable role definitions. governance_audit table logs security gate results for each proposal."
   defined_in: "packages/node/src/platform/agent-database.ts"
   used_by: [MessageBus, WorkerPool, OrgManager, Orchestrator, AgentTools, PlatformApi, TemplateRegistry]
+}
+
+concept GovernanceSecurityGate {
+  description: "4 deterministic checks in validateUpgradeProposal() before auto-approve: (1) valid commit hash, (2) npm run build passes, (3) ScenarioRunner tests pass, (4) git diff non-empty. Any failure blocks auto-approve. Results logged to governance_audit table in AgentDatabase. Runs in dev mode only (< 8 peers)."
+  defined_in: "packages/node/src/kernel/governance.ts"
+  used_by: [GovernanceSync]
+}
+
+concept ObserverOrchestrator {
+  description: "Autonomous observer agent (role='observer') created alongside council on boot. 5-min tick interval (tickIntervalMs: 300000). Always classified as Tier 2 (AI judgment). Proactively audits architecture, code quality, and system health. Reports findings as directives to council via MessageBus. Cannot spawn workers — observation and reporting only."
+  defined_in: "packages/node/src/platform/orchestrator.ts"
+  used_by: [PandoNode, Orchestrator]
 }
 
 concept TierClassification {
@@ -205,7 +217,7 @@ flow TickLifecycle {
 }
 
 flow DirectiveFlow {
-  summary: "Directives are standing orders injected into the orchestrator's AI prompt. They persist in SQLite until explicitly deactivated after processing."
+  summary: "Directives are standing orders injected into the orchestrator's AI prompt. They persist in SQLite until explicitly completed or rejected by the AI via complete_directive/reject_directive actions."
   trigger: HumanDirective
 
   step post_directive -> store_sqlite {
@@ -229,9 +241,10 @@ flow DirectiveFlow {
     what: "AI prompt includes '## Directives' section listing all active directive strings. AI decides actions based on directive content."
   }
 
-  step ai_sees_directives -> deactivate {
-    actor: AgentTools
-    what: "After orchestrator processes directives, deactivateDirective(id) sets active=0. GET /council/directives shows current active directives."
+  step ai_sees_directives -> complete_or_reject {
+    actor: Orchestrator
+    what: "AI returns complete_directive(id, summary) or reject_directive(id, reason) actions. complete_directive sets status='completed' with completedAt timestamp and summary. reject_directive sets status='rejected' with reason. Directives persist across session rotations until explicitly completed or rejected — they do NOT disappear on their own."
+    @gotcha("Directives are PERSISTENT. They appear in every tick's AI prompt until the AI explicitly completes or rejects them. This prevents directives from being silently ignored.")
   }
 }
 
