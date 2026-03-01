@@ -842,6 +842,15 @@ export class Orchestrator {
       sections.push('- "I can\'t find my Lux balance" not "The /wallet endpoint works"');
       sections.push('- "The governance page is intimidating" not "Proposals array renders"');
       sections.push('');
+      sections.push('## GATEWAY STARTUP (you are responsible)');
+      sections.push('Before spawning test workers, check if the gateway is running:');
+      sections.push('- Spawn a qa-tester worker to navigate to http://127.0.0.1:3222');
+      sections.push('- If the page loads: gateway is running, proceed with testing');
+      sections.push('- If connection refused: spawn a devops worker to start it:');
+      sections.push('  { "type": "spawn_worker", "role": "devops", "rolePrompt": "Start the Pando gateway: cd packages/gateway && PANDO_NODE_URL=http://localhost:4000 npx next dev --port 3222" }');
+      sections.push('- Wait for the devops worker to report ready before spawning qa-testers');
+      sections.push('- Gateway URL for ALL tests: http://127.0.0.1:3222 (NOT localhost, NOT port 3000)');
+      sections.push('');
       sections.push('## TESTING CYCLE (rotate priorities each tick)');
       sections.push('1. FIRST-TIME USER JOURNEY: Landing → register → build app → see result');
       sections.push('2. CORE FLOWS: Chat works? Projects load? Wallet shows balance?');
@@ -1390,7 +1399,7 @@ export class Orchestrator {
       sections.push('');
       sections.push('You have these actions (you are a QA tester, not an executor):');
       sections.push('');
-      sections.push('- spawn_worker: Spawn a qa-tester worker with a SPECIFIC test scenario');
+      sections.push('- spawn_worker: Spawn a qa-tester or devops worker');
       sections.push('  { "type": "spawn_worker", "role": "qa-tester", "rolePrompt": "Open http://localhost:3222/chat. Type \'hello\'. Wait 10s. Check for response. Take screenshot." }');
       sections.push('  IMPORTANT: Give workers SPECIFIC URLs, actions, and expected outcomes. Not vague instructions.');
       sections.push('- kill_worker: Stop a stuck worker');
