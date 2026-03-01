@@ -613,6 +613,17 @@ export class AgentDatabase {
         console.log('[agents] Migrated: added directive status lifecycle columns');
       }
     } catch { /* column already exists or migration not needed */ }
+
+    // D#125: Migrate — add worker failure diagnostic columns to agent_identity if missing
+    try {
+      const dCols2 = this.db.pragma('table_info(agent_identity)') as any[];
+      if (!dCols2.some((c: any) => c.name === 'exit_code')) {
+        this.db.exec('ALTER TABLE agent_identity ADD COLUMN exit_code INTEGER');
+        this.db.exec('ALTER TABLE agent_identity ADD COLUMN error_summary TEXT');
+        this.db.exec('ALTER TABLE agent_identity ADD COLUMN failed_at TEXT');
+        console.log('[agents] Migrated: added worker failure diagnostic columns to agent_identity');
+      }
+    } catch { /* column already exists or migration not needed */ }
   }
 
   close(): void {
