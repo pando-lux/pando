@@ -357,6 +357,19 @@ export class Orchestrator {
         }
       }
 
+      // 3b-fallback: Clear stale currentFocus when no active workers remain
+      // Handles phantom failures where workers are marked failed externally (no inbox report)
+      if (board.workerReports.length === 0) {
+        const focus = this.deps.db.getCurrentFocus(this.orchestratorId);
+        if (focus) {
+          const remaining = this.deps.db.getActiveWorkers(this.orchestratorId);
+          if (remaining.length === 0) {
+            console.log(`[Orchestrator ${this.orchestratorId}] Clearing stale currentFocus: no active workers, no pending reports`);
+            this.deps.db.clearCurrentFocus(this.orchestratorId);
+          }
+        }
+      }
+
       // 3b2. Deploy URL fix: Auto-respond to user when devops worker reports success with a URL.
       // This is deterministic — no AI judgment needed. Prevents "Processing..." forever.
       if (board.workerReports.length > 0 && this._lastThreadId) {
