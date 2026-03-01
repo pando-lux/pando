@@ -3443,6 +3443,9 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       repoDir: process.cwd(),
       graphPath: join(process.cwd(), 'output', 'graph.json'),
       apiToken,
+      startOrchestrator: async (orchId: string, isCouncil: boolean) => {
+        this.orchestratorManager!.startOrchestrator(orchId, isCouncil);
+      },
     });
     console.log('[agents] OrchestratorProcessManager initialized');
 
