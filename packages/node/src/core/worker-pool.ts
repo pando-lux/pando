@@ -464,51 +464,60 @@ export class WorkerPool {
     }
 
     try {
-      // Check if worktree branch has commits ahead of current branch
-      const logOutput = execSync(`git log HEAD..${JSON.stringify(branchName)} --oneline`, {
-        cwd: mainRepo,
-        encoding: 'utf-8',
-        timeout: 10_000,
-        stdio: ['pipe', 'pipe', 'pipe'],
+      const mergeBase = execSync(`git merge-base HEAD ${JSON.stringify(branchName)}`, {
+        cwd: mainRepo, encoding: 'utf-8', timeout: 10_000, stdio: ['pipe', 'pipe', 'pipe'],
       }).trim();
 
-      if (logOutput) {
-        // Commits exist — fast-forward merge into main repo
-        execSync(`git merge ${JSON.stringify(branchName)} --ff-only`, {
-          cwd: mainRepo,
-          encoding: 'utf-8',
-          timeout: 30_000,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-        console.log(`[WorkerPool] Merged ${branchName} into main repo (ff-only)`);
-      } else {
-        // No commits — check for dirty (uncommitted) files in worktree
-        const diff = execSync('git diff', {
-          cwd: wtPath,
-          encoding: 'utf-8',
-          timeout: 10_000,
-          stdio: ['pipe', 'pipe', 'pipe'],
-        }).trim();
+      // Get committed changes relative to merge base
+      const committedDiff = execSync(`git diff ${mergeBase}..${JSON.stringify(branchName)}`, {
+        cwd: mainRepo, encoding: 'utf-8', timeout: 30_000, stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
 
-        if (diff) {
-          // Apply the patch to the main repo
+      // Get uncommitted changes in worktree
+      const uncommittedDiff = execSync('git diff', {
+        cwd: wtPath, encoding: 'utf-8', timeout: 10_000, stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim();
+
+      if (committedDiff) {
+        try {
           execSync('git apply --allow-empty -', {
-            cwd: mainRepo,
-            input: diff,
-            encoding: 'utf-8',
-            timeout: 10_000,
+            cwd: mainRepo, input: committedDiff, encoding: 'utf-8', timeout: 30_000,
             stdio: ['pipe', 'pipe', 'pipe'],
           });
-          console.log(`[WorkerPool] Applied uncommitted changes from ${workerId} worktree to main repo`);
-        } else {
-          console.log(`[WorkerPool] No changes in ${workerId} worktree to merge`);
+        } catch {
+          // Plain apply failed (main changed same files). Try 3-way merge.
+          execSync('git apply --3way --allow-empty -', {
+            cwd: mainRepo, input: committedDiff, encoding: 'utf-8', timeout: 30_000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
         }
+        console.log(`[WorkerPool] Applied committed changes from ${branchName} to main repo`);
+      }
+
+      if (uncommittedDiff) {
+        try {
+          execSync('git apply --allow-empty -', {
+            cwd: mainRepo, input: uncommittedDiff, encoding: 'utf-8', timeout: 10_000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+        } catch {
+          execSync('git apply --3way --allow-empty -', {
+            cwd: mainRepo, input: uncommittedDiff, encoding: 'utf-8', timeout: 10_000,
+            stdio: ['pipe', 'pipe', 'pipe'],
+          });
+        }
+        console.log(`[WorkerPool] Applied uncommitted changes from ${workerId} worktree to main repo`);
+      }
+
+      if (!committedDiff && !uncommittedDiff) {
+        console.log(`[WorkerPool] No changes in ${workerId} worktree to merge`);
       }
     } catch (mergeErr: any) {
       console.warn(`[WorkerPool] Worktree merge failed for ${workerId}: ${mergeErr.message?.slice(0, 200)}`);
+      throw mergeErr; // Re-throw so caller can set mergeOk=false
+    } finally {
+      this.cleanupWorktree(workerId, wtPath);
     }
-
-    this.cleanupWorktree(workerId, wtPath);
   }
 
   /**
