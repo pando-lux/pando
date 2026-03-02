@@ -22,7 +22,7 @@ export default function LandingPage() {
           <a href="#features" className="hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">Features</a>
           <a href="#how" className="hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">How it works</a>
           <Link
-            href="/login"
+            href="/chat"
             className="px-4 py-2 bg-amber-500 text-neutral-950 rounded-lg font-medium hover:bg-amber-400 transition-colors"
           >
             Get started

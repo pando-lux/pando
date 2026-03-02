@@ -585,6 +585,7 @@ function ChatPage() {
             content: "Processing your request...",
             timestamp: Date.now(),
             tier: "complex" as MessageTier,
+            isStreaming: true,
           }];
         });
       } else if (data.reply) {
