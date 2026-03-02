@@ -1472,7 +1472,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         return result;
       } catch (err: any) {
         return reply.code(500).send({
-          answer: 'Search failed: ' + err.message,
+          answer: 'Search is temporarily unavailable. Please try again later.',
           sources: [],
           confidence: 'none',
           respondedBy: 'node-error',

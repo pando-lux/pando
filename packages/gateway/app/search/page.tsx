@@ -32,7 +32,7 @@ export default function SearchPage() {
         body: JSON.stringify({ query: trimmed }),
       });
       const data: SearchResult = await res.json();
-      if (data.confidence === "none" && data.respondedBy === "gateway-error") {
+      if (data.confidence === "none" && (data.respondedBy === "gateway-error" || data.respondedBy === "node-error")) {
         setError(data.answer);
       } else {
         setResult(data);
