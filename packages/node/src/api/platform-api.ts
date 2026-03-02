@@ -353,6 +353,13 @@ export async function registerPlatformRoutes(
         }
       }
 
+      // D#177: Guard against sending ciphertext to AI when decryption fails or is skipped
+      if (isEncrypted && plaintextForProcessing === trimmed) {
+        const errReply = 'Unable to decrypt your message. Please refresh the page to re-establish encryption.';
+        await threadStore.addMessage(id, { role: 'assistant', content: errReply, timestamp: Date.now(), tier: 'simple' as any });
+        return { status: 'ok', threadId: id, reply: errReply, tier: 'simple' };
+      }
+
       // Save user message to thread (encrypted form for at-rest protection)
       await threadStore.addMessage(id, {
         role: 'user',
