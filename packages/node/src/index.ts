@@ -3485,13 +3485,14 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     if (existingObserver) {
       this.observerOrchId = existingObserver.id;
       this.agentDb.updateAgent(existingObserver.id, { status: 'active' });
+      this.agentDb.updateAgent(existingObserver.id, { tickIntervalMs: 1800000 });
       console.log(`[agents] Observer orchestrator rehydrated: ${this.observerOrchId}`);
     } else {
       this.observerOrchId = this.orgManager.createOrchestrator({
         role: 'observer',
         level: 0,
         scope: 'public',
-        tickIntervalMs: 300000, // 5 minutes
+        tickIntervalMs: 1800000, // 30 minutes
         maxWorkers: 0,
         maxChildren: 0,
         persistent: true,
@@ -3501,7 +3502,7 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       console.log(`[agents] Observer orchestrator created: ${this.observerOrchId}`);
     }
     this.orchestratorManager.startOrchestrator(this.observerOrchId!);
-    console.log('[agents] Observer orchestrator forked to child process (5min interval)');
+    console.log('[agents] Observer orchestrator forked to child process (30min interval)');
 
     // Find existing QA User Agent orchestrator or create new
     const existingQaUser = this.agentDb.listAgents({ role: 'qa-user', type: 'orchestrator' })
@@ -3509,14 +3510,14 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     if (existingQaUser) {
       this.qaUserOrchId = existingQaUser.id;
       this.agentDb.updateAgent(existingQaUser.id, { status: 'active' });
-      this.agentDb.updateAgent(existingQaUser.id, { tickIntervalMs: 300000 });
+      this.agentDb.updateAgent(existingQaUser.id, { tickIntervalMs: 1800000 });
       console.log(`[agents] QA User Agent rehydrated: ${this.qaUserOrchId}`);
     } else {
       this.qaUserOrchId = this.orgManager.createOrchestrator({
         role: 'qa-user',
         level: 0,
         scope: 'public',
-        tickIntervalMs: 300000, // 5 minutes (dev mode)
+        tickIntervalMs: 1800000, // 30 minutes
         maxWorkers: 2,
         maxChildren: 0,
         persistent: true,
@@ -3526,7 +3527,7 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       console.log(`[agents] QA User Agent created: ${this.qaUserOrchId}`);
     }
     this.orchestratorManager.startOrchestrator(this.qaUserOrchId!);
-    console.log('[agents] QA User Agent forked to child process (5min interval)');
+    console.log('[agents] QA User Agent forked to child process (30min interval)');
 
     // Phase 104: Rehydrate persistent project orchestrators from DB
     // Check both 'active' and 'pending' (pending = survived restart, needs reactivation)

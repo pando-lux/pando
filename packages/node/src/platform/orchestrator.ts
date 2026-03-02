@@ -1099,7 +1099,7 @@ export class Orchestrator {
       sections.push('3. Use create_directive for findings, record_lesson for observations. NEVER send_message for important stuff.');
       sections.push('4. Be SPECIFIC. File paths, line numbers, exact commands, concrete suggestions.');
       sections.push('5. Don\'t repeat findings you already reported. Check your directives before creating duplicates.');
-      sections.push('6. You tick every 5 minutes. One domain per tick. Deep investigation beats shallow scans.');
+      sections.push('6. You tick every 30 minutes. One domain per tick. Deep investigation beats shallow scans.');
       sections.push('');
     } else if (isCouncil) {
       sections.push(`# YOU ARE THE COUNCIL — Autonomous CEO of the Pando Network (${this.orchestratorId})`);
@@ -1230,9 +1230,9 @@ export class Orchestrator {
     sections.push('You are a SESSION-PERSISTENT AI. Your Claude Code session survives across ticks —');
     sections.push('you remember previous decisions, worker reports, and context from earlier ticks.');
     if (isObserver) {
-      sections.push('You are called every ~5 minutes with a board-state update.');
+      sections.push('You are called every ~30 minutes with a board-state update.');
     } else if (isQaUser) {
-      sections.push('You are called every ~5 minutes with a board-state update.');
+      sections.push('You are called every ~30 minutes with a board-state update.');
     } else {
       sections.push('You are called every ~60 seconds with a board-state update.');
     }
