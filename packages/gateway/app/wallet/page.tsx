@@ -149,12 +149,12 @@ export default function WalletPage() {
                 </div>
               </div>
             ) : (
-              <div className="flex items-center gap-3">
+              <div className="space-y-2">
                 <button type="submit" disabled={sending || !recipient.trim() || !amount.trim()}
-                  className="bg-amber-500 hover:bg-amber-600 active:scale-[0.98] disabled:opacity-50 text-black font-medium rounded-lg px-4 py-2 text-sm transition">
+                  className="w-full bg-amber-500 hover:bg-amber-600 active:scale-[0.98] disabled:opacity-50 text-black font-medium rounded-lg py-2.5 text-sm transition">
                   {sending ? "Sending..." : "Send"}
                 </button>
-                {sendMsg && <span className={`text-xs ${sendMsg.ok ? "text-green-400" : "text-red-400"}`}>{sendMsg.text}</span>}
+                {sendMsg && <p className={`text-xs text-center ${sendMsg.ok ? "text-green-400" : "text-red-400"}`}>{sendMsg.text}</p>}
               </div>
             )}
           </form>
