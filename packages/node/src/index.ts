@@ -2258,7 +2258,7 @@ location /apps/${projectId}/ {
             clearInterval(selfRestartInterval);
             process.exit(RESTART_EXIT_CODE);
           } catch { /* git unavailable or cwd mismatch — skip silently */ }
-        }, 5 * 60 * 1000);
+        }, 60 * 1000);  // Check every 60s — fast restart after CEO commits
         selfRestartInterval.unref(); // don't prevent normal node exit
       } else {
         console.log('[self-restart] No build-commit stamp found — stale-build watchdog disabled (run npm run build to enable)');

@@ -59,7 +59,7 @@ if exist "%~dp0secrets\local.env.bat" call "%~dp0secrets\local.env.bat"
 
 :: Default arguments if none provided
 set "ARGS=%*"
-if "%ARGS%"=="" set "ARGS=--port 4001 --api-port 4100"
+if "%ARGS%"=="" set "ARGS=--port 4100 --api-port 4000"
 
 set /a RESTART_COUNT=0
 
