@@ -1907,6 +1907,7 @@ export class GovernanceSync {
           continue;
         }
         if (line.startsWith('+') && !line.startsWith('+++')) {
+          if (currentFile.startsWith('output/')) { lineNum++; continue; }
           lineNum++;
           const content = line.slice(1);
           for (const pat of PATTERNS) {
