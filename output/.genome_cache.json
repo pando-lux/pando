@@ -177,7 +177,7 @@
       "content_hash": "f0e0c078"
     },
     "genome/knowledge/flows/council-operating-system.know": {
-      "mtime": 1772424241.2758827,
+      "mtime": 1772445704.3946304,
       "nodes": [
         {
           "_type": "flow",
@@ -254,7 +254,7 @@
               "_name": "deploy",
               "_target": "governance",
               "actor": "Orchestrator",
-              "what": "Council only: onPropose callback calls governance.createProposal(). In dev mode: auto-approve. Governance decisions route back via MessageBus as 'governance_decision' messages.",
+              "what": "Council only: onPropose callback calls governance.createProposal(). Proposal is Ed25519-signed by proposer node. In dev mode (<=8 peers): 6-layer security pipeline (signature, security file check, diff content scan, build, scenario tests, kernel delay) then auto-approve. Governance decisions route back via MessageBus as 'governance_decision' messages.",
               "_next": "governance"
             },
             {
@@ -346,7 +346,7 @@
           "_type": "concept",
           "_name": "GovernanceSecurityGate",
           "_source": "genome\\knowledge\\flows\\council-operating-system.know",
-          "description": "2 deterministic checks in validateUpgradeProposal() before auto-approve: (1) security file check \u2014 blocks proposals modifying sensitive files (credential-store, governance, guardrails, etc.) unless description mentions 'security' or 'credential', (2) kernel protection delay \u2014 60s delay before approval for kernel/ file changes. Build and test verification happen in the orchestrator pre-commit pipeline, not in governance. Results logged to governance_audit table in AgentDatabase. Runs in dev mode only (< 8 peers).",
+          "description": "6-layer security pipeline in validateUpgradeProposal() before auto-approve: (1) Ed25519 proposal signing \u2014 upgrade proposals MUST be signed by proposer, unsigned upgrades rejected, peers verify via peerIdFromString(proposedBy).publicKey; (2) security file check \u2014 blocks proposals modifying sensitive files unless description mentions 'security' or 'credential'; (3) diff content scan \u2014 parses git diff for dangerous patterns: eval() and new Function() BLOCK auto-approve, .privateKey access and dynamic require() WARN; (4) build verification (npm run build in orchestrator pipeline); (5) scenario tests (API regression via ScenarioRunner); (6) kernel protection delay \u2014 60s for kernel/ changes. Results logged to governance_audit table. Upgrade API routes (POST /upgrade/*) locked behind operator bearer token. TUI /upgrade pull warns on unapproved commits.",
           "defined_in": "packages/node/src/kernel/governance.ts",
           "used_by": [
             "GovernanceSync"
@@ -733,7 +733,7 @@
           "trigger": "WorkerCompletion"
         }
       ],
-      "content_hash": "e2ab6a7e"
+      "content_hash": "c88d945d"
     },
     "genome/knowledge/flows/node-onboarding.know": {
       "mtime": 1772122710.7784405,
@@ -2204,7 +2204,7 @@
       "content_hash": "8c1c2623"
     },
     "genome/knowledge/scenarios/layer3-security.know": {
-      "mtime": 1772205733.6919754,
+      "mtime": 1772445656.9128027,
       "nodes": [
         {
           "_type": "test",
@@ -2351,6 +2351,89 @@
         },
         {
           "_type": "test",
+          "_name": "GovernanceProposalSigning",
+          "_source": "genome\\knowledge\\scenarios\\layer3-security.know",
+          "description": "Upgrade proposals are Ed25519-signed by proposer. Unsigned upgrade proposals rejected. Forged signatures rejected.",
+          "validates": "GOVERNANCE_SIGNING",
+          "type": "e2e",
+          "category": "security",
+          "mode": 2,
+          "automatable": "false",
+          "steps": [
+            "Create upgrade proposal via governance \u2014 verify proposerSignature field populated",
+            "Broadcast to peer node \u2014 verify peer accepts signed proposal",
+            "Craft unsigned upgrade proposal and inject via GossipSub \u2014 verify peer REJECTS it",
+            "Craft proposal with corrupted signature \u2014 verify peer REJECTS it",
+            "Create non-upgrade proposal without signature \u2014 verify peer ACCEPTS it (backward compat)"
+          ],
+          "expected": "Signed upgrades accepted. Unsigned/forged upgrades rejected. Non-upgrade without sig accepted.",
+          "status": "passing"
+        },
+        {
+          "_type": "test",
+          "_name": "GovernanceDiffContentScan",
+          "_source": "genome\\knowledge\\scenarios\\layer3-security.know",
+          "description": "Governance scans git diff for dangerous patterns. eval() and new Function() block auto-approve.",
+          "validates": "GOVERNANCE_CONTENT_ANALYSIS",
+          "type": "e2e",
+          "category": "security",
+          "mode": 1,
+          "automatable": "false",
+          "steps": [
+            "Commit code containing eval(userInput) in a new file",
+            "Trigger propose_upgrade \u2014 verify validateUpgradeProposal returns { approved: false }",
+            "Check governance_audit table for diff_content_scan = fail",
+            "Commit clean code \u2014 verify auto-approve passes",
+            "Commit code with .privateKey access \u2014 verify warning logged but approval proceeds"
+          ],
+          "expected": "eval/Function blocks. Warning patterns logged. Clean code passes.",
+          "status": "passing"
+        },
+        {
+          "_type": "test",
+          "_name": "UpgradeAPIAuthRequired",
+          "_source": "genome\\knowledge\\scenarios\\layer3-security.know",
+          "description": "POST /upgrade/* routes require operator bearer token. Unauthenticated requests get 401.",
+          "validates": "UPGRADE_API_AUTH",
+          "type": "api",
+          "category": "security",
+          "mode": 1,
+          "automatable": "true",
+          "method": "POST",
+          "path": "v1/upgrade",
+          "expected_status": 401,
+          "steps": [
+            "POST /v1/upgrade without auth \u2014 expect 401",
+            "POST /v1/upgrade/propose without auth \u2014 expect 401",
+            "POST /v1/upgrade/rollback without auth \u2014 expect 401",
+            "POST /v1/upgrade/pin without auth \u2014 expect 401",
+            "POST /v1/upgrade with valid bearer \u2014 expect 200 or in_progress"
+          ],
+          "expected": "All upgrade writes require auth. 401 without token.",
+          "status": "passing"
+        },
+        {
+          "_type": "test",
+          "_name": "StrictCommitHashVerification",
+          "_source": "genome\\knowledge\\scenarios\\layer3-security.know",
+          "description": "pullAndUpgrade rejects upgrades when commit hash doesn't match governance-approved hash.",
+          "validates": "UPGRADE_HASH_VERIFICATION",
+          "type": "e2e",
+          "category": "security",
+          "mode": 2,
+          "automatable": "false",
+          "steps": [
+            "Push commit A to origin, create governance proposal for commit A",
+            "Force-push commit B (different, non-ancestor) to origin",
+            "Trigger pullAndUpgrade with governance hash A",
+            "Verify REJECTION: hash mismatch, commit not ancestor",
+            "Push commit C (descendant of A) \u2014 verify upgrade proceeds (ancestor check passes)"
+          ],
+          "expected": "Mismatch with non-ancestor \u2192 rejected. Ancestor \u2192 accepted.",
+          "status": "passing"
+        },
+        {
+          "_type": "test",
           "_name": "SecurityMonitorThreatDetection",
           "_source": "genome\\knowledge\\scenarios\\layer3-security.know",
           "description": "Send suspicious requests. SecurityMonitor detects and logs. Peer quarantine for repeated violations.",
@@ -2369,7 +2452,7 @@
           "status": "passing"
         }
       ],
-      "content_hash": "a5b81438"
+      "content_hash": "26acc399"
     },
     "genome/knowledge/scenarios/regression-api.know": {
       "mtime": 1772205733.6919754,
@@ -2667,9 +2750,9 @@
       "content_hash": "dbe66716"
     },
     "packages/gateway/app/api/auth/me/route.ts": {
-      "mtime": 1772055118.2668135,
+      "mtime": 1772428949.4125679,
       "nodes": [],
-      "content_hash": "2e0c99dc"
+      "content_hash": "d9b0ca20"
     },
     "packages/gateway/app/api/auth/refresh/route.ts": {
       "mtime": 1772055121.603394,
@@ -2890,6 +2973,11 @@
       "mtime": 1772063249.2979677,
       "nodes": [],
       "content_hash": "61795e27"
+    },
+    "packages/gateway/app/api/marketplace/[id]/route.ts": {
+      "mtime": 1772427663.5300894,
+      "nodes": [],
+      "content_hash": "141a273c"
     },
     "packages/gateway/app/api/marketplace/route.ts": {
       "mtime": 1772055222.5734549,
@@ -3112,9 +3200,9 @@
       "content_hash": "f457bc4f"
     },
     "packages/gateway/app/chat/page.tsx": {
-      "mtime": 1772413072.410355,
+      "mtime": 1772425584.390396,
       "nodes": [],
-      "content_hash": "37fe4a89"
+      "content_hash": "413d4c70"
     },
     "packages/gateway/app/content/page.tsx": {
       "mtime": 1771400157.8528934,
@@ -3122,9 +3210,14 @@
       "content_hash": "f26dc9cb"
     },
     "packages/gateway/app/council/page.tsx": {
-      "mtime": 1772422777.9548151,
+      "mtime": 1772430028.797832,
       "nodes": [],
-      "content_hash": "42d6440b"
+      "content_hash": "3444d801"
+    },
+    "packages/gateway/app/dashboard/page.tsx": {
+      "mtime": 1772434264.6279602,
+      "nodes": [],
+      "content_hash": "7b7756cf"
     },
     "packages/gateway/app/dev/page.tsx": {
       "mtime": 1772065558.4424982,
@@ -3177,9 +3270,9 @@
       "content_hash": "cb8b1fd1"
     },
     "packages/gateway/app/governance/page.tsx": {
-      "mtime": 1772399686.4791808,
+      "mtime": 1772429959.9115036,
       "nodes": [],
-      "content_hash": "8537ccb5"
+      "content_hash": "9198f32e"
     },
     "packages/gateway/app/layout.tsx": {
       "mtime": 1771601806.7474575,
@@ -3187,14 +3280,19 @@
       "content_hash": "bbb60529"
     },
     "packages/gateway/app/login/page.tsx": {
-      "mtime": 1772413056.964381,
+      "mtime": 1772429579.4647403,
       "nodes": [],
-      "content_hash": "51b5a527"
+      "content_hash": "8b1b1d96"
+    },
+    "packages/gateway/app/marketplace/[id]/page.tsx": {
+      "mtime": 1772427707.449942,
+      "nodes": [],
+      "content_hash": "76f227a1"
     },
     "packages/gateway/app/marketplace/page.tsx": {
-      "mtime": 1772423884.2918851,
+      "mtime": 1772430310.9449885,
       "nodes": [],
-      "content_hash": "fe426b5d"
+      "content_hash": "b4e76d84"
     },
     "packages/gateway/app/monitor/page.tsx": {
       "mtime": 1771542071.0627701,
@@ -3212,9 +3310,9 @@
       "content_hash": "5b6eb1e2"
     },
     "packages/gateway/app/page.tsx": {
-      "mtime": 1772413054.5536468,
+      "mtime": 1772428039.7302077,
       "nodes": [],
-      "content_hash": "078c22f9"
+      "content_hash": "f6f08f6d"
     },
     "packages/gateway/app/projects/page.tsx": {
       "mtime": 1772070909.1659617,
@@ -3222,9 +3320,9 @@
       "content_hash": "c3f3dfb9"
     },
     "packages/gateway/app/register/page.tsx": {
-      "mtime": 1772413058.6913157,
+      "mtime": 1772429605.3906121,
       "nodes": [],
-      "content_hash": "bac67ab6"
+      "content_hash": "71bad9d4"
     },
     "packages/gateway/app/resources/guide/page.tsx": {
       "mtime": 1771762610.7042608,
@@ -3247,9 +3345,9 @@
       "content_hash": "1be78ca1"
     },
     "packages/gateway/app/search/page.tsx": {
-      "mtime": 1772410643.9796512,
+      "mtime": 1772424915.2940483,
       "nodes": [],
-      "content_hash": "65e446b3"
+      "content_hash": "380a8153"
     },
     "packages/gateway/app/services/page.tsx": {
       "mtime": 1771772996.545933,
@@ -3262,9 +3360,14 @@
       "content_hash": "a085902f"
     },
     "packages/gateway/app/wallet/page.tsx": {
-      "mtime": 1772413648.352356,
+      "mtime": 1772429559.8348484,
       "nodes": [],
-      "content_hash": "fe46c9bd"
+      "content_hash": "0712e5fb"
+    },
+    "packages/gateway/components/MarkdownContent.tsx": {
+      "mtime": 1772425562.3291886,
+      "nodes": [],
+      "content_hash": "be6b45bc"
     },
     "packages/gateway/components/NavBar.tsx": {
       "mtime": 1772411322.9114425,
@@ -3357,9 +3460,9 @@
       "content_hash": "c5a62be0"
     },
     "packages/node/src/api/api-server.ts": {
-      "mtime": 1772295187.9488206,
+      "mtime": 1772424561.9813745,
       "nodes": [],
-      "content_hash": "bf66284f"
+      "content_hash": "4bb91de6"
     },
     "packages/node/src/api/context-api.ts": {
       "mtime": 1772375212.2061715,
@@ -3367,14 +3470,14 @@
       "content_hash": "fc156e10"
     },
     "packages/node/src/api/core-api.ts": {
-      "mtime": 1772168966.106819,
+      "mtime": 1772445359.8525128,
       "nodes": [],
-      "content_hash": "37f0cd54"
+      "content_hash": "0d5b089a"
     },
     "packages/node/src/api/kernel-api.ts": {
-      "mtime": 1772421333.1587055,
+      "mtime": 1772424914.0607343,
       "nodes": [],
-      "content_hash": "c9a96f7a"
+      "content_hash": "d4dbc075"
     },
     "packages/node/src/api/middleware/auth.ts": {
       "mtime": 1772136174.3396356,
@@ -3511,9 +3614,9 @@
       "content_hash": "23f6666f"
     },
     "packages/node/src/core/upgrade-protocol.ts": {
-      "mtime": 1772396012.2271066,
+      "mtime": 1772445299.3502758,
       "nodes": [],
-      "content_hash": "3765bd39"
+      "content_hash": "57cbd80e"
     },
     "packages/node/src/core/version-protocol.ts": {
       "mtime": 1772127664.935471,
@@ -3526,12 +3629,12 @@
       "content_hash": "0aaf6c6d"
     },
     "packages/node/src/core/worker-pool.ts": {
-      "mtime": 1772415672.0350757,
+      "mtime": 1772426380.7100937,
       "nodes": [],
-      "content_hash": "84707083"
+      "content_hash": "ff985cd9"
     },
     "packages/node/src/index.ts": {
-      "mtime": 1772410491.9128118,
+      "mtime": 1772445420.5013828,
       "nodes": [
         {
           "_type": "entity",
@@ -3566,10 +3669,10 @@
             "StorageBackend"
           ],
           "file": "packages\\node\\src\\index.ts:1",
-          "_content_hash": "80aece4d"
+          "_content_hash": "efb0d271"
         }
       ],
-      "content_hash": "80aece4d"
+      "content_hash": "efb0d271"
     },
     "packages/node/src/kernel/crash-guard.ts": {
       "mtime": 1772127664.9374683,
@@ -3582,9 +3685,9 @@
       "content_hash": "fb34a75f"
     },
     "packages/node/src/kernel/governance.ts": {
-      "mtime": 1772417587.0868006,
+      "mtime": 1772445238.142415,
       "nodes": [],
-      "content_hash": "e50df99d"
+      "content_hash": "a9964640"
     },
     "packages/node/src/kernel/guardrails.ts": {
       "mtime": 1772127664.9405558,
@@ -3811,9 +3914,9 @@
       "content_hash": "6fd23e30"
     },
     "packages/node/src/platform/orchestrator.ts": {
-      "mtime": 1772420420.5479436,
+      "mtime": 1772434707.2814126,
       "nodes": [],
-      "content_hash": "b9ad61f8"
+      "content_hash": "cc29b271"
     },
     "packages/node/src/platform/org-manager.ts": {
       "mtime": 1772397950.9530687,
@@ -3955,19 +4058,19 @@
       "content_hash": "039ea596"
     },
     "packages/node/src/supervisor.ts": {
-      "mtime": 1772260355.258776,
+      "mtime": 1772442382.1976576,
       "nodes": [],
-      "content_hash": "e41fd691"
+      "content_hash": "fec0fa34"
     },
     "packages/node/src/tui.ts": {
-      "mtime": 1772185934.8297262,
+      "mtime": 1772445394.623712,
       "nodes": [],
-      "content_hash": "bbde3e64"
+      "content_hash": "a7034a38"
     },
     "packages/shared/src/crypto.ts": {
-      "mtime": 1772127664.971471,
+      "mtime": 1772445000.939183,
       "nodes": [],
-      "content_hash": "4e246437"
+      "content_hash": "a1c7eed8"
     },
     "packages/shared/src/index.ts": {
       "mtime": 1772127664.971471,
@@ -3975,7 +4078,7 @@
       "content_hash": "d89d6925"
     },
     "packages/shared/src/types.ts": {
-      "mtime": 1772285190.4387212,
+      "mtime": 1772444951.0918605,
       "nodes": [
         {
           "_type": "entity",
@@ -3994,7 +4097,7 @@
           "description": "All shared types, interfaces, enums, and constants used across every Pando package \u2014 identity, messages, transactions, governance, agents, capabilities, and economics.",
           "depends_on": [],
           "file": "packages\\shared\\src\\types.ts:1",
-          "_content_hash": "a17e7476"
+          "_content_hash": "81e2c619"
         },
         {
           "_type": "invariant",
@@ -4007,10 +4110,10 @@
           ],
           "severity": "critical",
           "file": "packages\\shared\\src\\types.ts:1",
-          "_content_hash": "a17e7476"
+          "_content_hash": "81e2c619"
         }
       ],
-      "content_hash": "a17e7476"
+      "content_hash": "81e2c619"
     },
     "scripts/launch-nodes.js": {
       "mtime": 1771159401.9941764,
