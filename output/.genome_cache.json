@@ -177,7 +177,7 @@
       "content_hash": "f0e0c078"
     },
     "genome/knowledge/flows/council-operating-system.know": {
-      "mtime": 1772410202.5957627,
+      "mtime": 1772424241.2758827,
       "nodes": [
         {
           "_type": "flow",
@@ -530,49 +530,66 @@
           "_source": "genome\\knowledge\\flows\\council-operating-system.know",
           "_steps": [
             {
-              "_name": "post_directive",
+              "_name": "create_directive",
               "_target": "store_sqlite",
-              "actor": "PlatformApi",
-              "what": "POST /v1/council/directive receives { content } from operator. Inserts into SQLite directives table with active=1, target_id=councilOrchId, addedBy='operator'.",
+              "actor": "PlatformApi_or_Orchestrator",
+              "what": "Directives enter the system via two paths: (1) POST /v1/council/directive from a human operator (addedBy='operator'), or (2) create_directive action from another orchestrator (Observer, QA agent \u2014 addedBy=orchestratorId). Both insert into SQLite directives table. Schema columns: id (autoincrement), target_id (orchestrator ID or NULL for all), content (text), added_by (string), active (boolean, legacy compat), status ('pending'), times_seen (0), rejection_reason (null), acknowledged_at (null), completed_at (null), created_at (ISO timestamp).",
               "_next": "store_sqlite"
             },
             {
               "_name": "store_sqlite",
               "_target": "read_in_tick",
               "actor": "Orchestrator",
-              "what": "readBoard().getDirectives() queries SQLite: SELECT * FROM directives WHERE active=1 AND (target_id=? OR target_id IS NULL). Returns as board.directives string array.",
+              "what": "readBoard() calls db.getDirectives(orchestratorId) which queries: SELECT * FROM directives WHERE status IN ('pending', 'acknowledged', 'in_progress') AND (target_id=? OR target_id IS NULL). Returns array of { id, content, status, timesSeen, createdAt } \u2014 status-aware, not just active/inactive.",
               "_next": "read_in_tick"
             },
             {
               "_name": "read_in_tick",
-              "_target": "classify_tier2",
+              "_target": "classify_tier",
               "_tags": [
-                "@gotcha(\"Exception: if non-overdue workers are active AND inbox is empty, stays Tier 1 even with directives \u2014 avoids burning tokens while workers are busy.\")"
+                "@gotcha(\"Exception: if non-overdue workers are active AND inbox is empty, stays Tier 1 even with pending/overdue directives \u2014 avoids burning Opus tokens while workers are busy.\")"
               ],
               "actor": "Orchestrator",
-              "what": "classify() checks board.directives.length > 0 \u2014 if directives exist, returns Tier 2 (needs AI judgment). Directives always trigger AI thinking.",
-              "_next": "classify_tier2"
+              "what": "classify() handles directives based on status. Pending directives (status='pending', never seen by AI) force Tier 2 \u2014 new orders always get AI attention. Overdue directives (timesSeen >= 5 without completion) also force Tier 2 with escalation. Acknowledged directives (already seen) ride along on natural Tier 2 ticks \u2014 they do not independently force a Tier 2 classification.",
+              "_next": "classify_tier"
             },
             {
-              "_name": "classify_tier2",
+              "_name": "classify_tier",
               "_target": "ai_sees_directives",
               "actor": "Orchestrator",
-              "what": "AI prompt includes '## Directives' section listing all active directive strings. AI decides actions based on directive content.",
+              "what": "AI prompt includes '## Directives' section. Each directive shown as: [D#id] (seen Nx, Mmin old) [OVERDUE if timesSeen>=5]: content. New directives show '(NEW)'. OVERDUE directives show '**OVERDUE \u2014 ACT NOW OR REJECT WITH REASON**'. Prompt includes instructions for complete_directive and reject_directive JSON actions.",
               "_next": "ai_sees_directives"
             },
             {
               "_name": "ai_sees_directives",
+              "_target": "acknowledge",
+              "actor": "Orchestrator",
+              "what": "After a successful Tier 2 tick (no AI error), all directives on the board are acknowledged via db.acknowledgeDirective(id). This: (1) transitions status from 'pending' to 'acknowledged' (if still pending), (2) increments times_seen counter, (3) sets acknowledged_at timestamp on first acknowledgment. Directives are NOT removed \u2014 they persist on the board.",
+              "_next": "acknowledge"
+            },
+            {
+              "_name": "acknowledge",
               "_target": "complete_or_reject",
               "_tags": [
-                "@gotcha(\"Directives are PERSISTENT. They appear in every tick's AI prompt until the AI explicitly completes or rejects them. This prevents directives from being silently ignored.\")"
+                "@gotcha(\"Directives are PERSISTENT. They appear in every tick's AI prompt until the AI explicitly completes or rejects them. This prevents directives from being silently ignored. The OVERDUE escalation (5+ ticks) ensures even low-priority directives eventually get addressed.\")"
               ],
               "actor": "Orchestrator",
-              "what": "AI returns complete_directive(id, summary) or reject_directive(id, reason) actions. complete_directive sets status='completed' with completedAt timestamp and summary. reject_directive sets status='rejected' with reason. Directives persist across session rotations until explicitly completed or rejected \u2014 they do NOT disappear on their own.",
+              "what": "AI returns complete_directive(id, summary) or reject_directive(id, reason) actions. complete_directive: sets status='completed', active=0, completed_at=now, stores summary. reject_directive: sets status='rejected', active=0, completed_at=now, stores reason. Completed/rejected directives are pruned from SQLite after 7 days. Directives persist across session rotations until explicitly completed or rejected \u2014 they NEVER disappear on their own.",
               "_next": "complete_or_reject"
+            },
+            {
+              "_name": "complete_or_reject",
+              "_target": "cross_orchestrator",
+              "_tags": [
+                "@gotcha(\"Rule: NEVER use send_message for findings that must persist. Messages are read-once and pruned after 7 days. Directives persist until explicitly completed or rejected, survive session rotations and restarts, and escalate automatically when ignored.\")"
+              ],
+              "actor": "Orchestrator",
+              "what": "Cross-orchestrator communication via create_directive action: Observer creates directives targeted at the council CEO (e.g., '[OBSERVER GOVERNANCE] Priority: HIGH \u2014 ...'). QA agent creates directives for the CEO (e.g., '[QA BUG] Priority: HIGH \u2014 ...'). Any orchestrator can create directives for any other orchestrator by specifying targetId. This is the ONLY reliable way to communicate findings that must be acted on \u2014 send_message is fire-and-forget and gets lost after being read.",
+              "_next": "cross_orchestrator"
             }
           ],
-          "summary": "Directives are standing orders injected into the orchestrator's AI prompt. They persist in SQLite until explicitly completed or rejected by the AI via complete_directive/reject_directive actions.",
-          "trigger": "HumanDirective"
+          "summary": "Directives are persistent cross-agent standing orders stored in SQLite. Status lifecycle: pending \u2192 acknowledged \u2192 completed / rejected. They survive session rotations, node restarts, and crashes. Primary mechanism for Observer and QA agents to communicate findings to the council CEO. Never use send_message for findings that must persist \u2014 use create_directive instead.",
+          "trigger": "DirectiveCreation"
         },
         {
           "_type": "flow",
@@ -716,7 +733,7 @@
           "trigger": "WorkerCompletion"
         }
       ],
-      "content_hash": "c8fe1036"
+      "content_hash": "e2ab6a7e"
     },
     "genome/knowledge/flows/node-onboarding.know": {
       "mtime": 1772122710.7784405,
@@ -2575,9 +2592,9 @@
       "content_hash": "5042df17"
     },
     "packages/gateway/app/agents/page.tsx": {
-      "mtime": 1771532831.4101367,
+      "mtime": 1772410661.0833328,
       "nodes": [],
-      "content_hash": "d9244fb6"
+      "content_hash": "210c8cf9"
     },
     "packages/gateway/app/api/accounts/route.ts": {
       "mtime": 1770970307.2236044,
@@ -2760,9 +2777,9 @@
       "content_hash": "1457a439"
     },
     "packages/gateway/app/api/council/dashboard/route.ts": {
-      "mtime": 1772349701.324425,
+      "mtime": 1772422776.468463,
       "nodes": [],
-      "content_hash": "5db61e64"
+      "content_hash": "9cb41fc1"
     },
     "packages/gateway/app/api/council/directive/route.ts": {
       "mtime": 1772168966.1038158,
@@ -3095,9 +3112,9 @@
       "content_hash": "f457bc4f"
     },
     "packages/gateway/app/chat/page.tsx": {
-      "mtime": 1772402002.9532967,
+      "mtime": 1772413072.410355,
       "nodes": [],
-      "content_hash": "ca6869b3"
+      "content_hash": "37fe4a89"
     },
     "packages/gateway/app/content/page.tsx": {
       "mtime": 1771400157.8528934,
@@ -3105,9 +3122,9 @@
       "content_hash": "f26dc9cb"
     },
     "packages/gateway/app/council/page.tsx": {
-      "mtime": 1772406507.0191224,
+      "mtime": 1772422777.9548151,
       "nodes": [],
-      "content_hash": "e999a4c6"
+      "content_hash": "42d6440b"
     },
     "packages/gateway/app/dev/page.tsx": {
       "mtime": 1772065558.4424982,
@@ -3145,9 +3162,9 @@
       "content_hash": "46db8033"
     },
     "packages/gateway/app/explore/page.tsx": {
-      "mtime": 1772382268.7331393,
+      "mtime": 1772414995.4286883,
       "nodes": [],
-      "content_hash": "79288805"
+      "content_hash": "c10da54c"
     },
     "packages/gateway/app/explore/strategy/page.tsx": {
       "mtime": 1771319796.2226977,
@@ -3170,14 +3187,14 @@
       "content_hash": "bbb60529"
     },
     "packages/gateway/app/login/page.tsx": {
-      "mtime": 1772383032.086851,
+      "mtime": 1772413056.964381,
       "nodes": [],
-      "content_hash": "86dec6f3"
+      "content_hash": "51b5a527"
     },
     "packages/gateway/app/marketplace/page.tsx": {
-      "mtime": 1772409761.2815893,
+      "mtime": 1772423884.2918851,
       "nodes": [],
-      "content_hash": "6c3e05fe"
+      "content_hash": "fe426b5d"
     },
     "packages/gateway/app/monitor/page.tsx": {
       "mtime": 1771542071.0627701,
@@ -3195,9 +3212,9 @@
       "content_hash": "5b6eb1e2"
     },
     "packages/gateway/app/page.tsx": {
-      "mtime": 1772405741.237475,
+      "mtime": 1772413054.5536468,
       "nodes": [],
-      "content_hash": "860523a9"
+      "content_hash": "078c22f9"
     },
     "packages/gateway/app/projects/page.tsx": {
       "mtime": 1772070909.1659617,
@@ -3205,9 +3222,9 @@
       "content_hash": "c3f3dfb9"
     },
     "packages/gateway/app/register/page.tsx": {
-      "mtime": 1772383029.3589115,
+      "mtime": 1772413058.6913157,
       "nodes": [],
-      "content_hash": "0480875f"
+      "content_hash": "bac67ab6"
     },
     "packages/gateway/app/resources/guide/page.tsx": {
       "mtime": 1771762610.7042608,
@@ -3230,9 +3247,9 @@
       "content_hash": "1be78ca1"
     },
     "packages/gateway/app/search/page.tsx": {
-      "mtime": 1772059137.6330335,
+      "mtime": 1772410643.9796512,
       "nodes": [],
-      "content_hash": "4158f525"
+      "content_hash": "65e446b3"
     },
     "packages/gateway/app/services/page.tsx": {
       "mtime": 1771772996.545933,
@@ -3245,14 +3262,14 @@
       "content_hash": "a085902f"
     },
     "packages/gateway/app/wallet/page.tsx": {
-      "mtime": 1772404712.929627,
+      "mtime": 1772413648.352356,
       "nodes": [],
-      "content_hash": "5fd581f1"
+      "content_hash": "fe46c9bd"
     },
     "packages/gateway/components/NavBar.tsx": {
-      "mtime": 1772402002.1407769,
+      "mtime": 1772411322.9114425,
       "nodes": [],
-      "content_hash": "43b16d3f"
+      "content_hash": "a49eabcf"
     },
     "packages/gateway/components/ThemeToggle.tsx": {
       "mtime": 1771705579.7104096,
@@ -3275,9 +3292,9 @@
       "content_hash": "3e616267"
     },
     "packages/gateway/lib/auth-context.tsx": {
-      "mtime": 1772029249.867313,
+      "mtime": 1772418175.9675446,
       "nodes": [],
-      "content_hash": "71629698"
+      "content_hash": "58875110"
     },
     "packages/gateway/lib/crypto.ts": {
       "mtime": 1772127664.9107962,
@@ -3285,9 +3302,9 @@
       "content_hash": "51435729"
     },
     "packages/gateway/lib/node-connection.ts": {
-      "mtime": 1772127664.911797,
+      "mtime": 1772419717.3001792,
       "nodes": [],
-      "content_hash": "753ad0db"
+      "content_hash": "996247c1"
     },
     "packages/gateway/lib/node-pool.ts": {
       "mtime": 1772383688.1904585,
@@ -3355,9 +3372,9 @@
       "content_hash": "37f0cd54"
     },
     "packages/node/src/api/kernel-api.ts": {
-      "mtime": 1772382289.518555,
+      "mtime": 1772421333.1587055,
       "nodes": [],
-      "content_hash": "19a11a83"
+      "content_hash": "c9a96f7a"
     },
     "packages/node/src/api/middleware/auth.ts": {
       "mtime": 1772136174.3396356,
@@ -3365,9 +3382,9 @@
       "content_hash": "b6386d5e"
     },
     "packages/node/src/api/platform-api.ts": {
-      "mtime": 1772394237.013879,
+      "mtime": 1772423625.719391,
       "nodes": [],
-      "content_hash": "bfae5fb1"
+      "content_hash": "d0915bb6"
     },
     "packages/node/src/cli.ts": {
       "mtime": 1772300209.6348763,
@@ -3509,12 +3526,12 @@
       "content_hash": "0aaf6c6d"
     },
     "packages/node/src/core/worker-pool.ts": {
-      "mtime": 1772406765.4810245,
+      "mtime": 1772415672.0350757,
       "nodes": [],
-      "content_hash": "e578e8c4"
+      "content_hash": "84707083"
     },
     "packages/node/src/index.ts": {
-      "mtime": 1772395350.6475408,
+      "mtime": 1772410491.9128118,
       "nodes": [
         {
           "_type": "entity",
@@ -3549,10 +3566,10 @@
             "StorageBackend"
           ],
           "file": "packages\\node\\src\\index.ts:1",
-          "_content_hash": "4f9f0f76"
+          "_content_hash": "80aece4d"
         }
       ],
-      "content_hash": "4f9f0f76"
+      "content_hash": "80aece4d"
     },
     "packages/node/src/kernel/crash-guard.ts": {
       "mtime": 1772127664.9374683,
@@ -3565,9 +3582,9 @@
       "content_hash": "fb34a75f"
     },
     "packages/node/src/kernel/governance.ts": {
-      "mtime": 1772383479.2502158,
+      "mtime": 1772417587.0868006,
       "nodes": [],
-      "content_hash": "3238d057"
+      "content_hash": "e50df99d"
     },
     "packages/node/src/kernel/guardrails.ts": {
       "mtime": 1772127664.9405558,
@@ -3794,9 +3811,9 @@
       "content_hash": "6fd23e30"
     },
     "packages/node/src/platform/orchestrator.ts": {
-      "mtime": 1772410155.689787,
+      "mtime": 1772420420.5479436,
       "nodes": [],
-      "content_hash": "00087aae"
+      "content_hash": "b9ad61f8"
     },
     "packages/node/src/platform/org-manager.ts": {
       "mtime": 1772397950.9530687,
@@ -3814,9 +3831,9 @@
       "content_hash": "936e6962"
     },
     "packages/node/src/platform/project-store.ts": {
-      "mtime": 1772205702.0160394,
+      "mtime": 1772421986.83488,
       "nodes": [],
-      "content_hash": "944fa4d3"
+      "content_hash": "bb4506fd"
     },
     "packages/node/src/platform/qa-memory.ts": {
       "mtime": 1772168966.1128173,

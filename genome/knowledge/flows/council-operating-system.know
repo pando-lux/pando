@@ -217,34 +217,45 @@ flow TickLifecycle {
 }
 
 flow DirectiveFlow {
-  summary: "Directives are standing orders injected into the orchestrator's AI prompt. They persist in SQLite until explicitly completed or rejected by the AI via complete_directive/reject_directive actions."
-  trigger: HumanDirective
+  summary: "Directives are persistent cross-agent standing orders stored in SQLite. Status lifecycle: pending → acknowledged → completed / rejected. They survive session rotations, node restarts, and crashes. Primary mechanism for Observer and QA agents to communicate findings to the council CEO. Never use send_message for findings that must persist — use create_directive instead."
+  trigger: DirectiveCreation
 
-  step post_directive -> store_sqlite {
-    actor: PlatformApi
-    what: "POST /v1/council/directive receives { content } from operator. Inserts into SQLite directives table with active=1, target_id=councilOrchId, addedBy='operator'."
+  step create_directive -> store_sqlite {
+    actor: PlatformApi_or_Orchestrator
+    what: "Directives enter the system via two paths: (1) POST /v1/council/directive from a human operator (addedBy='operator'), or (2) create_directive action from another orchestrator (Observer, QA agent — addedBy=orchestratorId). Both insert into SQLite directives table. Schema columns: id (autoincrement), target_id (orchestrator ID or NULL for all), content (text), added_by (string), active (boolean, legacy compat), status ('pending'), times_seen (0), rejection_reason (null), acknowledged_at (null), completed_at (null), created_at (ISO timestamp)."
   }
 
   step store_sqlite -> read_in_tick {
     actor: Orchestrator
-    what: "readBoard().getDirectives() queries SQLite: SELECT * FROM directives WHERE active=1 AND (target_id=? OR target_id IS NULL). Returns as board.directives string array."
+    what: "readBoard() calls db.getDirectives(orchestratorId) which queries: SELECT * FROM directives WHERE status IN ('pending', 'acknowledged', 'in_progress') AND (target_id=? OR target_id IS NULL). Returns array of { id, content, status, timesSeen, createdAt } — status-aware, not just active/inactive."
   }
 
-  step read_in_tick -> classify_tier2 {
+  step read_in_tick -> classify_tier {
     actor: Orchestrator
-    what: "classify() checks board.directives.length > 0 — if directives exist, returns Tier 2 (needs AI judgment). Directives always trigger AI thinking."
-    @gotcha("Exception: if non-overdue workers are active AND inbox is empty, stays Tier 1 even with directives — avoids burning tokens while workers are busy.")
+    what: "classify() handles directives based on status. Pending directives (status='pending', never seen by AI) force Tier 2 — new orders always get AI attention. Overdue directives (timesSeen >= 5 without completion) also force Tier 2 with escalation. Acknowledged directives (already seen) ride along on natural Tier 2 ticks — they do not independently force a Tier 2 classification."
+    @gotcha("Exception: if non-overdue workers are active AND inbox is empty, stays Tier 1 even with pending/overdue directives — avoids burning Opus tokens while workers are busy.")
   }
 
-  step classify_tier2 -> ai_sees_directives {
+  step classify_tier -> ai_sees_directives {
     actor: Orchestrator
-    what: "AI prompt includes '## Directives' section listing all active directive strings. AI decides actions based on directive content."
+    what: "AI prompt includes '## Directives' section. Each directive shown as: [D#id] (seen Nx, Mmin old) [OVERDUE if timesSeen>=5]: content. New directives show '(NEW)'. OVERDUE directives show '**OVERDUE — ACT NOW OR REJECT WITH REASON**'. Prompt includes instructions for complete_directive and reject_directive JSON actions."
   }
 
-  step ai_sees_directives -> complete_or_reject {
+  step ai_sees_directives -> acknowledge {
     actor: Orchestrator
-    what: "AI returns complete_directive(id, summary) or reject_directive(id, reason) actions. complete_directive sets status='completed' with completedAt timestamp and summary. reject_directive sets status='rejected' with reason. Directives persist across session rotations until explicitly completed or rejected — they do NOT disappear on their own."
-    @gotcha("Directives are PERSISTENT. They appear in every tick's AI prompt until the AI explicitly completes or rejects them. This prevents directives from being silently ignored.")
+    what: "After a successful Tier 2 tick (no AI error), all directives on the board are acknowledged via db.acknowledgeDirective(id). This: (1) transitions status from 'pending' to 'acknowledged' (if still pending), (2) increments times_seen counter, (3) sets acknowledged_at timestamp on first acknowledgment. Directives are NOT removed — they persist on the board."
+  }
+
+  step acknowledge -> complete_or_reject {
+    actor: Orchestrator
+    what: "AI returns complete_directive(id, summary) or reject_directive(id, reason) actions. complete_directive: sets status='completed', active=0, completed_at=now, stores summary. reject_directive: sets status='rejected', active=0, completed_at=now, stores reason. Completed/rejected directives are pruned from SQLite after 7 days. Directives persist across session rotations until explicitly completed or rejected — they NEVER disappear on their own."
+    @gotcha("Directives are PERSISTENT. They appear in every tick's AI prompt until the AI explicitly completes or rejects them. This prevents directives from being silently ignored. The OVERDUE escalation (5+ ticks) ensures even low-priority directives eventually get addressed.")
+  }
+
+  step complete_or_reject -> cross_orchestrator {
+    actor: Orchestrator
+    what: "Cross-orchestrator communication via create_directive action: Observer creates directives targeted at the council CEO (e.g., '[OBSERVER GOVERNANCE] Priority: HIGH — ...'). QA agent creates directives for the CEO (e.g., '[QA BUG] Priority: HIGH — ...'). Any orchestrator can create directives for any other orchestrator by specifying targetId. This is the ONLY reliable way to communicate findings that must be acted on — send_message is fire-and-forget and gets lost after being read."
+    @gotcha("Rule: NEVER use send_message for findings that must persist. Messages are read-once and pruned after 7 days. Directives persist until explicitly completed or rejected, survive session rotations and restarts, and escalate automatically when ignored.")
   }
 }
 
