@@ -244,6 +244,11 @@ export class UpgradeProtocol {
         const localSha = this.git('rev-parse HEAD');
         if (localSha.startsWith(commitHash) || commitHash.startsWith(localSha.slice(0, commitHash.length))) {
           console.log(`[upgrade] Already at target version ${commitHash.slice(0, 8)} — skipping pull.`);
+          // Proposer node: dist/ was rebuilt by asyncOnCommit but running process uses stale in-memory code
+          if (this.runningCommit !== 'unknown' && this.runningCommit !== localSha) {
+            console.log(`[upgrade] Proposer node stale: running ${this.runningCommit.slice(0, 8)}, built ${localSha.slice(0, 8)} — triggering safe restart`);
+            this.safeRestart(localSha);
+          }
           return { success: true, message: 'Already at target version.' };
         }
       } catch {}
