@@ -2467,12 +2467,24 @@ location /apps/${projectId}/ {
   private selfRestart(): void {
     this.restartPending = true;
     const args = process.argv.slice(1);
-    const logFile = join(process.env.HOME || process.env.USERPROFILE || '.', '.pando', 'logs', 'node-stdout.log');
+    const dataDir = process.env.HOME || process.env.USERPROFILE || '.';
+    const pandoDir = join(dataDir, '.pando');
+    const logDir = join(pandoDir, 'logs');
+    const logFile = join(logDir, 'node-stdout.log');
     console.log(`[self-restart] Will exit and re-launch: node ${args.join(' ')}`);
+
+    // Write restart reason + clear crash guards so new process doesn't trip circuit breaker
+    try {
+      mkdirSync(logDir, { recursive: true });
+      writeFileSync(join(pandoDir, 'restart-reason.json'), JSON.stringify({
+        reason: 'auto-update', timestamp: Date.now(),
+      }));
+      try { unlinkSync(join(pandoDir, 'crash-log.json')); } catch {}
+      try { unlinkSync(join(pandoDir, 'circuit-breaker.json')); } catch {}
+    } catch {}
 
     // Stop everything first so ports are released
     this.stop().then(() => {
-      // Small delay for ports to fully release
       setTimeout(() => {
         try {
           const out = openSync(logFile, 'a');
