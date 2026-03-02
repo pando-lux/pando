@@ -3611,6 +3611,11 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       this.governance.setAgentDb(this.agentDb);
     }
 
+    // Governance hardening: wire Ed25519 private key for proposal signing
+    if (this.governance && this.identity?.privateKey) {
+      this.governance.setIdentityPrivateKey(this.identity.privateKey);
+    }
+
     // Phase 30.2: Wire WorkerPool to Governance for reviewer agent spawning
     if (this.governance && this.workerPool && this.councilOrchId) {
       const pool = this.workerPool;

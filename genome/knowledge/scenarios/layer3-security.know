@@ -126,6 +126,81 @@ test WitnessEmissionAntiCheat {
   @gotcha("Bootstrap fallback prevents deadlock but limits emission to prevent abuse.")
 }
 
+test GovernanceProposalSigning {
+  description: "Upgrade proposals are Ed25519-signed by proposer. Unsigned upgrade proposals rejected. Forged signatures rejected."
+  validates: GOVERNANCE_SIGNING
+  type: e2e
+  category: security
+  mode: 2
+  automatable: false
+  steps: [
+    "Create upgrade proposal via governance — verify proposerSignature field populated",
+    "Broadcast to peer node — verify peer accepts signed proposal",
+    "Craft unsigned upgrade proposal and inject via GossipSub — verify peer REJECTS it",
+    "Craft proposal with corrupted signature — verify peer REJECTS it",
+    "Create non-upgrade proposal without signature — verify peer ACCEPTS it (backward compat)"
+  ]
+  expected: "Signed upgrades accepted. Unsigned/forged upgrades rejected. Non-upgrade without sig accepted."
+  status: passing
+}
+
+test GovernanceDiffContentScan {
+  description: "Governance scans git diff for dangerous patterns. eval() and new Function() block auto-approve."
+  validates: GOVERNANCE_CONTENT_ANALYSIS
+  type: e2e
+  category: security
+  mode: 1
+  automatable: false
+  steps: [
+    "Commit code containing eval(userInput) in a new file",
+    "Trigger propose_upgrade — verify validateUpgradeProposal returns { approved: false }",
+    "Check governance_audit table for diff_content_scan = fail",
+    "Commit clean code — verify auto-approve passes",
+    "Commit code with .privateKey access — verify warning logged but approval proceeds"
+  ]
+  expected: "eval/Function blocks. Warning patterns logged. Clean code passes."
+  status: passing
+}
+
+test UpgradeAPIAuthRequired {
+  description: "POST /upgrade/* routes require operator bearer token. Unauthenticated requests get 401."
+  validates: UPGRADE_API_AUTH
+  type: api
+  category: security
+  mode: 1
+  automatable: true
+  method: POST
+  path: /v1/upgrade
+  expected_status: 401
+  steps: [
+    "POST /v1/upgrade without auth — expect 401",
+    "POST /v1/upgrade/propose without auth — expect 401",
+    "POST /v1/upgrade/rollback without auth — expect 401",
+    "POST /v1/upgrade/pin without auth — expect 401",
+    "POST /v1/upgrade with valid bearer — expect 200 or in_progress"
+  ]
+  expected: "All upgrade writes require auth. 401 without token."
+  status: passing
+}
+
+test StrictCommitHashVerification {
+  description: "pullAndUpgrade rejects upgrades when commit hash doesn't match governance-approved hash."
+  validates: UPGRADE_HASH_VERIFICATION
+  type: e2e
+  category: security
+  mode: 2
+  automatable: false
+  steps: [
+    "Push commit A to origin, create governance proposal for commit A",
+    "Force-push commit B (different, non-ancestor) to origin",
+    "Trigger pullAndUpgrade with governance hash A",
+    "Verify REJECTION: hash mismatch, commit not ancestor",
+    "Push commit C (descendant of A) — verify upgrade proceeds (ancestor check passes)"
+  ]
+  expected: "Mismatch with non-ancestor → rejected. Ancestor → accepted."
+  status: passing
+}
+
 test SecurityMonitorThreatDetection {
   description: "Send suspicious requests. SecurityMonitor detects and logs. Peer quarantine for repeated violations."
   validates: THREAT_DETECTION

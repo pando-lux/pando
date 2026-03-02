@@ -97,7 +97,14 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
 - **P2P chat proxy**: EC2 nodes without Claude Code forward build requests via `chat_proxy` P2P handler to Claude-capable nodes. The remote node runs the full pipeline (project creation → orchestrator → builder → deploy). Replaces old one-shot `routeClaudeTaskP2P`.
 - **Database cleanup**: 60s timer prunes read messages (>7d), expired discoveries. Every 10 min: prunes tick_log (>7d), failed/dissolved workers (>7d), old reflections (>30d), inactive directives (>7d).
 - **Builder error tracking**: Worker failure reports include exit code, stderr, and resume status. Orchestrator AI prompt warns when a role has failed 3+ times consecutively.
-- **Governance security gate**: 2 deterministic checks before auto-approve in dev mode: (1) security file check — blocks proposals modifying sensitive files unless description mentions 'security' or 'credential', (2) kernel protection delay — 60s delay before approval for kernel/ file changes. Build and test verification happen in the orchestrator pre-commit pipeline, not in governance. Logged to governance_audit table.
+- **Governance security gate**: 6-layer security pipeline before auto-approve. All logged to `governance_audit` table.
+  1. **Proposal signature verification** (Ed25519): Upgrade proposals MUST be signed by proposer's Ed25519 key. Unsigned upgrade proposals rejected. Non-upgrade proposals accepted unsigned (backward compat). Peers verify via `peerIdFromString(proposedBy).publicKey` — no ledger lookup.
+  2. **Security file check**: Blocks proposals modifying sensitive files (`credential-store.ts`, `governance.ts`, `upgrade-protocol.ts`, etc.) unless description mentions 'security' or 'credential'.
+  3. **Diff content scan**: Parses `git diff` for dangerous patterns in ADDED lines. `eval(`, `new Function(` → **block** auto-approve. `.privateKey` access, dynamic `require()`, `process.env[]` → **warn** (logged). `fetch()` and `writeFileSync()` in kernel/ → **warn**.
+  4. **Build verification** (`npm run build`): Runs in orchestrator pre-commit pipeline. Failure aborts proposal.
+  5. **Scenario tests** (API regression): ScenarioRunner verifies API endpoints. Failure aborts proposal.
+  6. **Kernel protection delay**: 60s delay before approval for kernel/ file changes.
+- **Locked upgrade API routes**: All `POST /upgrade/*` routes require operator bearer token (`~/.pando/api-token`). Prevents unauthenticated code injection via HTTP. TUI `/upgrade pull` shows governance-approval warning for unapproved commits.
 - **Observer orchestrator**: Autonomous observer agent (role='observer') created on boot alongside council. 5-min tick interval. Always Tier 2 (AI). Proactively audits architecture, finds bugs, reports issues as directives to council. Cannot spawn workers — observation only.
 - **Auto-propose after commit**: commit_code action automatically triggers propose_upgrade in the same tick. Prevents governance gaps where committed code sits unproposed for days.
 - **Persistent directives (CRITICAL ARCHITECTURE)**: Directives are the primary mechanism for persistent cross-agent communication. They survive session rotations, node restarts, and crashes (stored in SQLite).
@@ -112,11 +119,11 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
   - **Rule**: NEVER use send_message for findings that must be acted on. Use create_directive instead. Messages are fire-and-forget; directives persist.
 - **Four-actor governance model**:
   - **CEO** (council orchestrator): Executes — spawns workers, ships code, manages projects.
-  - **Governance** (governance.ts): Guards — 2 deterministic security checks before auto-approve: security file check (blocks sensitive file changes without security context), kernel protection delay (60s for kernel/ changes). Build/test verification runs in orchestrator pipeline.
+  - **Governance** (governance.ts): Guards — 6-layer security pipeline: Ed25519 proposal signing, security file check, diff content analysis (dangerous pattern scan), build verification, scenario tests, kernel protection delay. Upgrade API routes locked behind operator auth.
   - **Observer** (observer orchestrator): Watches inward — audits architecture, verifies design intent matches reality, creates persistent directives for CEO with findings. Cannot write code.
   - **QA User Agent** (qa-user orchestrator): Watches outward — tests gateway UI from a human perspective using Playwright. Spawns qa-tester workers every 5 min. Reports UX issues, bugs, stale data to CEO via directives. Cannot write code or deploy.
   - **Self-check dissolution rule**: Council self-check (every 10th tick) dissolves stale orchestrators. Persistent orchestrators (observer, qa-user) are **exempt** — `if (orch.persistent) continue;` guards in both the stale-check loop and OOM prevention loop. Only project orchestrators dissolve when idle.
-- **Verify-before-deploy hardening**: ScenarioRunner crash now ABORTS proposal (not silent pass-through). Upgrade-protocol hash mismatch returns failure (can't pull unapproved code). Proposal descriptions include test result audit trail.
+- **Verify-before-deploy hardening**: ScenarioRunner crash now ABORTS proposal (not silent pass-through). Upgrade-protocol hash mismatch STRICTLY rejects pull (no soft warnings). Proposal descriptions include test result audit trail. Commit hash verification: exact match, prefix match, or ancestor check — all others abort.
 - **Gateway auto-deploy**: When governance approves an upgrade that touches `packages/gateway/`, the proposer node auto-deploys to Vercel production via `vercel deploy --prod`. Handled in `onUpgradeApproved` callback in `index.ts`. Only fires on nodes with Vercel CLI installed. **Do NOT modify this mechanism or duplicate it elsewhere.** Public gateway: https://gateway-one-mu.vercel.app
 
 ### Agent system components

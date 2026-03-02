@@ -48,7 +48,7 @@ flow OrchestratorSystem {
 
   step deploy -> governance {
     actor: Orchestrator
-    what: "Council only: onPropose callback calls governance.createProposal(). In dev mode: auto-approve. Governance decisions route back via MessageBus as 'governance_decision' messages."
+    what: "Council only: onPropose callback calls governance.createProposal(). Proposal is Ed25519-signed by proposer node. In dev mode (<=8 peers): 6-layer security pipeline (signature, security file check, diff content scan, build, scenario tests, kernel delay) then auto-approve. Governance decisions route back via MessageBus as 'governance_decision' messages."
   }
 
   step governance -> reflection {
@@ -94,7 +94,7 @@ concept AgentDatabase {
 }
 
 concept GovernanceSecurityGate {
-  description: "2 deterministic checks in validateUpgradeProposal() before auto-approve: (1) security file check — blocks proposals modifying sensitive files (credential-store, governance, guardrails, etc.) unless description mentions 'security' or 'credential', (2) kernel protection delay — 60s delay before approval for kernel/ file changes. Build and test verification happen in the orchestrator pre-commit pipeline, not in governance. Results logged to governance_audit table in AgentDatabase. Runs in dev mode only (< 8 peers)."
+  description: "6-layer security pipeline in validateUpgradeProposal() before auto-approve: (1) Ed25519 proposal signing — upgrade proposals MUST be signed by proposer, unsigned upgrades rejected, peers verify via peerIdFromString(proposedBy).publicKey; (2) security file check — blocks proposals modifying sensitive files unless description mentions 'security' or 'credential'; (3) diff content scan — parses git diff for dangerous patterns: eval() and new Function() BLOCK auto-approve, .privateKey access and dynamic require() WARN; (4) build verification (npm run build in orchestrator pipeline); (5) scenario tests (API regression via ScenarioRunner); (6) kernel protection delay — 60s for kernel/ changes. Results logged to governance_audit table. Upgrade API routes (POST /upgrade/*) locked behind operator bearer token. TUI /upgrade pull warns on unapproved commits."
   defined_in: "packages/node/src/kernel/governance.ts"
   used_by: [GovernanceSync]
 }

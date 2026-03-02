@@ -6,7 +6,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createHash, randomBytes, pbkdf2Sync, createCipheriv, createDecipheriv } from 'node:crypto';
-import type { NodeIdentity, SerializedIdentity, EncryptedSerializedIdentity, PandoMessage } from './types.js';
+import type { NodeIdentity, SerializedIdentity, EncryptedSerializedIdentity, PandoMessage, GovernanceProposal } from './types.js';
 
 const DEFAULT_PANDO_DIR = join(homedir(), '.pando');
 
@@ -451,6 +451,68 @@ export async function verifyTransactionSignature(
 
     const pk = publicKeyFromProtobuf(proto);
     const data = canonicalTransactionBytes(tx);
+    const sig = uint8ArrayFromString(signature, 'base64');
+    return await pk.verify(data, sig);
+  } catch {
+    return false;
+  }
+}
+
+// ── Governance proposal signing (governance hardening) ──
+
+/**
+ * Build a canonical signable payload from a GovernanceProposal.
+ * Deterministic: fixed key order, no signature field, no transient fields.
+ */
+export function buildProposalSignablePayload(proposal: GovernanceProposal): string {
+  const canonical = {
+    category: proposal.category || '',
+    createdAt: proposal.createdAt,
+    description: proposal.description,
+    id: proposal.id,
+    proposedBy: proposal.proposedBy,
+    title: proposal.title,
+    upgradePayload: proposal.upgradePayload || null,
+  };
+  return JSON.stringify(canonical);
+}
+
+/**
+ * Sign a GovernanceProposal with Ed25519 private key.
+ * Returns base64-encoded signature.
+ */
+export async function signProposal(
+  proposal: GovernanceProposal,
+  privateKeyBytes: Uint8Array
+): Promise<string> {
+  const pk = privateKeyFromProtobuf(privateKeyBytes);
+  const data = new TextEncoder().encode(buildProposalSignablePayload(proposal));
+  const sig = await pk.sign(data);
+  return uint8ArrayToString(sig, 'base64');
+}
+
+/**
+ * Verify a GovernanceProposal signature.
+ * Extracts the public key from the proposedBy peerId — no ledger lookup needed.
+ */
+export async function verifyProposalSignature(
+  proposal: GovernanceProposal,
+  signature: string
+): Promise<boolean> {
+  try {
+    const { peerIdFromString } = await import('@libp2p/peer-id');
+    const peerId = peerIdFromString(proposal.proposedBy);
+    const pubKeyRaw = peerId.publicKey;
+    if (!pubKeyRaw) return false;
+
+    // Build Ed25519 protobuf-wrapped public key (same pattern as verifySignature)
+    const rawBytes = pubKeyRaw.raw ?? pubKeyRaw;
+    const proto = new Uint8Array(2 + 2 + 32);
+    proto[0] = 0x08; proto[1] = 0x01; proto[2] = 0x12; proto[3] = 32;
+    proto.set(rawBytes instanceof Uint8Array && rawBytes.length === 32 ? rawBytes : (pubKeyRaw as any).raw ?? new Uint8Array(32), 4);
+
+    const pk = publicKeyFromProtobuf(proto);
+    const data = new TextEncoder().encode(buildProposalSignablePayload(proposal));
     const sig = uint8ArrayFromString(signature, 'base64');
     return await pk.verify(data, sig);
   } catch {

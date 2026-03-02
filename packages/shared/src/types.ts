@@ -320,6 +320,17 @@ export interface GovernanceProposal {
   humanOnly?: boolean;           // If true, proposal uses extended voting with lower quorum
   // Phase 73: Upgrade payload for P2P self-upgrade proposals
   upgradePayload?: UpgradePayload;
+  // Governance hardening: Ed25519 signature of canonical proposal payload
+  proposerSignature?: string;
+}
+
+/** A dangerous code pattern flagged by governance diff analysis. */
+export interface DangerousPatternMatch {
+  file: string;
+  line: number;
+  pattern: string;
+  severity: 'warn' | 'block';
+  context: string;
 }
 
 export interface GovernanceComment {

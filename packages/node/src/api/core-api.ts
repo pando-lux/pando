@@ -18,6 +18,12 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
     // POST /upgrade — Pull latest code, build, and schedule graceful restart.
     // Idempotent: if an upgrade is already in progress, returns current status.
     fastify.post('/upgrade', async (request: any, reply: any) => {
+      // Governance hardening: require operator bearer token
+      const authHeader = request.headers.authorization || '';
+      if (!authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
+        return reply.code(401).send({ error: 'Operator authentication required for /upgrade' });
+      }
+
       // Idempotent — return status if already in progress or pending restart
       if (node.isUpgradeInProgress()) {
         return { status: 'in_progress', message: 'Upgrade already in progress.' };
@@ -127,6 +133,10 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
 
     // POST /upgrade/propose — submit upgrade proposal (description only, no diff)
     fastify.post('/upgrade/propose', async (request: any, reply: any) => {
+      const authHeader = request.headers.authorization || '';
+      if (!authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
+        return reply.code(401).send({ error: 'Operator authentication required for /upgrade/propose' });
+      }
       const upgradeProtocol = node.getUpgradeProtocol();
       if (!upgradeProtocol) {
         return reply.code(503).send({ error: 'Upgrade protocol not ready' });
@@ -145,6 +155,10 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
 
     // POST /upgrade/rollback — emergency rollback
     fastify.post('/upgrade/rollback', async (request: any, reply: any) => {
+      const authHeader = request.headers.authorization || '';
+      if (!authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
+        return reply.code(401).send({ error: 'Operator authentication required for /upgrade/rollback' });
+      }
       const upgradeProtocol = node.getUpgradeProtocol();
       if (!upgradeProtocol) {
         return reply.code(503).send({ error: 'Upgrade protocol not ready' });
@@ -168,6 +182,10 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
 
     // POST /upgrade/pin — pin current version
     fastify.post('/upgrade/pin', async (request: any, reply: any) => {
+      const authHeader = request.headers.authorization || '';
+      if (!authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
+        return reply.code(401).send({ error: 'Operator authentication required for /upgrade/pin' });
+      }
       const upgradeProtocol = node.getUpgradeProtocol();
       if (!upgradeProtocol) {
         return reply.code(503).send({ error: 'Upgrade protocol not ready' });
@@ -182,6 +200,10 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
 
     // POST /upgrade/unpin — unpin version
     fastify.post('/upgrade/unpin', async (request: any, reply: any) => {
+      const authHeader = request.headers.authorization || '';
+      if (!authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
+        return reply.code(401).send({ error: 'Operator authentication required for /upgrade/unpin' });
+      }
       const upgradeProtocol = node.getUpgradeProtocol();
       if (!upgradeProtocol) {
         return reply.code(503).send({ error: 'Upgrade protocol not ready' });

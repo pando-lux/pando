@@ -289,16 +289,16 @@ export class UpgradeProtocol {
       return { success: true, message: 'Already up to date.' };
     }
 
-    // Step 4: Verify commit hash if provided (governance-approved hash)
-    // Soft check only — orphan branch pushes produce different hashes, so log warning but proceed
+    // Step 4: STRICT commit hash verification (governance hardening)
+    // Exact/prefix match → proceed. Ancestor of origin/master → proceed (already incorporated).
+    // Neither → ABORT. No code runs without governance approval.
     if (commitHash && remoteSha !== commitHash && !remoteSha.startsWith(commitHash) && !commitHash.startsWith(remoteSha.slice(0, commitHash.length))) {
-      // Check if proposed commit is an ancestor of origin/master (already incorporated)
       try {
         this.git(`merge-base --is-ancestor ${commitHash} origin/master`);
         console.log(`[upgrade] Proposed commit ${commitHash.slice(0, 12)} is ancestor of origin/master (${remoteSha.slice(0, 12)}) — upgrading to latest`);
       } catch {
-        console.error(`[upgrade] Hash mismatch: governance approved ${commitHash.slice(0, 12)}, but origin/master is ${remoteSha.slice(0, 12)} and commit is not an ancestor — aborting upgrade`);
-        return { success: false, message: `Hash mismatch: governance approved ${commitHash} but origin/master is ${remoteSha}` };
+        console.error(`[upgrade] REJECTED: governance approved ${commitHash.slice(0, 12)}, but origin/master is ${remoteSha.slice(0, 12)} and commit is not an ancestor`);
+        return { success: false, message: `Hash mismatch: governance approved ${commitHash} but origin/master is ${remoteSha}. Rejected.` };
       }
     }
 

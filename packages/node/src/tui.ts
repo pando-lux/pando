@@ -2174,8 +2174,29 @@ class PandoTUI {
       if (!status.includes('behind')) {
         this.log(`${c.yellow}Branch has local changes or diverged.${c.reset}`); return;
       }
+
+      // Governance hardening: check if remote HEAD is governance-approved
+      try {
+        const remoteSha = execSync('git rev-parse origin/master', { cwd: repoDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
+        const governance = (this.node as any).governance;
+        if (governance) {
+          const proposals = governance.getProposals();
+          const approved = proposals.some((p: any) =>
+            p.status === 'passed' && p.category === 'upgrade' &&
+            p.upgradePayload?.commitHash && remoteSha.startsWith(p.upgradePayload.commitHash)
+          );
+          if (!approved) {
+            this.log(`${c.yellow}WARNING: commit ${remoteSha.slice(0, 8)} is NOT governance-approved.${c.reset}`);
+            this.log(`${c.dim}Proceeding with operator override (TUI = local operator).${c.reset}`);
+          } else {
+            this.log(`${c.green}Commit ${remoteSha.slice(0, 8)} is governance-approved.${c.reset}`);
+          }
+        }
+      } catch { /* governance check is best-effort */ }
+
       this.log(`${c.dim}Pulling...${c.reset}`);
-      execSync('git pull', { cwd: repoDir, encoding: 'utf-8', timeout: 60_000 });
+      const { safeGitReset } = await import('./core/upgrade-protocol.js');
+      safeGitReset(repoDir, 'origin/master');
       this.log(`${c.dim}Building...${c.reset}`);
       execSync('npm run build', { cwd: repoDir, stdio: 'pipe', timeout: 120_000 });
       this.log(`${c.green}Build succeeded.${c.reset}`);

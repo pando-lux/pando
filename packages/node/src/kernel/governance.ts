@@ -201,6 +201,9 @@ export class GovernanceSync {
   // Governance audit logging (optional — set via setAgentDb)
   private agentDb: AgentDbLike | null = null;
 
+  // Governance hardening: Ed25519 private key for signing proposals
+  private identityPrivateKey: Uint8Array | null = null;
+
   // Phase 30.3: Review tracking (proposalId → reviews)
   private reviews: Map<string, Map<string, ProposalReview>> = new Map();
 
@@ -264,6 +267,11 @@ export class GovernanceSync {
   /** Set the AgentDatabase for governance audit logging. */
   setAgentDb(db: AgentDbLike): void {
     this.agentDb = db;
+  }
+
+  /** Set the node's Ed25519 private key for signing governance proposals. */
+  setIdentityPrivateKey(key: Uint8Array): void {
+    this.identityPrivateKey = key;
   }
 
   // ── Phase 73: Upgrade auto-approve configuration ──
@@ -359,10 +367,15 @@ export class GovernanceSync {
       this.db.exec("ALTER TABLE governance_proposals ADD COLUMN upgrade_payload TEXT DEFAULT ''");
     }
 
+    // Governance hardening migration: add proposer_signature column
+    if (!proposalCols.some((c: any) => c.name === 'proposer_signature')) {
+      this.db.exec("ALTER TABLE governance_proposals ADD COLUMN proposer_signature TEXT DEFAULT ''");
+    }
+
     // === Prepare SQL statements (after all migrations) ===
     this.stmtInsertProposal = this.db.prepare(
-      `INSERT OR IGNORE INTO governance_proposals (id, title, description, proposed_by, created_at, voting_ends_at, status, stake_amount, stake_hold_id, category, reviewer_count, human_only, upgrade_payload)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      `INSERT OR IGNORE INTO governance_proposals (id, title, description, proposed_by, created_at, voting_ends_at, status, stake_amount, stake_hold_id, category, reviewer_count, human_only, upgrade_payload, proposer_signature)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     );
     this.stmtUpdateProposalStatus = this.db.prepare(
       `UPDATE governance_proposals SET status = ? WHERE id = ?`
@@ -566,7 +579,7 @@ export class GovernanceSync {
   private handleGovernanceMessage(message: PandoMessage): void {
     switch (message.type) {
       case MessageType.GOVERNANCE_PROPOSAL:
-        this.handleProposal(message);
+        this.handleProposal(message).catch(e => console.warn(`[governance] handleProposal error: ${(e as Error).message?.slice(0, 100)}`));
         break;
       case MessageType.GOVERNANCE_COMMENT:
         this.handleComment(message);
@@ -612,12 +625,33 @@ export class GovernanceSync {
     }
   }
 
-  private handleProposal(message: PandoMessage): void {
+  private async handleProposal(message: PandoMessage): Promise<void> {
     const proposal = message.payload as GovernanceProposal;
     if (!proposal?.id || !proposal.title || !proposal.proposedBy) return;
 
     if (this.processedIds.has(`proposal:${proposal.id}`)) return;
     this.processedIds.add(`proposal:${proposal.id}`);
+
+    // Governance hardening: verify proposal signature
+    if (proposal.proposerSignature) {
+      try {
+        const { verifyProposalSignature } = await import('@pando/shared');
+        const valid = await verifyProposalSignature(proposal, proposal.proposerSignature);
+        if (!valid) {
+          console.warn(`[governance] REJECTED proposal "${proposal.title}" — invalid signature from ${proposal.proposedBy.slice(0, 16)}`);
+          this.agentDb?.logGovernanceCheck(proposal.id, 'signature_verification', 'fail', 'Invalid proposer signature');
+          return;
+        }
+        this.agentDb?.logGovernanceCheck(proposal.id, 'signature_verification', 'pass');
+      } catch (e: any) {
+        console.warn(`[governance] Signature verification error: ${e.message?.slice(0, 100)}`);
+      }
+    } else if (proposal.category === 'upgrade') {
+      // Upgrade proposals MUST be signed — reject unsigned upgrades
+      console.warn(`[governance] REJECTED unsigned upgrade proposal "${proposal.title}" from ${proposal.proposedBy.slice(0, 16)}`);
+      this.agentDb?.logGovernanceCheck(proposal.id, 'signature_verification', 'fail', 'Unsigned upgrade proposal');
+      return;
+    }
 
     // Sanitize remote input
     proposal.title = sanitizeText(proposal.title);
@@ -627,16 +661,17 @@ export class GovernanceSync {
     this.comments.set(proposal.id, this.comments.get(proposal.id) || []);
     this.votes.set(proposal.id, this.votes.get(proposal.id) || new Map());
 
-    // Persist to SQLite (including Phase 30 staking fields + Phase 73 upgradePayload)
+    // Persist to SQLite (including Phase 30 staking fields + Phase 73 upgradePayload + signature)
     this.stmtInsertProposal.run(
       proposal.id, proposal.title, proposal.description || '',
       proposal.proposedBy, proposal.createdAt, proposal.votingEndsAt, proposal.status,
       proposal.stakeAmount ?? 0, proposal.stakeHoldId ?? '', proposal.category ?? '', proposal.reviewerCount ?? 0,
       proposal.humanOnly ? 1 : 0,
-      proposal.upgradePayload ? JSON.stringify(proposal.upgradePayload) : ''
+      proposal.upgradePayload ? JSON.stringify(proposal.upgradePayload) : '',
+      proposal.proposerSignature ?? ''
     );
 
-    console.log(`[governance] New proposal: "${proposal.title}" by ${proposal.proposedBy.slice(0, 16)}...${proposal.stakeAmount ? ` (stake: ${proposal.stakeAmount} Lux)` : ''}`);
+    console.log(`[governance] New proposal: "${proposal.title}" by ${proposal.proposedBy.slice(0, 16)}...${proposal.stakeAmount ? ` (stake: ${proposal.stakeAmount} Lux)` : ''}${proposal.proposerSignature ? ' [signed]' : ''}`);
     this.onProposalCallback?.(proposal);
   }
 
@@ -1766,6 +1801,16 @@ export class GovernanceSync {
       upgradePayload: options?.upgradePayload,
     };
 
+    // Governance hardening: sign proposal with Ed25519 key
+    if (this.identityPrivateKey) {
+      try {
+        const { signProposal } = await import('@pando/shared');
+        proposal.proposerSignature = await signProposal(proposal, this.identityPrivateKey);
+      } catch (e: any) {
+        console.warn(`[governance] Failed to sign proposal: ${e.message?.slice(0, 100)}`);
+      }
+    }
+
     // Store locally + persist
     this.proposals.set(proposal.id, proposal);
     this.comments.set(proposal.id, []);
@@ -1776,7 +1821,8 @@ export class GovernanceSync {
       proposal.proposedBy, proposal.createdAt, proposal.votingEndsAt, proposal.status,
       proposal.stakeAmount ?? 0, proposal.stakeHoldId ?? '', proposal.category ?? '', proposal.reviewerCount ?? 0,
       proposal.humanOnly ? 1 : 0,
-      proposal.upgradePayload ? JSON.stringify(proposal.upgradePayload) : ''
+      proposal.upgradePayload ? JSON.stringify(proposal.upgradePayload) : '',
+      proposal.proposerSignature ?? ''
     );
 
     // Broadcast
@@ -1834,6 +1880,64 @@ export class GovernanceSync {
   }
 
   /**
+   * Scan git diff for dangerous code patterns in ADDED lines.
+   * Returns matches found. 'block' severity blocks auto-approve; 'warn' logs to audit only.
+   */
+  private scanDiffForDangerousPatterns(proposalId: string): import('@pando/shared').DangerousPatternMatch[] {
+    const PATTERNS: Array<{ regex: RegExp; name: string; severity: 'warn' | 'block'; kernelOnly?: boolean }> = [
+      { regex: /\beval\s*\(/, name: 'eval(', severity: 'block' },
+      { regex: /new\s+Function\s*\(/, name: 'new Function(', severity: 'block' },
+      { regex: /\.privateKey\b/, name: '.privateKey access', severity: 'warn' },
+      { regex: /process\.env\[/, name: 'process.env[] dynamic access', severity: 'warn' },
+      { regex: /require\s*\([^'"`)]+\)/, name: 'dynamic require()', severity: 'warn' },
+      { regex: /\bfetch\s*\(/, name: 'fetch() in kernel', severity: 'warn', kernelOnly: true },
+      { regex: /\bwriteFileSync\s*\(/, name: 'writeFileSync in kernel', severity: 'warn', kernelOnly: true },
+    ];
+
+    const matches: import('@pando/shared').DangerousPatternMatch[] = [];
+    try {
+      const diff = execSync('git diff HEAD~1 -U0', { encoding: 'utf-8', timeout: 15000 });
+      let currentFile = '';
+      let lineNum = 0;
+      for (const line of diff.split('\n')) {
+        if (line.startsWith('+++ b/')) { currentFile = line.slice(6); continue; }
+        if (line.startsWith('@@ ')) {
+          const m = line.match(/@@ \-\d+(?:,\d+)? \+(\d+)/);
+          if (m) lineNum = parseInt(m[1], 10) - 1;
+          continue;
+        }
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          lineNum++;
+          const content = line.slice(1);
+          for (const pat of PATTERNS) {
+            if (pat.kernelOnly && !currentFile.includes('kernel/')) continue;
+            if (pat.regex.test(content)) {
+              matches.push({ file: currentFile, line: lineNum, pattern: pat.name, severity: pat.severity, context: content.trim().slice(0, 120) });
+            }
+          }
+        } else if (!line.startsWith('-')) {
+          lineNum++;
+        }
+      }
+    } catch (err) {
+      console.warn('[governance] WARNING: diff content scan failed:', (err as Error).message?.slice(0, 100));
+    }
+
+    // Log results to governance_audit
+    if (matches.length > 0) {
+      const blockCount = matches.filter(m => m.severity === 'block').length;
+      const warnCount = matches.filter(m => m.severity === 'warn').length;
+      this.agentDb?.logGovernanceCheck(proposalId, 'diff_content_scan',
+        blockCount > 0 ? 'fail' : 'warn',
+        `Found ${matches.length} pattern(s): ${blockCount} blocking, ${warnCount} warning. ${matches.map(m => `${m.pattern} in ${m.file}:${m.line}`).join('; ')}`.slice(0, 500));
+    } else {
+      this.agentDb?.logGovernanceCheck(proposalId, 'diff_content_scan', 'pass');
+    }
+
+    return matches;
+  }
+
+  /**
    * Deterministic security checks for upgrade proposals.
    * Runs BEFORE auto-approve to catch security-sensitive changes, large unreviewed diffs, and build failures.
    */
@@ -1884,10 +1988,16 @@ export class GovernanceSync {
     }
     this.agentDb?.logGovernanceCheck(proposalId, 'security_file_check', 'pass', undefined, changedFiles.length, totalLinesChanged);
 
-    // CHECK 2 & 3 removed: were dead code (wrong DB, nonexistent field).
-    // Real safety gates: orchestrator pre-commit build, scenario runner, kernel delay below.
+    // CHECK 2: Diff content analysis — scan added lines for dangerous patterns
+    const dangerousPatterns = this.scanDiffForDangerousPatterns(proposalId);
+    const blockingPatterns = dangerousPatterns.filter(p => p.severity === 'block');
+    if (blockingPatterns.length > 0) {
+      const reason = `Dangerous code patterns detected: ${blockingPatterns.map(p => `${p.pattern} in ${p.file}:${p.line}`).join(', ')}`;
+      this.agentDb?.logGovernanceCheck(proposalId, 'dangerous_pattern_check', 'fail', reason.slice(0, 500), changedFiles.length, totalLinesChanged);
+      return { approved: false, reason, kernelDelay: false };
+    }
 
-    // CHECK 4: Kernel protection — delay if kernel files modified
+    // CHECK 3: Kernel protection — delay if kernel files modified
     const kernelFilesChanged = changedFiles.some(f => f.includes('kernel/'));
     if (kernelFilesChanged) {
       console.log('[governance] WARNING: Kernel file modified — applying 60s delay before approval');
@@ -2108,7 +2218,7 @@ export class GovernanceSync {
    * Handle an incoming sync response — apply all governance data through existing handlers.
    * Dedup is handled by processedIds, so duplicate items are safely ignored.
    */
-  handleSyncResponse(message: PandoMessage): void {
+  async handleSyncResponse(message: PandoMessage): Promise<void> {
     const payload = message.payload as {
       proposals?: GovernanceProposal[];
       comments?: GovernanceComment[];
@@ -2123,7 +2233,7 @@ export class GovernanceSync {
     // Apply proposals first (comments/votes/reviews reference them)
     for (const proposal of payload.proposals || []) {
       if (!this.processedIds.has(`proposal:${proposal.id}`)) {
-        this.handleProposal({ type: MessageType.GOVERNANCE_PROPOSAL, from: message.from, timestamp: proposal.createdAt, payload: proposal });
+        await this.handleProposal({ type: MessageType.GOVERNANCE_PROPOSAL, from: message.from, timestamp: proposal.createdAt, payload: proposal });
         newProposals++;
       }
     }
