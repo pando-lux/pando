@@ -31,3 +31,14 @@ dev-testing/
 
 # E2E test results (runtime artifacts)
 e2e/results/
+
+# QA E2E screenshots (generated, not source)
+qa-e2e/
+
+# Accidental path-mangled files
+Usersjaira*
+
+# Old planning docs
+*-PLAN.md
+*-RESULTS.md
+RESULT.md
