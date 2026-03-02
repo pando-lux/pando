@@ -209,6 +209,17 @@ export class ApiServer {
         done(badRequest, undefined);
       }
     });
+
+    // Global error handler: convert storage timeouts to 503 instead of 500
+    this.fastify.setErrorHandler((error: any, request: any, reply: any) => {
+      if (error.message?.includes('timed out') || error.message?.includes('ECONNREFUSED') || error.message?.includes('not connected') || error.code === 'ETIMEDOUT') {
+        return reply.code(503).send({ error: 'Storage backend temporarily unavailable' });
+      }
+      // Let Fastify handle everything else as normal 500
+      request.log.error(error);
+      reply.code(error.statusCode || 500).send({ error: error.message || 'Internal server error' });
+    });
+
     this.apiToken = loadOrGenerateApiToken(node.getDataDir() || join(homedir(), '.pando'));
 
     this.setupIdentity();
