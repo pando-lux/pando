@@ -20,9 +20,13 @@ export async function GET(request: Request) {
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch (err: any) {
+    const msg = err?.message || "";
+    if (/Invalid|expired|Unauthorized/i.test(msg)) {
+      return NextResponse.json({ error: "Unauthorized", details: msg }, { status: 401 });
+    }
     return NextResponse.json(
-      { error: "Failed to get user info", details: err?.message },
-      { status: 500 },
+      { error: "Service unavailable", details: msg },
+      { status: 503 },
     );
   }
 }
