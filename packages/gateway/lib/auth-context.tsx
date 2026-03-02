@@ -125,13 +125,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [saveToken],
   );
 
-  /** Try to validate an existing token via GET /api/auth/me. */
-  const validateToken = useCallback(async (t: string): Promise<boolean> => {
+  /** Try to validate an existing token via GET /api/auth/me.
+   * Returns 'valid' | 'invalid' | 'error' to distinguish genuinely expired tokens
+   * from transient network failures (D#176 fix).
+   */
+  const validateToken = useCallback(async (t: string): Promise<'valid' | 'invalid' | 'error'> => {
     try {
       const res = await fetch("/api/auth/me", {
         headers: { Authorization: `Bearer ${t}` },
       });
-      if (!res.ok) return false;
+      if (res.status === 401) return 'invalid';
+      if (!res.ok) return 'error';
       const data = await res.json();
       if (data.user) {
         setUser({
@@ -142,11 +146,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           balance: data.user.balance ?? 0,
           authMethod: "jwt",
         });
-        return true;
+        return 'valid';
       }
-      return false;
+      return 'invalid';
     } catch {
-      return false;
+      return 'error';
     }
   }, []);
 
@@ -205,8 +209,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       sigAuthPeerIdRef.current = peerId;
 
       // Validate the token to populate user info
-      const valid = await validateToken(result.token);
-      if (valid) {
+      const validationResult = await validateToken(result.token);
+      if (validationResult === 'valid') {
         scheduleRefresh(result.expiresAt, peerId);
         return true;
       }
@@ -222,13 +226,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // 1. Try existing stored token
       const existingToken = localStorage.getItem(TOKEN_KEY);
       if (existingToken) {
-        const valid = await validateToken(existingToken);
-        if (valid) {
+        const result = await validateToken(existingToken);
+        if (result === 'valid') {
           setToken(existingToken);
           setLoading(false);
           return;
         }
-        // Token expired or invalid — clear it
+        if (result === 'error') {
+          // Network error — keep token, assume still valid (D#176)
+          setToken(existingToken);
+          setLoading(false);
+          return;
+        }
+        // result === 'invalid' — token is genuinely expired/bad
         localStorage.removeItem(TOKEN_KEY);
       }
 
