@@ -973,16 +973,21 @@ export class PandoNode {
               const filesTouched: string[] = (govProposal.upgradePayload as any)?.filesTouched || [];
               const gatewayChanged = filesTouched.some(f => f.startsWith('packages/gateway/'));
               if (gatewayChanged) {
-                try {
-                  const gatewayDir = join(process.cwd(), 'packages', 'gateway');
-                  execSync('vercel deploy --prod --yes', {
-                    cwd: gatewayDir, timeout: 120_000, stdio: 'pipe', windowsHide: true,
-                  });
-                  console.log(`[upgrade] Gateway auto-deployed to Vercel (${filesTouched.filter(f => f.startsWith('packages/gateway/')).length} gateway files changed)`);
-                } catch (err: any) {
-                  // Non-fatal — Vercel CLI may not be installed on all nodes
-                  const msg = err.stderr?.toString()?.slice(0, 200) || err.message;
-                  console.warn(`[upgrade] Gateway Vercel deploy skipped: ${msg}`);
+                const vercelToken = process.env.VERCEL_DEPLOY_TOKEN;
+                if (vercelToken) {
+                  try {
+                    const gatewayDir = join(process.cwd(), 'packages', 'gateway');
+                    const gwCount = filesTouched.filter(f => f.startsWith('packages/gateway/')).length;
+                    execSync(`vercel deploy --prod --yes --token ${vercelToken}`, {
+                      cwd: gatewayDir, timeout: 180_000, stdio: 'pipe', windowsHide: true,
+                    });
+                    console.log(`[upgrade] Gateway auto-deployed to Vercel (${gwCount} gateway files changed)`);
+                  } catch (err: any) {
+                    const msg = err.stderr?.toString()?.slice(0, 200) || err.message;
+                    console.warn(`[upgrade] Gateway Vercel deploy failed: ${msg}`);
+                  }
+                } else {
+                  console.log(`[upgrade] Gateway files changed but VERCEL_DEPLOY_TOKEN not set — skipping auto-deploy`);
                 }
               }
             } else {

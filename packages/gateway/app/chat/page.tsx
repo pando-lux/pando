@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import NavBar from "@/components/NavBar";
+import MarkdownContent from "@/components/MarkdownContent";
 import { useAuth } from "@/lib/auth-context";
 
 type MessageTier = "simple" | "medium" | "complex";
@@ -74,38 +75,6 @@ function getDisplayTitle(thread: ThreadMeta): string {
 }
 
 /** Render basic markdown: **bold**, `inline code`, ```code blocks``` */
-function renderContent(text: string) {
-  const parts: React.ReactNode[] = [];
-  const blocks = text.split(/(```[\s\S]*?```)/g);
-  blocks.forEach((block, bi) => {
-    if (block.startsWith("```") && block.endsWith("```")) {
-      const code = block.slice(3, -3).replace(/^\w*\n/, "");
-      parts.push(
-        <pre key={bi} className="my-2 p-3 rounded-lg bg-neutral-100 dark:bg-neutral-900 text-xs font-mono overflow-x-auto">
-          {code}
-        </pre>
-      );
-    } else {
-      const inlineParts = block.split(/(\*\*[^*]+\*\*|`[^`]+`|https?:\/\/[^\s<>)"']+)/g);
-      const inlineNodes = inlineParts.map((part, ii) => {
-        if (part.startsWith("**") && part.endsWith("**")) {
-          return <strong key={ii} className="font-semibold">{part.slice(2, -2)}</strong>;
-        }
-        if (part.startsWith("`") && part.endsWith("`")) {
-          return <code key={ii} className="px-1.5 py-0.5 rounded bg-neutral-100 dark:bg-neutral-900 text-xs font-mono">{part.slice(1, -1)}</code>;
-        }
-        if (/^https?:\/\//.test(part)) {
-          const label = part.length > 60 ? part.slice(0, 60) + '…' : part;
-          return <a key={ii} href={part} target="_blank" rel="noopener noreferrer" className="text-amber-500 hover:text-amber-400 underline break-all">{label}</a>;
-        }
-        return part;
-      });
-      parts.push(<span key={bi}>{inlineNodes}</span>);
-    }
-  });
-  return parts;
-}
-
 function TierBadge({ tier }: { tier?: MessageTier }) {
   if (!tier) return null;
   const config: Record<MessageTier, { bg: string; text: string; label: string }> = {
@@ -944,7 +913,7 @@ function ChatPage() {
                       ) : (
                         <>
                           <div className="text-sm whitespace-pre-wrap break-words">
-                            {msg.role === "assistant" ? renderContent(msg.content) : msg.content}
+                            {msg.role === "assistant" ? <MarkdownContent content={msg.content} /> : msg.content}
                           </div>
                           {msg.activityLog && msg.activityLog.length > 0 && (
                             <details className="mt-2 border-t border-neutral-200 dark:border-neutral-700 pt-1.5">

@@ -7,6 +7,10 @@ export async function GET(request: Request) {
     // Forward user token as X-User-Token (node expects this header for user auth)
     const token = authHeader.startsWith("Bearer ") ? authHeader.slice(7) : "";
 
+    if (!token) {
+      return NextResponse.json({ error: "Not authenticated" }, { status: 401 });
+    }
+
     const res = await fetchFromNode("/v1/auth/me", {
       headers: {
         ...(token ? { "X-User-Token": token } : {}),

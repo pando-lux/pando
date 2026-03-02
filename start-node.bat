@@ -53,6 +53,10 @@ if not exist "packages\node\dist\tui.js" (
 :: Set gateway URL for deployed apps (URL injection at deploy time)
 if not defined GATEWAY_PUBLIC_URL set "GATEWAY_PUBLIC_URL=https://gateway-one-mu.vercel.app"
 
+:: Vercel deploy token for gateway auto-deploy after governance approval
+:: Set VERCEL_DEPLOY_TOKEN in secrets/local.env.bat (gitignored) or system env vars
+if exist "%~dp0secrets\local.env.bat" call "%~dp0secrets\local.env.bat"
+
 :: Default arguments if none provided
 set "ARGS=%*"
 if "%ARGS%"=="" set "ARGS=--port 4001 --api-port 4100"
