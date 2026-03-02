@@ -204,7 +204,7 @@ export class WorkerPool {
 
     // Issue 8: Create git worktree for builder workers to isolate writes
     let worktreePath: string | null = null;
-    if (config.role === 'builder') {
+    if (false && config.role === 'builder') {
       try {
         const wtDir = join(this.dataDir, 'worktrees');
         if (!existsSync(wtDir)) mkdirSync(wtDir, { recursive: true });
@@ -216,7 +216,7 @@ export class WorkerPool {
           timeout: 30_000,
           stdio: ['pipe', 'pipe', 'pipe'],
         });
-        projectRoot = worktreePath;
+        projectRoot = worktreePath!;
         this.db.updateAgent(workerId, { workspaceDir: worktreePath });
         console.log(`[WorkerPool] Created worktree for ${workerId} at ${worktreePath}`);
       } catch (wtErr: any) {
