@@ -113,6 +113,10 @@ interface BoardState {
     connectedPeers: number;
     uptimeMinutes: number;
   };
+  /** QA test coverage — only populated for qa-user */
+  qaCoverage?: Array<{ targetUrl: string; lastTestedAt: string; lastStatus: string; totalRuns: number }>;
+  /** Recent QA failures — only populated for qa-user */
+  qaRecentFailures?: Array<{ targetUrl: string; errorDetail: string; createdAt: string }>;
 }
 
 // ---------------------------------------------------------------------------
@@ -595,6 +599,28 @@ export class Orchestrator {
       };
     }
 
+    // QA test coverage — only for qa-user so it knows what it already tested
+    let qaCoverage: BoardState['qaCoverage'];
+    let qaRecentFailures: BoardState['qaRecentFailures'];
+    if (agent.role === 'qa-user') {
+      try {
+        qaCoverage = this.deps.db.getQaTestCoverage(this.orchestratorId);
+        // Also get recent failures (last 24h) so QA knows what to re-test
+        const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+        const recentFails = this.deps.db.getQaTestRuns({
+          orchestratorId: this.orchestratorId,
+          status: 'failed',
+          since,
+          limit: 10,
+        });
+        qaRecentFailures = recentFails.map(r => ({
+          targetUrl: r.targetUrl,
+          errorDetail: r.errorDetail || r.uxNotes || 'unknown',
+          createdAt: r.createdAt,
+        }));
+      } catch { /* non-fatal — table may not exist yet */ }
+    }
+
     return {
       pendingTasks: this.deps.db.listAgents({ parentId: this.orchestratorId, status: 'pending' }).length,
       activeTasks: activeWorkers.filter(w => w.currentTaskId).length,
@@ -610,6 +636,8 @@ export class Orchestrator {
       overdueWorkers,
       interruptedWorkers,
       systemHealth,
+      qaCoverage,
+      qaRecentFailures,
     };
   }
 
@@ -1440,6 +1468,43 @@ export class Orchestrator {
       sections.push('## Other Messages');
       for (const msg of board.messages) {
         sections.push(`- From ${msg.senderId} (${msg.type}): ${msg.payload}`);
+      }
+      sections.push('');
+    }
+
+    // QA test coverage history — tells QA agent what it already tested
+    if (board.qaCoverage && board.qaCoverage.length > 0) {
+      sections.push('## Your Test Coverage (from qa_test_runs database)');
+      sections.push('URLs you have already tested (sorted oldest-first — test the oldest ones next):');
+      for (const c of board.qaCoverage) {
+        const age = Math.round((Date.now() - new Date(c.lastTestedAt).getTime()) / 60000);
+        sections.push(`- ${c.targetUrl}: last=${c.lastStatus} ${age}min ago, ${c.totalRuns} total runs`);
+      }
+      // Identify untested pages
+      const testedUrls = new Set(board.qaCoverage.map(c => c.targetUrl));
+      const allPages = [
+        '/', '/login', '/register', '/chat', '/projects', '/wallet',
+        '/marketplace', '/council', '/governance', '/apps', '/explore',
+        '/agents', '/monitor', '/scheduler', '/network', '/resources',
+      ];
+      const untested = allPages.filter(p => !testedUrls.has(p) && ![...testedUrls].some(u => u.includes(p)));
+      if (untested.length > 0) {
+        sections.push(`UNTESTED pages (high priority): ${untested.join(', ')}`);
+      }
+      sections.push('Strategy: Re-test FAILED pages first, then oldest PASSED, then UNTESTED.');
+      sections.push('');
+    } else if (agent.role === 'qa-user') {
+      sections.push('## Your Test Coverage');
+      sections.push('No tests recorded yet. Start with P1 pages: /, /login, /register, /chat, /projects, /wallet');
+      sections.push('');
+    }
+
+    // QA recent failures — what broke recently, needs re-testing
+    if (board.qaRecentFailures && board.qaRecentFailures.length > 0) {
+      sections.push('## Recent Test Failures (last 24h) — RE-TEST THESE');
+      for (const f of board.qaRecentFailures) {
+        const age = Math.round((Date.now() - new Date(f.createdAt).getTime()) / 60000);
+        sections.push(`- ${f.targetUrl}: ${f.errorDetail.slice(0, 150)} (${age}min ago)`);
       }
       sections.push('');
     }
