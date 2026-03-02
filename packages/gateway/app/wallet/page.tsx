@@ -16,6 +16,7 @@ export default function WalletPage() {
   const [sending, setSending] = useState(false);
   const [sendMsg, setSendMsg] = useState<{ ok?: boolean; text: string } | null>(null);
   const [showKey, setShowKey] = useState(false);
+  const [showConfirm, setShowConfirm] = useState(false);
   const [copied, setCopied] = useState(false);
   const [nodeStatus, setNodeStatus] = useState<{ identity: string; balance: number; publicKey: string } | null>(null);
 
@@ -53,7 +54,12 @@ export default function WalletPage() {
     if (!recipient.trim() || !amount.trim()) return;
     const amt = parseFloat(amount);
     if (isNaN(amt) || amt <= 0) { setSendMsg({ text: "Invalid amount" }); return; }
-    setSending(true); setSendMsg(null);
+    setShowConfirm(true);
+  }
+
+  async function confirmSend() {
+    const amt = parseFloat(amount);
+    setSending(true); setSendMsg(null); setShowConfirm(false);
     try {
       const headers: Record<string, string> = { "Content-Type": "application/json" };
       if (token) headers["Authorization"] = `Bearer ${token}`;
@@ -66,8 +72,6 @@ export default function WalletPage() {
         setSendMsg({ ok: true, text: `Sent ${amt} Lux` });
         setAmount("");
         setRecipient("");
-        // Refresh wallet data immediately and again after a short delay
-        // to pick up the updated balance and transaction list
         await fetchData();
         setTimeout(fetchData, 2000);
       } else {
@@ -129,13 +133,30 @@ export default function WalletPage() {
               <input type="number" step="any" min="0" value={amount} onChange={e => setAmount(e.target.value)}
                 placeholder="Amount" className="w-full sm:w-32 bg-neutral-200 dark:bg-neutral-800 border border-neutral-300 dark:border-neutral-700 rounded-lg px-3 py-2 text-sm text-neutral-900 dark:text-neutral-100 placeholder-neutral-400 dark:placeholder-neutral-500 focus:outline-none focus:ring-2 focus:ring-amber-500/50" />
             </div>
-            <div className="flex items-center gap-3">
-              <button type="submit" disabled={sending || !recipient.trim() || !amount.trim()}
-                className="bg-amber-500 hover:bg-amber-600 active:scale-[0.98] disabled:opacity-50 text-black font-medium rounded-lg px-4 py-2 text-sm transition">
-                {sending ? "Sending..." : "Send"}
-              </button>
-              {sendMsg && <span className={`text-xs ${sendMsg.ok ? "text-green-400" : "text-red-400"}`}>{sendMsg.text}</span>}
-            </div>
+            {showConfirm ? (
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-lg p-3 space-y-2">
+                <p className="text-sm text-neutral-800 dark:text-neutral-200">
+                  Send <span className="font-bold text-amber-500">{parseFloat(amount).toLocaleString(undefined, { maximumFractionDigits: 4 })} Lux</span> to <span className="font-mono text-xs">{shortId(recipient)}</span>?
+                </p>
+                <p className="text-xs text-neutral-500">This action is irreversible.</p>
+                <div className="flex gap-2">
+                  <button onClick={confirmSend} className="bg-amber-500 hover:bg-amber-600 active:scale-[0.98] text-black font-medium rounded-lg px-4 py-1.5 text-sm transition-all">
+                    Confirm
+                  </button>
+                  <button onClick={() => setShowConfirm(false)} className="bg-neutral-200 dark:bg-neutral-700 hover:bg-neutral-300 dark:hover:bg-neutral-600 active:scale-[0.98] text-neutral-700 dark:text-neutral-300 rounded-lg px-4 py-1.5 text-sm transition-all">
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3">
+                <button type="submit" disabled={sending || !recipient.trim() || !amount.trim()}
+                  className="bg-amber-500 hover:bg-amber-600 active:scale-[0.98] disabled:opacity-50 text-black font-medium rounded-lg px-4 py-2 text-sm transition">
+                  {sending ? "Sending..." : "Send"}
+                </button>
+                {sendMsg && <span className={`text-xs ${sendMsg.ok ? "text-green-400" : "text-red-400"}`}>{sendMsg.text}</span>}
+              </div>
+            )}
           </form>
         </div>
 
