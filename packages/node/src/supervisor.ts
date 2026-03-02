@@ -204,14 +204,30 @@ async function initTray(
 
 // ─── Boot ──────────────────────────────────────────────────────────────────
 
+// Catch unhandled errors from systray binary spawn (EACCES on headless Linux)
+process.on('uncaughtException', (err: Error) => {
+  if (err.message?.includes('systray') || err.message?.includes('tray_linux') || err.message?.includes('EACCES')) {
+    console.log(`[supervisor] Ignoring tray error on headless system: ${err.message}`);
+    return;
+  }
+  console.error(`[supervisor] Uncaught exception: ${err.message}`);
+  process.exit(1);
+});
+
 const pollTimer = setInterval(pollStatus, 10_000);
 pollTimer.unref(); // don't prevent process exit
 
-initTray(
-  () => child,
-  () => { stopping = true; if (child) child.kill('SIGINT'); setTimeout(() => process.exit(0), 3_000); },
-).catch((e: unknown) => {
-  console.log(`[supervisor] Tray init failed: ${e instanceof Error ? e.message : String(e)}`);
-});
+// Skip tray on headless systems (no DISPLAY on Linux = no GUI)
+const isHeadless = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
+if (!isHeadless) {
+  initTray(
+    () => child,
+    () => { stopping = true; if (child) child.kill('SIGINT'); setTimeout(() => process.exit(0), 3_000); },
+  ).catch((e: unknown) => {
+    console.log(`[supervisor] Tray init failed: ${e instanceof Error ? e.message : String(e)}`);
+  });
+} else {
+  console.log('[supervisor] Headless system detected — skipping system tray.');
+}
 
 child = spawnNode();
