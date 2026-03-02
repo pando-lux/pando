@@ -42,3 +42,7 @@ Usersjaira*
 *-PLAN.md
 *-RESULTS.md
 RESULT.md
+
+# QA snapshot/state files (runtime artifacts)
+*snapshot*.md
+project-state.md
