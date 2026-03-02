@@ -85,11 +85,11 @@ import { toString as uint8ArrayToString } from 'uint8arrays';
 import { join, resolve as pathResolve } from 'node:path';
 import { homedir, freemem, totalmem } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { execSync, exec as execCb } from 'node:child_process';
+import { execSync, exec as execCb, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(execCb);
-import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, openSync } from 'node:fs';
 
 /** Phase 68.2: Single constant for the node-level manager ID. */
 const DEFAULT_MANAGER_ID = 'pando-node-mgr';
@@ -2243,9 +2243,9 @@ location /apps/${projectId}/ {
                   console.log(`[self-restart] Build updated since startup (was=${initialCommit.slice(0, 8)}, now=${builtCommit.slice(0, 8)}) but ${activeWorkers} worker(s) active — deferring`);
                   return;
                 }
-                console.log(`[self-restart] Build updated since startup (was=${initialCommit.slice(0, 8)}, now=${builtCommit.slice(0, 8)}) — restarting (exit ${RESTART_EXIT_CODE})`);
+                console.log(`[self-restart] Build updated since startup (was=${initialCommit.slice(0, 8)}, now=${builtCommit.slice(0, 8)}) — restarting`);
                 clearInterval(selfRestartInterval);
-                process.exit(RESTART_EXIT_CODE);
+                this.selfRestart();
               }
               return;
             }
@@ -2254,9 +2254,9 @@ location /apps/${projectId}/ {
               console.log(`[self-restart] Stale build detected (built=${builtCommit.slice(0, 8)}, head=${currentCommit.slice(0, 8)}) but ${activeWorkers} worker(s) active — deferring restart`);
               return;
             }
-            console.log(`[self-restart] Stale build detected and no active workers — restarting (exit ${RESTART_EXIT_CODE})`);
+            console.log(`[self-restart] Stale build detected and no active workers — restarting`);
             clearInterval(selfRestartInterval);
-            process.exit(RESTART_EXIT_CODE);
+            this.selfRestart();
           } catch { /* git unavailable or cwd mismatch — skip silently */ }
         }, 60 * 1000);  // Check every 60s — fast restart after CEO commits
         selfRestartInterval.unref(); // don't prevent normal node exit
@@ -2458,6 +2458,41 @@ location /apps/${projectId}/ {
   /** v2.3: Get current boot health snapshot. */
   getNodeHealth(): NodeHealth {
     return { ...this.nodeHealth, bootSteps: { ...this.nodeHealth.bootSteps }, degraded: [...this.nodeHealth.degraded] };
+  }
+
+  /**
+   * Self-restart: spawn a new node process with same args and env, then exit.
+   * Works without PM2/systemd/bat wrapper — the new process is detached.
+   */
+  private selfRestart(): void {
+    this.restartPending = true;
+    const args = process.argv.slice(1);
+    const logFile = join(process.env.HOME || process.env.USERPROFILE || '.', '.pando', 'logs', 'node-stdout.log');
+    console.log(`[self-restart] Will exit and re-launch: node ${args.join(' ')}`);
+
+    // Stop everything first so ports are released
+    this.stop().then(() => {
+      // Small delay for ports to fully release
+      setTimeout(() => {
+        try {
+          const out = openSync(logFile, 'a');
+          const err = openSync(logFile, 'a');
+          const child = spawn(process.execPath, args, {
+            detached: true,
+            stdio: ['ignore', out, err],
+            env: process.env,
+            cwd: process.cwd(),
+          });
+          child.unref();
+          console.log(`[self-restart] New process spawned (PID ${child.pid}). Exiting old process.`);
+        } catch (e: any) {
+          console.error(`[self-restart] Failed to spawn: ${e.message}. Falling back to exit 75.`);
+        }
+        process.exit(RESTART_EXIT_CODE);
+      }, 3000);
+    }).catch(() => {
+      process.exit(RESTART_EXIT_CODE);
+    });
   }
 
   /**
