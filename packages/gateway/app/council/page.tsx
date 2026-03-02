@@ -115,6 +115,20 @@ function parseActions(actionsStr: string): string[] {
   }
 }
 
+function formatDuration(ms: number): string {
+  if (ms >= 3600000) {
+    const h = Math.floor(ms / 3600000);
+    const m = Math.floor((ms % 3600000) / 60000);
+    return `${h}h ${m}m`;
+  }
+  if (ms >= 60000) {
+    const m = Math.floor(ms / 60000);
+    const s = Math.floor((ms % 60000) / 1000);
+    return `${m}m ${s}s`;
+  }
+  return `${(ms / 1000).toFixed(1)}s`;
+}
+
 function actionBadgeColor(action: string): string {
   if (action.includes("spawn")) return "bg-blue-500/10 dark:bg-blue-500/20 text-blue-600 dark:text-blue-400 border-blue-500/30";
   if (action.includes("commit")) return "bg-emerald-500/10 dark:bg-emerald-500/20 text-emerald-600 dark:text-emerald-400 border-emerald-500/30";
@@ -208,7 +222,7 @@ export default function CouncilPage() {
           <>
             {/* 2. Status Bar */}
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center">
+              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center hover:bg-neutral-200 dark:hover:bg-neutral-800/50 transition-colors">
                 <p className="text-xs text-neutral-500 mb-1">Status</p>
                 <div className="flex items-center justify-center gap-2">
                   <span
@@ -224,7 +238,7 @@ export default function CouncilPage() {
                 </div>
               </div>
 
-              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center">
+              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center hover:bg-neutral-200 dark:hover:bg-neutral-800/50 transition-colors">
                 <p className="text-xs text-neutral-500 mb-1">Session</p>
                 <p className="text-xs font-mono text-neutral-600 dark:text-neutral-300">
                   {data.council.sessionId
@@ -233,21 +247,21 @@ export default function CouncilPage() {
                 </p>
               </div>
 
-              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center">
+              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center hover:bg-neutral-200 dark:hover:bg-neutral-800/50 transition-colors">
                 <p className="text-xs text-neutral-500 mb-1">Uptime</p>
                 <p className="text-sm font-mono font-bold text-neutral-700 dark:text-neutral-200">
                   {formatUptime(data.network.uptime)}
                 </p>
               </div>
 
-              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center">
+              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center hover:bg-neutral-200 dark:hover:bg-neutral-800/50 transition-colors">
                 <p className="text-xs text-neutral-500 mb-1">Peers</p>
                 <p className="text-lg font-mono font-bold text-indigo-600 dark:text-indigo-400">
                   {data.network.peers}
                 </p>
               </div>
 
-              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center col-span-2 sm:col-span-1">
+              <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center col-span-2 sm:col-span-1 hover:bg-neutral-200 dark:hover:bg-neutral-800/50 transition-colors">
                 <p className="text-xs text-neutral-500 mb-1">Budget Spent</p>
                 <p className="text-sm font-mono font-bold text-amber-600 dark:text-amber-400">
                   ${data.council.budgetSpent?.toFixed(2) ?? "0.00"}
@@ -353,13 +367,13 @@ export default function CouncilPage() {
                   {tier2Ticks.map((tick) => {
                     const actions = parseActions(tick.actions);
                     return (
-                      <div key={tick.tickNumber} className="px-4 py-3">
+                      <div key={tick.tickNumber} className="px-4 py-3 hover:bg-neutral-200 dark:hover:bg-neutral-800/50 transition-colors">
                         <div className="flex items-center gap-3 mb-1.5">
                           <span className="text-xs font-mono text-neutral-500">
-                            Tick #{tick.tickNumber}
+                            Decision #{tick.tickNumber}
                           </span>
                           <span className="text-xs text-neutral-600">
-                            {tick.durationMs}ms
+                            {formatDuration(tick.durationMs)}
                           </span>
                           <span className="text-xs text-neutral-600 ml-auto">
                             {relativeTime(tick.at)}
@@ -402,7 +416,7 @@ export default function CouncilPage() {
               ) : (
                 <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
                   {recentCommits.map((c) => (
-                    <div key={c.hash} className="px-4 py-2.5 flex items-start gap-3">
+                    <div key={c.hash} className="px-4 py-2.5 flex items-start gap-3 hover:bg-neutral-200 dark:hover:bg-neutral-800/50 transition-colors">
                       <span className="text-xs font-mono text-indigo-600 dark:text-indigo-400 shrink-0 mt-0.5">
                         {c.hash?.slice(0, 8)}
                       </span>
@@ -467,7 +481,7 @@ export default function CouncilPage() {
                       >
                         <div className="flex items-start gap-2">
                           {l.source && (
-                            <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full font-medium border bg-violet-500/10 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400 border-violet-500/30 mt-0.5">
+                            <span className="shrink-0 text-[10px] px-2 py-0.5 rounded-full font-medium border bg-violet-500/10 dark:bg-violet-500/20 text-violet-600 dark:text-violet-400 border-violet-500/30 mt-0.5 max-w-[120px] truncate" title={l.source}>
                               {l.source}
                             </span>
                           )}

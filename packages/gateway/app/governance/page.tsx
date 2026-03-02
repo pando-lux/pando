@@ -460,34 +460,37 @@ export default function GovernancePage() {
               {paginatedProposals.map(p => (
                 <div key={p.id}>
                   {/* Proposal row */}
-                  <button onClick={() => toggle(p.id)} className="w-full px-4 py-3 text-left hover:bg-neutral-100 dark:hover:bg-neutral-800/50 transition overflow-hidden">
-                    <div className="flex items-center gap-2">
-                      {/* Status badge */}
-                      <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border flex-shrink-0 ${statusBadgeCls(p.status)}`}>
-                        {p.status.replace(/_/g, " ")}
-                      </span>
-
-                      {/* Category badge */}
-                      {p.category && (
-                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border flex-shrink-0 ${categoryBadgeCls(p.category)}`}>
-                          {categoryLabel(p.category)}
-                        </span>
-                      )}
-
-                      {/* Human-only badge */}
-                      {p.humanOnly && (
-                        <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-pink-500/15 text-pink-400 border border-pink-500/25 flex-shrink-0">
-                          human only
-                        </span>
-                      )}
-
-                      {/* Title */}
-                      <span className="text-sm text-neutral-800 dark:text-neutral-200 font-medium flex-1 min-w-0 truncate">
+                  <button onClick={() => toggle(p.id)} className="w-full px-4 py-3 text-left hover:bg-neutral-100 dark:hover:bg-neutral-800/50 transition overflow-hidden relative">
+                    <div className="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-2">
+                      {/* Title — always visible, shown first on mobile */}
+                      <span className="text-sm text-neutral-800 dark:text-neutral-200 font-medium min-w-0 truncate order-first sm:order-none sm:flex-1">
                         {p.title}
                       </span>
 
+                      {/* Badges row */}
+                      <div className="flex items-center gap-2 flex-wrap order-last sm:order-first sm:flex-shrink-0">
+                        {/* Status badge */}
+                        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border flex-shrink-0 ${statusBadgeCls(p.status)}`}>
+                          {p.status.replace(/_/g, " ")}
+                        </span>
+
+                        {/* Category badge */}
+                        {p.category && (
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium border flex-shrink-0 ${categoryBadgeCls(p.category)}`}>
+                            {categoryLabel(p.category)}
+                          </span>
+                        )}
+
+                        {/* Human-only badge */}
+                        {p.humanOnly && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded font-medium bg-pink-500/15 text-pink-400 border border-pink-500/25 flex-shrink-0">
+                            human only
+                          </span>
+                        )}
+                      </div>
+
                       {/* Right side metadata */}
-                      <div className="flex items-center gap-3 flex-shrink-0">
+                      <div className="hidden sm:flex items-center gap-3 flex-shrink-0">
                         {/* Stake */}
                         {p.stakeAmount != null && p.stakeAmount > 0 && (
                           <span className="text-[10px] font-mono text-amber-400" title="Lux staked">
@@ -521,6 +524,11 @@ export default function GovernancePage() {
                           {expanded === p.id ? "\u25B2" : "\u25BC"}
                         </span>
                       </div>
+
+                      {/* Mobile expand indicator */}
+                      <span className="sm:hidden text-neutral-500 text-[10px] self-end absolute right-4 top-3">
+                        {expanded === p.id ? "\u25B2" : "\u25BC"}
+                      </span>
                     </div>
                   </button>
 
@@ -529,7 +537,20 @@ export default function GovernancePage() {
                     <div className="px-4 pb-4 bg-neutral-100/50 dark:bg-neutral-800/30 border-t border-neutral-300 dark:border-neutral-800 space-y-4 py-3">
                       {/* Description */}
                       {detail.description && (
-                        <p className="text-sm text-neutral-600 dark:text-neutral-400 whitespace-pre-wrap">{detail.description}</p>
+                        <div className="text-sm text-neutral-600 dark:text-neutral-400 space-y-1.5">
+                          {detail.description.split("\n").filter(line => line.trim() !== "").map((line, i) => {
+                            const labelMatch = line.match(/^([A-Za-z][A-Za-z0-9 _-]*):(.+)$/);
+                            if (labelMatch) {
+                              return (
+                                <p key={i}>
+                                  <span className="font-semibold text-neutral-700 dark:text-neutral-300">{labelMatch[1]}:</span>
+                                  {labelMatch[2]}
+                                </p>
+                              );
+                            }
+                            return <p key={i}>{line}</p>;
+                          })}
+                        </div>
                       )}
 
                       {/* Meta row */}
@@ -789,7 +810,7 @@ function StatCard({ label, value, accent, render }: {
   render?: () => React.ReactNode;
 }) {
   return (
-    <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-3 text-center">
+    <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-3 text-center hover:bg-neutral-200 dark:hover:bg-neutral-800 transition-colors">
       <p className="text-xs text-neutral-600 dark:text-neutral-500 mb-1">{label}</p>
       {render ? render() : (
         <p className={`text-lg font-mono font-bold ${accent || "text-neutral-800 dark:text-neutral-200"}`}>
