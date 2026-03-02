@@ -1527,7 +1527,7 @@ export class Orchestrator {
         // Check if any recent gateway change file path contains this page route
         const hasCodeChange = recentChanges.some(f => {
           const lower = f.toLowerCase();
-          const pageName = page === '/' ? 'page.tsx' : page.slice(1);
+          const pageName = page === '/' ? 'app/page.tsx' : page.slice(1);
           return lower.includes(pageName);
         });
 
