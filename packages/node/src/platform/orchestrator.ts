@@ -117,6 +117,8 @@ interface BoardState {
   qaCoverage?: Array<{ targetUrl: string; lastTestedAt: string; lastStatus: string; totalRuns: number }>;
   /** Recent QA failures — only populated for qa-user */
   qaRecentFailures?: Array<{ targetUrl: string; errorDetail: string; createdAt: string }>;
+  /** Recently changed gateway files from git log — only for qa-user */
+  qaRecentChanges?: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -621,6 +623,30 @@ export class Orchestrator {
       } catch { /* non-fatal — table may not exist yet */ }
     }
 
+    // Recently changed gateway files — only for qa-user to prioritize tests
+    let qaRecentChanges: BoardState['qaRecentChanges'];
+    if (agent.role === 'qa-user') {
+      try {
+        const repoDir = this.deps.repoDir;
+        if (repoDir) {
+          const gitOutput = (execSync(
+            'git log --name-only --pretty=format: --since="2 hours ago" -- packages/gateway/',
+            { cwd: repoDir, encoding: 'utf-8', timeout: 5000, stdio: 'pipe' },
+          ) as string).trim();
+          if (gitOutput) {
+            // Filter out empty lines and deduplicate
+            qaRecentChanges = [...new Set(gitOutput.split('\n').filter(l => l.trim()))];
+          } else {
+            qaRecentChanges = [];
+          }
+        } else {
+          qaRecentChanges = [];
+        }
+      } catch {
+        qaRecentChanges = [];
+      }
+    }
+
     return {
       pendingTasks: this.deps.db.listAgents({ parentId: this.orchestratorId, status: 'pending' }).length,
       activeTasks: activeWorkers.filter(w => w.currentTaskId).length,
@@ -638,6 +664,7 @@ export class Orchestrator {
       systemHealth,
       qaCoverage,
       qaRecentFailures,
+      qaRecentChanges,
     };
   }
 
@@ -1472,29 +1499,90 @@ export class Orchestrator {
       sections.push('');
     }
 
-    // QA test coverage history — tells QA agent what it already tested
+    // QA prioritized test queue — smart prioritization based on coverage + git changes
     if (board.qaCoverage && board.qaCoverage.length > 0) {
-      sections.push('## Your Test Coverage (from qa_test_runs database)');
-      sections.push('URLs you have already tested (sorted oldest-first — test the oldest ones next):');
-      for (const c of board.qaCoverage) {
-        const age = Math.round((Date.now() - new Date(c.lastTestedAt).getTime()) / 60000);
-        sections.push(`- ${c.targetUrl}: last=${c.lastStatus} ${age}min ago, ${c.totalRuns} total runs`);
-      }
-      // Identify untested pages
-      const testedUrls = new Set(board.qaCoverage.map(c => c.targetUrl));
+      const recentChanges = board.qaRecentChanges || [];
+      const TWO_HOURS_MS = 2 * 60 * 60 * 1000;
+      const now = Date.now();
+
+      // Build lookup of coverage by URL
+      const coverageByUrl = new Map(board.qaCoverage.map(c => [c.targetUrl, c]));
+
+      // All known pages
       const allPages = [
         '/', '/login', '/register', '/chat', '/projects', '/wallet',
         '/marketplace', '/council', '/governance', '/apps', '/explore',
         '/agents', '/monitor', '/scheduler', '/network', '/resources',
       ];
-      const untested = allPages.filter(p => !testedUrls.has(p) && ![...testedUrls].some(u => u.includes(p)));
-      if (untested.length > 0) {
-        sections.push(`UNTESTED pages (high priority): ${untested.join(', ')}`);
+
+      // Categorize into 4 buckets
+      const changed: string[] = [];
+      const failed: string[] = [];
+      const stale: string[] = [];
+      const skip: string[] = [];
+      const untested: string[] = [];
+
+      for (const page of allPages) {
+        const cov = coverageByUrl.get(page);
+        // Check if any recent gateway change file path contains this page route
+        const hasCodeChange = recentChanges.some(f => {
+          const lower = f.toLowerCase();
+          const pageName = page === '/' ? 'page.tsx' : page.slice(1);
+          return lower.includes(pageName);
+        });
+
+        if (!cov) {
+          // Never tested — treat as stale
+          if (hasCodeChange) {
+            changed.push(page);
+          } else {
+            untested.push(page);
+          }
+          continue;
+        }
+
+        const ageMs = now - new Date(cov.lastTestedAt).getTime();
+
+        if (hasCodeChange) {
+          changed.push(page);
+        } else if (cov.lastStatus === 'failed') {
+          failed.push(page);
+        } else if (ageMs > TWO_HOURS_MS) {
+          stale.push(page);
+        } else {
+          skip.push(page);
+        }
       }
-      sections.push('Strategy: Re-test FAILED pages first, then oldest PASSED, then UNTESTED.');
+
+      sections.push('## PRIORITIZED TEST QUEUE (smart — based on coverage + git changes)');
+      if (changed.length > 0) {
+        sections.push(`TEST NOW (code changed): ${changed.join(', ')}  ← gateway files changed in last 2h`);
+      }
+      if (failed.length > 0) {
+        sections.push(`TEST NOW (last failed): ${failed.join(', ')}`);
+      }
+      if (untested.length > 0) {
+        sections.push(`TEST NEXT (never tested): ${untested.join(', ')}`);
+      }
+      if (stale.length > 0) {
+        sections.push(`TEST NEXT (stale >2h): ${stale.join(', ')}`);
+      }
+      if (skip.length > 0) {
+        sections.push(`SKIP (passed <2h, no changes): ${skip.join(', ')}`);
+      }
+      sections.push('');
+      sections.push('DO NOT test pages in the SKIP list unless all other pages are done. Focus on CHANGED and FAILED pages first — these are where bugs are most likely.');
+      sections.push('');
+
+      // Still show raw coverage for context
+      sections.push('### Raw Coverage Data');
+      for (const c of board.qaCoverage) {
+        const age = Math.round((now - new Date(c.lastTestedAt).getTime()) / 60000);
+        sections.push(`- ${c.targetUrl}: last=${c.lastStatus} ${age}min ago, ${c.totalRuns} total runs`);
+      }
       sections.push('');
     } else if (agent.role === 'qa-user') {
-      sections.push('## Your Test Coverage');
+      sections.push('## PRIORITIZED TEST QUEUE');
       sections.push('No tests recorded yet. Start with P1 pages: /, /login, /register, /chat, /projects, /wallet');
       sections.push('');
     }
