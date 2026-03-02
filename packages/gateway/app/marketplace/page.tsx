@@ -191,7 +191,7 @@ function SearchBox({ value, onChange }: { value: string; onChange: (v: string) =
 
 /* -- Filter Tabs ------------------------------------------- */
 
-function FilterTabs({ active, onChange }: { active: string; onChange: (v: string) => void }) {
+function FilterTabs({ active, onChange, counts }: { active: string; onChange: (v: string) => void; counts: Record<string, number> }) {
   const tabs = [
     { value: "all", label: "All" },
     { value: "active", label: "Active" },
@@ -202,13 +202,18 @@ function FilterTabs({ active, onChange }: { active: string; onChange: (v: string
         <button
           key={tab.value}
           onClick={() => onChange(tab.value)}
-          className={`px-3 py-1.5 text-xs font-medium rounded-full transition ${
+          className={`px-3 py-1.5 text-xs font-medium rounded-full transition cursor-pointer ${
             active === tab.value
               ? "bg-amber-500/15 text-amber-500 dark:text-amber-400 border border-amber-500/25"
               : "text-neutral-500 dark:text-neutral-400 hover:text-neutral-900 dark:hover:text-neutral-200 hover:bg-neutral-100 dark:hover:bg-neutral-800"
           }`}
         >
           {tab.label}
+          {counts[tab.value] !== undefined && (
+            <span className="ml-1.5 inline-flex items-center justify-center px-1.5 py-0.5 rounded-full text-[10px] font-medium bg-neutral-200 dark:bg-neutral-700 text-neutral-600 dark:text-neutral-300">
+              {counts[tab.value]}
+            </span>
+          )}
         </button>
       ))}
     </div>
@@ -277,7 +282,8 @@ export default function MarketplacePage() {
 
   /* -- Client-side filtering -------------------------------- */
 
-  const filteredProjects = useMemo(() => {
+  /* Base filtered = dedup + test filter + search (no status filter yet) */
+  const baseFiltered = useMemo(() => {
     if (!data?.projects) return [];
     let result = data.projects;
 
@@ -297,11 +303,6 @@ export default function MarketplacePage() {
     const testPartialPattern = /^test-|\btest-(message|static|poll|verify)|^QA\s+test|^infra-\d+|^phase\d+-test|hello\s+from\s+tester|\.(ts|js|tsx|jsx)\s*$|^Add\s+(a\s+)?\w+\s+(at|to|in)\s+/i;
     result = result.filter((p) => { const n = p.name.trim(); return !testExactPattern.test(n) && !testPartialPattern.test(n); });
 
-    // Status filter
-    if (statusFilter !== "all") {
-      result = result.filter((p) => p.status === statusFilter);
-    }
-
     // Text search
     if (search.trim()) {
       const term = search.toLowerCase();
@@ -313,7 +314,19 @@ export default function MarketplacePage() {
     }
 
     return result;
-  }, [data, search, statusFilter]);
+  }, [data, search]);
+
+  /* Filter counts for badge display */
+  const filterCounts = useMemo(() => ({
+    all: baseFiltered.length,
+    active: baseFiltered.filter((p) => p.status === "active").length,
+  }), [baseFiltered]);
+
+  /* Final filtered = base + status filter */
+  const filteredProjects = useMemo(() => {
+    if (statusFilter === "all") return baseFiltered;
+    return baseFiltered.filter((p) => p.status === statusFilter);
+  }, [baseFiltered, statusFilter]);
 
   const featuredProjects = useMemo(
     () => filteredProjects.filter((p) => p.visibility === "featured"),
@@ -331,9 +344,17 @@ export default function MarketplacePage() {
       <main className="max-w-6xl mx-auto p-6 space-y-8">
         {/* Header */}
         <div className="space-y-2 animate-page-fade-in">
-          <h1 className="text-2xl font-bold text-neutral-900 dark:text-neutral-100">
-            Pando Marketplace
-          </h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold text-neutral-900 dark:text-neutral-100">
+              Pando Marketplace
+            </h1>
+            <button
+              onClick={() => { setLoading(true); fetchData(); }}
+              className="bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 rounded-lg px-3 py-1.5 text-xs text-neutral-700 dark:text-neutral-300 transition cursor-pointer"
+            >
+              Refresh
+            </button>
+          </div>
           <p className="text-sm text-neutral-500 dark:text-neutral-400">
             Discover projects built on the network
           </p>
@@ -344,7 +365,7 @@ export default function MarketplacePage() {
           <div className="flex-1 w-full sm:w-auto">
             <SearchBox value={search} onChange={setSearch} />
           </div>
-          <FilterTabs active={statusFilter} onChange={setStatusFilter} />
+          <FilterTabs active={statusFilter} onChange={setStatusFilter} counts={filterCounts} />
         </div>
 
         {/* Loading State */}
@@ -361,11 +382,13 @@ export default function MarketplacePage() {
 
         {/* Error State */}
         {!loading && error && (
-          <div className="bg-red-500/10 border border-red-500/25 rounded-xl p-5 animate-page-fade-in-delay-1">
-            <p className="text-sm text-red-400">{error}</p>
+          <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-8 text-center animate-page-fade-in-delay-1">
+            <p className="text-sm text-neutral-600 dark:text-neutral-400">
+              Unable to load marketplace. The network might be busy.
+            </p>
             <button
-              onClick={() => { setLoading(true); fetchData(); }}
-              className="mt-2 text-xs text-red-300 hover:text-red-200 underline transition"
+              onClick={() => { setLoading(true); setError(null); fetchData(); }}
+              className="mt-4 w-full py-2.5 rounded-lg bg-amber-500 hover:bg-amber-600 text-black font-medium text-sm transition cursor-pointer"
             >
               Retry
             </button>
