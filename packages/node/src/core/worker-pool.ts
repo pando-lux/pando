@@ -415,7 +415,7 @@ export class WorkerPool {
 
     const agent = this.db.getAgent(workerId);
     if (agent && !['done', 'failed', 'dissolved', 'idle'].includes(agent.status)) {
-      this.db.updateAgent(workerId, { status: 'failed', pid: null });
+      this.db.updateAgent(workerId, { status: 'failed', pid: null, errorSummary: 'Force killed by orchestrator' });
     }
   }
 
