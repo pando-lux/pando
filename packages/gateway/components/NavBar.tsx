@@ -8,11 +8,13 @@ import { useAuth } from "@/lib/auth-context";
 const links = [
   { href: "/", label: "Home" },
   { href: "/chat", label: "Chat" },
+  { href: "/search", label: "Search" },
   { href: "/projects", label: "Projects" },
   { href: "/apps", label: "Apps" },
   { href: "/wallet", label: "Wallet" },
   { href: "/network", label: "Network" },
   { href: "/governance", label: "Governance" },
+  { href: "/agents", label: "Agents" },
   { href: "/marketplace", label: "Marketplace" },
   { href: "/explore", label: "Explore" },
   { href: "/dev", label: "Dev" },
@@ -46,7 +48,7 @@ export default function NavBar() {
   }, []);
 
   return (
-    <header className="sticky top-0 z-50 border-b border-neutral-200 dark:border-neutral-800 bg-white/80 dark:bg-neutral-950/80 backdrop-blur-sm">
+    <header className="sticky top-0 z-50 border-b border-neutral-200 dark:border-neutral-800 bg-white/90 dark:bg-neutral-950/80 backdrop-blur-sm">
       <div className="flex items-center justify-between px-6 py-3">
         <div className="flex items-center gap-6">
           <a href="/" className="text-xl font-bold tracking-tight text-neutral-900 dark:text-neutral-100 hover:text-amber-500 dark:hover:text-amber-400 transition flex items-center gap-2">

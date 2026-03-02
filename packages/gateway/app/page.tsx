@@ -32,7 +32,7 @@ export default function LandingPage() {
 
       {/* Hero */}
       <section className="px-6 pt-24 pb-32 max-w-4xl mx-auto text-center">
-        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-neutral-200/60 dark:bg-neutral-800/60 text-sm text-neutral-500 dark:text-neutral-400 mb-8">
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-neutral-200 dark:bg-neutral-800/60 text-sm text-neutral-500 dark:text-neutral-400 mb-8">
           <span className={`w-2 h-2 rounded-full ${peers !== null && peers > 0 ? "bg-green-400" : "bg-neutral-400 dark:bg-neutral-600"}`} />
           {peers !== null ? `${peers} peers online` : "Connecting..."}
         </div>
@@ -106,7 +106,7 @@ export default function LandingPage() {
           ].map((f) => (
             <div
               key={f.title}
-              className="p-6 rounded-2xl bg-neutral-100/50 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 transition-colors"
+              className="p-6 rounded-2xl bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 transition-colors"
             >
               <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center mb-4">
                 <svg
@@ -164,7 +164,7 @@ export default function LandingPage() {
 
       {/* CTA */}
       <section className="px-6 py-16 max-w-4xl mx-auto text-center">
-        <div className="p-12 rounded-2xl bg-gradient-to-b from-neutral-100 to-neutral-50 dark:from-neutral-900 dark:to-neutral-950 border border-neutral-200 dark:border-neutral-800">
+        <div className="p-12 rounded-2xl bg-gradient-to-b from-neutral-100 to-white dark:from-neutral-900 dark:to-neutral-950 border border-neutral-200 dark:border-neutral-800">
           <h2 className="text-3xl font-bold mb-4">Ready to try Pando?</h2>
           <p className="text-neutral-500 dark:text-neutral-400 mb-8 max-w-lg mx-auto">
             No sign-up required. Open the chat, describe what you want, and

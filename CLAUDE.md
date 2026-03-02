@@ -70,7 +70,7 @@ packages/node/src/
 
 ## Agent Architecture (LIVE — E2E verified 2026-02-27)
 
-Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. First tick = boot prompt with full instructions. Subsequent ticks = short board-state update. Session rotates every ~50 ticks.
+Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. First tick = boot prompt with full instructions. Subsequent ticks = short board-state update. Session rotates every ~200 ticks.
 
 ### The Self-Sustaining Loop (verified end-to-end)
 
@@ -97,7 +97,7 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
 - **P2P chat proxy**: EC2 nodes without Claude Code forward build requests via `chat_proxy` P2P handler to Claude-capable nodes. The remote node runs the full pipeline (project creation → orchestrator → builder → deploy). Replaces old one-shot `routeClaudeTaskP2P`.
 - **Database cleanup**: 60s timer prunes read messages (>7d), expired discoveries. Every 10 min: prunes tick_log (>7d), failed/dissolved workers (>7d), old reflections (>30d), inactive directives (>7d).
 - **Builder error tracking**: Worker failure reports include exit code, stderr, and resume status. Orchestrator AI prompt warns when a role has failed 3+ times consecutively.
-- **Governance security gate**: 4 deterministic checks before auto-approve in dev mode: (1) proposal has valid commit hash, (2) code compiles (npm run build), (3) scenario tests pass (ScenarioRunner), (4) git diff is non-empty. Blocks auto-approve if any check fails. Logged to governance_audit table.
+- **Governance security gate**: 2 deterministic checks before auto-approve in dev mode: (1) security file check — blocks proposals modifying sensitive files unless description mentions 'security' or 'credential', (2) kernel protection delay — 60s delay before approval for kernel/ file changes. Build and test verification happen in the orchestrator pre-commit pipeline, not in governance. Logged to governance_audit table.
 - **Observer orchestrator**: Autonomous observer agent (role='observer') created on boot alongside council. 5-min tick interval. Always Tier 2 (AI). Proactively audits architecture, finds bugs, reports issues as directives to council. Cannot spawn workers — observation only.
 - **Auto-propose after commit**: commit_code action automatically triggers propose_upgrade in the same tick. Prevents governance gaps where committed code sits unproposed for days.
 - **Persistent directives (CRITICAL ARCHITECTURE)**: Directives are the primary mechanism for persistent cross-agent communication. They survive session rotations, node restarts, and crashes (stored in SQLite).
@@ -112,7 +112,7 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
   - **Rule**: NEVER use send_message for findings that must be acted on. Use create_directive instead. Messages are fire-and-forget; directives persist.
 - **Four-actor governance model**:
   - **CEO** (council orchestrator): Executes — spawns workers, ships code, manages projects.
-  - **Governance** (governance.ts): Guards — 4 deterministic security checks before auto-approve: security file check, change size + QA check, build verify, kernel protection delay. Blocks bad changes.
+  - **Governance** (governance.ts): Guards — 2 deterministic security checks before auto-approve: security file check (blocks sensitive file changes without security context), kernel protection delay (60s for kernel/ changes). Build/test verification runs in orchestrator pipeline.
   - **Observer** (observer orchestrator): Watches inward — audits architecture, verifies design intent matches reality, creates persistent directives for CEO with findings. Cannot write code.
   - **QA User Agent** (qa-user orchestrator): Watches outward — tests gateway UI from a human perspective using Playwright. Spawns qa-tester workers every 5 min. Reports UX issues, bugs, stale data to CEO via directives. Cannot write code or deploy.
   - **Self-check dissolution rule**: Council self-check (every 10th tick) dissolves stale orchestrators. Persistent orchestrators (observer, qa-user) are **exempt** — `if (orch.persistent) continue;` guards in both the stale-check loop and OOM prevention loop. Only project orchestrators dissolve when idle.
@@ -123,7 +123,7 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
 | Component | File | Purpose |
 |---|---|---|
 | **AgentDatabase** | `platform/agent-database.ts` | SQLite storage for agents, messages, lessons, reflections, tick logs. Single source of truth. |
-| **Orchestrator** | `platform/orchestrator.ts` | Deterministic tick loop with session-persistent AI brain. Tier 1 (deterministic) or Tier 2 (Opus with tools). Session rotates every ~50 ticks. Same class at every hierarchy level. |
+| **Orchestrator** | `platform/orchestrator.ts` | Deterministic tick loop with session-persistent AI brain. Tier 1 (deterministic) or Tier 2 (Opus with tools). Session rotates every ~200 ticks. Same class at every hierarchy level. |
 | **WorkerPool** | `core/worker-pool.ts` | Spawn fresh Claude Code workers. Each task gets a clean session with full boot prompt. |
 | **MessageBus** | `core/message-bus.ts` | SQLite-backed persistent message routing. Priority, type-based, sender validation. |
 | **OrgManager** | `platform/org-manager.ts` | Hierarchy: create/dissolve orchestrators, route messages, authority inheritance. |
@@ -169,7 +169,7 @@ Claude Code is a **contributed resource**, not a node requirement. Most nodes wo
 **Workers are always fresh.** Each spawn creates a new Claude Code session with a full boot prompt. Workers do not resume previous sessions — each task gets a clean context. Lessons from previous sessions accumulate in SQLite and are injected into future workers' context API responses.
 
 ### Key principle
-**State lives in SQLite, AI brain lives in session.** Orchestrators are deterministic code (setInterval) that resume a persistent Claude Code session each tick. The session provides memory across ticks; SQLite provides ground truth. Sessions rotate every ~50 ticks. Every tick is logged. Lessons, worker sessions, and orchestrator sessions persist across runs.
+**State lives in SQLite, AI brain lives in session.** Orchestrators are deterministic code (setInterval) that resume a persistent Claude Code session each tick. The session provides memory across ticks; SQLite provides ground truth. Sessions rotate every ~200 ticks. Every tick is logged. Lessons, worker sessions, and orchestrator sessions persist across runs.
 
 ## How to Build and Run
 
