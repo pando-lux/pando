@@ -1841,6 +1841,7 @@ export class GovernanceSync {
     const SECURITY_FILES = [
       'credential-store.ts', 'credential-vault.ts', 'request-reply.ts',
       'guardrails.ts', 'security-monitor.ts', 'governance.ts',
+      'upgrade-protocol.ts', 'payment-gate.ts',
     ];
 
     const proposalId = proposal.id;
