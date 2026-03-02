@@ -455,11 +455,20 @@ export class ProjectStore {
    * Get a project by ID (async — prefers MongoDB when available).
    */
   async getProjectAsync(projectId: string): Promise<Project | null> {
+    // Prefer local SQLite cache — avoids P2P proxy timeout on untrusted nodes
+    const cached = this.getProject(projectId);
+    if (cached) return cached;
+    // Cache miss — try backend (MongoDB or P2P proxy)
     if (this.backend) {
       const record = await this.backend.getRecord('projects', projectId);
-      return record ? this.recordToProject(record) : null;
+      if (record) {
+        const project = this.recordToProject(record);
+        // Hydrate local cache for next time
+        this.upsertProjectToSQLite(project);
+        return project;
+      }
     }
-    return this.getProject(projectId);
+    return null;
   }
 
   /**
@@ -725,11 +734,22 @@ export class ProjectStore {
    * Get all collaborators for a project (async — prefers MongoDB).
    */
   async getCollaboratorsAsync(projectId: string): Promise<ProjectCollaborator[]> {
+    // Prefer local SQLite cache — avoids P2P proxy timeout on untrusted nodes
+    const cached = this.getCollaborators(projectId);
+    if (cached.length > 0) return cached;
+    // Cache miss — try backend (MongoDB or P2P proxy)
     if (this.backend) {
       const records = await this.backend.queryRecords('project_collaborators', { projectId });
-      return records.map(r => this.recordToCollaborator(r));
+      if (records.length > 0) {
+        const collaborators = records.map(r => this.recordToCollaborator(r));
+        // Hydrate local cache for next time
+        for (const c of collaborators) {
+          this.upsertCollaboratorToSQLite(c);
+        }
+        return collaborators;
+      }
     }
-    return this.getCollaborators(projectId);
+    return [];
   }
 
   /**
@@ -2100,6 +2120,35 @@ export class ProjectStore {
       addedAt: r.addedAt || r.added_at,
       addedBy: r.addedBy || r.added_by,
     };
+  }
+
+  /**
+   * Upsert a Project into local SQLite cache.
+   * Uses the same column mapping as loadFromBackend().
+   */
+  private upsertProjectToSQLite(p: Project): void {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO projects (id, name, description, owner_id, type, visibility, revenue_model, revenue_config, budget_spent, budget_limit, thread_id, manager_agent_id, deployment_url, deployment_type, deployment_status, status, created_at, updated_at, category, repo_url, team_history, notes, resources, api_key)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      p.id, p.name, p.description, p.ownerId, p.type, p.visibility,
+      p.revenueModel, JSON.stringify(p.revenueConfig), p.budgetSpent, p.budgetLimit,
+      p.threadId, p.managerAgentId, p.deploymentUrl, p.deploymentType,
+      p.deploymentStatus, p.status, p.createdAt, p.updatedAt,
+      (p as any).category || '', p.repoUrl || '', p.teamHistory || '', p.notes || '',
+      JSON.stringify(p.resources || []), p.apiKey || null,
+    );
+  }
+
+  /**
+   * Upsert a ProjectCollaborator into local SQLite cache.
+   * Uses the same column mapping as loadFromBackend().
+   */
+  private upsertCollaboratorToSQLite(c: ProjectCollaborator): void {
+    this.db.prepare(`
+      INSERT OR REPLACE INTO project_collaborators (project_id, user_id, role, added_at, added_by)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(c.projectId, c.userId, c.role, c.addedAt, c.addedBy);
   }
 
   private rowToInvite(row: any): ProjectInvite {
