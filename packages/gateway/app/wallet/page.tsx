@@ -131,7 +131,7 @@ export default function WalletPage() {
             </div>
             <div className="flex items-center gap-3">
               <button type="submit" disabled={sending || !recipient.trim() || !amount.trim()}
-                className="bg-amber-500 hover:bg-amber-600 disabled:opacity-50 text-black font-medium rounded-lg px-4 py-2 text-sm transition">
+                className="bg-amber-500 hover:bg-amber-600 active:scale-[0.98] disabled:opacity-50 text-black font-medium rounded-lg px-4 py-2 text-sm transition">
                 {sending ? "Sending..." : "Send"}
               </button>
               {sendMsg && <span className={`text-xs ${sendMsg.ok ? "text-green-400" : "text-red-400"}`}>{sendMsg.text}</span>}
@@ -148,7 +148,7 @@ export default function WalletPage() {
             ) : (
               <code className="text-xs text-neutral-600 dark:text-neutral-400 font-mono bg-neutral-200 dark:bg-neutral-800 px-2 py-1 rounded flex-1 truncate">{peerId || "Not connected"}</code>
             )}
-            <button onClick={copyId} disabled={!peerId} className="bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 disabled:opacity-50 text-neutral-700 dark:text-neutral-300 rounded-lg px-3 py-1 text-xs transition">{copied ? "Copied!" : "Copy"}</button>
+            <button onClick={copyId} disabled={!peerId} className="bg-neutral-200 dark:bg-neutral-800 hover:bg-neutral-300 dark:hover:bg-neutral-700 active:scale-[0.98] disabled:opacity-50 text-neutral-700 dark:text-neutral-300 rounded-lg px-3 py-1 text-xs transition">{copied ? "Copied!" : "Copy"}</button>
           </div>
           {pubKey && (
             <div>

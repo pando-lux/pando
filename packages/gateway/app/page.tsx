@@ -48,7 +48,7 @@ export default function LandingPage() {
         <div className="flex items-center justify-center gap-4">
           <Link
             href="/chat"
-            className="px-6 py-3 bg-amber-500 text-neutral-950 rounded-lg font-semibold hover:bg-amber-400 transition-colors text-lg"
+            className="px-6 py-3 bg-amber-500 text-neutral-950 rounded-lg font-semibold hover:bg-amber-400 active:scale-[0.98] transition-colors text-lg"
           >
             Start building
           </Link>
@@ -106,7 +106,7 @@ export default function LandingPage() {
           ].map((f) => (
             <div
               key={f.title}
-              className="p-6 rounded-2xl bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 transition-colors"
+              className="p-6 rounded-2xl bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200"
             >
               <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center mb-4">
                 <svg
@@ -172,7 +172,7 @@ export default function LandingPage() {
           </p>
           <Link
             href="/chat"
-            className="inline-block px-8 py-3 bg-amber-500 text-neutral-950 rounded-lg font-semibold hover:bg-amber-400 transition-colors text-lg"
+            className="inline-block px-8 py-3 bg-amber-500 text-neutral-950 rounded-lg font-semibold hover:bg-amber-400 active:scale-[0.98] transition-colors text-lg"
           >
             Open Pando
           </Link>

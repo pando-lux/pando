@@ -657,7 +657,7 @@ function ChatPage() {
             {/* New Chat button */}
             <button
               onClick={createNewThread}
-              className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:border-amber-500/50 hover:text-amber-600 dark:hover:text-amber-400 transition mb-3 text-sm"
+              className="w-full flex items-center gap-2 px-3 py-2.5 rounded-lg border border-dashed border-neutral-300 dark:border-neutral-700 text-neutral-600 dark:text-neutral-400 hover:border-amber-500/50 hover:text-amber-600 dark:hover:text-amber-400 active:scale-[0.98] transition mb-3 text-sm"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="12" y1="5" x2="12" y2="19" />
@@ -782,7 +782,7 @@ function ChatPage() {
             <div className="flex items-center gap-3">
               <button
                 onClick={() => setShowSidebar(!showSidebar)}
-                className="w-8 h-8 rounded-lg border border-neutral-200 dark:border-neutral-800 flex items-center justify-center text-neutral-500 hover:text-amber-500 transition"
+                className="w-8 h-8 rounded-lg border border-neutral-200 dark:border-neutral-800 flex items-center justify-center text-neutral-500 hover:text-amber-500 active:scale-[0.98] transition"
                 title={showSidebar ? "Hide sidebar" : "Show threads"}
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -1020,7 +1020,7 @@ function ChatPage() {
                   key={action.label}
                   onClick={() => sendMessage(action.message)}
                   disabled={sending}
-                  className="text-xs px-3 py-1.5 rounded-lg bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:border-amber-500/50 hover:text-amber-600 dark:hover:text-amber-400 disabled:opacity-50 transition"
+                  className="text-xs px-3 py-1.5 rounded-lg bg-white dark:bg-neutral-800 border border-neutral-200 dark:border-neutral-700 text-neutral-600 dark:text-neutral-300 hover:border-amber-500/50 hover:text-amber-600 dark:hover:text-amber-400 active:scale-[0.98] disabled:opacity-50 transition"
                 >
                   {action.label}
                 </button>
@@ -1049,7 +1049,7 @@ function ChatPage() {
             <button
               onClick={() => sendMessage()}
               disabled={!input.trim() || sending}
-              className="px-4 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 text-white font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2"
+              className="px-4 py-3 rounded-xl bg-amber-500 hover:bg-amber-600 active:scale-[0.98] text-white font-medium text-sm disabled:opacity-50 disabled:cursor-not-allowed transition flex items-center gap-2"
             >
               <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <line x1="22" y1="2" x2="11" y2="13" />
