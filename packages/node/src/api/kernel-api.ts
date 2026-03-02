@@ -273,6 +273,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         ledgerMode: node.getLedgerMode(),
         cloudInstances: node.getCloudInstanceManager()?.getInstances().length || 0,
         health: node.getNodeHealth(),
+        commitHash: node.getUpgradeProtocol()?.getUpgradeStatus()?.currentVersion || 'unknown',
       };
     });
 
