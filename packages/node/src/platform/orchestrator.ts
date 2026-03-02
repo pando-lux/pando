@@ -2333,19 +2333,23 @@ export class Orchestrator {
     console.log(`[Orchestrator ${this.orchestratorId}] Self-check (tick=${this._tickCount}): RSS=${rssMB}MB, workers=${myWorkers.length} (${activeTasks} with tasks)`);
 
     // Find stale orchestrators: no active workers AND no tick in last 60 min
+    // Query ALL orchestrators regardless of status — pending/active orchestrators that were never
+    // activated (e.g. after restart) would be invisible to cleanup if we filtered by status='active'.
+    // We skip 'dissolved' and 'failed' since those are already cleaned up.
     const sixtyMinAgo = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const allOrchestrators = this.deps.db.listAgents({ type: 'orchestrator', status: 'active' });
+    const allOrchestrators = this.deps.db.listAgents({ type: 'orchestrator' });
     let dissolved = 0;
 
     for (const orch of allOrchestrators) {
       if (orch.id === this.orchestratorId) continue;
+      if (orch.status === 'dissolved' || orch.status === 'failed') continue; // already cleaned up
       if (orch.persistent) continue; // never dissolve persistent system orchestrators (observer, qa-user)
       const workers = this.deps.db.getActiveWorkers(orch.id);
       const isStale = workers.length === 0 &&
         (!orch.lastTickAt || orch.lastTickAt < sixtyMinAgo);
 
       if (isStale) {
-        console.log(`[Orchestrator ${this.orchestratorId}] Dissolving stale orchestrator ${orch.id} (role=${orch.role}, lastTick=${orch.lastTickAt || 'never'})`);
+        console.log(`[Orchestrator ${this.orchestratorId}] Dissolving stale orchestrator ${orch.id} (role=${orch.role}, status=${orch.status}, lastTick=${orch.lastTickAt || 'never'})`);
         this.deps.orgManager.dissolve(orch.id);
         dissolved++;
       }
@@ -2361,6 +2365,7 @@ export class Orchestrator {
     let idleProjectsDissolved = 0;
     for (const orch of allOrchestrators) {
       if (orch.id === this.orchestratorId) continue;
+      if (orch.status === 'dissolved' || orch.status === 'failed') continue; // already cleaned up
       if (orch.role !== 'user_project') continue;
       const orchWorkers = this.deps.db.getActiveWorkers(orch.id);
 
