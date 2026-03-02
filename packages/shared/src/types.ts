@@ -467,6 +467,7 @@ export interface CapabilityProfile {
     storage?: { availableMb: number };
     gateway?: { publicUrl?: string; https: boolean };
     httpApi?: { host: string; port: number; https: boolean };
+    hosting?: { providers: HostingProvider[] };
   };
 }
 
@@ -1660,6 +1661,22 @@ export interface DeploymentInfo {
   fileCount: number;
   totalSize: number;    // bytes
   deployedAt: number;   // epoch ms
+}
+
+// === Distributed Hosting Pool Types ===
+
+/** Hosting provider identifier for adapter dispatch */
+export type HostingProvider = 'vercel' | 'netlify' | 'cloudflare-pages';
+
+/** Gateway deploy result — broadcast via pando/gateways after successful deploy */
+export interface GatewayDeployRecord {
+  peerId: string;
+  provider: HostingProvider;
+  url: string;
+  commitHash: string;
+  deployedAt: number;
+  status: 'live' | 'failed' | 'stale';
+  error?: string;
 }
 
 // === Phase 42.5: Resource Registry Types ===

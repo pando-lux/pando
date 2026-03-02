@@ -124,7 +124,7 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
   - **QA User Agent** (qa-user orchestrator): Watches outward — tests gateway UI from a human perspective using Playwright. Spawns qa-tester workers every 5 min. Reports UX issues, bugs, stale data to CEO via directives. Cannot write code or deploy.
   - **Self-check dissolution rule**: Council self-check (every 10th tick) dissolves stale orchestrators. Persistent orchestrators (observer, qa-user) are **exempt** — `if (orch.persistent) continue;` guards in both the stale-check loop and OOM prevention loop. Only project orchestrators dissolve when idle.
 - **Verify-before-deploy hardening**: ScenarioRunner crash now ABORTS proposal (not silent pass-through). Upgrade-protocol hash mismatch STRICTLY rejects pull (no soft warnings). Proposal descriptions include test result audit trail. Commit hash verification: exact match, prefix match, or ancestor check — all others abort.
-- **Gateway auto-deploy**: When governance approves an upgrade that touches `packages/gateway/`, the proposer node auto-deploys to Vercel production via `vercel deploy --prod`. Handled in `onUpgradeApproved` callback in `index.ts`. Only fires on nodes with Vercel CLI installed. **Do NOT modify this mechanism or duplicate it elsewhere.** Public gateway: https://gateway-one-mu.vercel.app
+- **Distributed Hosting Pool**: Anyone contributes hosting tokens via `/contribute vercel <token>` (or `netlify`). On governance approval of gateway changes, ALL contributed hosting accounts get deployed to automatically via `GatewayDeployPool.deployToAll()`. Provider-agnostic adapter pattern (`core/hosting-adapters.ts`). Gateway URLs broadcast via GossipSub `pando/gateways` topic. All nodes know all live gateways. `GET /v1/gateways` returns the full registry. Legacy `VERCEL_DEPLOY_TOKEN` env var auto-migrates to hosting_platform resource on startup. Health checks every 5 min.
 
 ### Agent system components
 
@@ -141,6 +141,8 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
 | **QA User Agent** | `platform/orchestrator.ts` (role=`qa-user`) | Autonomous UI tester. Spawns Playwright workers every 5 min to test gateway pages from a human perspective. Reports to CEO via directives. |
 | **OrchestratorProcessManager** | `platform/orchestrator-manager.ts` | Forks system orchestrators (council, observer, qa-user) into separate child processes. IPC bridge for actions needing main process (spawn_worker, commit_code, push_event). Auto-restart on crash. |
 | **orchestrator-process** | `platform/orchestrator-process.ts` | Child process entry point. Creates own AgentDatabase, MessageBus, AIBackendRegistry (WAL-mode SQLite). Proxies workerPool and commit/propose via IPC. |
+| **GatewayDeployPool** | `core/gateway-deploy-pool.ts` | Deploys gateway to all contributed hosting accounts on governance approval. Broadcasts URLs via GossipSub `pando/gateways`. Health-checks every 5 min. |
+| **HostingAdapters** | `core/hosting-adapters.ts` | Provider-agnostic deployment adapters (Vercel, Netlify). Register new providers via `registerHostingAdapter()`. |
 
 ### Process Isolation Architecture (Phase 200 — live)
 
@@ -249,6 +251,7 @@ Key endpoints:
 - `GET /v1/context/team` — team member status for an orchestrator
 - `GET /v1/context/identity` — agent identity details
 - `POST /v1/context/discover` — share a discovery (UPSERT by confidence)
+- `GET /v1/gateways` — list all known live gateway deployments across network
 
 ## TUI Commands
 
@@ -315,7 +318,7 @@ Witness-based emission — peers must attest that work happened before Lux is mi
 |---|---|
 | **Entry** | `index.ts`, `cli.ts`, `tui.ts` |
 | **Kernel** | `kernel/network.ts` (libp2p), `kernel/governance.ts`, `kernel/monitor.ts`, `kernel/guardrails.ts`, `kernel/sync.ts`, `kernel/reputation.ts`, `kernel/emission-witness.ts`, `kernel/security-monitor.ts` |
-| **Core** | `core/ai-backend-claude.ts`, `core/ai-backend-registry.ts`, `core/storage-backend.ts`, `core/deploy-manager.ts`, `core/upgrade-protocol.ts`, `core/payment-gate.ts`, `core/request-reply.ts` |
+| **Core** | `core/ai-backend-claude.ts`, `core/ai-backend-registry.ts`, `core/storage-backend.ts`, `core/deploy-manager.ts`, `core/upgrade-protocol.ts`, `core/payment-gate.ts`, `core/request-reply.ts`, `core/gateway-deploy-pool.ts`, `core/hosting-adapters.ts` |
 | **Platform** | `platform/agent-tools.ts` (HTTP API), `platform/genome-bridge.ts` (reads compiled genome graph), `platform/scenario-runner.ts` (automated test runner from graph), `platform/resource-router.ts`, `platform/content-registry.ts`, `platform/thread-store.ts`, `platform/capability-detector.ts` |
 | **API** | `api/api-server.ts`, `api/kernel-api.ts`, `api/core-api.ts`, `api/platform-api.ts` |
 | **Agent** | `platform/orchestrator.ts`, `platform/orchestrator-manager.ts` (process isolation), `platform/orchestrator-process.ts` (child entry), `platform/org-manager.ts`, `core/worker-pool.ts`, `core/worker-mcp.ts`, `core/message-bus.ts` |

@@ -48,7 +48,7 @@ flow OrchestratorSystem {
 
   step deploy -> governance {
     actor: Orchestrator
-    what: "Council only: onPropose callback calls governance.createProposal(). Proposal is Ed25519-signed by proposer node. In dev mode (<=8 peers): 6-layer security pipeline (signature, security file check, diff content scan, build, scenario tests, kernel delay) then auto-approve. Governance decisions route back via MessageBus as 'governance_decision' messages."
+    what: "Council only: onPropose callback calls governance.createProposal(). Proposal is Ed25519-signed by proposer node. In dev mode (<=8 peers): 6-layer security pipeline then auto-approve. On approval: if gateway files changed, GatewayDeployPool.deployToAll() deploys to ALL contributed hosting accounts (Vercel, Netlify, etc.) and broadcasts URLs via GossipSub pando/gateways."
   }
 
   step governance -> reflection {
@@ -97,6 +97,12 @@ concept GovernanceSecurityGate {
   description: "6-layer security pipeline in validateUpgradeProposal() before auto-approve: (1) Ed25519 proposal signing — upgrade proposals MUST be signed by proposer, unsigned upgrades rejected, peers verify via peerIdFromString(proposedBy).publicKey; (2) security file check — blocks proposals modifying sensitive files unless description mentions 'security' or 'credential'; (3) diff content scan — parses git diff for dangerous patterns: eval() and new Function() BLOCK auto-approve, .privateKey access and dynamic require() WARN; (4) build verification (npm run build in orchestrator pipeline); (5) scenario tests (API regression via ScenarioRunner); (6) kernel protection delay — 60s for kernel/ changes. Results logged to governance_audit table. Upgrade API routes (POST /upgrade/*) locked behind operator bearer token. TUI /upgrade pull warns on unapproved commits."
   defined_in: "packages/node/src/kernel/governance.ts"
   used_by: [GovernanceSync]
+}
+
+concept DistributedHostingPool {
+  description: "Provider-agnostic gateway deployment pool. Users contribute hosting tokens via /contribute vercel <token> (or netlify). On governance approval of gateway changes, GatewayDeployPool.deployToAll() deploys to ALL contributed hosting accounts. Adapter pattern: HostingAdapter interface with VercelAdapter and NetlifyAdapter. Gateway URLs broadcast via GossipSub pando/gateways topic. All nodes maintain registry of live gateways. Health checks every 5 min. Legacy VERCEL_DEPLOY_TOKEN env var auto-migrates on startup. GET /v1/gateways returns all known gateways."
+  defined_in: "packages/node/src/core/gateway-deploy-pool.ts"
+  used_by: [PandoNode, GovernanceSync]
 }
 
 concept ObserverOrchestrator {

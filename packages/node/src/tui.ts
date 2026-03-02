@@ -1487,6 +1487,8 @@ class PandoTUI {
       'github':      { type: 'code_repository', metadata: { provider: 'github', service: 'GitHub' } },
       'ec2':         { type: 'cloud_compute',   metadata: { provider: 'aws', service: 'AWS Compute' } },
       'lambda':      { type: 'cloud_compute',   metadata: { provider: 'aws', service: 'AWS Compute' } },
+      'vercel':      { type: 'hosting_platform', metadata: { provider: 'vercel', service: 'Vercel' } },
+      'netlify':     { type: 'hosting_platform', metadata: { provider: 'netlify', service: 'Netlify' } },
     };
 
     const [firstArg, ...valueParts] = argsStr.split(' ');
@@ -1543,7 +1545,7 @@ class PandoTUI {
         return;
       }
       this.log(`${c.dim}Usage: /contribute <service> <key>${c.reset}`);
-      this.log(`${c.dim}Services: openai, anthropic, gemini, mongodb, aws, github, ec2, lambda, claude-code${c.reset}`);
+      this.log(`${c.dim}Services: openai, anthropic, gemini, mongodb, aws, github, ec2, lambda, vercel, netlify, claude-code${c.reset}`);
       this.log(`${c.dim}Example: /contribute openai sk-proj-abc123${c.reset}`);
       this.log(`${c.dim}         /contribute claude-code${c.reset}`);
       return;
@@ -1558,7 +1560,7 @@ class PandoTUI {
     const preset = SERVICE_MAP[firstArg.toLowerCase()];
     if (!preset) {
       this.log(`${c.red}Unknown service "${firstArg}".${c.reset}`);
-      this.log(`${c.dim}Valid services: openai, anthropic, gemini, mongodb, aws, s3, github, ec2, lambda, claude-code${c.reset}`);
+      this.log(`${c.dim}Valid services: openai, anthropic, gemini, mongodb, aws, s3, github, ec2, lambda, vercel, netlify, claude-code${c.reset}`);
       return;
     }
     const type = preset.type;
@@ -1631,6 +1633,12 @@ class PandoTUI {
         this.log(`${c.yellow}  Launch a secure compute instance?${c.reset}`);
         this.log(`${c.dim}    /launch ${record.resourceId}${c.reset}`);
         this.log(`${c.dim}    Instance will run a Pando node in compute mode (no SSH, tripwire-protected).${c.reset}`);
+      }
+      // Hosting pool: confirm auto-deploy on governance approval
+      if (serviceLower === 'vercel' || serviceLower === 'netlify') {
+        this.log('');
+        this.log(`${c.green}  Gateway will auto-deploy to ${metadata.service} on governance approval.${c.reset}`);
+        this.log(`${c.dim}  No manual deploy needed — the network handles it.${c.reset}`);
       }
       this.log('');
     } catch (err: any) {

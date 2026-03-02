@@ -39,6 +39,11 @@ export { PaymentGate } from './payment-gate.js';
 // Cloud instances
 export { CloudInstanceManager } from './cloud-instance-manager.js';
 
+// Hosting pool
+export { GatewayDeployPool, TOPIC_GATEWAYS } from './gateway-deploy-pool.js';
+export { getHostingAdapter, registerHostingAdapter } from './hosting-adapters.js';
+export type { HostingAdapter } from './hosting-adapters.js';
+
 // P2P request/reply
 export { RequestReplyManager } from './request-reply.js';
 export type { RequestHandler, RequestReplyStats } from './request-reply.js';

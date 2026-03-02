@@ -108,6 +108,9 @@ export class ResourceHealthChecker {
         case 'cloud_compute':
           await this.checkAws(credential);
           break;
+        case 'hosting_platform':
+          await this.checkHostingPlatform(credential);
+          break;
         default:
           return { resourceId, type, status: 'unchecked', checkedAt: Date.now() };
       }
@@ -195,6 +198,31 @@ export class ResourceHealthChecker {
   }
 
   /** AWS — describe regions (minimal, works with any valid credentials) */
+  /** Hosting platform token health check — verify token is valid with provider API */
+  private async checkHostingPlatform(credential: string): Promise<void> {
+    // Try Vercel API first (most common). If it fails, assume other provider — just check non-empty.
+    try {
+      const res = await fetch('https://api.vercel.com/v2/user', {
+        headers: { Authorization: `Bearer ${credential}` },
+        signal: AbortSignal.timeout(8000),
+      });
+      if (res.ok) return; // Vercel token valid
+      // If 401/403, might be a different provider's token — that's ok, just check non-empty
+      if (res.status === 401 || res.status === 403) {
+        // Check if it's a Netlify token
+        const netlifyRes = await fetch('https://api.netlify.com/api/v1/user', {
+          headers: { Authorization: `Bearer ${credential}` },
+          signal: AbortSignal.timeout(8000),
+        });
+        if (netlifyRes.ok) return;
+      }
+      throw new Error(`Hosting token verification failed (HTTP ${res.status})`);
+    } catch (err: any) {
+      if (err.message?.includes('Hosting token')) throw err;
+      throw new Error(`Hosting token check failed: ${err.message}`);
+    }
+  }
+
   private async checkAws(credential: string): Promise<void> {
     const parts = credential.split(':');
     if (parts.length < 2) throw new Error('Invalid AWS credential format');

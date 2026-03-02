@@ -177,7 +177,7 @@
       "content_hash": "f0e0c078"
     },
     "genome/knowledge/flows/council-operating-system.know": {
-      "mtime": 1772445704.3946304,
+      "mtime": 1772448256.390619,
       "nodes": [
         {
           "_type": "flow",
@@ -254,7 +254,7 @@
               "_name": "deploy",
               "_target": "governance",
               "actor": "Orchestrator",
-              "what": "Council only: onPropose callback calls governance.createProposal(). Proposal is Ed25519-signed by proposer node. In dev mode (<=8 peers): 6-layer security pipeline (signature, security file check, diff content scan, build, scenario tests, kernel delay) then auto-approve. Governance decisions route back via MessageBus as 'governance_decision' messages.",
+              "what": "Council only: onPropose callback calls governance.createProposal(). Proposal is Ed25519-signed by proposer node. In dev mode (<=8 peers): 6-layer security pipeline then auto-approve. On approval: if gateway files changed, GatewayDeployPool.deployToAll() deploys to ALL contributed hosting accounts (Vercel, Netlify, etc.) and broadcasts URLs via GossipSub pando/gateways.",
               "_next": "governance"
             },
             {
@@ -349,6 +349,17 @@
           "description": "6-layer security pipeline in validateUpgradeProposal() before auto-approve: (1) Ed25519 proposal signing \u2014 upgrade proposals MUST be signed by proposer, unsigned upgrades rejected, peers verify via peerIdFromString(proposedBy).publicKey; (2) security file check \u2014 blocks proposals modifying sensitive files unless description mentions 'security' or 'credential'; (3) diff content scan \u2014 parses git diff for dangerous patterns: eval() and new Function() BLOCK auto-approve, .privateKey access and dynamic require() WARN; (4) build verification (npm run build in orchestrator pipeline); (5) scenario tests (API regression via ScenarioRunner); (6) kernel protection delay \u2014 60s for kernel/ changes. Results logged to governance_audit table. Upgrade API routes (POST /upgrade/*) locked behind operator bearer token. TUI /upgrade pull warns on unapproved commits.",
           "defined_in": "packages/node/src/kernel/governance.ts",
           "used_by": [
+            "GovernanceSync"
+          ]
+        },
+        {
+          "_type": "concept",
+          "_name": "DistributedHostingPool",
+          "_source": "genome\\knowledge\\flows\\council-operating-system.know",
+          "description": "Provider-agnostic gateway deployment pool. Users contribute hosting tokens via /contribute vercel <token> (or netlify). On governance approval of gateway changes, GatewayDeployPool.deployToAll() deploys to ALL contributed hosting accounts. Adapter pattern: HostingAdapter interface with VercelAdapter and NetlifyAdapter. Gateway URLs broadcast via GossipSub pando/gateways topic. All nodes maintain registry of live gateways. Health checks every 5 min. Legacy VERCEL_DEPLOY_TOKEN env var auto-migrates on startup. GET /v1/gateways returns all known gateways.",
+          "defined_in": "packages/node/src/core/gateway-deploy-pool.ts",
+          "used_by": [
+            "PandoNode",
             "GovernanceSync"
           ]
         },
@@ -733,7 +744,7 @@
           "trigger": "WorkerCompletion"
         }
       ],
-      "content_hash": "c88d945d"
+      "content_hash": "326cdaa5"
     },
     "genome/knowledge/flows/node-onboarding.know": {
       "mtime": 1772122710.7784405,
@@ -3485,9 +3496,9 @@
       "content_hash": "b6386d5e"
     },
     "packages/node/src/api/platform-api.ts": {
-      "mtime": 1772423625.719391,
+      "mtime": 1772448002.9747145,
       "nodes": [],
-      "content_hash": "d0915bb6"
+      "content_hash": "6d7ba71d"
     },
     "packages/node/src/cli.ts": {
       "mtime": 1772300209.6348763,
@@ -3578,10 +3589,20 @@
       "nodes": [],
       "content_hash": "e8cf36b0"
     },
-    "packages/node/src/core/index.ts": {
-      "mtime": 1772185934.8217413,
+    "packages/node/src/core/gateway-deploy-pool.ts": {
+      "mtime": 1772447794.102173,
       "nodes": [],
-      "content_hash": "dea70e27"
+      "content_hash": "7a5e3bc1"
+    },
+    "packages/node/src/core/hosting-adapters.ts": {
+      "mtime": 1772447741.7566662,
+      "nodes": [],
+      "content_hash": "a5e51e3e"
+    },
+    "packages/node/src/core/index.ts": {
+      "mtime": 1772447818.3495364,
+      "nodes": [],
+      "content_hash": "19e4904c"
     },
     "packages/node/src/core/message-bus.ts": {
       "mtime": 1772254587.5115938,
@@ -3634,7 +3655,7 @@
       "content_hash": "ff985cd9"
     },
     "packages/node/src/index.ts": {
-      "mtime": 1772445420.5013828,
+      "mtime": 1772448081.724566,
       "nodes": [
         {
           "_type": "entity",
@@ -3669,10 +3690,10 @@
             "StorageBackend"
           ],
           "file": "packages\\node\\src\\index.ts:1",
-          "_content_hash": "efb0d271"
+          "_content_hash": "179f86ef"
         }
       ],
-      "content_hash": "efb0d271"
+      "content_hash": "179f86ef"
     },
     "packages/node/src/kernel/crash-guard.ts": {
       "mtime": 1772127664.9374683,
@@ -3978,9 +3999,9 @@
       "content_hash": "a9345c98"
     },
     "packages/node/src/platform/resource-health.ts": {
-      "mtime": 1772127664.961087,
+      "mtime": 1772448040.0711367,
       "nodes": [],
-      "content_hash": "314edad6"
+      "content_hash": "882fc89a"
     },
     "packages/node/src/platform/resource-marketplace.ts": {
       "mtime": 1772127664.961087,
@@ -4063,9 +4084,9 @@
       "content_hash": "fec0fa34"
     },
     "packages/node/src/tui.ts": {
-      "mtime": 1772445394.623712,
+      "mtime": 1772447855.571489,
       "nodes": [],
-      "content_hash": "a7034a38"
+      "content_hash": "5539ca11"
     },
     "packages/shared/src/crypto.ts": {
       "mtime": 1772445000.939183,
@@ -4078,7 +4099,7 @@
       "content_hash": "d89d6925"
     },
     "packages/shared/src/types.ts": {
-      "mtime": 1772444951.0918605,
+      "mtime": 1772447709.3110893,
       "nodes": [
         {
           "_type": "entity",
@@ -4097,7 +4118,7 @@
           "description": "All shared types, interfaces, enums, and constants used across every Pando package \u2014 identity, messages, transactions, governance, agents, capabilities, and economics.",
           "depends_on": [],
           "file": "packages\\shared\\src\\types.ts:1",
-          "_content_hash": "81e2c619"
+          "_content_hash": "f0c5d64b"
         },
         {
           "_type": "invariant",
@@ -4110,10 +4131,10 @@
           ],
           "severity": "critical",
           "file": "packages\\shared\\src\\types.ts:1",
-          "_content_hash": "81e2c619"
+          "_content_hash": "f0c5d64b"
         }
       ],
-      "content_hash": "81e2c619"
+      "content_hash": "f0c5d64b"
     },
     "scripts/launch-nodes.js": {
       "mtime": 1771159401.9941764,

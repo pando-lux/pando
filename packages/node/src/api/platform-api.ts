@@ -1546,6 +1546,17 @@ export async function registerPlatformRoutes(
       return { available: true, result: runner.getLastResult() };
     });
 
+    // ── Gateway Hosting Pool API ──────────────────────────────────
+
+    // GET /gateways — List all known live gateway deployments across the network
+    fastify.get('/gateways', async () => {
+      const pool = node.getGatewayDeployPool();
+      if (!pool) return { gateways: [], total: 0 };
+      const all = pool.getAllGateways();
+      const live = all.filter(g => g.status === 'live');
+      return { gateways: all, total: all.length, live: live.length };
+    });
+
     // ── Payment Gate API (Phase 18.6) ──────────────────────────────
 
     // POST /payment/estimate — Estimate cost for a task description

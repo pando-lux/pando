@@ -75,6 +75,7 @@ import { NetworkState } from './kernel/network-state.js';
 import { ThreadStore } from './platform/thread-store.js';
 import { HostingService } from './platform/hosting-service.js';
 import { CloudInstanceManager } from './core/cloud-instance-manager.js';
+import { GatewayDeployPool } from './core/gateway-deploy-pool.js';
 import type { StorageBackend } from './core/storage-backend.js';
 import { AIBackendRegistry } from './core/ai-backend-registry.js';
 import { ClaudeBackend } from './core/ai-backend-claude.js';
@@ -186,6 +187,7 @@ export class PandoNode {
   private resourceMarketplace: ResourceMarketplace | null = null;
   private resourceRegistry: ResourceRegistry | null = null;
   private resourceHealthChecker: ResourceHealthChecker | null = null;
+  private gatewayDeployPool: GatewayDeployPool | null = null;
   private upgradeProtocol: UpgradeProtocol | null = null;
   private regressionSuite: RegressionSuite | null = null;
   private paymentGate: PaymentGate | null = null;
@@ -969,25 +971,21 @@ export class PandoNode {
               // Broadcast to all peers so they pull too
               await upgradeProtocol.broadcastUpgradeNotification(commitHash, description, govProposal.id);
 
-              // Auto-deploy gateway to Vercel if gateway files changed
+              // Auto-deploy gateway to all contributed hosting accounts
               const filesTouched: string[] = (govProposal.upgradePayload as any)?.filesTouched || [];
               const gatewayChanged = filesTouched.some(f => f.startsWith('packages/gateway/'));
-              if (gatewayChanged) {
-                const vercelToken = process.env.VERCEL_DEPLOY_TOKEN;
-                if (vercelToken) {
-                  try {
-                    const gatewayDir = join(process.cwd(), 'packages', 'gateway');
-                    const gwCount = filesTouched.filter(f => f.startsWith('packages/gateway/')).length;
-                    execSync(`vercel deploy --prod --yes --token ${vercelToken}`, {
-                      cwd: gatewayDir, timeout: 180_000, stdio: 'pipe', windowsHide: true,
-                    });
-                    console.log(`[upgrade] Gateway auto-deployed to Vercel (${gwCount} gateway files changed)`);
-                  } catch (err: any) {
-                    const msg = err.stderr?.toString()?.slice(0, 200) || err.message;
-                    console.warn(`[upgrade] Gateway Vercel deploy failed: ${msg}`);
+              if (gatewayChanged && this.gatewayDeployPool) {
+                try {
+                  const results = await this.gatewayDeployPool.deployToAll(commitHash);
+                  const succeeded = results.filter(r => r.status === 'live').length;
+                  const failed = results.filter(r => r.status === 'failed').length;
+                  if (results.length > 0) {
+                    console.log(`[upgrade] Gateway deployed to ${succeeded} hosting account(s)${failed > 0 ? ` (${failed} failed)` : ''}`);
+                  } else {
+                    console.log(`[upgrade] Gateway changed but no hosting credentials contributed — skipping deploy`);
                   }
-                } else {
-                  console.log(`[upgrade] Gateway files changed but VERCEL_DEPLOY_TOKEN not set — skipping auto-deploy`);
+                } catch (err: any) {
+                  console.warn(`[upgrade] Gateway deploy pool error: ${err.message}`);
                 }
               }
             } else {
@@ -1171,6 +1169,45 @@ export class PandoNode {
           console.warn(`[resources] P2P credential proxy: no compute peer could decrypt ${resourceId.slice(0, 8)}`);
           return null;
         });
+      }
+    }
+
+    // Distributed Hosting Pool — deploys gateway to all contributed hosting accounts on governance approval
+    this.gatewayDeployPool = new GatewayDeployPool(this.network, this.identity.peerId, this.resourceRegistry, process.cwd());
+    {
+      const credStore = (this as any)._credentialStore as import('./core/credential-store.js').CredentialStore | undefined;
+      if (credStore) this.gatewayDeployPool.setCredentialStore(credStore);
+
+      // Legacy migration: VERCEL_DEPLOY_TOKEN env var → hosting_platform resource
+      if (process.env.VERCEL_DEPLOY_TOKEN && credStore?.hasDecryptionCapability()) {
+        const existing = this.resourceRegistry.findResources('hosting_platform').filter(r => r.metadata?.provider === 'vercel');
+        if (existing.length === 0) {
+          try {
+            await this.resourceRegistry.registerResource('hosting_platform', process.env.VERCEL_DEPLOY_TOKEN, {
+              metadata: { provider: 'vercel', service: 'Vercel', migrated: true },
+            });
+            console.log('[gateway-pool] Migrated VERCEL_DEPLOY_TOKEN to hosting_platform resource');
+          } catch (err: any) {
+            console.warn(`[gateway-pool] Failed to migrate VERCEL_DEPLOY_TOKEN: ${err.message}`);
+          }
+        }
+        delete process.env.VERCEL_DEPLOY_TOKEN;
+      }
+    }
+    await this.gatewayDeployPool.start();
+
+    // Advertise hosting providers in capability profile
+    {
+      const hostingResources = this.resourceRegistry.findResources('hosting_platform');
+      if (hostingResources.length > 0 && this.capabilityRegistry) {
+        const localProfile = this.capabilityRegistry.getLocalProfile();
+        if (localProfile) {
+          const providers = hostingResources.map(r => r.metadata?.provider).filter(Boolean) as import('@pando/shared').HostingProvider[];
+          if (!localProfile.details) localProfile.details = {} as any;
+          localProfile.details!.hosting = { providers };
+          localProfile.updatedAt = Date.now();
+          this.capabilityRegistry.setLocalProfile(localProfile);
+        }
       }
     }
 
@@ -2678,6 +2715,11 @@ location /apps/${projectId}/ {
 
   getResourceHealthChecker(): ResourceHealthChecker | null {
     return this.resourceHealthChecker;
+  }
+
+  /** Get the GatewayDeployPool for hosting pool operations */
+  getGatewayDeployPool(): GatewayDeployPool | null {
+    return this.gatewayDeployPool;
   }
 
   /** Returns the reward recipient — only linked user accounts earn rewards */
@@ -4351,6 +4393,8 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     }
 
     // Stop resource network components
+    this.gatewayDeployPool?.stop();
+    this.gatewayDeployPool = null;
     this.resourceHealthChecker?.stop();
     this.resourceHealthChecker = null;
     this.resourceRegistry?.stop();
