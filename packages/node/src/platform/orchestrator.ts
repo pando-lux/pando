@@ -1136,6 +1136,10 @@ export class Orchestrator {
       sections.push('Use your judgment on when to restart — after every significant change, or after batching');
       sections.push('a few related fixes. But do NOT keep working on stale code for long. Restart is cheap.');
       sections.push('');
+      sections.push('**Gateway auto-deploy**: When governance approves an upgrade that touches packages/gateway/,');
+      sections.push('Vercel production is auto-deployed. You do NOT need to deploy the gateway manually.');
+      sections.push('This is handled by onUpgradeApproved in index.ts. Do NOT modify this mechanism.');
+      sections.push('');
       sections.push('## DIRECTIVE TRIAGE');
       sections.push('');
       sections.push('Observer and QA are your EYES. They report what they see. Their findings are almost never wrong.');

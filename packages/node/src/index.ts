@@ -82,7 +82,7 @@ import { OllamaBackend } from './core/ai-backend-ollama.js';
 import { OrchestratorProcessManager } from './platform/orchestrator-manager.js';
 import { LocalEnvironment } from './kernel/local-environment.js';
 import { toString as uint8ArrayToString } from 'uint8arrays';
-import { join } from 'node:path';
+import { join, resolve as pathResolve } from 'node:path';
 import { homedir, freemem, totalmem } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { execSync, exec as execCb } from 'node:child_process';
@@ -968,6 +968,23 @@ export class PandoNode {
             if (result.success) {
               // Broadcast to all peers so they pull too
               await upgradeProtocol.broadcastUpgradeNotification(commitHash, description, govProposal.id);
+
+              // Auto-deploy gateway to Vercel if gateway files changed
+              const filesTouched: string[] = (govProposal.upgradePayload as any)?.filesTouched || [];
+              const gatewayChanged = filesTouched.some(f => f.startsWith('packages/gateway/'));
+              if (gatewayChanged) {
+                try {
+                  const gatewayDir = join(process.cwd(), 'packages', 'gateway');
+                  execSync('vercel deploy --prod --yes', {
+                    cwd: gatewayDir, timeout: 120_000, stdio: 'pipe', windowsHide: true,
+                  });
+                  console.log(`[upgrade] Gateway auto-deployed to Vercel (${filesTouched.filter(f => f.startsWith('packages/gateway/')).length} gateway files changed)`);
+                } catch (err: any) {
+                  // Non-fatal — Vercel CLI may not be installed on all nodes
+                  const msg = err.stderr?.toString()?.slice(0, 200) || err.message;
+                  console.warn(`[upgrade] Gateway Vercel deploy skipped: ${msg}`);
+                }
+              }
             } else {
               console.error(`[upgrade] Local pull failed: ${result.message}`);
             }

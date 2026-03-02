@@ -117,6 +117,7 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
   - **QA User Agent** (qa-user orchestrator): Watches outward — tests gateway UI from a human perspective using Playwright. Spawns qa-tester workers every 5 min. Reports UX issues, bugs, stale data to CEO via directives. Cannot write code or deploy.
   - **Self-check dissolution rule**: Council self-check (every 10th tick) dissolves stale orchestrators. Persistent orchestrators (observer, qa-user) are **exempt** — `if (orch.persistent) continue;` guards in both the stale-check loop and OOM prevention loop. Only project orchestrators dissolve when idle.
 - **Verify-before-deploy hardening**: ScenarioRunner crash now ABORTS proposal (not silent pass-through). Upgrade-protocol hash mismatch returns failure (can't pull unapproved code). Proposal descriptions include test result audit trail.
+- **Gateway auto-deploy**: When governance approves an upgrade that touches `packages/gateway/`, the proposer node auto-deploys to Vercel production via `vercel deploy --prod`. Handled in `onUpgradeApproved` callback in `index.ts`. Only fires on nodes with Vercel CLI installed. **Do NOT modify this mechanism or duplicate it elsewhere.** Public gateway: https://gateway-one-mu.vercel.app
 
 ### Agent system components
 
