@@ -144,8 +144,11 @@ class NodeConnection {
         signal: AbortSignal.timeout(30000),
       });
 
-      if (!res.ok) throw new Error("Search failed");
-      return await res.json();
+      const data = await res.json();
+      if (res.ok) return data;
+      // Node responded but with an error — forward its message if present
+      if (data && data.answer) return data as SearchResult;
+      throw new Error("Search failed");
     } catch {
       return {
         answer:

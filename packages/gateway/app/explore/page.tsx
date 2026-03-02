@@ -43,7 +43,7 @@ export default function ExplorePage() {
       fetch("/api/status").then(r => r.json()).catch(() => null),
       fetch("/api/scheduler/status").then(r => r.json()).catch(() => null),
       fetch("/api/activity/stats?window=24h").then(r => r.json()).catch(() => null),
-      fetch("/api/monitor/status").then(r => r.json()).catch(() => null),
+      fetch("/api/monitor/status").then(r => r.ok ? r.json() : null).catch(() => null),
       fetch("/api/governance/proposals").then(r => r.json()).catch(() => null),
       fetch("/api/apps").then(r => r.json()).catch(() => null),
     ]);
