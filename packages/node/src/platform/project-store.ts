@@ -1592,9 +1592,11 @@ export class ProjectStore {
     if (this.backend) {
       const filter: Record<string, any> = { status: 'active' };
       const records = await this.backend.queryRecords('projects', filter, { sort: { updatedAt: -1 } });
+      const testArtifactPattern = /^(hello[\s-]?world|test[\s-]?(app)?|untitled|my[\s-]?app|new[\s-]?project|demo|example|sample|asdf|foo|bar|temp|tmp|delete[\s-]?me|placeholder)$/i;
       let filtered = records
         .map(r => this.recordToProject(r))
-        .filter(p => p.visibility === 'listed' || p.visibility === 'featured');
+        .filter(p => p.visibility === 'listed' || p.visibility === 'featured')
+        .filter(p => !testArtifactPattern.test(p.name.trim()));
 
       if (opts?.category) {
         filtered = filtered.filter(p => (p as any).category === opts.category);

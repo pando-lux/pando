@@ -62,7 +62,6 @@ function shortPeerId(peerId: string): string {
 function StatusBadge({ status }: { status: string }) {
   const styles: Record<string, string> = {
     active: "bg-green-500/15 text-green-400 border-green-500/25",
-    completed: "bg-blue-500/15 text-blue-400 border-blue-500/25",
     archived: "bg-neutral-500/15 text-neutral-400 border-neutral-500/25",
     transferred: "bg-purple-500/15 text-purple-400 border-purple-500/25",
   };
@@ -283,7 +282,6 @@ function FilterTabs({ active, onChange }: { active: string; onChange: (v: string
   const tabs = [
     { value: "all", label: "All" },
     { value: "active", label: "Active" },
-    { value: "completed", label: "Completed" },
   ];
   return (
     <div className="flex items-center gap-1">
@@ -370,7 +368,7 @@ export default function MarketplacePage() {
     result = Array.from(dedupeMap.values());
 
     // Filter out test artifacts
-    const testPattern = /^(hello[\s-]?world|test[\s-]?(app)?|untitled|my[\s-]?app|new[\s-]?project)$/i;
+    const testPattern = /^(hello[\s-]?world|test[\s-]?(app)?|untitled|my[\s-]?app|new[\s-]?project|demo|example|sample|asdf|foo|bar|temp|tmp|delete[\s-]?me|placeholder)$/i;
     result = result.filter((p) => !testPattern.test(p.name.trim()));
 
     // Status filter
