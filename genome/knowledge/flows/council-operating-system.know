@@ -25,7 +25,7 @@ flow OrchestratorSystem {
 
   step tick_classify -> tick_execute {
     actor: Orchestrator
-    what: "execute() processes OrchestratorAction[] from either deterministic() or callAI(). 12 action types: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy, respond_to_user."
+    what: "execute() processes OrchestratorAction[] from either deterministic() or callAI(). 18 action types: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, respond_to_user, run_scenarios, delay_rotation, complete_directive, reject_directive, create_directive, record_qa_result."
   }
 
   step tick_execute -> spawn_workers {
@@ -58,7 +58,7 @@ flow OrchestratorSystem {
 }
 
 concept OrchestratorAction {
-  description: "Union type of 15 action types an orchestrator can take per tick: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy (legacy/noop), respond_to_user, run_scenarios, complete_directive, reject_directive. Returned from deterministic() (Tier 1) or parseAIActions() (Tier 2)."
+  description: "Union type of 18 action types an orchestrator can take per tick: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, respond_to_user, run_scenarios, delay_rotation, complete_directive, reject_directive, create_directive, record_qa_result. Returned from deterministic() (Tier 1) or parseAIActions() (Tier 2)."
   defined_in: "packages/node/src/platform/orchestrator.ts"
   used_by: [Orchestrator]
 }
@@ -88,13 +88,13 @@ concept OrgManager {
 }
 
 concept AgentDatabase {
-  description: "SQLite-backed storage with 9 tables: agent_identity, agent_templates, message_inbox, tick_log, lessons, org_knowledge, directives, reflections, governance_audit. Single file at ~/.pando/agents.db. WAL mode, prepared statements. Phase 105: agent_templates table stores reusable role definitions. governance_audit table logs security gate results for each proposal."
+  description: "SQLite-backed storage with 11 tables: agent_identity, message_inbox, tick_log, lessons, org_knowledge, directives, reflections, agent_templates, project_discoveries, governance_audit, qa_test_runs. Single file at ~/.pando/agents.db. WAL mode, prepared statements. Phase 105: agent_templates table stores reusable role definitions. governance_audit table logs security gate results for each proposal. project_discoveries stores cross-worker knowledge sharing. qa_test_runs stores QA agent test results."
   defined_in: "packages/node/src/platform/agent-database.ts"
   used_by: [MessageBus, WorkerPool, OrgManager, Orchestrator, AgentTools, PlatformApi, TemplateRegistry]
 }
 
 concept GovernanceSecurityGate {
-  description: "4 deterministic checks in validateUpgradeProposal() before auto-approve: (1) valid commit hash, (2) npm run build passes, (3) ScenarioRunner tests pass, (4) git diff non-empty. Any failure blocks auto-approve. Results logged to governance_audit table in AgentDatabase. Runs in dev mode only (< 8 peers)."
+  description: "2 deterministic checks in validateUpgradeProposal() before auto-approve: (1) security file check — blocks proposals modifying sensitive files (credential-store, governance, guardrails, etc.) unless description mentions 'security' or 'credential', (2) kernel protection delay — 60s delay before approval for kernel/ file changes. Build and test verification happen in the orchestrator pre-commit pipeline, not in governance. Results logged to governance_audit table in AgentDatabase. Runs in dev mode only (< 8 peers)."
   defined_in: "packages/node/src/kernel/governance.ts"
   used_by: [GovernanceSync]
 }
@@ -201,7 +201,7 @@ flow TickLifecycle {
 
   step decide -> execute {
     actor: Orchestrator
-    what: "Execute OrchestratorAction[] array. 13 action types: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy, respond_to_user, run_scenarios."
+    what: "Execute OrchestratorAction[] array. 18 action types: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, respond_to_user, run_scenarios, delay_rotation, complete_directive, reject_directive, create_directive, record_qa_result."
   }
 
   step execute -> mark_read {

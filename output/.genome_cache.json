@@ -177,7 +177,7 @@
       "content_hash": "f0e0c078"
     },
     "genome/knowledge/flows/council-operating-system.know": {
-      "mtime": 1772378049.4836912,
+      "mtime": 1772410202.5957627,
       "nodes": [
         {
           "_type": "flow",
@@ -219,7 +219,7 @@
               "_name": "tick_classify",
               "_target": "tick_execute",
               "actor": "Orchestrator",
-              "what": "execute() processes OrchestratorAction[] from either deterministic() or callAI(). 12 action types: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy, respond_to_user.",
+              "what": "execute() processes OrchestratorAction[] from either deterministic() or callAI(). 18 action types: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, respond_to_user, run_scenarios, delay_rotation, complete_directive, reject_directive, create_directive, record_qa_result.",
               "_next": "tick_execute"
             },
             {
@@ -272,7 +272,7 @@
           "_type": "concept",
           "_name": "OrchestratorAction",
           "_source": "genome\\knowledge\\flows\\council-operating-system.know",
-          "description": "Union type of 15 action types an orchestrator can take per tick: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy (legacy/noop), respond_to_user, run_scenarios, complete_directive, reject_directive. Returned from deterministic() (Tier 1) or parseAIActions() (Tier 2).",
+          "description": "Union type of 18 action types an orchestrator can take per tick: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, respond_to_user, run_scenarios, delay_rotation, complete_directive, reject_directive, create_directive, record_qa_result. Returned from deterministic() (Tier 1) or parseAIActions() (Tier 2).",
           "defined_in": "packages/node/src/platform/orchestrator.ts",
           "used_by": [
             "Orchestrator"
@@ -330,7 +330,7 @@
           "_type": "concept",
           "_name": "AgentDatabase",
           "_source": "genome\\knowledge\\flows\\council-operating-system.know",
-          "description": "SQLite-backed storage with 9 tables: agent_identity, agent_templates, message_inbox, tick_log, lessons, org_knowledge, directives, reflections, governance_audit. Single file at ~/.pando/agents.db. WAL mode, prepared statements. Phase 105: agent_templates table stores reusable role definitions. governance_audit table logs security gate results for each proposal.",
+          "description": "SQLite-backed storage with 11 tables: agent_identity, message_inbox, tick_log, lessons, org_knowledge, directives, reflections, agent_templates, project_discoveries, governance_audit, qa_test_runs. Single file at ~/.pando/agents.db. WAL mode, prepared statements. Phase 105: agent_templates table stores reusable role definitions. governance_audit table logs security gate results for each proposal. project_discoveries stores cross-worker knowledge sharing. qa_test_runs stores QA agent test results.",
           "defined_in": "packages/node/src/platform/agent-database.ts",
           "used_by": [
             "MessageBus",
@@ -346,7 +346,7 @@
           "_type": "concept",
           "_name": "GovernanceSecurityGate",
           "_source": "genome\\knowledge\\flows\\council-operating-system.know",
-          "description": "4 deterministic checks in validateUpgradeProposal() before auto-approve: (1) valid commit hash, (2) npm run build passes, (3) ScenarioRunner tests pass, (4) git diff non-empty. Any failure blocks auto-approve. Results logged to governance_audit table in AgentDatabase. Runs in dev mode only (< 8 peers).",
+          "description": "2 deterministic checks in validateUpgradeProposal() before auto-approve: (1) security file check \u2014 blocks proposals modifying sensitive files (credential-store, governance, guardrails, etc.) unless description mentions 'security' or 'credential', (2) kernel protection delay \u2014 60s delay before approval for kernel/ file changes. Build and test verification happen in the orchestrator pre-commit pipeline, not in governance. Results logged to governance_audit table in AgentDatabase. Runs in dev mode only (< 8 peers).",
           "defined_in": "packages/node/src/kernel/governance.ts",
           "used_by": [
             "GovernanceSync"
@@ -500,7 +500,7 @@
               "_name": "decide",
               "_target": "execute",
               "actor": "Orchestrator",
-              "what": "Execute OrchestratorAction[] array. 13 action types: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, deploy, respond_to_user, run_scenarios.",
+              "what": "Execute OrchestratorAction[] array. 18 action types: spawn_worker, kill_worker, create_task, assign_task, send_message, create_team, dissolve_team, record_lesson, escalate, propose_upgrade, commit_code, respond_to_user, run_scenarios, delay_rotation, complete_directive, reject_directive, create_directive, record_qa_result.",
               "_next": "execute"
             },
             {
@@ -654,7 +654,7 @@
               "_name": "instantiate",
               "_target": "start_tick_loop",
               "actor": "Orchestrator",
-              "what": "orch.start() begins setInterval tick loop (60s for council). First tick gets full boot prompt with instructions. Subsequent ticks get short board-state update. Session rotates every ~50 ticks.",
+              "what": "orch.start() begins setInterval tick loop (60s for council). First tick gets full boot prompt with instructions. Subsequent ticks get short board-state update. Session rotates every ~200 ticks.",
               "_next": "start_tick_loop"
             },
             {
@@ -716,7 +716,7 @@
           "trigger": "WorkerCompletion"
         }
       ],
-      "content_hash": "0b266ab2"
+      "content_hash": "c8fe1036"
     },
     "genome/knowledge/flows/node-onboarding.know": {
       "mtime": 1772122710.7784405,
@@ -976,7 +976,7 @@
       "content_hash": "659a4eb3"
     },
     "genome/knowledge/flows/project-pipeline.know": {
-      "mtime": 1772265271.3770583,
+      "mtime": 1772402707.4255228,
       "nodes": [
         {
           "_type": "flow",
@@ -1018,7 +1018,7 @@
                 "@gotcha(\"Same Orchestrator class as council. Only callbacks differ.\")"
               ],
               "actor": "PandoNode",
-              "what": "ensureProjectOrchestrator(projectId) calls OrgManager.getOrchestratorForProject() for DB record, then instantiateOrchestrator() for live instance. Factory wires project-scoped callbacks: onCommit (git in workspace \u2192 GitHub push), onDeploy (S3/PM2+nginx).",
+              "what": "ensureProjectOrchestrator(projectId) calls OrgManager.getOrchestratorForProject() for DB record, then instantiateOrchestrator() for live instance. Factory wires project-scoped callbacks: onCommit (git in workspace \u2192 GitHub push). Deployment is agent-driven (devops worker calls deploy API directly).",
               "_next": "instantiate_orchestrator"
             },
             {
@@ -1070,7 +1070,7 @@
               "_name": "commit",
               "_target": "deploy",
               "actor": "Orchestrator",
-              "what": "After commit, orchestrator may trigger deploy action. onDeploy callback: POST /v1/projects/:id/deploy \u2192 P2P discovery \u2192 compute peer \u2192 S3 (tier 1) or PM2+nginx (tier 2).",
+              "what": "After commit, orchestrator spawns a devops worker to handle deployment. The devops agent calls POST /v1/projects/:id/deploy directly (agent-driven, no hardcoded callback). Deploy routes via P2P discovery \u2192 compute peer \u2192 S3 (tier 1) or PM2+nginx (tier 2).",
               "_next": "deploy"
             },
             {
@@ -1118,7 +1118,7 @@
           ]
         }
       ],
-      "content_hash": "4116f31a"
+      "content_hash": "2d6f86a3"
     },
     "genome/knowledge/flows/respond-to-user.know": {
       "mtime": 1772315568.4863605,
@@ -2609,6 +2609,11 @@
       "nodes": [],
       "content_hash": "12421826"
     },
+    "packages/gateway/app/api/apps/check/route.ts": {
+      "mtime": 1772407375.8537254,
+      "nodes": [],
+      "content_hash": "96f2ff4e"
+    },
     "packages/gateway/app/api/apps/route.ts": {
       "mtime": 1772062738.6177955,
       "nodes": [],
@@ -2805,9 +2810,9 @@
       "content_hash": "ec2453d5"
     },
     "packages/gateway/app/api/governance/comment/route.ts": {
-      "mtime": 1770999656.4820876,
+      "mtime": 1772397023.7016153,
       "nodes": [],
-      "content_hash": "817de788"
+      "content_hash": "162fc1d8"
     },
     "packages/gateway/app/api/governance/proposal/[id]/models/route.ts": {
       "mtime": 1772055213.9659188,
@@ -2835,9 +2840,9 @@
       "content_hash": "09d11534"
     },
     "packages/gateway/app/api/governance/propose/route.ts": {
-      "mtime": 1770998991.073208,
+      "mtime": 1772397020.7448592,
       "nodes": [],
-      "content_hash": "72f60018"
+      "content_hash": "bb408609"
     },
     "packages/gateway/app/api/governance/stats/route.ts": {
       "mtime": 1771592146.1866484,
@@ -2845,9 +2850,9 @@
       "content_hash": "4e840f71"
     },
     "packages/gateway/app/api/governance/vote/route.ts": {
-      "mtime": 1770998991.073208,
+      "mtime": 1772397022.2025297,
       "nodes": [],
-      "content_hash": "0fa25df0"
+      "content_hash": "9e0ffd61"
     },
     "packages/gateway/app/api/guardrails/[...path]/route.ts": {
       "mtime": 1772055217.2866702,
@@ -2960,9 +2965,9 @@
       "content_hash": "a698d407"
     },
     "packages/gateway/app/api/request-reply/[...path]/route.ts": {
-      "mtime": 1772085406.1775663,
+      "mtime": 1772409768.6892972,
       "nodes": [],
-      "content_hash": "78b519cb"
+      "content_hash": "395c6bb2"
     },
     "packages/gateway/app/api/resource-proxy/db/route.ts": {
       "mtime": 1772055361.2622044,
@@ -3075,14 +3080,14 @@
       "content_hash": "6c1164d9"
     },
     "packages/gateway/app/api/transfer/route.ts": {
-      "mtime": 1771769403.7772348,
+      "mtime": 1772404715.4724083,
       "nodes": [],
-      "content_hash": "4de353f6"
+      "content_hash": "023a0a97"
     },
     "packages/gateway/app/apps/page.tsx": {
-      "mtime": 1772062720.6540487,
+      "mtime": 1772409765.2140498,
       "nodes": [],
-      "content_hash": "a31ecd12"
+      "content_hash": "431ee215"
     },
     "packages/gateway/app/capacity/page.tsx": {
       "mtime": 1771769341.0152488,
@@ -3090,9 +3095,9 @@
       "content_hash": "f457bc4f"
     },
     "packages/gateway/app/chat/page.tsx": {
-      "mtime": 1772289943.367191,
+      "mtime": 1772402002.9532967,
       "nodes": [],
-      "content_hash": "87bdff9b"
+      "content_hash": "ca6869b3"
     },
     "packages/gateway/app/content/page.tsx": {
       "mtime": 1771400157.8528934,
@@ -3100,9 +3105,9 @@
       "content_hash": "f26dc9cb"
     },
     "packages/gateway/app/council/page.tsx": {
-      "mtime": 1772352094.688457,
+      "mtime": 1772406507.0191224,
       "nodes": [],
-      "content_hash": "20b7af2c"
+      "content_hash": "e999a4c6"
     },
     "packages/gateway/app/dev/page.tsx": {
       "mtime": 1772065558.4424982,
@@ -3140,9 +3145,9 @@
       "content_hash": "46db8033"
     },
     "packages/gateway/app/explore/page.tsx": {
-      "mtime": 1772071741.9635048,
+      "mtime": 1772382268.7331393,
       "nodes": [],
-      "content_hash": "5fd5658c"
+      "content_hash": "79288805"
     },
     "packages/gateway/app/explore/strategy/page.tsx": {
       "mtime": 1771319796.2226977,
@@ -3155,9 +3160,9 @@
       "content_hash": "cb8b1fd1"
     },
     "packages/gateway/app/governance/page.tsx": {
-      "mtime": 1771699888.084549,
+      "mtime": 1772399686.4791808,
       "nodes": [],
-      "content_hash": "3461bc97"
+      "content_hash": "8537ccb5"
     },
     "packages/gateway/app/layout.tsx": {
       "mtime": 1771601806.7474575,
@@ -3165,14 +3170,14 @@
       "content_hash": "bbb60529"
     },
     "packages/gateway/app/login/page.tsx": {
-      "mtime": 1771756334.71895,
+      "mtime": 1772383032.086851,
       "nodes": [],
-      "content_hash": "dbac0c9c"
+      "content_hash": "86dec6f3"
     },
     "packages/gateway/app/marketplace/page.tsx": {
-      "mtime": 1771995723.6068451,
+      "mtime": 1772409761.2815893,
       "nodes": [],
-      "content_hash": "ae64b106"
+      "content_hash": "6c3e05fe"
     },
     "packages/gateway/app/monitor/page.tsx": {
       "mtime": 1771542071.0627701,
@@ -3190,9 +3195,9 @@
       "content_hash": "5b6eb1e2"
     },
     "packages/gateway/app/page.tsx": {
-      "mtime": 1772308633.9390101,
+      "mtime": 1772405741.237475,
       "nodes": [],
-      "content_hash": "01b0a872"
+      "content_hash": "860523a9"
     },
     "packages/gateway/app/projects/page.tsx": {
       "mtime": 1772070909.1659617,
@@ -3200,9 +3205,9 @@
       "content_hash": "c3f3dfb9"
     },
     "packages/gateway/app/register/page.tsx": {
-      "mtime": 1771756326.342566,
+      "mtime": 1772383029.3589115,
       "nodes": [],
-      "content_hash": "066410ba"
+      "content_hash": "0480875f"
     },
     "packages/gateway/app/resources/guide/page.tsx": {
       "mtime": 1771762610.7042608,
@@ -3240,14 +3245,14 @@
       "content_hash": "a085902f"
     },
     "packages/gateway/app/wallet/page.tsx": {
-      "mtime": 1771770263.0140328,
+      "mtime": 1772404712.929627,
       "nodes": [],
-      "content_hash": "bdbeb8c0"
+      "content_hash": "5fd581f1"
     },
     "packages/gateway/components/NavBar.tsx": {
-      "mtime": 1772225660.303203,
+      "mtime": 1772402002.1407769,
       "nodes": [],
-      "content_hash": "0284e2b7"
+      "content_hash": "43b16d3f"
     },
     "packages/gateway/components/ThemeToggle.tsx": {
       "mtime": 1771705579.7104096,
@@ -3285,9 +3290,9 @@
       "content_hash": "753ad0db"
     },
     "packages/gateway/lib/node-pool.ts": {
-      "mtime": 1772127664.9128017,
+      "mtime": 1772383688.1904585,
       "nodes": [],
-      "content_hash": "87679f36"
+      "content_hash": "b9325785"
     },
     "packages/gateway/lib/use-sse.ts": {
       "mtime": 1772315129.1151686,
@@ -3295,7 +3300,7 @@
       "content_hash": "07a96755"
     },
     "packages/gateway/next-env.d.ts": {
-      "mtime": 1772352134.02518,
+      "mtime": 1772398498.7434237,
       "nodes": [],
       "content_hash": "2a74d390"
     },
@@ -3305,9 +3310,9 @@
       "content_hash": "a082bf8c"
     },
     "packages/ledger/src/accounts.ts": {
-      "mtime": 1772127664.9138,
+      "mtime": 1772394207.3493614,
       "nodes": [],
-      "content_hash": "5ad2b641"
+      "content_hash": "dd2ebdb1"
     },
     "packages/ledger/src/contributions.ts": {
       "mtime": 1772127664.914796,
@@ -3350,9 +3355,9 @@
       "content_hash": "37f0cd54"
     },
     "packages/node/src/api/kernel-api.ts": {
-      "mtime": 1772185934.819737,
+      "mtime": 1772382289.518555,
       "nodes": [],
-      "content_hash": "39d8612e"
+      "content_hash": "19a11a83"
     },
     "packages/node/src/api/middleware/auth.ts": {
       "mtime": 1772136174.3396356,
@@ -3360,9 +3365,9 @@
       "content_hash": "b6386d5e"
     },
     "packages/node/src/api/platform-api.ts": {
-      "mtime": 1772354955.3300908,
+      "mtime": 1772394237.013879,
       "nodes": [],
-      "content_hash": "089ef483"
+      "content_hash": "bfae5fb1"
     },
     "packages/node/src/cli.ts": {
       "mtime": 1772300209.6348763,
@@ -3414,9 +3419,9 @@
       "content_hash": "f177cca4"
     },
     "packages/node/src/core/ai-backend-claude.ts": {
-      "mtime": 1772288180.2552366,
+      "mtime": 1772406763.1097608,
       "nodes": [],
-      "content_hash": "0d2e7308"
+      "content_hash": "ed2ccff1"
     },
     "packages/node/src/core/ai-backend-ollama.ts": {
       "mtime": 1772127664.9263244,
@@ -3429,9 +3434,9 @@
       "content_hash": "261123d0"
     },
     "packages/node/src/core/ai-backend.ts": {
-      "mtime": 1772127664.927324,
+      "mtime": 1772406759.9244373,
       "nodes": [],
-      "content_hash": "65d011f9"
+      "content_hash": "27786e36"
     },
     "packages/node/src/core/cloud-instance-manager.ts": {
       "mtime": 1772127664.9284716,
@@ -3489,9 +3494,9 @@
       "content_hash": "23f6666f"
     },
     "packages/node/src/core/upgrade-protocol.ts": {
-      "mtime": 1772358927.8499625,
+      "mtime": 1772396012.2271066,
       "nodes": [],
-      "content_hash": "687649f8"
+      "content_hash": "3765bd39"
     },
     "packages/node/src/core/version-protocol.ts": {
       "mtime": 1772127664.935471,
@@ -3499,17 +3504,17 @@
       "content_hash": "9eacc069"
     },
     "packages/node/src/core/worker-mcp.ts": {
-      "mtime": 1772368529.8787947,
+      "mtime": 1772392675.0867062,
       "nodes": [],
-      "content_hash": "e96795e9"
+      "content_hash": "0aaf6c6d"
     },
     "packages/node/src/core/worker-pool.ts": {
-      "mtime": 1772368531.2408118,
+      "mtime": 1772406765.4810245,
       "nodes": [],
-      "content_hash": "45a1d8fa"
+      "content_hash": "e578e8c4"
     },
     "packages/node/src/index.ts": {
-      "mtime": 1772377291.235432,
+      "mtime": 1772395350.6475408,
       "nodes": [
         {
           "_type": "entity",
@@ -3544,10 +3549,10 @@
             "StorageBackend"
           ],
           "file": "packages\\node\\src\\index.ts:1",
-          "_content_hash": "008a59d8"
+          "_content_hash": "4f9f0f76"
         }
       ],
-      "content_hash": "008a59d8"
+      "content_hash": "4f9f0f76"
     },
     "packages/node/src/kernel/crash-guard.ts": {
       "mtime": 1772127664.9374683,
@@ -3560,9 +3565,9 @@
       "content_hash": "fb34a75f"
     },
     "packages/node/src/kernel/governance.ts": {
-      "mtime": 1772361677.1039443,
+      "mtime": 1772383479.2502158,
       "nodes": [],
-      "content_hash": "7f57a979"
+      "content_hash": "3238d057"
     },
     "packages/node/src/kernel/guardrails.ts": {
       "mtime": 1772127664.9405558,
@@ -3699,14 +3704,14 @@
       "content_hash": "fea57ec4"
     },
     "packages/node/src/platform/agent-database.ts": {
-      "mtime": 1772370446.3617039,
+      "mtime": 1772403616.691682,
       "nodes": [],
-      "content_hash": "caf06226"
+      "content_hash": "49590473"
     },
     "packages/node/src/platform/agent-tools.ts": {
-      "mtime": 1772216846.500401,
+      "mtime": 1772392675.2677274,
       "nodes": [],
-      "content_hash": "92619ed2"
+      "content_hash": "9613c213"
     },
     "packages/node/src/platform/capability-detector.ts": {
       "mtime": 1772127664.9480503,
@@ -3778,15 +3783,25 @@
       "nodes": [],
       "content_hash": "6d8b4070"
     },
-    "packages/node/src/platform/orchestrator.ts": {
-      "mtime": 1772377846.0171304,
+    "packages/node/src/platform/orchestrator-manager.ts": {
+      "mtime": 1772392612.4745045,
       "nodes": [],
-      "content_hash": "0d902886"
+      "content_hash": "904215e6"
+    },
+    "packages/node/src/platform/orchestrator-process.ts": {
+      "mtime": 1772380853.1743634,
+      "nodes": [],
+      "content_hash": "6fd23e30"
+    },
+    "packages/node/src/platform/orchestrator.ts": {
+      "mtime": 1772410155.689787,
+      "nodes": [],
+      "content_hash": "00087aae"
     },
     "packages/node/src/platform/org-manager.ts": {
-      "mtime": 1772285210.4756103,
+      "mtime": 1772397950.9530687,
       "nodes": [],
-      "content_hash": "ed1f000d"
+      "content_hash": "fd044bb3"
     },
     "packages/node/src/platform/pipeline-runner.ts": {
       "mtime": 1772127664.9565673,

@@ -578,7 +578,10 @@ export class Orchestrator {
     // System health snapshot for council
     let systemHealth: BoardState['systemHealth'];
     if (agent.role === 'council' || agent.role === 'observer' || agent.role === 'qa-user') {
-      const allWorkers = this.deps.db.listAgents({ type: 'worker', parentId: this.orchestratorId });
+      const workerFilter = agent.role === 'observer'
+        ? { type: 'worker' as const }  // observer sees all workers system-wide
+        : { type: 'worker' as const, parentId: this.orchestratorId };
+      const allWorkers = this.deps.db.listAgents(workerFilter);
       const workersByStatus: Record<string, number> = {};
       for (const w of allWorkers) {
         workersByStatus[w.status] = (workersByStatus[w.status] || 0) + 1;
