@@ -158,6 +158,28 @@ function TreeNodeRow({
         </div>
       </div>
 
+      {/* Detail panel (visible when expanded) */}
+      {isExpanded && (
+        <div
+          className="px-4 py-3 bg-neutral-50 dark:bg-neutral-900/80 border-t border-neutral-200 dark:border-neutral-800 text-xs space-y-1"
+          style={{ paddingLeft: `${depth * 24 + 48}px` }}
+        >
+          <div className="flex flex-wrap gap-x-6 gap-y-1 text-neutral-600 dark:text-neutral-400">
+            <span><span className="text-neutral-400 dark:text-neutral-500">ID:</span> <span className="font-mono">{node.id}</span></span>
+            {node.description && (
+              <span><span className="text-neutral-400 dark:text-neutral-500">Desc:</span> {node.description}</span>
+            )}
+            <span><span className="text-neutral-400 dark:text-neutral-500">Tasks:</span> {node.taskCount}</span>
+            {node.totalCost > 0 && (
+              <span><span className="text-neutral-400 dark:text-neutral-500">Cost:</span> <span className="text-green-500 font-mono">${node.totalCost.toFixed(4)}</span></span>
+            )}
+            {node.lastActive > 0 && (
+              <span><span className="text-neutral-400 dark:text-neutral-500">Last active:</span> {relTime(node.lastActive)}</span>
+            )}
+          </div>
+        </div>
+      )}
+
       {/* Children */}
       {hasChildren && isExpanded && (
         <div className="border-l-2 border-neutral-200 dark:border-neutral-800" style={{ marginLeft: `${(depth + 1) * 24 + 16}px` }}>

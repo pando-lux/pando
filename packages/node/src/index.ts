@@ -3085,7 +3085,7 @@ location /apps/${projectId}/ {
       onCommit = async (message) => {
         try {
           const cwd = process.cwd();
-          execSync('git add -A -- ":(exclude)CLAUDE.md"', { cwd, timeout: 10000 });
+          execSync('git add -A', { cwd, timeout: 10000 });
           const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000 });
           if (!status.trim()) {
             console.log('[orchestrator] Nothing to commit');
@@ -3362,7 +3362,7 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     const asyncOnCommit = async (message: string): Promise<boolean> => {
       try {
         const cwd = process.cwd();
-        await execAsync('git add -A -- ":(exclude)CLAUDE.md"', { cwd, timeout: 10000 });
+        await execAsync('git add -A', { cwd, timeout: 10000 });
         const { stdout: status } = await execAsync('git status --porcelain', { cwd, timeout: 5000 });
         if (!status.trim()) {
           console.log('[orchestrator] Nothing to commit');
