@@ -1994,7 +1994,12 @@ export async function registerPlatformRoutes(
       if (!ps) return reply.code(503).send({ error: 'Project store not available' });
 
       const { id } = request.params as { id: string };
-      const project = await ps.getProjectAsync(id);
+      let project;
+      try {
+        project = await ps.getProjectAsync(id);
+      } catch (err: any) {
+        return reply.code(503).send({ error: 'Storage backend unavailable' });
+      }
       if (!project) return reply.code(404).send({ error: 'Project not found' });
 
       // Check access
@@ -2007,7 +2012,10 @@ export async function registerPlatformRoutes(
         }
       }
 
-      const collaborators = await ps.getCollaboratorsAsync(id);
+      let collaborators: any[] = [];
+      try {
+        collaborators = await ps.getCollaboratorsAsync(id);
+      } catch {}
       return { project, collaborators };
     });
 
