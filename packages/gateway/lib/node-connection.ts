@@ -750,7 +750,21 @@ export async function fetchFromNode(path: string, options?: RequestInit, prefere
     });
     pool.recordSuccess(url, Date.now() - start);
     return res;
-  } catch (err) {
+  } catch (err: any) {
+    // Retry same node once on timeout (handles cold-start compilation delays)
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+      const retryStart = Date.now();
+      try {
+        const res = await fetch(`${url}${path}`, {
+          ...options,
+          signal: options?.signal || AbortSignal.timeout(10000),
+        });
+        pool.recordSuccess(url, Date.now() - retryStart);
+        return res;
+      } catch {
+        // Retry failed — fall through to fallback node
+      }
+    }
     pool.recordFailure(url);
     // Try one fallback
     const fallbackUrl = pool.getBestNodeUrl();
