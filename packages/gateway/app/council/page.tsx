@@ -101,6 +101,7 @@ function statusColor(status: string): string {
 function parseActions(actionsStr: string): string[] {
   try {
     const parsed = JSON.parse(actionsStr);
+    if (parsed == null) return [];
     if (Array.isArray(parsed)) {
       return parsed.map((a: any) => typeof a === 'string' ? a : (a.type || a.action || 'unknown'));
     }

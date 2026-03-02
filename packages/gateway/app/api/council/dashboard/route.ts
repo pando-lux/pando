@@ -12,22 +12,25 @@ export async function GET() {
     return res;
   };
 
+  const delays = [2000, 3000, 4000];
   try {
     let res = await attempt();
-    if (res.status === 503) {
-      await new Promise(r => setTimeout(r, 2000));
+    for (const delay of delays) {
+      if (res.status !== 503) break;
+      await new Promise(r => setTimeout(r, delay));
       res = await attempt();
     }
     if (!res.ok) return NextResponse.json({ error: 'Upstream error' }, { status: res.status });
     return NextResponse.json(await res.json());
   } catch {
-    try {
-      await new Promise(r => setTimeout(r, 2000));
-      const res = await attempt();
-      if (!res.ok) return NextResponse.json({ error: 'Upstream error' }, { status: res.status });
-      return NextResponse.json(await res.json());
-    } catch {
-      return NextResponse.json({ error: 'Node unreachable' }, { status: 502 });
+    for (const delay of delays) {
+      try {
+        await new Promise(r => setTimeout(r, delay));
+        const res = await attempt();
+        if (!res.ok) return NextResponse.json({ error: 'Upstream error' }, { status: res.status });
+        return NextResponse.json(await res.json());
+      } catch { continue; }
     }
+    return NextResponse.json({ error: 'Node unreachable' }, { status: 502 });
   }
 }

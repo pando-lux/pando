@@ -3969,7 +3969,7 @@ export async function registerPlatformRoutes(
       for (const w of workers) {
         try {
           const lastMsg = msgDb.db.prepare(
-            `SELECT payload FROM messages WHERE sender_id = ? AND type = 'worker_report' ORDER BY created_at DESC LIMIT 1`
+            `SELECT payload FROM message_inbox WHERE sender_id = ? AND type = 'worker_report' ORDER BY created_at DESC LIMIT 1`
           ).get(w.id);
           if (lastMsg?.payload) {
             try { const p = JSON.parse(lastMsg.payload); w.lastReport = p.summary?.slice(0, 200) || null; } catch { /* ignore parse errors */ }
