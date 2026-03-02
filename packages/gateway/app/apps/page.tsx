@@ -70,7 +70,7 @@ function statusDot(status: string | undefined): string {
 
 function AppCard({ app, onOpen }: { app: App; onOpen: (url: string) => void }) {
   return (
-    <div className="group relative rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-5 flex flex-col gap-3 hover:border-amber-500/40 hover:shadow-md transition-all">
+    <div className="group relative rounded-xl border border-neutral-200 dark:border-neutral-800 bg-white dark:bg-neutral-900 p-4 sm:p-5 flex flex-col gap-3 hover:border-amber-500/40 hover:shadow-md transition-all">
       {/* Header row */}
       <div className="flex items-start justify-between gap-2">
         <div className="flex-1 min-w-0">
@@ -106,7 +106,7 @@ function AppCard({ app, onOpen }: { app: App; onOpen: (url: string) => void }) {
       </div>
 
       {/* URL row */}
-      <div className="mt-auto pt-1 border-t border-neutral-100 dark:border-neutral-800 flex items-center gap-2">
+      <div className="mt-auto pt-1 border-t border-neutral-100 dark:border-neutral-800 flex flex-col sm:flex-row items-center gap-2">
         <span className="flex-1 min-w-0 font-mono text-[10px] text-neutral-400 truncate" title={app.deploymentUrl}>
           {app.deploymentUrl}
         </span>

@@ -358,6 +358,21 @@ export default function MarketplacePage() {
     if (!data?.projects) return [];
     let result = data.projects;
 
+    // Deduplicate by name+owner (keep most recent)
+    const dedupeMap = new Map<string, Project>();
+    for (const p of result) {
+      const key = `${p.name.toLowerCase()}::${p.ownerId}`;
+      const existing = dedupeMap.get(key);
+      if (!existing || (p.updatedAt || p.createdAt) > (existing.updatedAt || existing.createdAt)) {
+        dedupeMap.set(key, p);
+      }
+    }
+    result = Array.from(dedupeMap.values());
+
+    // Filter out test artifacts
+    const testPattern = /^(hello[\s-]?world|test[\s-]?(app)?|untitled|my[\s-]?app|new[\s-]?project)$/i;
+    result = result.filter((p) => !testPattern.test(p.name.trim()));
+
     // Status filter
     if (statusFilter !== "all") {
       result = result.filter((p) => p.status === statusFilter);
@@ -435,43 +450,12 @@ export default function MarketplacePage() {
 
         {/* Empty State */}
         {!loading && !error && filteredProjects.length === 0 && (
-          <div className="text-center py-16 space-y-4 animate-page-fade-in-delay-1">
-            <div className="w-16 h-16 mx-auto rounded-2xl bg-neutral-200 dark:bg-neutral-800 flex items-center justify-center">
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                width="28"
-                height="28"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="1.5"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="text-neutral-400 dark:text-neutral-500"
-              >
-                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-                <polyline points="3.27 6.96 12 12.01 20.73 6.96" />
-                <line x1="12" y1="22.08" x2="12" y2="12" />
-              </svg>
-            </div>
-            <div>
-              <p className="text-neutral-600 dark:text-neutral-400 font-medium">
-                No projects listed yet
-              </p>
-              <p className="text-sm text-neutral-500 dark:text-neutral-500 mt-1 max-w-md mx-auto">
-                {search
-                  ? "No projects match your search. Try different keywords."
-                  : "Start a conversation in Chat to create your first project."}
-              </p>
-            </div>
-            {!search && (
-              <a
-                href="/chat"
-                className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-amber-500/10 text-amber-600 dark:text-amber-400 border border-amber-500/25 hover:bg-amber-500/20 text-sm font-medium transition"
-              >
-                Go to Chat
-              </a>
-            )}
+          <div className="text-center py-12 animate-page-fade-in-delay-1">
+            <p className="text-neutral-400">
+              {search
+                ? "No projects match your search. Try different keywords."
+                : "No apps deployed yet. Be the first to build something on Pando!"}
+            </p>
           </div>
         )}
 
