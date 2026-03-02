@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useRouter } from "next/navigation";
 import NavBar from "@/components/NavBar";
 import { useAuth } from "@/lib/auth-context";
 
@@ -105,40 +106,13 @@ function CostBadge({ budgetLimit, revenueModel }: { budgetLimit: number; revenue
 
 /* -- Project Card ------------------------------------------ */
 
-function ProjectCard({ project, myPeerId, authHeaders, onRefresh }: { project: Project; myPeerId: string; authHeaders: Record<string, string>; onRefresh: () => void }) {
-  const [expanded, setExpanded] = useState(false);
-  const [undeploying, setUndeploying] = useState(false);
-  const [undeployMsg, setUndeployMsg] = useState<string | null>(null);
-  const isOwner = myPeerId && project.ownerId === myPeerId;
-
-  async function handleUndeploy(e: React.MouseEvent) {
-    e.stopPropagation();
-    if (!confirm("Undeploy this project? The app will stop and its URL will no longer work.")) return;
-    setUndeploying(true);
-    setUndeployMsg(null);
-    try {
-      const res = await fetch(`/api/projects/${encodeURIComponent(project.id)}/undeploy`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", ...authHeaders },
-        body: JSON.stringify({}),
-      });
-      if (res.ok) {
-        setUndeployMsg("Undeployed");
-        setTimeout(onRefresh, 500);
-      } else {
-        const d = await res.json();
-        setUndeployMsg(d.error || "Failed");
-      }
-    } catch {
-      setUndeployMsg("Network error");
-    }
-    setUndeploying(false);
-  }
+function ProjectCard({ project }: { project: Project; myPeerId: string; authHeaders: Record<string, string>; onRefresh: () => void }) {
+  const router = useRouter();
 
   return (
     <div
       className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-5 space-y-3 hover:border-amber-500/30 transition cursor-pointer"
-      onClick={() => setExpanded(!expanded)}
+      onClick={() => router.push(`/marketplace/${encodeURIComponent(project.id)}`)}
     >
       {/* Header row */}
       <div className="flex items-start justify-between gap-3">
@@ -161,7 +135,7 @@ function ProjectCard({ project, myPeerId, authHeaders, onRefresh }: { project: P
 
       {/* Description */}
       <p className="text-sm text-neutral-600 dark:text-neutral-400 leading-relaxed">
-        {expanded ? project.description : truncate(project.description || "No description provided.", 100)}
+        {truncate(project.description || "No description provided.", 100)}
       </p>
 
       {/* Footer meta */}
@@ -179,68 +153,7 @@ function ProjectCard({ project, myPeerId, authHeaders, onRefresh }: { project: P
             Live
           </a>
         )}
-        {isOwner && project.deploymentUrl && (
-          <button
-            onClick={handleUndeploy}
-            disabled={undeploying}
-            className="text-red-400 hover:text-red-300 hover:underline transition disabled:opacity-50"
-          >
-            {undeploying ? "Undeploying..." : "Undeploy"}
-          </button>
-        )}
-        {undeployMsg && (
-          <span className="text-red-400">{undeployMsg}</span>
-        )}
       </div>
-
-      {/* Expanded detail */}
-      {expanded && (
-        <div className="border-t border-neutral-200 dark:border-neutral-800 pt-3 mt-2 space-y-2 text-xs">
-          <div className="grid grid-cols-2 gap-2">
-            <div>
-              <span className="text-neutral-500 dark:text-neutral-500">Project ID:</span>{" "}
-              <span className="font-mono text-neutral-700 dark:text-neutral-300">{project.id}</span>
-            </div>
-            <div>
-              <span className="text-neutral-500 dark:text-neutral-500">Revenue Model:</span>{" "}
-              <span className="text-neutral-700 dark:text-neutral-300 capitalize">{project.revenueModel || "none"}</span>
-            </div>
-            <div>
-              <span className="text-neutral-500 dark:text-neutral-500">Budget Spent:</span>{" "}
-              <span className="font-mono text-neutral-700 dark:text-neutral-300">{project.budgetSpent.toFixed(2)} Lux</span>
-            </div>
-            <div>
-              <span className="text-neutral-500 dark:text-neutral-500">Last Updated:</span>{" "}
-              <span className="text-neutral-700 dark:text-neutral-300">{relativeTime(project.updatedAt)}</span>
-            </div>
-          </div>
-          {project.deploymentUrl && (
-            <div>
-              <span className="text-neutral-500 dark:text-neutral-500">Deployment:</span>{" "}
-              <a
-                href={project.deploymentUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-amber-600 dark:text-amber-400 hover:underline break-all"
-                onClick={(e) => e.stopPropagation()}
-              >
-                {project.deploymentUrl}
-              </a>
-            </div>
-          )}
-          {isOwner && (
-            <div className="pt-1">
-              <a
-                href="/projects"
-                className="text-amber-500 hover:text-amber-400 hover:underline transition"
-                onClick={(e) => e.stopPropagation()}
-              >
-                Manage in Projects
-              </a>
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
