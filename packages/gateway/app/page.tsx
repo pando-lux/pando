@@ -19,11 +19,11 @@ export default function LandingPage() {
       <nav className="flex items-center justify-between px-6 py-4 max-w-6xl mx-auto">
         <span className="text-xl font-bold tracking-tight">pando</span>
         <div className="flex items-center gap-6 text-sm text-neutral-500 dark:text-neutral-400">
-          <a href="#features" className="hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">Features</a>
-          <a href="#how" className="hover:text-neutral-900 dark:hover:text-neutral-100 transition-colors">How it works</a>
+          <a href="#features" className="hover:text-amber-500 dark:hover:text-amber-400 transition-colors duration-200">Features</a>
+          <a href="#how" className="hover:text-amber-500 dark:hover:text-amber-400 transition-colors duration-200">How it works</a>
           <Link
             href="/chat"
-            className="px-4 py-2 bg-amber-500 text-neutral-950 rounded-lg font-medium hover:bg-amber-400 transition-colors"
+            className="px-4 py-2 bg-amber-500 text-neutral-950 rounded-lg font-medium hover:bg-amber-400 hover:shadow-md hover:shadow-amber-500/20 transition-all duration-200"
           >
             Get started
           </Link>
@@ -48,7 +48,7 @@ export default function LandingPage() {
         <div className="flex items-center justify-center gap-4">
           <Link
             href="/chat"
-            className="px-6 py-3 bg-amber-500 text-neutral-950 rounded-lg font-semibold hover:bg-amber-400 active:scale-[0.98] transition-colors text-lg"
+            className="px-6 py-3 bg-amber-500 text-neutral-950 rounded-lg font-semibold hover:bg-amber-400 hover:scale-[1.02] hover:shadow-lg hover:shadow-amber-500/25 active:scale-[0.98] transition-all duration-200 text-lg"
           >
             Start building
           </Link>
@@ -56,7 +56,7 @@ export default function LandingPage() {
             href="https://github.com/pando-lux/pando"
             target="_blank"
             rel="noopener noreferrer"
-            className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-lg font-semibold hover:border-neutral-400 dark:hover:border-neutral-500 hover:text-neutral-900 dark:hover:text-white transition-colors text-lg"
+            className="px-6 py-3 border border-neutral-300 dark:border-neutral-700 rounded-lg font-semibold hover:border-amber-500/50 dark:hover:border-amber-500/50 hover:text-amber-500 dark:hover:text-amber-400 hover:scale-[1.02] hover:shadow-md transition-all duration-200 text-lg"
           >
             View source
           </a>
@@ -106,7 +106,7 @@ export default function LandingPage() {
           ].map((f) => (
             <div
               key={f.title}
-              className="p-6 rounded-2xl bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 hover:border-neutral-300 dark:hover:border-neutral-700 hover:-translate-y-0.5 hover:shadow-md transition-all duration-200"
+              className="p-6 rounded-2xl bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 hover:border-amber-500/30 dark:hover:border-amber-500/30 hover:-translate-y-1 hover:shadow-lg hover:shadow-amber-500/5 transition-all duration-200"
             >
               <div className="w-10 h-10 rounded-lg bg-amber-500/10 flex items-center justify-center mb-4">
                 <svg
@@ -172,7 +172,7 @@ export default function LandingPage() {
           </p>
           <Link
             href="/chat"
-            className="inline-block px-8 py-3 bg-amber-500 text-neutral-950 rounded-lg font-semibold hover:bg-amber-400 active:scale-[0.98] transition-colors text-lg"
+            className="inline-block px-8 py-3 bg-amber-500 text-neutral-950 rounded-lg font-semibold hover:bg-amber-400 hover:scale-[1.02] hover:shadow-lg hover:shadow-amber-500/25 active:scale-[0.98] transition-all duration-200 text-lg"
           >
             Open Pando
           </Link>
@@ -188,14 +188,14 @@ export default function LandingPage() {
               href="https://github.com/pando-lux/pando"
               target="_blank"
               rel="noopener noreferrer"
-              className="hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors"
+              className="hover:text-amber-500 dark:hover:text-amber-400 transition-colors duration-200"
             >
               GitHub
             </a>
-            <Link href="/network" className="hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors">
+            <Link href="/network" className="hover:text-amber-500 dark:hover:text-amber-400 transition-colors duration-200">
               Network
             </Link>
-            <Link href="/governance" className="hover:text-neutral-700 dark:hover:text-neutral-300 transition-colors">
+            <Link href="/governance" className="hover:text-amber-500 dark:hover:text-amber-400 transition-colors duration-200">
               Governance
             </Link>
           </div>
