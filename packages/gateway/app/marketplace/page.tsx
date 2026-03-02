@@ -304,6 +304,8 @@ function FilterTabs({ active, onChange }: { active: string; onChange: (v: string
 
 /* -- Page -------------------------------------------------- */
 
+const PAGE_SIZE = 12;
+
 export default function MarketplacePage() {
   const { user, token } = useAuth();
   const [data, setData] = useState<MarketplaceData | null>(null);
@@ -311,6 +313,7 @@ export default function MarketplacePage() {
   const [error, setError] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [page, setPage] = useState(1);
 
   const myPeerId = user?.peerId || "";
   const authHdrs = useMemo(() => {
@@ -321,7 +324,9 @@ export default function MarketplacePage() {
 
   const fetchData = useCallback(async () => {
     try {
-      const res = await fetch("/api/marketplace", { signal: AbortSignal.timeout(10000) });
+      const offset = (page - 1) * PAGE_SIZE;
+      const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+      const res = await fetch(`/api/marketplace?${params}`, { signal: AbortSignal.timeout(10000) });
       if (!res.ok) {
         setError(`Failed to fetch marketplace (${res.status})`);
         setData({ projects: [], total: 0 });
@@ -342,13 +347,20 @@ export default function MarketplacePage() {
       setData({ projects: [], total: 0 });
     }
     setLoading(false);
-  }, []);
+  }, [page]);
 
   useEffect(() => {
     fetchData();
     const interval = setInterval(fetchData, 30000);
     return () => clearInterval(interval);
   }, [fetchData]);
+
+  // Reset to page 1 when search or filter changes
+  useEffect(() => {
+    setPage(1);
+  }, [search, statusFilter]);
+
+  const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
 
   /* -- Client-side filtering -------------------------------- */
 
@@ -496,6 +508,29 @@ export default function MarketplacePage() {
         {!loading && featuredProjects.length > 0 && regularProjects.length === 0 && filteredProjects.length > 0 && (
           <div className="text-center text-xs text-neutral-500 dark:text-neutral-500 py-4 animate-page-fade-in-delay-2">
             Showing {filteredProjects.length} featured project{filteredProjects.length !== 1 ? "s" : ""}
+          </div>
+        )}
+
+        {/* Pagination Controls */}
+        {!loading && !error && totalPages > 1 && (
+          <div className="flex items-center justify-center gap-4 pt-4 pb-2 animate-page-fade-in-delay-2">
+            <button
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+              disabled={page <= 1}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-700 dark:text-neutral-300 hover:border-amber-500/50 hover:text-amber-600 dark:hover:text-amber-400 transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-neutral-300 dark:disabled:hover:border-neutral-700 disabled:hover:text-neutral-700 dark:disabled:hover:text-neutral-300"
+            >
+              Previous
+            </button>
+            <span className="text-sm text-neutral-500 dark:text-neutral-400 tabular-nums">
+              Page {page} of {totalPages}
+            </span>
+            <button
+              onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+              disabled={page >= totalPages}
+              className="px-4 py-2 text-sm font-medium rounded-lg border border-neutral-300 dark:border-neutral-700 bg-white dark:bg-neutral-900 text-neutral-700 dark:text-neutral-300 hover:border-amber-500/50 hover:text-amber-600 dark:hover:text-amber-400 transition disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:border-neutral-300 dark:disabled:hover:border-neutral-700 disabled:hover:text-neutral-700 dark:disabled:hover:text-neutral-300"
+            >
+              Next
+            </button>
           </div>
         )}
       </main>
