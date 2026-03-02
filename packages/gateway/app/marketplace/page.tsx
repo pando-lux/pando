@@ -367,9 +367,10 @@ export default function MarketplacePage() {
     }
     result = Array.from(dedupeMap.values());
 
-    // Filter out test artifacts
-    const testPattern = /^(hello[\s-]?world|test[\s-]?(app)?|untitled|my[\s-]?app|new[\s-]?project|demo|example|sample|asdf|foo|bar|temp|tmp|delete[\s-]?me|placeholder)$/i;
-    result = result.filter((p) => !testPattern.test(p.name.trim()));
+    // Filter out test artifacts — exact matches + partial patterns
+    const testExactPattern = /^(hello[\s-]?world|test[\s-]?(app)?|untitled|my[\s-]?app|new[\s-]?project|demo|example|sample|asdf|foo|bar|temp|tmp|delete[\s-]?me|placeholder)$/i;
+    const testPartialPattern = /^test-|\btest-(message|static|poll|verify)|^QA\s+test|^infra-\d+|^phase\d+-test|hello\s+from\s+tester|\.(ts|js|tsx|jsx)\s*$|^Add\s+(a\s+)?\w+\s+(at|to|in)\s+/i;
+    result = result.filter((p) => { const n = p.name.trim(); return !testExactPattern.test(n) && !testPartialPattern.test(n); });
 
     // Status filter
     if (statusFilter !== "all") {
