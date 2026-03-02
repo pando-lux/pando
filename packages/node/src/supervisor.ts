@@ -32,7 +32,7 @@ function spawnNode(): ChildProcess {
   const cliPath = join(__dirname, 'cli.js');
   const args = [cliPath, '--supervised', ...process.argv.slice(2)];
   console.log(`[supervisor ${ts()}] Spawning: node ${args.join(' ')}`);
-  const proc = spawn(process.execPath, args, { stdio: 'inherit' });
+  const proc = spawn(process.execPath, args, { stdio: 'inherit', windowsHide: true });
   proc.on('exit', onChildExit);
   return proc;
 }

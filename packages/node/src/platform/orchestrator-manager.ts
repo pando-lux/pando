@@ -102,7 +102,8 @@ export class OrchestratorProcessManager {
     const child = fork(modulePath, [], {
       stdio: ['ignore', 'inherit', 'inherit', 'ipc'],
       env: childEnv,
-    });
+      windowsHide: true,
+    } as any);
 
     const managed: ManagedProcess = {
       child,
