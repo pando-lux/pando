@@ -238,16 +238,14 @@ class NodeConnection {
   }
 
   async getProposalDetail(id: string): Promise<any> {
-    try {
-      const res = await this.fetchWithFailover(`/v1/governance/proposal/${encodeURIComponent(id)}`, {
-        headers: this.authHeaders(),
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!res.ok) throw new Error("Failed to get proposal");
-      return await res.json();
-    } catch {
-      return null;
-    }
+    const res = await this.fetchWithFailover(`/v1/governance/proposal/${encodeURIComponent(id)}`, {
+      headers: this.authHeaders(),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.status === 404) return null; // genuinely not found
+    if (!res.ok) throw new Error(`Node returned ${res.status}`);
+    return await res.json();
+    // Network errors propagate — gateway route.ts catches and returns 500
   }
 
   async addComment(proposalId: string, content: string): Promise<any> {
@@ -413,29 +411,23 @@ class NodeConnection {
   }
 
   async getProposalReviews(proposalId: string): Promise<{ proposalId: string; reviews: any[]; summary: any | null }> {
-    try {
-      const res = await this.fetchWithFailover(`/v1/governance/proposals/${encodeURIComponent(proposalId)}/reviews`, {
-        headers: this.authHeaders(),
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!res.ok) throw new Error("Failed to get reviews");
-      return await res.json();
-    } catch {
-      return { proposalId, reviews: [], summary: null };
-    }
+    const res = await this.fetchWithFailover(`/v1/governance/proposals/${encodeURIComponent(proposalId)}/reviews`, {
+      headers: this.authHeaders(),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.status === 404) return { proposalId, reviews: [], summary: null };
+    if (!res.ok) throw new Error(`Node returned ${res.status}`);
+    return await res.json();
   }
 
   async getProposalReviewers(proposalId: string): Promise<{ proposalId: string; reviewers: any[]; selectedReviewers: any[]; reviewerCount: number; humanOnly: boolean }> {
-    try {
-      const res = await this.fetchWithFailover(`/v1/governance/proposals/${encodeURIComponent(proposalId)}/reviewers`, {
-        headers: this.authHeaders(),
-        signal: AbortSignal.timeout(5000),
-      });
-      if (!res.ok) throw new Error("Failed to get reviewers");
-      return await res.json();
-    } catch {
-      return { proposalId, reviewers: [], selectedReviewers: [], reviewerCount: 0, humanOnly: false };
-    }
+    const res = await this.fetchWithFailover(`/v1/governance/proposals/${encodeURIComponent(proposalId)}/reviewers`, {
+      headers: this.authHeaders(),
+      signal: AbortSignal.timeout(5000),
+    });
+    if (res.status === 404) return { proposalId, reviewers: [], selectedReviewers: [], reviewerCount: 0, humanOnly: false };
+    if (!res.ok) throw new Error(`Node returned ${res.status}`);
+    return await res.json();
   }
 
   /* -- Projects API ----------------------------------------- */
