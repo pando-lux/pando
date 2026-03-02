@@ -5,7 +5,7 @@
  * Implements the AIBackend interface so agents are not hardcoded to Claude Code.
  */
 
-import { spawn, execSync } from 'node:child_process';
+import { spawn, execSync, spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { homedir, platform } from 'node:os';
 import type { AIBackend, AITask, AIResult } from './ai-backend.js';
@@ -26,6 +26,33 @@ function buildAugmentedPath(): string {
 }
 
 const AUGMENTED_PATH = buildAugmentedPath();
+
+/**
+ * Kill a process and all its children (entire process tree).
+ * Prevents orphan child processes when killing Claude Code workers.
+ */
+export function killProcessTree(pid: number): void {
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], {
+        timeout: 5000,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch { /* already dead */ }
+  } else {
+    // POSIX: kill children first, then parent
+    try {
+      spawnSync('pkill', ['-TERM', '-P', String(pid)], {
+        timeout: 5000,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+    } catch { /* no children or already dead */ }
+    try {
+      process.kill(pid, 'SIGTERM');
+    } catch { /* already dead */ }
+  }
+}
 
 export function detectClaudePath(): string | null {
   try {
@@ -122,19 +149,19 @@ export class ClaudeBackend implements AIBackend {
       let lineBuffer = '';
 
       let idleTimer = setTimeout(() => {
-        child.kill();
+        if (child.pid) killProcessTree(child.pid);
         resolve({ success: false, output: '', backend: this.name, error: `Idle timeout after ${IDLE_TIMEOUT_MS / 60000} min` });
       }, IDLE_TIMEOUT_MS);
 
       const hardCapTimer = setTimeout(() => {
-        child.kill();
+        if (child.pid) killProcessTree(child.pid);
         resolve({ success: false, output: '', backend: this.name, error: `Hard cap after ${HARD_CAP_MS / 3600000}h` });
       }, HARD_CAP_MS);
 
       const resetIdle = () => {
         clearTimeout(idleTimer);
         idleTimer = setTimeout(() => {
-          child.kill();
+          if (child.pid) killProcessTree(child.pid);
           resolve({ success: false, output: '', backend: this.name, error: `Idle timeout after ${IDLE_TIMEOUT_MS / 60000} min` });
         }, IDLE_TIMEOUT_MS);
       };

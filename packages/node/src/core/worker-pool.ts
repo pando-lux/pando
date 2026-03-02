@@ -27,6 +27,7 @@ import { execSync, spawnSync } from 'node:child_process';
 import type { AgentDatabase, AgentIdentity, AgentType, AgentScope } from '../platform/agent-database.js';
 import type { AIBackendRegistry } from './ai-backend-registry.js';
 import type { AIResult } from './ai-backend.js';
+import { killProcessTree } from './ai-backend-claude.js';
 import { MessageBus } from './message-bus.js';
 // generateWorkerToolsDocs is exported from worker-mcp.ts for external use
 // Boot prompt (buildBootPrompt) handles tool docs inline for new workers
@@ -250,7 +251,7 @@ export class WorkerPool {
       kill: () => {
         const agent = this.db.getAgent(workerId);
         if (agent?.pid) {
-          try { process.kill(agent.pid, 'SIGTERM'); } catch { /* already dead */ }
+          try { killProcessTree(agent.pid); } catch { /* already dead */ }
         }
       },
     });
@@ -932,7 +933,7 @@ export class WorkerPool {
       kill: () => {
         const agent = this.db.getAgent(workerId);
         if (agent?.pid) {
-          try { process.kill(agent.pid, 'SIGTERM'); } catch { /* already dead */ }
+          try { killProcessTree(agent.pid); } catch { /* already dead */ }
         }
       },
     });
