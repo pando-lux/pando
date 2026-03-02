@@ -669,17 +669,17 @@ export class UpgradeProtocol {
 
   private getRecentFilesTouched(): string[] {
     try {
-      // Show what will change when upgrading to origin/master (pending changes).
-      // Falls back to last commit diff if origin/master is unavailable.
+      // Try origin/master diff first (for remote upgrades)
       const output = this.git('diff --name-only HEAD origin/master');
+      const files = output.split('\n').filter(Boolean);
+      // If empty (proposer already pushed), fall back to last commit diff
+      if (files.length > 0) return files;
+    } catch { /* origin/master unavailable */ }
+    try {
+      const output = this.git('diff --name-only HEAD~1 HEAD');
       return output.split('\n').filter(Boolean);
     } catch {
-      try {
-        const output = this.git('diff --name-only HEAD~1 HEAD');
-        return output.split('\n').filter(Boolean);
-      } catch {
-        return [];
-      }
+      return [];
     }
   }
 
