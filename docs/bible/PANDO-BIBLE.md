@@ -57,14 +57,12 @@ A node can run fully offline — no internet, no peers, no network. It becomes a
     verifier.ts          Verify any Ed25519 signature against a public key (offline)
     jwt.ts               Ed25519-signed JWTs (for HTTP session auth)
     password.ts          scrypt password hashing + validation
-    middleware.ts        Express/Fastify middleware for Pando Login verification
-
-  accounts/
-    account-store.ts     Account CRUD, username claiming (SQLite)
-    user-accounts.ts     Guest creation, claiming, login, password change
 
   types.ts               All exported types
-  constants.ts           Default scopes, role definitions, version
+  constants.ts           Crypto params, agent statuses, defaults
+
+No storage, no SQLite, no MongoDB. Pure crypto primitives.
+Account storage (username, encrypted keys) lives in MongoDB via @pando/node.
 ```
 
 ### Key Types
@@ -87,7 +85,7 @@ interface AgentCertificate {
   parentId: string            // Human's peerId (the owner)
   permissions: AgentPermissions
   issuedAt: string            // ISO 8601
-  expiresAt?: string          // Optional expiry
+  expiresAt: string           // REQUIRED — 90-day default, no permanent certificates
   parentSignature: string     // Human's Ed25519 signature over all above fields
 }
 
@@ -176,7 +174,8 @@ Step 3 adds network-backed reputation but is optional.
 ```
 @pando/identity runtime deps: @libp2p/crypto, @libp2p/peer-id, uint8arrays
 Uses Node.js built-in crypto module for AES/scrypt/SHA-256.
-Optional peer dependency: @pando/network (for network-backed verification)
+No storage dependencies (no SQLite, no MongoDB). Pure crypto.
+Account storage (encrypted keys, usernames) lives in MongoDB via @pando/node.
 ```
 
 ---
@@ -452,7 +451,7 @@ External deps: AI provider SDKs, better-sqlite3, zod
 
 ```
 @pando/ledger/
-  accounts.ts          Create, claim (username/password), balance queries
+  accounts.ts          Create account, balance queries (NO auth — auth is in MongoDB via @pando/node)
   transactions.ts      TRANSFER (0.1% relay fee), EMISSION (from NETWORK account)
   emissions.ts         10B hard cap, 500 Lux/day/node, early adopter multipliers
   witnesses.ts         2-witness quorum, 5-min expiry, 10/hour rate limit
@@ -623,7 +622,7 @@ External deps: AI provider SDKs, better-sqlite3, zod
                                All other failures -> immediate refund + error to caller
 
   ============================================================
-  IDENTITY LAYER — Pando Login + node identity management
+  IDENTITY LAYER — Pando Login + identity storage
   ============================================================
 
   identity/
@@ -635,13 +634,16 @@ External deps: AI provider SDKs, better-sqlite3, zod
 
     node-identity.ts         Node Ed25519 keypair management
                              Load from ~/.pando/identity
-                             Password-protected private key
+                             Uses @pando/identity/keypair for generation
                              Auto-generate on first run
 
-    account-manager.ts       Human account CRUD
-                             Username/password registration
-                             Account claiming (first-come-first-served)
-                             Multi-device sync via encrypted key backup
+    account-manager.ts       Human/agent account CRUD (MongoDB)
+                             Stores: encrypted private key, username, password hash, publicKey
+                             Username claiming (first-come-first-served)
+                             Login: fetch encrypted blob from MongoDB, verify password,
+                               decrypt key in memory, issue JWT, discard key
+                             Uses @pando/identity primitives (encrypt, hashPassword, issueJwt)
+                             User can log in from ANY node — identity in MongoDB, not local
 
   ============================================================
   INFRASTRUCTURE — Deploy, storage, hosting, security
@@ -856,7 +858,7 @@ External deps: AI provider SDKs, better-sqlite3, zod
     core-api.ts              Tasks, workers, storage, deploy, upgrade, credentials
     platform-api.ts          Chat, projects, agents, governance, content
     agent-services-api.ts    Capability CRUD, discovery, cross-app routing
-    identity-api.ts          Pando Login verification, account management
+    identity-api.ts          Pando Login verification, account management (MongoDB-backed)
     local-api.ts             Local file indexing, user memory
     middleware/
       auth.ts                Bearer token auth on writes
@@ -1594,7 +1596,7 @@ KEY ROTATION:
      -> Delete ~/.pando/identity/keypair
      -> Node generates fresh keypair on next start
   2. New nodeId is a completely new identity (no link to old one)
-  3. Operator claims username on new identity (if account was claimed)
+  3. Operator re-links username to new identity in MongoDB (if account was claimed)
   4. Contributed resources must be re-contributed under new identity
   5. Reputation starts fresh (no reputation transfer — prevents abuse)
   6. Old nodeId remains permanently quarantined

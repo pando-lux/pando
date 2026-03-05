@@ -12,20 +12,21 @@ Published independently to npm as `@pando/identity`.
 
 ---
 
-# WHAT EXISTS TODAY (inventory from current codebase)
+# LEGACY CODE (to be replaced)
 
-Everything below already works but is scattered across 3 packages:
+The following legacy code is scattered across packages and will be replaced
+by @pando/identity primitives during integration (Phase 6):
 
 ```
-packages/shared/src/crypto.ts         522 lines — Ed25519 keypair, signing, AES-256-GCM, PBKDF2
-packages/shared/src/types.ts          ~100 lines — NodeIdentity, Account, Transaction types
-packages/node/src/platform/user-accounts.ts  611 lines — Guest, claim, login, password, key encryption
-packages/node/src/api/middleware/auth.ts     138 lines — JWT issuance + Ed25519 verification
-packages/node/src/core/credential-vault.ts    42 lines — AES-256-GCM credential encryption
-packages/ledger/src/accounts.ts              222 lines — Account CRUD, auth fields, P2P claim sync
+packages/shared/src/crypto.ts         522 lines — Will re-export from @pando/identity
+packages/shared/src/types.ts          ~100 lines — Will re-export identity types
+packages/node/src/platform/user-accounts.ts  611 lines — Will use @pando/identity primitives
+                                               Account storage stays in MongoDB (via @pando/node)
+                                               Key encryption uses @pando/identity/encryption
+packages/node/src/api/middleware/auth.ts     138 lines — Will use @pando/identity/jwt
+packages/ledger/src/accounts.ts              222 lines — Keeps balance/transaction logic only
+                                               Auth fields (username, password_hash) move to MongoDB
 ```
-
-Total: ~1,635 lines of existing code to reorganize.
 
 ---
 
@@ -96,19 +97,6 @@ packages/identity/
                              scrypt (N=16384, r=8, p=1, keylen=64)
                              Functions: hashPassword(), verifyPassword(), validatePassword()
 
-      middleware.ts           Express/Fastify middleware for Pando Login verification
-                             Functions: pandoAuth(options), pandoAuthOptional(options)
-
-    accounts/
-      account-store.ts       Account CRUD (SQLite, auth-only — no balances)
-                             Username claiming (first-come-first-served, case-insensitive)
-                             Auth fields: username, display_name, password_hash, is_claimed
-
-      user-accounts.ts       User-facing account management
-                             Guest creation, claiming, login, password change
-                             Key backup (encrypted export/import)
-                             Local SQLite storage (auth-local.db — never synced)
-
     types.ts                 All exported types:
                              KeyPair, NodeIdentity (= KeyPair for P2P)
                              AgentCertificate, AgentPermissions, AgentProfile
@@ -133,9 +121,6 @@ packages/identity/
     node-identity.test.ts    Node keypair create, load, persist flag (4 tests)
     jwt.test.ts              Issue/verify for human+agent, expiry, tampering (7 tests)
     password.test.ts         Hash + verify round-trip, validation rules (5 tests)
-    middleware.test.ts        Fastify integration test (Phase 7)
-    account-store.test.ts    CRUD, claiming, username conflicts (Phase 6)
-    user-accounts.test.ts    Guest, claim, login, password change, key backup (Phase 6)
 
   package.json
   tsconfig.json
@@ -265,26 +250,13 @@ interface JwtPayload {
   typ: "human" | "agent"
 }
 
-// Ledger account (stays in @pando/ledger, not in identity)
-interface Account {
-  peerId: string              // For agents: agent's own peerId = wallet ID
-  publicKey: string
-  balance: number
-  createdAt: number
-  updatedAt: number
-}
-
-// Auth result from login/claim
-interface AuthResult {
-  success: boolean
-  peerId?: string
-  publicKey?: string
-  username?: string
-  isClaimed?: boolean
-  isNewAccount?: boolean
-  error?: string
-}
 ```
+
+**NOT in this package** (stays in other packages):
+- `Account` (peerId, balance) → `@pando/ledger`
+- `AuthResult` (login response) → `@pando/node` (uses MongoDB for account storage)
+- Account CRUD, username claiming → `@pando/node` (MongoDB, not SQLite)
+- Private key encrypted backup → `@pando/node` (stored in MongoDB, encrypted with user's password)
 
 ---
 
@@ -305,18 +277,15 @@ import { createSignedAction, verifySignedAction, verifySignedActionFull, stableS
 // === Auth ===
 import { verifySignature, verifyPayloadSignature } from "@pando/identity/verifier"
 import { issueJwt, verifyJwt } from "@pando/identity/jwt"
-import { pandoAuth } from "@pando/identity/middleware"
 import { hashPassword, verifyPassword } from "@pando/identity/password"
 
-// === Accounts ===
-import { AccountStore } from "@pando/identity/account-store"
-import { UserAccountStore } from "@pando/identity/user-accounts"
-
 // === Types (everything) ===
-import type { NodeIdentity, AgentProfile, SignedAction, ... } from "@pando/identity"
+import type { KeyPair, NodeIdentity, AgentProfile, AgentCertificate,
+  AgentPermissions, SignedAction, JwtPayload, EngineAgentConfig } from "@pando/identity"
 
 // === Barrel (convenience) ===
-import { generate, sign, verify, createSignedAction, pandoAuth } from "@pando/identity"
+import { generate, sign, verify, createAgent, createSignedAction,
+  verifyCertificate, verifySignedActionFull, stableStringify } from "@pando/identity"
 ```
 
 ---
@@ -328,8 +297,7 @@ import { generate, sign, verify, createSignedAction, pandoAuth } from "@pando/id
   "dependencies": {
     "@libp2p/crypto": "^5.x",
     "@libp2p/peer-id": "^5.x",
-    "uint8arrays": "^5.x",
-    "better-sqlite3": "^11.x"
+    "uint8arrays": "^5.x"
   },
   "devDependencies": {
     "vitest": "^3.x",
@@ -338,8 +306,9 @@ import { generate, sign, verify, createSignedAction, pandoAuth } from "@pando/id
 }
 ```
 
-Four runtime dependencies. All well-maintained, widely used.
+Three runtime dependencies. Zero infrastructure deps (no SQLite, no MongoDB).
 Node.js `crypto` module is builtin (not a dependency).
+This package is PURE CRYPTO — storage is the caller's responsibility.
 
 ---
 
@@ -347,20 +316,25 @@ Node.js `crypto` module is builtin (not a dependency).
 
 ```
 NOT included (stays in other packages):
-  - CredentialStore (MongoDB encryption) -> stays in @pando/node
-    Reason: requires MongoDB dependency. Identity has zero infrastructure deps.
-  - credential-vault.ts (AES-256-GCM for credentials) -> stays in @pando/node
-    Reason: coupled to CredentialStore, not general identity.
-  - Transaction signing/verification -> function signatures exported from identity,
-    but TransactionStore stays in @pando/ledger.
-  - Governance proposal signing -> function signatures exported from identity,
-    but GovernanceSync stays in @pando/governance.
-  - P2P message signing -> function signatures exported from identity,
-    but PandoNetwork stays in @pando/network.
+  - Account storage (username, password hash, encrypted keys) -> @pando/node (MongoDB)
+    Reason: identity is pure crypto, no storage backend. Nodes store encrypted
+    identity blobs in MongoDB. Users log in from any node.
+  - Account balances / transactions -> @pando/ledger (SQLite, P2P synced)
+  - CredentialStore (MongoDB encryption) -> @pando/node
+  - Auth middleware (Fastify/Express) -> @pando/node
+    Reason: framework dependency. Identity provides JWT primitives,
+    node wraps them in middleware.
+  - Transaction signing/verification -> primitives exported from identity,
+    TransactionStore stays in @pando/ledger.
+  - Governance proposal signing -> primitives exported from identity,
+    GovernanceSync stays in @pando/governance.
+  - P2P message signing -> primitives exported from identity,
+    PandoNetwork stays in @pando/network.
 ```
 
-Identity provides the PRIMITIVES (sign, verify, encrypt, decrypt).
+Identity provides the PRIMITIVES (sign, verify, encrypt, decrypt, hash, JWT, certificates).
 Other packages USE those primitives for their domain-specific operations.
+**No databases. No storage. No infrastructure. Pure crypto.**
 
 ---
 
@@ -473,50 +447,23 @@ COMPLETED:
   Full monorepo build + 83 tests pass (10 test files).
 ```
 
-## Phase 6: Account store + user accounts (days 8-10)
-
-```
-Tasks:
-  - Create identity/src/accounts/account-store.ts (fresh, not migration)
-    Auth-only — NO balance operations (balances stay in @pando/ledger)
-    Account existence (peerId, publicKey, createdAt)
-    Username claiming (first-come-first-served, case-insensitive)
-    Auth fields: username, display_name, password_hash, is_claimed
-    Agent account registration (agent's own peerId = its account ID)
-    SQLite (better-sqlite3), own db file (auth.db — not ledger db)
-  - Create identity/src/accounts/user-accounts.ts (fresh)
-    Guest creation (auto-generate keypair)
-    Account claiming (set username + password)
-    Login (password verification)
-    Password change
-    Key backup (encrypted export/import)
-  - Write tests
-  - Add better-sqlite3 to dependencies
-
-Tests:
-  - account-store.test.ts: create account, exists check
-  - account-store.test.ts: claim username, verify case-insensitive
-  - account-store.test.ts: username conflict -> first-come-first-served
-  - account-store.test.ts: register agent account (agent peerId)
-  - user-accounts.test.ts: create guest -> login as guest
-  - user-accounts.test.ts: claim guest account with password
-  - user-accounts.test.ts: login with username + password
-  - user-accounts.test.ts: change password -> old password fails, new works
-  - user-accounts.test.ts: key backup export -> import on new device
-
-Acceptance: Full user lifecycle works: guest -> claim -> login -> password change.
-Agent accounts are first-class (same as human, just with certificate).
-```
-
-## Phase 7: Integration + wire into monorepo (days 11-13)
+## Phase 6: Integration + wire into monorepo
 
 ```
 Tasks:
   - Update shared/crypto.ts to re-export from @pando/identity
   - Update shared/types.ts to re-export identity types from @pando/identity
   - Update ALL imports across packages/node/ to use @pando/identity
-    (governance.ts, network.ts, sync.ts, auth middleware, user-accounts refs)
+    (governance.ts, network.ts, sync.ts, auth middleware)
   - Update @pando/ledger imports
+  - Rewrite user-accounts.ts in @pando/node to use @pando/identity primitives:
+    hashPassword/verifyPassword from @pando/identity/password
+    encrypt/decrypt from @pando/identity/encryption
+    generate/sign/verify from @pando/identity/keypair + signing
+    issueJwt/verifyJwt from @pando/identity/jwt
+    Account storage stays in MongoDB (via @pando/node, NOT in identity)
+  - Remove duplicated crypto from shared/crypto.ts (keep only re-exports)
+  - Remove duplicated types from shared/types.ts (keep only re-exports)
   - Run FULL monorepo build: npm run build
   - Run ALL existing tests
   - Fix any breakage
@@ -532,26 +479,21 @@ Acceptance: Zero regressions. The monorepo builds and all tests pass.
 Old imports via @pando/shared still work (re-exports).
 ```
 
-## Phase 8: Cleanup + publish (day 14)
+## Phase 7: Cleanup + publish
 
 ```
 Tasks:
-  - Remove duplicated code from shared/crypto.ts (keep only re-exports)
-  - Remove duplicated types from shared/types.ts (keep only re-exports)
-  - Remove user-accounts.ts from packages/node/ (now in identity)
   - Update CLAUDE.md with new package structure
-  - Update docs/bible/PANDO-BIBLE.md if any architecture changed
-  - Write README.md for packages/identity/
   - Verify standalone: cd packages/identity && npm test (no monorepo deps needed)
   - Tag version: @pando/identity@0.1.0
 
 Tests:
   - packages/identity standalone build + test passes
   - Full monorepo build + test passes
-  - Manual smoke test: generate identity, sign, verify, create account, login
 
-Acceptance: @pando/identity is a standalone package with its own tests.
+Acceptance: @pando/identity is a standalone pure crypto package.
 Ready for npm publish. Zero code duplication in monorepo.
+Zero storage dependencies. Zero infrastructure deps.
 ```
 
 ---
@@ -559,12 +501,56 @@ Ready for npm publish. Zero code duplication in monorepo.
 # DONE CRITERIA
 
 @pando/identity is DONE when:
-1. All 13 test files pass (core crypto, identity, auth, accounts)
+1. All 10 test files pass (83 tests — core crypto, identity, auth)
 2. Package compiles standalone (no monorepo deps at build time)
 3. All existing monorepo tests still pass (zero regressions)
 4. shared/crypto.ts is just re-exports (no own implementation)
 5. Published to npm as @pando/identity@0.1.0
-6. docs/bible/PANDO-BIBLE.md updated if anything changed
+6. Zero storage dependencies (no SQLite, no MongoDB)
+
+---
+
+# IDENTITY STORAGE MODEL
+
+```
+WHERE IDENTITY DATA LIVES:
+
+  MongoDB (via @pando/node, trusted nodes only):
+    - Encrypted private key blob (PBKDF2 + AES-256-GCM, useless without password)
+    - Username registry (unique, case-insensitive)
+    - Public key, peerId
+    - Agent certificates
+    - Password hash (scrypt)
+
+  @pando/identity (pure crypto, NO storage):
+    - Generate keypair
+    - Encrypt/decrypt private key with password
+    - Sign/verify
+    - Certificates, JWTs, password hashing
+
+  @pando/node (infrastructure):
+    - Reads/writes identity data to MongoDB
+    - P2P proxy so untrusted nodes can auth through trusted ones
+    - Issues JWTs after successful password verification
+    - Auth middleware (Fastify)
+
+  @pando/ledger (economy):
+    - Account balances + transactions only
+    - P2P synced via GossipSub
+
+  Client (gateway/browser):
+    - Sends username + password to any node
+    - Receives JWT for session
+    - Key decrypted in memory on node, used for session, then discarded
+
+WHY MONGODB (not local SQLite):
+  - Nodes are stateless compute. Node goes down = zero data loss.
+  - User logs in from ANY node. Identity travels with them.
+  - Triple protection: node security (tripwire) + MongoDB access control
+    + encrypted blobs (PBKDF2/AES-256-GCM = infeasible brute force)
+  - This is how password managers work (1Password, LastPass):
+    encrypted vault on server, password unlocks it client-side.
+```
 
 ---
 
@@ -574,14 +560,14 @@ Ready for npm publish. Zero code duplication in monorepo.
 RISK: @libp2p/crypto API changes between versions
   MITIGATION: Pin exact version. Wrap in our own functions (never expose libp2p types).
 
-RISK: Account store split (identity DB vs ledger DB) causes sync issues
-  MITIGATION: Clear ownership: identity owns accounts + auth. Ledger owns balances + transactions.
-  Bridge: ledger reads account existence from identity. Identity doesn't know about transactions.
-
 RISK: Re-export from shared/ breaks something in the monorepo
-  MITIGATION: Phase 7 is dedicated to this. Keep re-exports until all consumers updated.
+  MITIGATION: Phase 6 is dedicated to this. Keep re-exports until all consumers updated.
 
-RISK: user-accounts.ts has deep coupling to PandoLedger
-  MITIGATION: Phase 6 must cleanly separate. Account balance lives in ledger.
-  UserAccountStore only manages auth (password, keys, sessions). No balance operations.
+RISK: MongoDB compromise exposes encrypted key blobs
+  MITIGATION: PBKDF2 (100K iterations) + AES-256-GCM. Each password guess = ~100ms.
+  8-char password = billions of years to brute force. Tripwire wipes on compromise detection.
+
+RISK: user-accounts.ts in @pando/node has deep coupling to PandoLedger
+  MITIGATION: Phase 6 refactors to use @pando/identity primitives. Account CRUD stays in
+  @pando/node (MongoDB). Only balance operations stay in @pando/ledger.
 ```
