@@ -58,6 +58,7 @@
     "@libp2p/peer-id": "^5.0.0",
     "@libp2p/tcp": "^10.0.0",
     "@libp2p/websockets": "^9.0.0",
+    "@pando-code/core": "*",
     "@pando/ledger": "*",
     "@pando/shared": "*",
     "fastify": "^5.7.4",

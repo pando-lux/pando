@@ -80,6 +80,8 @@ import type { StorageBackend } from './core/storage-backend.js';
 import { AIBackendRegistry } from './core/ai-backend-registry.js';
 import { ClaudeBackend } from './core/ai-backend-claude.js';
 import { OllamaBackend } from './core/ai-backend-ollama.js';
+import { PandoCodeBackend } from './core/ai-backend-pandocode.js';
+import { configurePandoEngine } from './core/engine-bridge.js';
 import { OrchestratorProcessManager } from './platform/orchestrator-manager.js';
 import { LocalEnvironment } from './kernel/local-environment.js';
 import { toString as uint8ArrayToString } from 'uint8arrays';
@@ -3338,10 +3340,34 @@ location /apps/${projectId}/ {
     const dataDir = this.config.dataDir;
 
     // v2.1: Initialize AI Backend Registry — detect available backends
+    // PandoCode engine is preferred (in-process, full tool system).
+    // ClaudeBackend (claude -p subprocess) kept as fallback.
     this.aiBackendRegistry = new AIBackendRegistry();
+    const pandoCodeBackend = new PandoCodeBackend();
+    this.aiBackendRegistry.register(pandoCodeBackend);
     this.aiBackendRegistry.register(new ClaudeBackend());
     this.aiBackendRegistry.register(new OllamaBackend());
-    this.aiBackendRegistry.detectAll().catch(err =>
+    this.aiBackendRegistry.detectAll().then(async () => {
+      // Configure PandoCode with Pando-specific integrations (Lux budget, custom tools)
+      if (pandoCodeBackend.available) {
+        try {
+          let token: string | undefined;
+          try {
+            const tokenPath = join(dataDir, 'api-token');
+            if (existsSync(tokenPath)) token = readFileSync(tokenPath, 'utf-8').trim();
+          } catch { /* no token */ }
+          await configurePandoEngine(pandoCodeBackend, {
+            apiPort: this.config.apiPort,
+            apiToken: token,
+            nodeId: this.node?.peerId?.toString(),
+            useLuxBudget: true,
+          });
+          console.log('[ai-backend] PandoCode engine configured with Lux budget and Pando tools');
+        } catch (err: any) {
+          console.warn('[ai-backend] PandoCode configuration failed:', err.message);
+        }
+      }
+    }).catch(err =>
       console.warn('[ai-backend] Detection error:', err)
     );
 
