@@ -554,6 +554,47 @@ WHY MONGODB (not local SQLite):
 
 ---
 
+# INTEGRATION WITH PANDO-CODE
+
+```
+pando-code lives at: pando/code/ (separate repo, 60K+ lines, standalone product)
+pando-code has ZERO @pando/* imports — integration is via structural typing.
+
+HOW IT WORKS:
+  @pando/identity defines AgentProfile (full identity with certificate)
+  pando-code defines EngineAgentConfig (minimal interface for engine)
+  AgentProfile is a SUPERSET of EngineAgentConfig
+  TypeScript structural typing: pass AgentProfile where EngineAgentConfig expected
+
+TYPE CONTRACT (must stay aligned):
+  EngineAgentConfig {
+    id: string          ← AgentProfile.id (agent's peerId)
+    role: string        ← AgentProfile.role
+    tools: string[]     ← AgentProfile.tools
+    scope?: AgentScope  ← AgentProfile.scope (readPaths, writePaths, excludePaths)
+    model?: string      ← AgentProfile.model
+    maxSteps?: number   ← AgentProfile.maxSteps
+    budgetLimit?: number ← AgentProfile.budgetLimit
+  }
+
+FIELDS PANDO-CODE IGNORES (identity-specific):
+  certificate, parentId, publicKey, canEarn, canSpend, canAuthenticate,
+  username, createdAt, metadata, capabilities
+  These are passed through but pando-code doesn't read them.
+  @pando/node uses them for certificate verification + ledger integration.
+
+DUAL BUDGET:
+  pando-code tracks costs in USD by default (standalone)
+  @pando/node registers a Lux BudgetProvider at runtime
+  interface BudgetProvider { calculateCost(usage): number; currency: 'usd' | 'lux' }
+
+systemPrompt IS NOT IN AgentProfile:
+  pando-code constructs systemPrompt dynamically from role + context + frames.
+  This is correct — prompts are engine-specific, not identity-specific.
+```
+
+---
+
 # RISKS
 
 ```

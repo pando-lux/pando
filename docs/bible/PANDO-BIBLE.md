@@ -188,100 +188,73 @@ Account storage (encrypted keys, usernames) lives in MongoDB via @pando/node.
 
 **Standalone value:** Any developer can use this as their AI coding assistant. No Pando network, no Pando Identity required.
 
-### Architecture
+### Repository
+
+**Separate repo:** `pando/code/` (NOT inside the node monorepo).
+60K+ lines, 1333 TypeScript files, production-ready standalone product.
+
+### Architecture (ACTUAL — audited 2026-03-05)
 
 ```
-@pando/code/
+pando/code/
   packages/
     core/                        The engine (this is the product)
       engine/
         engine.ts                PandoCode class: create(), send(), sendAsAgent(), shutdown()
-        frame-builder.ts         8-layer prompt assembly
-        compaction.ts            Conversation history pruning
-        providers/
-          anthropic.ts           Claude (Opus/Sonnet/Haiku)
-          openai.ts              GPT (5.2/o3/o1/4o)
-          google.ts              Gemini (2.5/1.5)
-          ollama.ts              Local models (OpenAI-compatible)
-          registry.ts            Provider selection, fallback, hot-swap
-
+        learning.ts              Post-task learning extraction
+        retry.ts                 Retry logic for AI calls
       agent/
-        runtime.ts               Agent lifecycle: spawn, run, pause, resume, terminate
-        profiles.ts              Role definitions loaded from config (NOT hardcoded)
+        frame-builder.ts         8-layer prompt assembly (L0-L6 — verified working)
+        goal-stack.ts            Goal management (main goal + subtasks)
         prompts.ts               System prompt construction per role
         sub-agent.ts             Sub-agent execution loop
-
-      messaging/
-        bus.ts                   Intra-engine message passing (Level 1)
-                                 Direct, broadcast, subscribe (push), request-reply
-                                 Configurable: TTL, persistence, delete-on-read, priority
-        policy.ts                Communication rules: who can message whom
-                                 Loaded from config, enforced at send time
-
-      board/
-        board.ts                 Persistent task board (SQLite)
-                                 Tasks: create, assign, complete, dependencies, progress
-                                 Discoveries: add, deduplicate, confidence scoring
-                                 Snapshot: serialize for prompt injection
+        working-set.ts           Files read/modified tracking
+        frame-budget.ts          Token budget allocation across frames
+      provider/
+        provider.ts              Multi-provider: Anthropic, OpenAI, Google, Ollama
+                                 Thinking/reasoning model support (Opus, o3, Gemini 2.5)
 
       memory/
-        store.ts                 4-tier memory (hot/warm/cold/frozen)
-                                 Auto-reflection after tasks
-                                 Ranked recall by relevance + scope matching
-                                 Cross-session persistence, stale pruning
-        types.ts                 Memory, MemoryRelation, RankedMemory
-
-      knowledge/
-        graph.ts                 AST-based code intelligence
-                                 Symbol extraction, cross-reference tracking
-                                 Import/dependency analysis
-                                 Cross-ref injection on file reads
-        loader.ts                Load external knowledge sources (.know files, custom)
-
+        memory-store.ts          Append-only lessons + preferences
+        reflect.ts               Post-task reflection (auto-extracts lessons)
+        compaction.ts            Conversation history pruning
+        query.ts                 Ranked recall by relevance + scope matching
+        tables.ts                SQLite memory tables
+      graph/
+        graph.ts                 AST-based code intelligence (1000+ symbols, 13K+ xrefs)
+        scanner-ast.ts           TypeScript/JavaScript AST scanner
+        scanner.ts               Regex scanner for other languages
+      board/
+        board.ts                 Persistent task board (SQLite)
+                                 Tasks, discoveries, confidence scoring, board snapshot
       tool/
-        registry.ts              ToolRegistry: register, execute, scope enforcement
-                                 Checks: tool in agent's allowed list?
-                                 Checks: file path within agent's scope?
-                                 Checks: service in agent's allowed services?
-        built-in/                15+ standard tools
-          read-file.ts, write-file.ts, edit-file.ts
-          glob.ts, grep.ts, list-files.ts
-          bash.ts, run-tests.ts
-          task.ts, manage-tasks.ts, batch.ts
-          spawn-agent.ts, check-agents.ts, send-message.ts, ask-user.ts
-          save-memory.ts, query-memory.ts, query-knowledge.ts
-          update-goal.ts
-
-      services/
-        registry.ts              External service definitions
-                                 Per-agent service access control
-                                 Credential injection (from config or env)
-        mcp-client.ts            MCP server connection, tool discovery
-                                 Playwright, user-defined MCP servers
-
-      session/
-        manager.ts               Session create, resume, rotate, archive
-                                 Conversation history, compaction trigger
-        budget.ts                Budget tracking per session/task/turn (USD)
-                                 Soft limits (warn), hard limits (stop)
-
-      db/
-        schema.ts                All SQLite tables
-        index.ts                 DB initialization, WAL mode, migrations
-
+        registry.ts              ToolRegistry: register, execute, guardrail enforcement
+        23+ built-in tools:      read_file, write_file, edit_file, multiedit, bash,
+                                 glob, grep, list_files, genome, test, run_tests, undo,
+                                 task, manage_tasks, batch, spawn_agent, check_agents,
+                                 send_message, ask_user, save_memory, query_memory,
+                                 query_knowledge, update_goal
+      guardrails/
+        hard.ts                  Hard guardrails (ENFORCED at tool execution, not advisory)
+        permissions.ts           Role-based tool permissions
+        checkpoint.ts            State checkpointing for rollback
+        risk.ts                  Risk scoring for operations
+      mcp/
+        client.ts                MCP server connection (Playwright, user-defined servers)
+      events/
+        bus.ts                   Typed event bus (20+ StreamEvent types)
+      convention/
+        scanner.ts               Project convention detection
       config/
-        index.ts                 Config hierarchy: defaults -> global -> project -> env -> code
-        presets/
-          minimal.ts             Single agent, all tools (Claude Code mode)
-          coding.ts              Default team (builder/tester/reviewer/lead)
-
+        index.ts                 Config hierarchy: defaults -> global -> project -> env -> CLI
+      db/
+        schema.ts                All SQLite tables (sessions, tasks, agents, memories, budget)
       types.ts                   All exported types (engine owns its own types)
-      events.ts                  StreamEvent discriminated union (20+ event types)
 
-    server/                      HTTP/WebSocket/SSE server (Hono)
+    server/                      HTTP + WebSocket server
     web/                         React dashboard (Vite)
-    cli/                         Interactive terminal
-    universal-mcp/               MCP server exposing pando-code tools (17 tools)
+    cli/                         CLI interface
+    universal-mcp/               17-tool MCP server (memory, goals, board, agents)
 ```
 
 ### Key API
@@ -345,15 +318,17 @@ Scope is enforced at the tool execution layer. Not advisory. Not optional. Every
 ### Dependencies
 
 ```
-@pando/code has ZERO @pando/* dependencies.
-It exports its own types.
-It defines a MINIMAL INTERFACE for agent config (not a concrete type):
+@pando/code has ZERO @pando/* dependencies. Separate repo: pando/code/
+It exports its own types. 60K+ lines, fully standalone product.
+
+It defines a MINIMAL INTERFACE for agent config (structural typing):
 
   interface EngineAgentConfig {
     id: string
     role: string
     tools: string[]
-    scope?: { readPaths?: string[]; writePaths?: string[]; excludePaths?: string[] }
+    scope?: { readPaths?: string[]; writePaths?: string[]; excludePaths?: string[];
+              services?: string[]; network?: boolean }
     model?: string
     maxSteps?: number
     budgetLimit?: number
@@ -362,10 +337,15 @@ It defines a MINIMAL INTERFACE for agent config (not a concrete type):
 @pando/identity's AgentProfile is a SUPERSET of this interface (has all these
 fields plus name, capabilities, certificate, etc.). TypeScript structural typing
 means you can pass AgentProfile directly to PandoCode.create() — no mapping
-layer needed. The "engine-bridge" in @pando/node becomes a trivial pass-through,
-not a complex type mapper.
+layer needed. The "engine-bridge" in @pando/node becomes a trivial pass-through.
 
-External deps: AI provider SDKs, better-sqlite3, zod
+DUAL BUDGET SYSTEM:
+  Standalone mode: tracks cost in USD (from AI provider pricing)
+  Via @pando/node: tracks cost in Lux (node provides BudgetProvider)
+  Interface: BudgetProvider { calculateCost(usage): number; currency: 'usd' | 'lux' }
+  Default: USD. @pando/node registers Lux provider at runtime. No import needed.
+
+External deps: @ai-sdk/*, better-sqlite3, zod, drizzle-orm, fast-glob, MCP SDK
 ```
 
 ---
