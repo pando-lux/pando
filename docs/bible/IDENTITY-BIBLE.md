@@ -361,54 +361,38 @@ Other packages USE those primitives for their domain-specific operations.
 
 # ROADMAP
 
-## Phase 1: Scaffold package (day 1)
+## Phase 1: Scaffold package — DONE
 
 ```
-Tasks:
-  - Create packages/identity/ directory structure
-  - Create package.json (name: @pando/identity, version: 0.1.0)
-  - Create tsconfig.json (extends monorepo root config)
-  - Create vitest.config.ts
-  - Create src/index.ts (empty barrel)
-  - Add to monorepo build order: shared -> identity -> ledger -> node
-  - Verify: npm run build succeeds with empty package
-
-Test: `npm run build` passes. Package compiles to dist/.
+COMPLETED:
+  - packages/identity/ created with full directory structure
+  - package.json (name: @pando/identity, version: 0.1.0, zero @pando deps)
+  - tsconfig.json (extends monorepo root)
+  - Added to monorepo workspaces (build order: shared -> identity -> ledger -> node)
+  - npm run build passes (full monorepo)
 ```
 
-## Phase 2: Core crypto (days 2-3)
+## Phase 2: Core crypto — DONE
 
 ```
-Tasks:
-  - Move keypair functions from shared/crypto.ts -> identity/src/core/keypair.ts
-    generate(), load(), save(), loadOrCreate(), list()
-    encrypt/decrypt identity with password
-    Session management (save/load/clear)
-  - Move signing functions -> identity/src/core/signing.ts
-    sign(), verify() (generic Ed25519)
-    Canonical JSON payload construction
-  - Move encryption functions -> identity/src/core/encryption.ts
-    AES-256-GCM encrypt/decrypt
-    PBKDF2 key derivation
-  - Move hash functions -> identity/src/core/hash.ts
-    sha256(), hashTransaction()
-  - Write tests for ALL functions (keypair, signing, encryption, hash)
-  - Update shared/crypto.ts to re-export from @pando/identity (backward compat)
+COMPLETED:
+  - core/keypair.ts (210 lines): generate, load, save, loadOrCreate, encrypt, decrypt,
+    saveEncrypted, saveSession, loadSession, clearSession, list, loadFile, saveToDir,
+    isEncrypted, loadRaw, getPrivateKey
+  - core/signing.ts (67 lines): sign, verify, signPayload, verifyPayload
+    Extracted wrapPublicKey() helper for Ed25519 protobuf wrapping
+  - core/encryption.ts (103 lines): AES-256-GCM encrypt/decrypt, PBKDF2 deriveKey,
+    encryptWithPassword, decryptWithPassword, generateSalt, generateIv
+  - core/hash.ts (17 lines): sha256, hashTransaction
+  - types.ts (93 lines): all identity types including AgentProfile as first-class citizen
+  - constants.ts (12 lines): PBKDF2_ITERATIONS, AES params, DEFAULT_PANDO_DIR
+  - index.ts (57 lines): barrel export
 
-Tests:
-  - keypair.test.ts: generate -> save -> load round-trip
-  - keypair.test.ts: encrypt with password -> decrypt -> matches original
-  - keypair.test.ts: list multiple identities
-  - signing.test.ts: sign -> verify succeeds
-  - signing.test.ts: tampered payload -> verify fails
-  - signing.test.ts: wrong key -> verify fails
-  - encryption.test.ts: encrypt -> decrypt round-trip
-  - encryption.test.ts: wrong key -> decrypt fails
-  - encryption.test.ts: PBKDF2 derivation is deterministic (same password + salt = same key)
-  - hash.test.ts: SHA-256 deterministic (same input = same output)
-  - hash.test.ts: hashTransaction deterministic
+  NOT YET DONE from Phase 2:
+  - Tests (keypair, signing, encryption, hash)
+  - Re-export from shared/crypto.ts (backward compat — deferred to Phase 7)
 
-Acceptance: All tests pass. `npm run build` passes. shared/crypto.ts re-exports work.
+  Full monorepo build passes. Commit: e1c36155
 ```
 
 ## Phase 3: Identity types + agent profiles (day 4)
