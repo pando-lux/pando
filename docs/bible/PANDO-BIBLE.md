@@ -1796,8 +1796,8 @@ AGENT BUDGET ENFORCEMENT:
 - ✅ Agent status expanded (7 states: pending/active/idle/working/done/failed/terminated)
 - ✅ Identity fields in agent DB (parentId, publicKey, certificate — nullable)
 - ✅ Custom roles use explicit tools[], built-ins use role-matrix
-- ⏳ Add communication rules (who can message whom)
-- ⏳ Config presets ("minimal", "coding")
+- ✅ Communication policy (CommunicationRule, first-match-wins enforcement in send_message)
+- ✅ Config presets ("open", "minimal", "coding") via COMMUNICATION_PRESETS
 - ⏳ Integration tests for all agent features
 - **Data migration:** Existing pando-code SQLite databases (sessions, memory, board) remain in place — schema additions only, no breaking changes. New columns get defaults. Migration script `migrate-code-v2.ts` runs ALTER TABLE for new columns. Rollback: new columns are ignored by old code (additive only).
 
