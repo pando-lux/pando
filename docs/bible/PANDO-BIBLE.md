@@ -85,6 +85,9 @@ interface HumanAccount {
   createdAt: string
 }
 
+// Agents are FIRST-CLASS CITIZENS — same capabilities as humans.
+// Own username, own Lux wallet, can earn/spend/authenticate.
+// Trust chain: agent -> parentIdentity (human) -> node
 interface AgentProfile {
   id: string                  // ULID
   name: string                // Human-readable
@@ -95,7 +98,13 @@ interface AgentProfile {
   model?: string              // Preferred AI model
   budgetLimit?: number        // Max cost (currency-agnostic)
   status: AgentStatus         // pending | active | idle | done | failed | terminated
-  ownerNodeKey: string        // Node that owns this agent
+  ownerNodeKey: string        // Node that runs this agent
+  parentIdentity: string      // Human account peerId that owns this agent
+  username?: string           // Agent's own username (optional)
+  walletPeerId?: string       // Agent's own Lux wallet (separate from parent's)
+  canEarn: boolean            // Can earn Lux independently
+  canSpend: boolean           // Can spend Lux (within budgetLimit)
+  canAuthenticate: boolean    // Can use Pando Login as itself
   createdAt: string
   metadata?: Record<string, unknown>  // App-specific data
 }
