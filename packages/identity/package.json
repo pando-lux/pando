@@ -1,0 +1,25 @@
+{
+  "name": "@pando/identity",
+  "version": "0.1.0",
+  "description": "Identity and authentication for AI agents. The foundation of the Pando ecosystem.",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "clean": "rm -rf dist",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@libp2p/crypto": "^5.0.0",
+    "@libp2p/peer-id": "^5.0.0",
+    "uint8arrays": "^5.0.0"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.0",
+    "@types/node": "^20.0.0",
+    "vitest": "^3.0.0"
+  }
+}
