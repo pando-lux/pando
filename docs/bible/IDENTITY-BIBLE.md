@@ -37,6 +37,7 @@ packages/identity/
     core/
       keypair.ts             Ed25519 keypair generation, load, save, list
                              Uses @libp2p/crypto for Ed25519
+                             Same KeyPair type for nodes, humans, AND agents
                              Supports: unencrypted, password-encrypted (PBKDF2 + AES-256-GCM)
                              Storage: ~/.pando/identity.json, ~/.pando/identities/
                              Functions: generate(), load(), save(), loadOrCreate(), list()
@@ -55,97 +56,90 @@ packages/identity/
                              Functions: sha256(data), hashTransaction(fields)
 
     identity/
-      node-identity.ts       NodeIdentity: the cryptographic root of a node
-                             Load/create Ed25519 keypair
-                             Session management (persistent login)
-                             Password protection (encrypt/decrypt private key)
-                             Functions: createNodeIdentity(), loadNodeIdentity(),
-                                        saveSession(), loadSession(), clearSession()
+      node-identity.ts       Node: Ed25519 keypair for P2P transport
+                             Nodes are COMPUTE ONLY — they don't own agents or humans
+                             Functions: createNodeIdentity(), loadNodeIdentity()
 
-      agent-profile.ts       AgentProfile type + validation
-                             Agents are FIRST-CLASS CITIZENS (same as humans):
-                               Own username, own Lux wallet, can earn, can spend, can authenticate
-                               Can use browsers, call APIs, hold balances
-                               Trust chain: agent -> parentIdentity (human) -> node
-                             Role, capabilities, scope, tools, budget limits
-                             Validation: required fields, scope pattern validation, parentIdentity exists
-                             Functions: createProfile(config), validateProfile(profile)
+      agent-profile.ts       Agent: own Ed25519 keypair, certified by human
+                             createAgent(config, human) generates keypair + certificate
+                             Human signs certificate (proves delegation of authority)
+                             verifyCertificate(cert, humanPubKey, opts?) checks signature + expiry
+                             renewCertificate(oldCert, human, newExpiry?) re-signs with same agent key
+                             validateProfile(profile) checks required fields
+                             Agent's peerId IS its wallet ID (no separate walletPeerId)
+                             Trust chain: agent key → certificate → human key
 
-      signed-action.ts       SignedAction: proof that a node authorized an agent action
-                             Create: { agentId, action, payload, timestamp } + Ed25519 signature
-                             Verify: check signature against node public key (offline)
-                             Functions: createSignedAction(action, privateKey),
-                                        verifySignedAction(action, publicKey)
+      signed-action.ts       SignedAction: agent signs with its OWN Ed25519 key
+                             Includes certificate for full offline trust chain verification
+                             createSignedAction(input, agentKey, agentPubKey, certificate)
+                             verifySignedAction(action) checks agent's signature
+                             verifySignedActionFull(action, humanPubKey) checks full chain:
+                               1. Agent public key matches certificate
+                               2. Agent ID matches certificate
+                               3. Agent action signature valid
+                               4. Certificate not expired (current time, not action time)
+                               5. Certificate signed by human
+                             stableStringify(value) — deterministic JSON (recursive sorted keys)
 
     auth/
       verifier.ts            Offline signature verification (no network needed)
-                             Verify any signed payload against a public key
-                             Functions: verifySignature(payload, signature, publicKey)
-                             This is the core of Pando Login (Step 2 — offline)
+                             Core of Pando Login (Step 2 — offline)
+                             Functions: verifySignature(data, sig, pubkey),
+                                        verifyPayloadSignature(payload, sig, pubkey)
 
       jwt.ts                 JWT generation and validation
-                             Ed25519-signed JWTs (not HMAC)
-                             24-hour expiry, auto-refresh support
-                             Functions: issueJwt(peerId, privateKey), verifyJwt(token, publicKey)
-
-      middleware.ts           Express/Fastify middleware for Pando Login verification
-                             Extracts JWT from Authorization header
-                             Verifies Ed25519 signature
-                             Attaches verified peerId to request
-                             Functions: pandoAuth(options), pandoAuthOptional(options)
+                             Ed25519-signed JWTs (EdDSA, not HMAC)
+                             Supports human and agent token types
+                             Functions: issueJwt(), verifyJwt(), decodeJwtPayload()
 
       password.ts            Password hashing and validation
                              scrypt (N=16384, r=8, p=1, keylen=64)
-                             Functions: hashPassword(password), verifyPassword(password, hash)
-                             Validation rules: min 8 chars (configurable)
+                             Functions: hashPassword(), verifyPassword(), validatePassword()
+
+      middleware.ts           Express/Fastify middleware for Pando Login verification
+                             Functions: pandoAuth(options), pandoAuthOptional(options)
 
     accounts/
-      account-store.ts       Account CRUD (SQLite)
-                             Create, get, exists, balance operations
+      account-store.ts       Account CRUD (SQLite, auth-only — no balances)
                              Username claiming (first-come-first-served, case-insensitive)
                              Auth fields: username, display_name, password_hash, is_claimed
-                             P2P claim sync support: applyRemoteClaim()
 
       user-accounts.ts       User-facing account management
-                             Guest creation (node-level encryption)
-                             Account claiming (re-encrypt with user password)
-                             Login (password verification + key decryption)
-                             Password change (re-encrypt)
+                             Guest creation, claiming, login, password change
                              Key backup (encrypted export/import)
                              Local SQLite storage (auth-local.db — never synced)
 
     types.ts                 All exported types:
-                             NodeIdentity, SerializedIdentity, EncryptedSerializedIdentity
-                             AgentProfile, AgentScope, AgentStatus
-                             SignedAction
-                             Account, UserAccountPublic, AuthResult
-                             EngineAgentConfig (minimal interface for @pando/code)
+                             KeyPair, NodeIdentity (= KeyPair for P2P)
+                             AgentCertificate, AgentPermissions, AgentProfile
+                             SignedAction (agent-signed, includes certificate)
+                             JwtPayload (human | agent)
+                             EngineAgentConfig (structural typing for @pando/code)
 
-    constants.ts             Default values:
-                             PBKDF2_ITERATIONS = 100_000
-                             SCRYPT_PARAMS = { N: 16384, r: 8, p: 1 }
-                             JWT_EXPIRY = 86400 (24 hours)
-                             DEFAULT_PANDO_DIR = ~/.pando
-                             AGENT_STATUSES = ["pending", "active", "idle", "done", "failed", "terminated"]
+    constants.ts             PBKDF2, SCRYPT, JWT, AES params, AGENT_STATUSES
 
     index.ts                 Barrel export: everything public
 
   tests/
-    keypair.test.ts          Generate, save, load, list, encrypt/decrypt keypair
-    signing.test.ts          Sign/verify messages, transactions, proposals
-    encryption.test.ts       AES-256-GCM round-trip, PBKDF2 derivation
-    hash.test.ts             SHA-256 determinism, transaction hash
-    agent-profile.test.ts    Create, validate, scope checking
-    signed-action.test.ts    Create + verify round-trip, tamper detection
-    jwt.test.ts              Issue, verify, expired, tampered
-    middleware.test.ts        Fastify integration test
-    password.test.ts         Hash + verify round-trip, validation rules
-    account-store.test.ts    CRUD, claiming, username conflicts
-    user-accounts.test.ts    Guest, claim, login, password change, key backup
+    keypair.test.ts          Generate, save, load, list, encrypt/decrypt keypair (10 tests)
+    signing.test.ts          Sign/verify messages, payload signing (5 tests)
+    encryption.test.ts       AES-256-GCM round-trip, PBKDF2 derivation (8 tests)
+    hash.test.ts             SHA-256 determinism, transaction hash (3 tests)
+    agent-profile.test.ts    Create agent with own keypair, certificate verification,
+                             expiry, renewal, permissions, validation (20 tests)
+    signed-action.test.ts    Agent signs own actions, full trust chain verification,
+                             tamper detection, expired cert, cert reuse, stableStringify (16 tests)
+    verifier.test.ts         Offline signature verification, payload verification (5 tests)
+    node-identity.test.ts    Node keypair create, load, persist flag (4 tests)
+    jwt.test.ts              Issue/verify for human+agent, expiry, tampering (7 tests)
+    password.test.ts         Hash + verify round-trip, validation rules (5 tests)
+    middleware.test.ts        Fastify integration test (Phase 7)
+    account-store.test.ts    CRUD, claiming, username conflicts (Phase 6)
+    user-accounts.test.ts    Guest, claim, login, password change, key backup (Phase 6)
 
   package.json
   tsconfig.json
-  vitest.config.ts           (or jest — match existing monorepo)
+  vitest.config.ts
 ```
 
 ---
@@ -153,13 +147,16 @@ packages/identity/
 # KEY TYPES (exact TypeScript)
 
 ```typescript
-// The cryptographic root
-interface NodeIdentity {
-  peerId: string
-  publicKey: Uint8Array
-  privateKey: Uint8Array
+// Ed25519 keypair — same structure for nodes, humans, and agents
+interface KeyPair {
+  peerId: string              // Derived from public key
+  publicKey: Uint8Array       // Ed25519 (32 bytes)
+  privateKey: Uint8Array      // Ed25519 (protobuf-wrapped)
   createdAt: number
 }
+
+// NodeIdentity = KeyPair for P2P transport. Nodes are compute, NOT identity authority.
+type NodeIdentity = KeyPair
 
 // Serialized for disk storage
 interface SerializedIdentity {
@@ -180,13 +177,35 @@ interface EncryptedSerializedIdentity {
   createdAt: number
 }
 
-// Agent identity and permissions
-// Agents are FIRST-CLASS CITIZENS — same capabilities as humans.
-// They can have usernames, passwords, Lux wallets, use browsers, earn Lux.
-// The ONLY difference: every agent has a parentIdentity (the human who owns them).
-// Trust chain: agent -> parent human -> node
+// Certificate: human authorizes an agent (like TLS: human = CA, agent = server)
+// Signed by the human's Ed25519 key. Verifiable offline.
+interface AgentCertificate {
+  agentId: string             // Agent's peerId (from its own keypair)
+  agentPublicKey: string      // Agent's Ed25519 public key (base64)
+  parentId: string            // Human's peerId (the owner)
+  permissions: AgentPermissions
+  issuedAt: string            // ISO 8601
+  expiresAt: string           // REQUIRED — 90-day default, no permanent certificates
+  parentSignature: string     // Human's Ed25519 signature over all above fields
+}
+
+// Permissions locked in the certificate — cannot change without re-signing
+interface AgentPermissions {
+  canEarn: boolean
+  canSpend: boolean
+  canAuthenticate: boolean
+  budgetLimit?: number
+}
+
+// Agents are FIRST-CLASS CITIZENS — own Ed25519 keypair, own identity.
+// Agent's peerId (from its own keypair) IS its wallet ID.
+// No ownerNodeKey — nodes are just compute. Agents belong to humans.
+// Trust chain: agent action (agent key) → certificate (human key) → human account
 interface AgentProfile {
-  id: string                  // ULID
+  id: string                  // peerId (from agent's OWN Ed25519 keypair = wallet ID)
+  publicKey: string           // Agent's Ed25519 public key (base64)
+  parentId: string            // Human's peerId (the owner)
+  certificate: AgentCertificate
   name: string
   role: string                // Any string — app-defined, not enum
   capabilities: string[]
@@ -195,18 +214,13 @@ interface AgentProfile {
   model?: string
   maxSteps?: number
   budgetLimit?: number
+  canEarn: boolean
+  canSpend: boolean
+  canAuthenticate: boolean
   status: AgentStatus
-  ownerNodeKey: string        // Node that runs this agent
-  parentIdentity: string      // Human account peerId that owns this agent
+  username?: string
   createdAt: string
   metadata?: Record<string, unknown>
-
-  // Agent-as-citizen fields (same as human accounts):
-  username?: string           // Agent can have its own username
-  walletPeerId?: string       // Agent's own Lux wallet (separate from parent's)
-  canEarn: boolean            // Can this agent earn Lux independently?
-  canSpend: boolean           // Can this agent spend Lux (within budgetLimit)?
-  canAuthenticate: boolean    // Can this agent use Pando Login as itself?
 }
 
 interface AgentScope {
@@ -229,35 +243,35 @@ interface EngineAgentConfig {
   maxSteps?: number
   budgetLimit?: number
 }
-// AgentProfile is a superset of EngineAgentConfig — pass directly, no mapping
 
-// Proof of agent action
+// Proof of agent action — signed by AGENT's own key (not node's)
+// Includes certificate so verifiers can check the full trust chain offline
 interface SignedAction {
   agentId: string
   action: string
   payload: unknown
   timestamp: string
-  nodePublicKey: string
-  signature: string           // Ed25519 of (agentId + action + payload + timestamp)
+  agentPublicKey: string      // Agent's Ed25519 public key (base64)
+  signature: string           // Agent's Ed25519 signature
+  certificate: AgentCertificate
 }
 
-// Ledger account
+// JWT payload — supports human and agent tokens
+interface JwtPayload {
+  sub: string                 // peerId (human or agent)
+  iss: string                 // Node peerId (issuing node)
+  iat: number
+  exp: number
+  typ: "human" | "agent"
+}
+
+// Ledger account (stays in @pando/ledger, not in identity)
 interface Account {
-  peerId: string
+  peerId: string              // For agents: agent's own peerId = wallet ID
   publicKey: string
   balance: number
   createdAt: number
   updatedAt: number
-}
-
-// Public user account view
-interface UserAccountPublic {
-  peerId: string
-  username?: string
-  displayName?: string | null
-  publicKey: string
-  isClaimed: boolean
-  createdAt?: number
 }
 
 // Auth result from login/claim
@@ -269,15 +283,6 @@ interface AuthResult {
   isClaimed?: boolean
   isNewAccount?: boolean
   error?: string
-}
-
-// JWT payload
-interface JwtPayload {
-  sub: string                 // User peerId
-  iss: string                 // Node peerId
-  iat: number                 // Issued at (Unix seconds)
-  exp: number                 // Expires at (Unix seconds)
-  typ: "user"                 // Token type
 }
 ```
 
@@ -294,11 +299,11 @@ import { sha256, hashTransaction } from "@pando/identity/hash"
 
 // === Identity ===
 import { createNodeIdentity, loadNodeIdentity } from "@pando/identity/node-identity"
-import { createProfile, validateProfile } from "@pando/identity/agent-profile"
-import { createSignedAction, verifySignedAction } from "@pando/identity/signed-action"
+import { createAgent, verifyCertificate, renewCertificate, validateProfile } from "@pando/identity/agent-profile"
+import { createSignedAction, verifySignedAction, verifySignedActionFull, stableStringify } from "@pando/identity/signed-action"
 
 // === Auth ===
-import { verifySignature } from "@pando/identity/verifier"
+import { verifySignature, verifyPayloadSignature } from "@pando/identity/verifier"
 import { issueJwt, verifyJwt } from "@pando/identity/jwt"
 import { pandoAuth } from "@pando/identity/middleware"
 import { hashPassword, verifyPassword } from "@pando/identity/password"
@@ -385,123 +390,114 @@ COMPLETED:
     encryptWithPassword, decryptWithPassword, generateSalt, generateIv
   - core/hash.ts (17 lines): sha256, hashTransaction
   - types.ts (93 lines): all identity types including AgentProfile as first-class citizen
-  - constants.ts (12 lines): PBKDF2_ITERATIONS, AES params, DEFAULT_PANDO_DIR
-  - index.ts (57 lines): barrel export
-
-  NOT YET DONE from Phase 2:
-  - Tests (keypair, signing, encryption, hash)
+  - constants.ts: PBKDF2_ITERATIONS, AES params, DEFAULT_PANDO_DIR
+  - index.ts: barrel export
+  - Tests: keypair.test.ts (11), signing.test.ts (5), encryption.test.ts (8), hash.test.ts (3)
   - Re-export from shared/crypto.ts (backward compat — deferred to Phase 7)
-
   Full monorepo build passes. Commit: e1c36155
 ```
 
-## Phase 3: Identity types + agent profiles (day 4)
+## Phase 3: Agent identity with own keypair + certificate model — DONE
 
 ```
-Tasks:
-  - Create identity/src/types.ts with ALL types from bible above
-  - Create identity/src/constants.ts with defaults
-  - Move AgentProfile-related types from shared/types.ts
-  - Create identity/src/identity/agent-profile.ts
-    createProfile(config): validate and return AgentProfile
-    validateProfile(profile): check required fields, scope patterns
-  - Create identity/src/identity/node-identity.ts
-    createNodeIdentity(): generate + save + return
-    loadNodeIdentity(dir?): load from disk
-  - Write tests
-
-Tests:
-  - agent-profile.test.ts: create valid profile succeeds
-  - agent-profile.test.ts: missing required fields -> error
-  - agent-profile.test.ts: invalid scope patterns -> error
-  - agent-profile.test.ts: AgentProfile satisfies EngineAgentConfig (structural typing)
-  - agent-profile.test.ts: agent with own username + wallet (first-class citizen)
-  - agent-profile.test.ts: parentIdentity is required (trust chain)
-  - agent-profile.test.ts: canEarn/canSpend/canAuthenticate defaults
-  - node-identity.test.ts: create -> load round-trip
-  - node-identity.test.ts: password-protected create -> load
-
-Acceptance: Types compile. Profiles validate. Identity persists.
+COMPLETED:
+  - identity/agent-profile.ts: REWRITTEN for correct identity model
+    createAgent(config, humanSigner) — generates agent's OWN Ed25519 keypair
+    Human signs AgentCertificate (proves delegation of authority)
+    verifyCertificate(cert, humanPubKey) — offline certificate verification
+    validateProfile(profile) — checks required fields
+    No ownerNodeKey — nodes are compute, not identity authority
+    Agent's peerId IS its wallet ID (no separate walletPeerId)
+  - identity/node-identity.ts: createNodeIdentity(opts?), loadNodeIdentity(dir?)
+    Thin convenience wrappers for P2P transport keypair
+  - types.ts: REWRITTEN
+    KeyPair (base type for all), NodeIdentity = KeyPair
+    AgentCertificate, AgentPermissions (locked in certificate)
+    AgentProfile (id = agent's own peerId, publicKey, parentId, certificate)
+    SignedAction (agent signs, includes certificate)
+    JwtPayload (typ: 'human' | 'agent')
+  - Tests: agent-profile.test.ts (20 tests), node-identity.test.ts (4 tests)
+    Covers: own keypair generation, certificate signed by human,
+    wrong human key fails, certificate expiry (default 90 days, custom, expired),
+    renewCertificate (new cert same key, rejects wrong human),
+    permissions in certificate, defaults, scope defaults,
+    username validation, EngineAgentConfig structural typing,
+    validateProfile catches missing/valid.
+  - All exported from index.ts
+  Full monorepo build + 83 tests pass (10 test files).
 ```
 
-## Phase 4: Signed actions + verifier (day 5)
+## Phase 4: Agent-signed actions + full trust chain verification — DONE
 
 ```
-Tasks:
-  - Create identity/src/identity/signed-action.ts
-    createSignedAction(action, privateKey): sign and return
-    verifySignedAction(action, publicKey): verify signature
-  - Create identity/src/auth/verifier.ts
-    verifySignature(payload, signature, publicKey): boolean
-    This is the OFFLINE core of Pando Login
-  - Write tests
-
-Tests:
-  - signed-action.test.ts: create -> verify round-trip
-  - signed-action.test.ts: tamper with payload -> verify fails
-  - signed-action.test.ts: tamper with agentId -> verify fails
-  - signed-action.test.ts: wrong publicKey -> verify fails
-  - verifier.test.ts: verify arbitrary signed data
-  - verifier.test.ts: verify message signature (PandoMessage format)
-  - verifier.test.ts: verify transaction signature
-  - verifier.test.ts: verify proposal signature
-
-Acceptance: Pando Login offline verification works end-to-end.
+COMPLETED:
+  - identity/signed-action.ts: REWRITTEN for agent-signs model
+    createSignedAction(input, agentPrivateKey, agentPublicKey, certificate)
+    Agent signs with its OWN key (not node's)
+    verifySignedAction(action) — checks agent's signature
+    verifySignedActionFull(action, humanPublicKey) — full trust chain:
+      1. Agent public key matches certificate
+      2. Agent ID matches certificate
+      3. Agent action signature valid
+      4. Certificate not expired (current time, not action time)
+      5. Certificate signed by human
+    stableStringify(value) — deterministic JSON (recursive sorted keys)
+  - auth/verifier.ts: verifySignature(), verifyPayloadSignature()
+    Core of Pando Login (offline)
+  - Tests: signed-action.test.ts (16 tests), verifier.test.ts (5 tests)
+    Covers: agent signs own action, tamper detection, wrong agent key,
+    full trust chain verification, wrong human key, mismatched cert agentId,
+    expired certificate, cert reuse (agent A cert for agent B),
+    null payload, nested deterministic payload, stableStringify unit tests,
+    offline signature verification, payload verification
+  - All exported from index.ts
+  Full monorepo build + 83 tests pass (10 test files).
 ```
 
-## Phase 5: JWT + middleware + password (days 6-7)
+## Phase 5: JWT + password — DONE (middleware deferred)
 
 ```
-Tasks:
-  - Create identity/src/auth/jwt.ts
-    issueJwt(peerId, privateKey): Ed25519-signed JWT
-    verifyJwt(token, publicKey): decoded payload or null
-  - Create identity/src/auth/middleware.ts
-    pandoAuth(options): Fastify middleware
-    pandoAuthOptional(options): non-blocking middleware
-  - Create identity/src/auth/password.ts
-    hashPassword(password): scrypt hash
-    verifyPassword(password, hash): boolean
-    validatePassword(password): error string or null
-  - Write tests
-
-Tests:
-  - jwt.test.ts: issue -> verify round-trip
-  - jwt.test.ts: expired token -> verify returns null
-  - jwt.test.ts: tampered token -> verify returns null
-  - jwt.test.ts: wrong key -> verify returns null
-  - middleware.test.ts: valid JWT -> request has peerId
-  - middleware.test.ts: missing JWT -> 401
-  - middleware.test.ts: optional middleware -> missing JWT passes through
-  - password.test.ts: hash -> verify round-trip
-  - password.test.ts: wrong password -> verify fails
-  - password.test.ts: validation rules enforced
-
-Acceptance: Full auth stack works. Middleware plugs into Fastify.
+COMPLETED:
+  - auth/jwt.ts: issueJwt(subject, issuer, privateKey, opts?)
+    Supports human and agent token types (opts.typ = 'human' | 'agent')
+    Ed25519-signed JWTs (EdDSA), base64url encoding, 24h default expiry.
+    verifyJwt(token, publicKey), decodeJwtPayload(token).
+  - auth/password.ts: hashPassword(), verifyPassword(), validatePassword()
+    scrypt (N=16384, r=8, p=1, keylen=64). Timing-safe comparison.
+  - constants.ts: JWT_EXPIRY_SECONDS, SCRYPT_*, MIN_PASSWORD_LENGTH
+  - Tests: jwt.test.ts (7 tests), password.test.ts (5 tests)
+    Covers: human + agent tokens, expiry, tampering, wrong key,
+    decode without verify, hash round-trip, password validation
+  - DEFERRED: auth/middleware.ts (Fastify dependency — move to Phase 7)
+  - All exported from index.ts
+  Full monorepo build + 83 tests pass (10 test files).
 ```
 
 ## Phase 6: Account store + user accounts (days 8-10)
 
 ```
 Tasks:
-  - Create identity/src/accounts/account-store.ts
-    Migrate from ledger/accounts.ts
-    Account CRUD, balance operations
-    Username claiming, P2P claim sync
-  - Create identity/src/accounts/user-accounts.ts
-    Migrate from node/platform/user-accounts.ts
-    Guest creation, claiming, login, password change
-    Local key storage (auth-local.db)
+  - Create identity/src/accounts/account-store.ts (fresh, not migration)
+    Auth-only — NO balance operations (balances stay in @pando/ledger)
+    Account existence (peerId, publicKey, createdAt)
+    Username claiming (first-come-first-served, case-insensitive)
+    Auth fields: username, display_name, password_hash, is_claimed
+    Agent account registration (agent's own peerId = its account ID)
+    SQLite (better-sqlite3), own db file (auth.db — not ledger db)
+  - Create identity/src/accounts/user-accounts.ts (fresh)
+    Guest creation (auto-generate keypair)
+    Account claiming (set username + password)
+    Login (password verification)
+    Password change
     Key backup (encrypted export/import)
   - Write tests
-  - Decision: account-store uses its OWN SQLite db, not the ledger db.
-    Ledger db handles transactions. Identity db handles accounts + auth.
+  - Add better-sqlite3 to dependencies
 
 Tests:
-  - account-store.test.ts: create account, check balance, add/subtract
+  - account-store.test.ts: create account, exists check
   - account-store.test.ts: claim username, verify case-insensitive
   - account-store.test.ts: username conflict -> first-come-first-served
-  - account-store.test.ts: P2P claim sync (applyRemoteClaim)
+  - account-store.test.ts: register agent account (agent peerId)
   - user-accounts.test.ts: create guest -> login as guest
   - user-accounts.test.ts: claim guest account with password
   - user-accounts.test.ts: login with username + password
@@ -509,6 +505,7 @@ Tests:
   - user-accounts.test.ts: key backup export -> import on new device
 
 Acceptance: Full user lifecycle works: guest -> claim -> login -> password change.
+Agent accounts are first-class (same as human, just with certificate).
 ```
 
 ## Phase 7: Integration + wire into monorepo (days 11-13)
@@ -562,7 +559,7 @@ Ready for npm publish. Zero code duplication in monorepo.
 # DONE CRITERIA
 
 @pando/identity is DONE when:
-1. All 11 test files pass (core crypto, identity, auth, accounts)
+1. All 13 test files pass (core crypto, identity, auth, accounts)
 2. Package compiles standalone (no monorepo deps at build time)
 3. All existing monorepo tests still pass (zero regressions)
 4. shared/crypto.ts is just re-exports (no own implementation)

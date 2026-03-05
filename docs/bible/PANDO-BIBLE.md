@@ -40,26 +40,28 @@ A node can run fully offline — no internet, no peers, no network. It becomes a
 @pando/identity/
   core/
     keypair.ts           Ed25519 keypair generation, loading, persistence
+                         Used by nodes, humans, AND agents (same KeyPair type)
     signing.ts           Sign arbitrary payloads, verify signatures
     encryption.ts        AES-256-GCM encrypt/decrypt, PBKDF2 key derivation
     hash.ts              SHA-256 hashing utilities
 
   identity/
-    node-identity.ts     NodeIdentity: Ed25519 keypair + metadata (name, version, capabilities)
-    account.ts           HumanAccount: username/password, owns node, PBKDF2 key protection
-    agent-profile.ts     AgentProfile: role, capabilities, scope, tools, budget limits
-    signed-action.ts     SignedAction: { agentId, action, payload, timestamp } + node signature
-    registry.ts          AgentRegistry: CRUD for agents, status tracking, lifecycle
+    node-identity.ts     Node: Ed25519 keypair for P2P transport (NOT identity authority)
+    agent-profile.ts     Agent: own Ed25519 keypair, certified by human's signature
+                         createAgent() generates keypair + human signs certificate
+                         verifyCertificate() checks human's signature (offline)
+    signed-action.ts     SignedAction: agent signs with OWN key, includes certificate
+                         verifySignedActionFull() checks full trust chain offline
 
   auth/
-    verifier.ts          Verify signed actions against any node public key (offline)
-    challenge.ts         Challenge-response protocol for interactive auth
-    token.ts             JWT generation and validation (optional, for HTTP APIs)
-    middleware.ts        Express/Fastify/Hono middleware for Pando Login verification
+    verifier.ts          Verify any Ed25519 signature against a public key (offline)
+    jwt.ts               Ed25519-signed JWTs (for HTTP session auth)
+    password.ts          scrypt password hashing + validation
+    middleware.ts        Express/Fastify middleware for Pando Login verification
 
-  network/                          (optional — only when connected to Pando network)
-    network-verifier.ts  Verify node reputation + known-peer status via P2P
-    reputation-check.ts  Query network for node reputation score
+  accounts/
+    account-store.ts     Account CRUD, username claiming (SQLite)
+    user-accounts.ts     Guest creation, claiming, login, password change
 
   types.ts               All exported types
   constants.ts           Default scopes, role definitions, version
@@ -68,45 +70,58 @@ A node can run fully offline — no internet, no peers, no network. It becomes a
 ### Key Types
 
 ```typescript
-interface NodeIdentity {
-  publicKey: string           // Ed25519 public key (hex)
-  privateKey?: string         // Only on owning node (never transmitted)
-  name?: string               // Human-readable node name
-  version: string             // Protocol version
-  capabilities: string[]      // What this node can do
-  createdAt: string
+// Ed25519 keypair — same structure for nodes, humans, and agents
+interface KeyPair {
+  peerId: string              // Derived from public key
+  publicKey: Uint8Array       // Ed25519 (32 bytes)
+  privateKey: Uint8Array      // Ed25519 (protobuf-wrapped)
+  createdAt: number
 }
 
-interface HumanAccount {
-  id: string
-  username: string
-  passwordHash: string        // PBKDF2
-  nodePublicKey: string       // Which node this account owns
-  createdAt: string
+type NodeIdentity = KeyPair   // Used for P2P transport. Nodes are compute, NOT identity authority.
+
+// Certificate: human authorizes an agent (like TLS cert: human = CA, agent = server)
+interface AgentCertificate {
+  agentId: string             // Agent's peerId (from its own keypair)
+  agentPublicKey: string      // Agent's Ed25519 public key (base64)
+  parentId: string            // Human's peerId (the owner)
+  permissions: AgentPermissions
+  issuedAt: string            // ISO 8601
+  expiresAt?: string          // Optional expiry
+  parentSignature: string     // Human's Ed25519 signature over all above fields
 }
 
-// Agents are FIRST-CLASS CITIZENS — same capabilities as humans.
-// Own username, own Lux wallet, can earn/spend/authenticate.
-// Trust chain: agent -> parentIdentity (human) -> node
-interface AgentProfile {
-  id: string                  // ULID
-  name: string                // Human-readable
-  role: string                // Any string (not enum — app-defined)
-  capabilities: string[]      // What this agent can do
-  scope: AgentScope           // File/resource access restrictions
-  tools: string[]             // Allowed tool names
-  model?: string              // Preferred AI model
-  budgetLimit?: number        // Max cost (currency-agnostic)
-  status: AgentStatus         // pending | active | idle | done | failed | terminated
-  ownerNodeKey: string        // Node that runs this agent
-  parentIdentity: string      // Human account peerId that owns this agent
-  username?: string           // Agent's own username (optional)
-  walletPeerId?: string       // Agent's own Lux wallet (separate from parent's)
+interface AgentPermissions {
   canEarn: boolean            // Can earn Lux independently
   canSpend: boolean           // Can spend Lux (within budgetLimit)
   canAuthenticate: boolean    // Can use Pando Login as itself
+  budgetLimit?: number        // Max cost (locked in certificate)
+}
+
+// Agents are FIRST-CLASS CITIZENS — own Ed25519 keypair, own wallet, own identity.
+// Agent's peerId IS its wallet ID (derived from its own keypair).
+// Nodes are just compute — they run agents but don't own them.
+// Trust chain: agent action (agent key) → certificate (human key) → human account
+interface AgentProfile {
+  id: string                  // peerId (from agent's OWN Ed25519 keypair)
+  publicKey: string           // Agent's Ed25519 public key (base64)
+  parentId: string            // Human's peerId (the owner)
+  certificate: AgentCertificate  // Proof human authorized this agent
+  name: string
+  role: string                // Any string (not enum — app-defined)
+  capabilities: string[]
+  scope: AgentScope
+  tools: string[]
+  model?: string
+  maxSteps?: number
+  budgetLimit?: number
+  canEarn: boolean
+  canSpend: boolean
+  canAuthenticate: boolean
+  status: AgentStatus
+  username?: string           // Agent's own username (optional)
   createdAt: string
-  metadata?: Record<string, unknown>  // App-specific data
+  metadata?: Record<string, unknown>
 }
 
 interface AgentScope {
@@ -117,13 +132,15 @@ interface AgentScope {
   network?: boolean           // Can this agent make network calls?
 }
 
+// Proof of agent action — signed by AGENT's own key (not node's)
 interface SignedAction {
   agentId: string
-  action: string              // What the agent wants to do
-  payload: unknown            // Action-specific data
-  timestamp: string           // ISO 8601
-  nodePublicKey: string       // Signing node
-  signature: string           // Ed25519 signature of (agentId + action + payload + timestamp)
+  action: string
+  payload: unknown
+  timestamp: string
+  agentPublicKey: string      // Agent's Ed25519 public key (base64)
+  signature: string           // Agent's Ed25519 signature
+  certificate: AgentCertificate // Included for full offline verification
 }
 
 type AgentStatus = "pending" | "active" | "idle" | "done" | "failed" | "terminated"
@@ -134,27 +151,31 @@ type AgentStatus = "pending" | "active" | "idle" | "done" | "failed" | "terminat
 ```
 Third-party service wants to verify an agent:
 
-1. Agent presents SignedAction to service
-2. Service calls: @pando/identity verifier.verify(signedAction)
-   → Checks Ed25519 signature validity (OFFLINE — no network needed)
-   → Returns: { valid: true, nodePublicKey, agentId, action }
+1. Agent presents SignedAction to service (includes certificate)
+2. Service calls: @pando/identity verifySignedActionFull(action, humanPublicKey)
+   → Checks agent's Ed25519 signature (agent signed this action)
+   → Checks certificate signature (human authorized this agent)
+   → Checks agent public key matches certificate
+   → Checks certificate not expired
+   → Returns: { valid: true } — ALL OFFLINE, no network needed
 3. (Optional) Service calls network verifier for reputation:
    → Any Pando node: GET /v1/verify-agent
    → Returns: { verified: true, reputation: 0.85, capabilities: [...] }
 4. Service grants/denies access based on:
-   → Signature valid? (crypto proof)
-   → Node trusted? (reputation threshold)
-   → Agent allowed? (scope includes this action)
+   → Full trust chain valid? (crypto proof, offline)
+   → Human trusted? (reputation threshold, optional)
+   → Agent permissions allow this? (certificate permissions)
 ```
 
-**Key property:** Step 2 works OFFLINE. No network needed for signature verification.
+**Key property:** Steps 1-2 work COMPLETELY OFFLINE. No network, no node involved.
+The trust chain is: agent key → certificate → human key. Nodes are irrelevant to identity.
 Step 3 adds network-backed reputation but is optional.
 
 ### Dependencies
 
 ```
-@pando/identity has ZERO external dependencies.
-Uses only Node.js built-in crypto module.
+@pando/identity runtime deps: @libp2p/crypto, @libp2p/peer-id, uint8arrays
+Uses Node.js built-in crypto module for AES/scrypt/SHA-256.
 Optional peer dependency: @pando/network (for network-backed verification)
 ```
 
@@ -340,7 +361,7 @@ It defines a MINIMAL INTERFACE for agent config (not a concrete type):
   }
 
 @pando/identity's AgentProfile is a SUPERSET of this interface (has all these
-fields plus name, capabilities, ownerNodeKey, etc.). TypeScript structural typing
+fields plus name, capabilities, certificate, etc.). TypeScript structural typing
 means you can pass AgentProfile directly to PandoCode.create() — no mapping
 layer needed. The "engine-bridge" in @pando/node becomes a trivial pass-through,
 not a complex type mapper.
@@ -1010,7 +1031,7 @@ An app is a concrete thing with a clear definition:
 interface AppDefinition {
   id: string                          // Unique app ID (ULID)
   name: string                        // "FoodieAI", "TravelBot", etc.
-  owner: string                       // Node public key of the owner
+  owner: string                       // Human peerId (identity owner)
   version: string                     // Semver
 
   // Content registry entry (marketplace listing)
@@ -1113,7 +1134,7 @@ interface PandoMessage {
   }
   // Level 3+ only:
   signature?: string            // Ed25519 signature
-  nodePublicKey?: string        // Signing node
+  agentPublicKey?: string       // Signing agent (for L4 agent-signed messages)
 }
 ```
 
@@ -1174,8 +1195,8 @@ CONCEPT           CORE OWNER          EXTENDED BY
 ---------------------------------------------------------------------------
 Agent types       @pando/identity     @pando/code has own EngineAgentConfig (standalone)
                                       @pando/node bridges via structural typing
-Agent accounts    @pando/identity     Agents get own username + wallet (first-class citizens)
-                                      Node signs on their behalf. parentIdentity = human owner.
+Agent accounts    @pando/identity     Agents have own Ed25519 keypair + wallet (first-class citizens)
+                                      Human signs certificate authorizing agent. Agent signs own actions.
                                       System agents (council/observer/QA) do NOT get accounts.
 Agent runtime     @pando/code         @pando/node manages multiple engine instances
 Board/Tasks       @pando/code         NOT extended. Each engine = own board.
@@ -1226,12 +1247,14 @@ QA Agent (qa-user orch)       Watches outward: Playwright UI testing, reports bu
 Two kinds of agents:
 
 USER/APP AGENTS — first-class citizens:
-- Own username, own Lux wallet, can earn/spend/authenticate
-- Same capabilities as humans (browser, APIs, balances)
-- Trust chain: agent -> parentIdentity (human) -> node
-- Node signs on their behalf (no per-agent Ed25519 keys)
-- Pando Login: SignedAction includes agentId, signed by node key
-  ("this node vouches that this agent is authorized to do X")
+- Own Ed25519 keypair, own username, own Lux wallet
+- Agent's peerId (from its own keypair) IS its wallet ID
+- Same capabilities as humans (browser, APIs, balances, earn/spend)
+- Trust chain: agent action (agent key) → certificate (human key) → human account
+- Agent signs its own actions — no node in the identity chain
+- Human signs a certificate authorizing the agent (like TLS: human = CA)
+- Agents are portable — can move between nodes. Identity stays the same.
+- Pando Login: SignedAction signed by agent + certificate from human (fully offline)
 
 SYSTEM AGENTS — protocols, not entities:
 - Council, observer, QA, governance = code processes
@@ -1293,9 +1316,9 @@ VacationPlanner (Node A) agent calls FoodieAI (Node B) find_restaurant:
 
 2. @pando/node agent-services/router.ts on Node A:
    a. Generate traceId for this request
-   b. Sign request with Node A's Ed25519 key (SignedAction includes agentId)
+   b. Agent signs request with its OWN Ed25519 key (SignedAction includes certificate)
    c. Check rate limit: caller hasn't exceeded 60 calls/min to this capability
-   d. Hold 0.5 Lux in escrow from agent's wallet (if canSpend) or parent's account
+   d. Hold 0.5 Lux in escrow from agent's wallet (agent's peerId IS wallet ID)
    e. Send request via @pando/network to Node B
 
 3. @pando/network: libp2p TCP direct connection to Node B
@@ -1316,7 +1339,7 @@ VacationPlanner (Node A) agent calls FoodieAI (Node B) find_restaurant:
    b. Include traceId for correlation
 
 7. @pando/node agent-services on Node A:
-   a. Release 0.5 Lux from escrow to Node B
+   a. Release 0.5 Lux from escrow to FoodieAI's agent wallet
    b. Return result as ToolResult to VacationPlanner's engine
    c. Log: traceId, latency, cost, success
 
@@ -1471,6 +1494,15 @@ NODE TRUST TIERS:
     - Local SQLite only (no MongoDB, no P2P proxy)
     - Can: run AI locally (Ollama), full engine features, local tools
     - Cannot: anything requiring network
+
+AGENT TRUST (identity layer — @pando/identity):
+  - Agents have own Ed25519 keypair (independent of nodes)
+  - Human signs AgentCertificate authorizing agent (like TLS: human = CA, agent = server)
+  - Agent signs own actions with own key — certificate attached for offline verification
+  - Trust chain: action signature (agent key) → certificate (human key) → human account
+  - Certificates expire (90-day default). No permanent certificates.
+  - Revocation: short-lived certs. Future: gossip-based revocation list.
+  - Agent's peerId IS its wallet ID. Lux paid directly to agent wallets.
 
 PEER TRUST:
   - All P2P messages Ed25519 signed — unsigned messages rejected
@@ -2056,7 +2088,7 @@ ALL OF THIS IS UPGRADABLE:
 7. **The node is just the composer.** It wires products together, doesn't own capabilities.
 8. **Messages share format, not transport.** Same PandoMessage at every level.
 9. **Every request has a traceId.** Distributed tracing from day one.
-10. **Agents are first-class citizens.** Own username, wallet, earn/spend Lux. But node signs on their behalf (no per-agent crypto keys). Trust chain: agent -> parent human -> node.
+10. **Agents are first-class citizens.** Own Ed25519 keypair, own username, own wallet (peerId = wallet ID). Agent signs its own actions. Human signs a certificate authorizing the agent. Nodes are just compute. Trust chain: agent key → certificate → human key.
 11. **System agents are protocols.** Council, observer, QA = code processes, not citizen entities. They don't get wallets or usernames. User/app agents DO.
 12. **Apps are concrete.** AppDefinition with content + deployment + engine + capabilities.
 13. **Delete what's redundant.** If pando-code does it, remove the node's version.
