@@ -10,6 +10,7 @@
     "clean": "rm -rf dist"
   },
   "dependencies": {
+    "@pando/identity": "*",
     "@libp2p/crypto": "^5.0.0",
     "@libp2p/peer-id": "^5.0.0",
     "uint8arrays": "^5.0.0"
