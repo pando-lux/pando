@@ -12,18 +12,25 @@ Published independently to npm as `@pando/identity`.
 
 ---
 
-# LEGACY CODE (to be replaced)
+# INTEGRATION STATUS
 
-The following legacy code is scattered across packages and will be replaced
-by @pando/identity primitives during integration (Phase 6):
+## Already replaced (Phase D — DONE)
 
 ```
-packages/shared/src/crypto.ts         522 lines — Will re-export from @pando/identity
+packages/shared/src/crypto.ts         221 lines — Now re-exports from @pando/identity
+                                       406 lines of duplicated crypto removed
+                                       Domain-specific wrappers kept (signMessage, signTransaction, signProposal)
+                                       All consumers use old function names — zero breaking changes
+```
+
+## Remaining legacy code (to be replaced)
+
+```
 packages/shared/src/types.ts          ~100 lines — Will re-export identity types
 packages/node/src/platform/user-accounts.ts  611 lines — Will use @pando/identity primitives
                                                Account storage stays in MongoDB (via @pando/node)
                                                Key encryption uses @pando/identity/encryption
-packages/node/src/api/middleware/auth.ts     138 lines — Will use @pando/identity/jwt
+packages/node/src/api/middleware/auth.ts     137 lines — Will use @pando/identity/jwt
 packages/ledger/src/accounts.ts              222 lines — Keeps balance/transaction logic only
                                                Auth fields (username, password_hash) move to MongoDB
 ```

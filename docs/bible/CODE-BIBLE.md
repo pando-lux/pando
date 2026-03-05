@@ -182,7 +182,7 @@ static async create(options: EngineOptions): Promise<PandoCode>
 const MODEL_PRICING: Record<string, [input, output]> = {
   "claude-opus-4-6":     [15, 75],
   "claude-sonnet-4-6":   [3, 15],
-  "gpt-5.2":             [2.5, 10],
+  "gpt-5.2":             [1.75, 14],
   "gemini-2.5-flash":    [0.15, 0.6],
   "o3":                  [10, 40],
   // ... etc

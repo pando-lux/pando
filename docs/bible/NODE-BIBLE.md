@@ -196,6 +196,29 @@ Pluggable AI backends:
 - `ai-backend-ollama.ts` — Local Ollama models
 - Default model: `claude-opus-4-6`
 
+## AI Backend Interface (`core/ai-backend.ts`)
+
+TypeScript interfaces for pluggable AI backends:
+- `AIBackend`, `AITask`, `AIResult` interfaces
+- Implemented by `ai-backend-claude.ts` and `ai-backend-ollama.ts`
+- 37 lines — pure type definitions
+
+## Credential Vault (`core/credential-vault.ts`)
+
+AES-256-GCM encryption utilities used by CredentialStore:
+- `generateDataKey()` — random 256-bit AES key
+- `encryptCredential()` / `decryptCredential()` — AES-256-GCM round-trip
+- 41 lines — used by credential-store.ts for MongoDB credential encryption
+
+## Cloud Instance Manager (`core/cloud-instance-manager.ts`)
+
+Secure EC2 instance launcher and manager (906 lines):
+- Operators contribute AWS credentials, Pando launches locked-down instances
+- No SSH/SSM (removed at boot), tripwire monitoring
+- All management via P2P (no shell access needed)
+- Instance lifecycle: launch, health check, terminate
+- P2P linking for app deployment
+
 ## Storage Backend (`core/storage-backend.ts`)
 
 Abstract `StorageBackend` interface (6 CRUD operations):
@@ -356,6 +379,89 @@ Reads compiled genome knowledge graph (`output/graph.json`):
 Reads test scenarios from genome graph:
 - Executes API regression tests via fetch
 - Wired into governance pipeline (crash = abort proposal)
+
+## Code Pipeline (`platform/code-pipeline.ts`)
+
+Extract and apply workspace diffs (446 lines):
+- `extractDiff()` — scan workspace output/ for source files, compute diffs
+- `applyPatch()` — validate through guardrails, save originals, write new content
+- `rollback()` — restore originals and delete newly created files
+- Used by PipelineRunner for the autonomous code pipeline
+
+## Pipeline Runner (`platform/pipeline-runner.ts`)
+
+Full autonomous code pipeline with 7 sequential stages (724 lines):
+1. Version check — verify node meets version requirements
+2. Extract diff — scan workspace output (CodePipeline)
+3. Backup — snapshot current repo state (DeployManager)
+4. Apply patch — apply changes with guardrail checks (CodePipeline)
+5. Build — run `npm run build` to verify compilation
+6. QA — run page/API tests on affected pages (QaRunner)
+7. Commit — stage and commit changes
+- Rollback at each stage on failure
+
+## Genome Agent (`platform/genome-agent.ts`)
+
+Self-maintaining project genome (808 lines):
+- Watches git commits, maps code changes to genome components
+- Detects drift between genome claims and actual filesystem state
+- Generates scoped context for worker boot prompts
+- Used for project architecture awareness
+
+## Template Registry (`platform/template-registry.ts`)
+
+Data-driven agent templates (528 lines):
+- SQLite-backed `agent_templates` table
+- Built-in templates seeded on boot (replaces hardcoded DEFAULT_ROLE_PROMPTS)
+- Custom templates created via API
+- 5 API routes: list, create, get, update, delete
+
+## File Registry (`platform/file-registry.ts`)
+
+Concurrent edit prevention (107 lines):
+- File ownership claims with auto-expiring TTL (15 min default)
+- Local-only registry (no P2P sync)
+- Prevents multiple agents from editing the same file
+
+## Content Publisher (`platform/content-publish.ts`)
+
+Content publish flow (158 lines):
+- Extracts output from agent workspace after task completion
+- Creates ContentRecord, announces to network via GossipSub
+- Part of the Phase 11 content layer
+
+## Content Maintenance (`platform/content-maintenance.ts`)
+
+Periodic content health monitoring (210 lines):
+- Scans owned content for staleness and health issues
+- Creates maintenance tasks via task queue for unhealthy content
+- Configurable scan interval (default: 1 hour)
+
+## Content Safety (`platform/content-safety.ts`)
+
+Rule-based content safety review (359 lines):
+- Checks for harmful content patterns, malicious code
+- OWASP vulnerability scanning, dependency checks
+- Two Laws compliance verification
+- No external API calls — entirely pattern matching
+- Reviews persisted at `~/.pando/security/safety-reviews.json`
+
+## Hosting Service (`platform/hosting-service.ts`)
+
+S3 hosting management (247 lines):
+- Deploy projects to S3 (public static sites or pre-signed private)
+- Bucket layout: `s3://pando-deployments/public/` and `private/`
+- Pre-signed URLs with 1-hour TTL for private content
+- 5 API routes: deploy, get deployment, validate, undeploy, delete
+
+## Local Capability Store (`platform/local-capability-store.ts`)
+
+Three-tier capability architecture (121 lines):
+- Tier 0: Local private — capabilities detected but never broadcast
+- Tier 1: Network shared — broadcast via GossipSub
+- Tier 2: Group scoped — future, not built yet
+- Detection ≠ sharing (detected capabilities available locally regardless)
+- Stored at `~/.pando/local-capabilities.json`
 
 ## Resource System
 
@@ -635,6 +741,37 @@ Witness-based emission: peers must attest that work happened before Lux is minte
 ```
 
 **Idle ticks = zero cost.** Inbox empty → Tier 1 (no AI call).
+
+---
+
+# DEAD CODE (candidates for removal)
+
+| File | Lines | Why Dead |
+|------|-------|----------|
+| `smart-router.ts` | 349 | Phase 18 heuristic classifier. Exported but never imported or instantiated anywhere. |
+| `platform/reputation-governance.ts` | 228 | Phase 12.4 reputation-weighted voting. Exported but never instantiated in PandoNode. |
+
+---
+
+# ARCHITECTURAL DEBT
+
+## index.ts monolith (4,514 lines)
+
+`packages/node/src/index.ts` is the PandoNode class — a single file that imports and instantiates
+ALL kernel, core, and platform components. It handles:
+- 80+ imports
+- 20+ private fields for component instances
+- Initialization ordering in `_start()` (~800 lines)
+- 100+ getter methods
+- All component wiring and lifecycle management
+
+This is the single biggest refactoring target. The PANDO-BIBLE's Phase 5 rewrite addresses this
+by splitting PandoNode into focused modules (bridge/, orchestrator/, infrastructure/, etc.).
+
+## Resource Marketplace P2P broadcasting
+
+`platform/resource-marketplace.ts` has pricing logic that works locally, but the GossipSub
+broadcasting code is a stub — prices are never actually synced across the network.
 
 ---
 

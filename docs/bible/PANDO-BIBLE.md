@@ -1,6 +1,6 @@
 # THE PANDO BIBLE
-## Final Architecture — Version 1.2 (11 additional gaps fixed after deep codebase audit)
-## 2026-03-05
+## Architecture — Version 1.3 (current state + target architecture clearly separated)
+## 2026-03-06
 
 This is the definitive architecture document for the entire Pando ecosystem.
 All previous brainstorm docs are superseded by this document.
@@ -21,6 +21,20 @@ A developer can buy code alone ("I want an AI coding tool").
 A developer can run a node and get everything ("I want the full network").
 
 A node can run fully offline — no internet, no peers, no network. It becomes a private AI workstation (like Open WebUI / Ollama). Connect it to the network, and it joins the collective.
+
+---
+
+# HOW TO READ THIS DOCUMENT
+
+This bible describes both **what exists today** and **what we're building toward**.
+
+- Sections marked **[CURRENT]** describe implemented, working code
+- Sections marked **[TARGET]** describe designed architecture not yet built
+- The MIGRATION STRATEGY section (bottom) tracks which phases are done
+
+Products 1 and 2 (@pando/identity, @pando/code) are **[CURRENT]** — they exist and work.
+Product 3 (@pando/node) is **mixed** — the node works but its internal architecture
+will be restructured in Phases 3-8.
 
 ---
 
@@ -360,19 +374,50 @@ External deps: @ai-sdk/*, better-sqlite3, zod, drizzle-orm, fast-glob, MCP SDK
 - **Network mode (default):** Connected to peers. Full P2P, governance, economy, marketplace.
 - **Private mode:** Offline. Local AI workstation. All engine features, no network. Like Open WebUI but with multi-agent, memory, knowledge graph. User gets @pando/code features + node services (deploy, storage, monitoring) without connecting to anyone.
 
-### Sub-packages within @pando/node
+### Current Architecture [CURRENT]
+
+Today, @pando/node is a single package at `packages/node/` with a 3-layer architecture:
 
 ```
 @pando/node depends on:
+  @pando/shared      (types + crypto re-exports from @pando/identity)
+  @pando/identity    (Ed25519, certificates, JWT, passwords)
+  @pando/ledger      (Lux economy — accounts, transactions, emissions)
+
+packages/node/src/
+  kernel/     14 files — P2P core (network, sync, governance, guardrails, monitor, security)
+  core/       21 files — Agent system, storage, deploy, credentials, upgrade, payment
+  platform/   41 files — Orchestrator, resources, content, chat, projects, hosting
+  api/         6 files — HTTP API (kernel-api, core-api, platform-api, context-api, server, auth)
+  index.ts    4,514 lines — PandoNode class monolith (wires all components)
+  cli.ts      Entry point
+  tui.ts      Terminal UI (2,510 lines)
+  supervisor.ts  Process manager with auto-restart
+```
+
+The node does NOT yet integrate with @pando/code. There is no `@pando/network` or
+`@pando/governance` as separate packages — that code lives inside the node package.
+
+See NODE-BIBLE.md for detailed documentation of every file in the current architecture.
+
+### Target Architecture [TARGET — Phases 3-8]
+
+The following architecture is DESIGNED but NOT YET BUILT. It describes how @pando/node
+will be restructured after Phases 3-8 of the migration strategy.
+
+#### Future dependencies (after extraction)
+
+```
+@pando/node will depend on:
   @pando/shared      (types + crypto constants shared across node subsystems)
   @pando/identity    (for Pando Login, node keys, agent auth)
   @pando/code        (AI engine — one instance per orchestrator)
-  @pando/network     (P2P layer — libp2p, GossipSub, sync)
+  @pando/network     (P2P layer — libp2p, GossipSub, sync — extracted from kernel/)
   @pando/ledger      (Lux economy — accounts, transactions, emissions)
-  @pando/governance  (decision layer — proposals, security pipeline, voting)
+  @pando/governance  (decision layer — proposals, security pipeline, voting — extracted from kernel/)
 ```
 
-### Package: @pando/shared
+### Package: @pando/shared [CURRENT]
 
 ```
 @pando/shared/
@@ -390,7 +435,10 @@ External deps: @ai-sdk/*, better-sqlite3, zod, drizzle-orm, fast-glob, MCP SDK
   Dependencies: ZERO. Pure types and constants.
 ```
 
-### Package: @pando/network
+### Package: @pando/network [TARGET — Phase 3]
+
+Currently this code lives in `packages/node/src/kernel/` (network.ts, sync.ts, etc.).
+It will be extracted into its own package in Phase 3.
 
 ```
 @pando/network/
@@ -427,7 +475,7 @@ External deps: @ai-sdk/*, better-sqlite3, zod, drizzle-orm, fast-glob, MCP SDK
   Dependencies: @pando/shared (types), @pando/identity (Ed25519 signing)
 ```
 
-### Package: @pando/ledger
+### Package: @pando/ledger [CURRENT]
 
 ```
 @pando/ledger/
@@ -447,7 +495,10 @@ External deps: @ai-sdk/*, better-sqlite3, zod, drizzle-orm, fast-glob, MCP SDK
   Dependencies: @pando/shared (types), @pando/identity (transaction signature verification)
 ```
 
-### Package: @pando/governance
+### Package: @pando/governance [TARGET — Phase 4]
+
+Currently this code lives in `packages/node/src/kernel/governance.ts`.
+It will be extracted into its own package in Phase 4.
 
 ```
 @pando/governance/
@@ -470,7 +521,11 @@ External deps: @ai-sdk/*, better-sqlite3, zod, drizzle-orm, fast-glob, MCP SDK
                 @pando/network (broadcast, quorum)
 ```
 
-### @pando/node itself
+### @pando/node internal structure [TARGET — Phase 5]
+
+The following directory structure is the TARGET rewrite of @pando/node.
+Today, the node uses the 3-layer architecture described in "Current Architecture" above.
+This restructuring happens in Phase 5 of the migration strategy.
 
 ```
 @pando/node/
@@ -865,9 +920,9 @@ External deps: @ai-sdk/*, better-sqlite3, zod, drizzle-orm, fast-glob, MCP SDK
 
 ---
 
-# LIBRARY VS APPLICATION BOUNDARY
+# LIBRARY VS APPLICATION BOUNDARY [TARGET]
 
-When @pando/node uses @pando/code, it imports ONLY `@pando/code/core` (the engine).
+When @pando/node uses @pando/code (after Phase 5 integration), it will import ONLY `@pando/code/core` (the engine).
 The other @pando/code packages (server, web, cli, universal-mcp) are NOT started.
 
 ```
@@ -886,7 +941,7 @@ The other @pando/code packages (server, web, cli, universal-mcp) are NOT started
 
 No port conflicts. No duplicate servers. Node is the master; it uses the engine as a library.
 
-# MCP SERVER (@pando/mcp-server)
+# MCP SERVER (@pando/mcp-server) [CURRENT]
 
 Separate package exposing Pando node operations via MCP protocol.
 Allows ANY MCP-compatible AI tool (Claude Code, Cursor, Windsurf, etc.) to interact with a Pando node.
@@ -911,7 +966,7 @@ Allows ANY MCP-compatible AI tool (Claude Code, Cursor, Windsurf, etc.) to inter
 This is DISTINCT from @pando/code's universal-mcp (which exposes coding tools).
 @pando/mcp-server exposes NETWORK operations.
 
-# PACKAGE TIERS
+# PACKAGE TIERS [TARGET — describes post-extraction package structure]
 
 Three tiers of packages:
 
@@ -937,7 +992,7 @@ All packages published under @pando/* npm scope.
 Each has own package.json, own test suite, own semver.
 Tier 2 packages CAN be used standalone but are not primary marketing targets.
 
-# CROSS-PACKAGE VERSIONING STRATEGY
+# CROSS-PACKAGE VERSIONING STRATEGY [TARGET]
 
 ```
 VERSION POLICY:
@@ -1005,7 +1060,7 @@ CHANGELOG:
 
 ---
 
-# WHAT IS AN "APP" ON PANDO
+# WHAT IS AN "APP" ON PANDO [TARGET]
 
 An app is a concrete thing with a clear definition:
 
@@ -1055,7 +1110,9 @@ An app can have:
 
 ---
 
-# COMMUNICATION ARCHITECTURE
+# COMMUNICATION ARCHITECTURE [MIXED — partially current, partially target]
+
+Levels 0-1 are [TARGET] (require @pando/code integration). Level 2 is [CURRENT] (IPC + SQLite exists today via orchestrator-process.ts). Level 3 is [CURRENT] (P2P messaging works today via kernel/). Level 4 is [TARGET] (cross-app agent services not yet built).
 
 ## The 5 Levels
 
@@ -1124,9 +1181,10 @@ Same format at every level. Transport and auth differ. An agent writing a messag
 
 ---
 
-# PRIVATE MODE (OFFLINE NODE)
+# PRIVATE MODE (OFFLINE NODE) [TARGET]
 
-When a node runs without internet, it becomes a private AI workstation:
+Private mode is designed but not yet implemented. When a node runs without internet,
+it will become a private AI workstation:
 
 ```
 AVAILABLE (no network needed):
@@ -1168,7 +1226,7 @@ GRACEFUL DEGRADATION:
 
 ---
 
-# SHARED CONCEPTS — DEFINITIVE PLACEMENT
+# SHARED CONCEPTS — DEFINITIVE PLACEMENT [TARGET — describes post-integration ownership]
 
 Every concept has ONE core implementation. No duplication.
 
@@ -1218,7 +1276,7 @@ User memory       @pando/node         Local markdown file, agent-writable
 
 ---
 
-# THE FOUR-ACTOR GOVERNANCE MODEL
+# THE FOUR-ACTOR GOVERNANCE MODEL [CURRENT]
 
 ```
 CEO (council orchestrator)    Executes: spawns workers, ships code, manages projects
@@ -1249,9 +1307,12 @@ SYSTEM AGENTS — protocols, not entities:
 
 ---
 
-# ENGINE INSTANCE LIFECYCLE
+# ENGINE INSTANCE LIFECYCLE [TARGET]
 
-Each orchestrator gets a PERSISTENT PandoCode engine that lives across ticks:
+Each orchestrator will get a PERSISTENT PandoCode engine that lives across ticks.
+Today, orchestrators use Claude Code sessions via `claude -p` (child_process spawn),
+not the @pando/code engine. This section describes the target architecture after
+the @pando/code integration (Phase 5).
 
 ```
 Node starts
@@ -1288,7 +1349,7 @@ For project orchestrators: same pattern, but engine is created when project star
 
 ---
 
-# CROSS-APP AGENT CALLS — COMPLETE FLOW
+# CROSS-APP AGENT CALLS — COMPLETE FLOW [TARGET]
 
 ```
 VacationPlanner (Node A) agent calls FoodieAI (Node B) find_restaurant:
@@ -1331,7 +1392,7 @@ VacationPlanner (Node A) agent calls FoodieAI (Node B) find_restaurant:
 
 ---
 
-# DEPENDENCY GRAPH (FINAL)
+# DEPENDENCY GRAPH [TARGET — shows post-extraction package structure]
 
 ```
 @pando/identity ──────────────────────────────────────────┐
@@ -1363,7 +1424,7 @@ No circular dependencies. One-way flow. Three products:
 
 ---
 
-# DATABASE STRATEGY
+# DATABASE STRATEGY [CURRENT]
 
 ```
 SQLite (via better-sqlite3, WAL mode):
@@ -1387,9 +1448,12 @@ P2P Storage Proxy:
 
 ---
 
-# OBSERVABILITY
+# OBSERVABILITY [TARGET]
 
-Every request across the system carries a traceId:
+The distributed tracing system below is designed but not yet implemented.
+Currently, logging uses FileLogger (5MB rotation) without correlation IDs.
+
+Every request across the system will carry a traceId:
 
 ```
 User sends chat message
@@ -1409,7 +1473,7 @@ Cross-node: query multiple nodes with same traceId to reconstruct full flow.
 
 ---
 
-# CONSISTENCY MODEL
+# CONSISTENCY MODEL [CURRENT]
 
 The Pando network uses EVENTUAL CONSISTENCY. This is a deliberate design choice, not a gap.
 
@@ -1452,7 +1516,7 @@ WHY EVENTUAL (not strong):
 
 ---
 
-# TRUST MODEL
+# TRUST MODEL [CURRENT]
 
 ```
 NODE TRUST TIERS:
@@ -1505,7 +1569,10 @@ CREDENTIAL TRUST:
 
 ---
 
-# GOVERNANCE FORK RESOLUTION
+# GOVERNANCE FORK RESOLUTION [TARGET]
+
+The resolution protocol below is designed but not yet implemented. Current governance
+uses auto-approve for dev mode (<=8 peers) with no fork resolution.
 
 ```
 SCENARIO: Network partitions. Both halves approve conflicting governance proposals.
@@ -1541,7 +1608,7 @@ PREVENTION:
 
 ---
 
-# NODE KEY COMPROMISE / ROTATION
+# NODE KEY COMPROMISE / ROTATION [CURRENT]
 
 ```
 SCENARIO: Node's Ed25519 private key is stolen.
@@ -1589,7 +1656,7 @@ LIMITATION:
 
 ---
 
-# HUMAN ROLE — NO SPECIAL POWERS
+# HUMAN ROLE — NO SPECIAL POWERS [CURRENT]
 
 ```
 CORE PRINCIPLE:
@@ -1655,7 +1722,7 @@ WHY THIS MATTERS:
 
 ---
 
-# LESSON PROMOTION / INSTITUTIONAL MEMORY
+# LESSON PROMOTION / INSTITUTIONAL MEMORY [CURRENT]
 
 ```
 HOW AUTONOMOUS AGENTS BUILD INSTITUTIONAL KNOWLEDGE:
@@ -1693,7 +1760,7 @@ SURVIVAL GUARANTEES:
 
 ---
 
-# AUDIT LOG INTEGRITY
+# AUDIT LOG INTEGRITY [CURRENT — hash chain is TARGET]
 
 ```
 PROBLEM:
@@ -1734,7 +1801,7 @@ CURRENT STATE:
 
 ---
 
-# ANTI-ABUSE HARDENING
+# ANTI-ABUSE HARDENING [MIXED — some implemented, some target]
 
 ```
 GOVERNANCE PROPOSAL RATE LIMITING:
@@ -1774,11 +1841,11 @@ AGENT BUDGET ENFORCEMENT:
 
 # MIGRATION STRATEGY
 
-## Phase 0: Prepare (no code changes)
+## Phase 0: Prepare (no code changes) — NOT STARTED
 - Finalize this bible document
 - Create monorepo structure for all packages
-- Set up CI/CD for each package independently
-- Write comprehensive test plans for each package
+- ⏳ Set up CI/CD for each package independently
+- ⏳ Write comprehensive test plans for each package
 
 ## Phase 1: @pando/identity (new package, standalone) — DONE
 - ✅ Extract crypto from @pando/shared into @pando/identity
@@ -1801,7 +1868,7 @@ AGENT BUDGET ENFORCEMENT:
 - ⏳ Integration tests for all agent features
 - **Data migration:** Existing pando-code SQLite databases (sessions, memory, board) remain in place — schema additions only, no breaking changes. New columns get defaults. Migration script `migrate-code-v2.ts` runs ALTER TABLE for new columns. Rollback: new columns are ignored by old code (additive only).
 
-## Phase 3: @pando/shared + @pando/network + @pando/ledger (extract from node)
+## Phase 3: @pando/shared + @pando/network + @pando/ledger (extract from node) — NOT STARTED
 - Extract shared types from current @pando/shared (keep, expand)
 - Extract network code from kernel/ into @pando/network package
 - Extract ledger code from @pando/ledger (already mostly standalone)
@@ -1809,13 +1876,13 @@ AGENT BUDGET ENFORCEMENT:
 - Verify: each compiles and tests independently
 - **Data migration:** SQLite ledger database schema unchanged (already in @pando/ledger). Known peers table moves from node's main DB to @pando/network's own SQLite file. Migration script `migrate-peers-v3.ts` copies rows, verifies count, then marks old table as deprecated. Rollback: old peers table kept intact, new code falls back to it if new file missing.
 
-## Phase 4: @pando/governance (extract from node)
+## Phase 4: @pando/governance (extract from node) — NOT STARTED
 - Extract governance.ts + security pipeline into @pando/governance
 - Wire dependencies: uses @pando/identity, @pando/ledger, @pando/network
 - Test: proposals, voting, security pipeline all pass independently
 - **Data migration:** Governance tables (proposals, votes, governance_audit) move from node's main SQLite to @pando/governance's own DB file. Migration script `migrate-governance-v4.ts` exports all rows, imports into new DB, verifies integrity (row counts + hash of proposal IDs). Rollback: old tables preserved, governance code checks both locations.
 
-## Phase 5: @pando/node rewrite (the big one)
+## Phase 5: @pando/node rewrite (the big one) — NOT STARTED
 - Create bridge layer (PandoBridge, directives, tick-log)
 - Create orchestrator system (tick loop drives @pando/code engines)
 - Implement engine-bridge (maps identity types, registers custom tools)
@@ -1842,14 +1909,14 @@ AGENT BUDGET ENFORCEMENT:
   - Master migration runner: `migrate-all.ts` runs phase-specific scripts in order, logs each step, aborts on failure with rollback instructions
   - All migration scripts are idempotent (safe to re-run)
 
-## Phase 6: @pando/gateway updates
+## Phase 6: @pando/gateway updates — NOT STARTED
 - Add agent-services UI pages (marketplace capabilities, cross-app calls)
 - Add app management pages (deploy, capabilities, billing)
 - Update API routes for new node API surface
 - Add traceId to all requests
 - **Data migration:** No database migration needed. Gateway is stateless (connects to node API). Update API client to match new endpoint signatures.
 
-## Phase 7: Integration testing + cleanup
+## Phase 7: Integration testing + cleanup — NOT STARTED
 - End-to-end tests: user -> gateway -> node -> engine -> P2P -> cross-app
 - Stress tests: multiple nodes, cross-app calls, failure scenarios
 - Delete all deprecated code (old AI backends, old AgentDatabase, old MessageBus)
@@ -1857,7 +1924,7 @@ AGENT BUDGET ENFORCEMENT:
 - Update genome .know files
 - **Data cleanup:** Drop deprecated tables (`messages_v1_archive`, old peers table) after 30 days of stable operation. Remove migration scripts from production builds (keep in repo under `scripts/migrations/`).
 
-## Phase 8: Launch
+## Phase 8: Launch — NOT STARTED
 - Deploy to all live nodes
 - Verify cross-node compatibility
 - Monitor via observability stack
@@ -2003,7 +2070,7 @@ THIS BIBLE IS VERSION 1.0 OF THE NETWORK'S DNA:
 
 ---
 
-# TRANSACTION CONFIRMATION MODEL
+# TRANSACTION CONFIRMATION MODEL [TARGET]
 
 ```
 PRINCIPLE:
