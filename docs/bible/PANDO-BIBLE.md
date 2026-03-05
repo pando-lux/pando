@@ -1780,22 +1780,25 @@ AGENT BUDGET ENFORCEMENT:
 - Set up CI/CD for each package independently
 - Write comprehensive test plans for each package
 
-## Phase 1: @pando/identity (new package, standalone)
-- Extract crypto from @pando/shared into @pando/identity
-- Implement: NodeIdentity, AgentProfile, SignedAction, verifier
-- Implement: challenge-response, JWT, middleware
-- Unit tests for all crypto and auth operations
-- Publish as standalone npm package
-- **Data migration:** Export existing Ed25519 keypair from `~/.pando/identity` to new @pando/identity format. Write migration script `migrate-identity-v1.ts` that reads old format, writes new. Rollback: old format files are never deleted, only new files added.
+## Phase 1: @pando/identity (new package, standalone) — DONE
+- ✅ Extract crypto from @pando/shared into @pando/identity
+- ✅ Implement: NodeIdentity, AgentProfile, SignedAction, verifier
+- ✅ Implement: JWT (Ed25519-signed), password hashing (scrypt)
+- ✅ Unit tests: 89 tests across 11 files (core crypto, identity, auth, structural typing)
+- ✅ shared/crypto.ts replaced with identity re-exports (406 lines removed)
+- ⏳ Publish as standalone npm package (pending)
+- **Data migration:** Not needed — identity format unchanged. @pando/shared re-exports ensure backward compat.
 
-## Phase 2: @pando/code improvements (existing codebase)
-- Un-hardcode roles (config-driven profiles)
-- Enforce scope in tool execution (not advisory)
-- Fix messaging: configurable TTL, push via subscribe(), request-reply
-- Add service access control per agent
-- Add communication rules (who can message whom)
-- Make agents optional (single-agent mode as default)
-- Integration tests for all agent features
+## Phase 2: @pando/code improvements (existing codebase) — PARTIAL
+- ✅ Un-hardcode roles (custom role strings + built-in enum via z.union)
+- ✅ Add service access control per agent (scope.services, scope.network)
+- ✅ Dual budget system (BudgetProvider interface, USD default, Lux via node)
+- ✅ Agent status expanded (7 states: pending/active/idle/working/done/failed/terminated)
+- ✅ Identity fields in agent DB (parentId, publicKey, certificate — nullable)
+- ✅ Custom roles use explicit tools[], built-ins use role-matrix
+- ⏳ Add communication rules (who can message whom)
+- ⏳ Config presets ("minimal", "coding")
+- ⏳ Integration tests for all agent features
 - **Data migration:** Existing pando-code SQLite databases (sessions, memory, board) remain in place — schema additions only, no breaking changes. New columns get defaults. Migration script `migrate-code-v2.ts` runs ALTER TABLE for new columns. Rollback: new columns are ignored by old code (additive only).
 
 ## Phase 3: @pando/shared + @pando/network + @pando/ledger (extract from node)

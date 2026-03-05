@@ -445,38 +445,34 @@ COMPLETED:
   - DEFERRED: auth/middleware.ts (Fastify dependency — move to Phase 7)
   - All exported from index.ts
   Full monorepo build + 83 tests pass (10 test files).
+
+ADDED LATER (Phase A/B integration):
+  - structural-typing.test.ts (6 tests): Proves AgentProfile → pando-code
+    AgentIdentity via Zod validation. Tests custom roles, all statuses,
+    scope with services+network, BudgetProvider contract (USD + Lux).
+  - Total: 89 tests across 11 test files.
 ```
 
-## Phase 6: Integration + wire into monorepo
+## Phase 6: Integration + wire into monorepo — PARTIAL
 
 ```
-Tasks:
-  - Update shared/crypto.ts to re-export from @pando/identity
-  - Update shared/types.ts to re-export identity types from @pando/identity
-  - Update ALL imports across packages/node/ to use @pando/identity
-    (governance.ts, network.ts, sync.ts, auth middleware)
-  - Update @pando/ledger imports
-  - Rewrite user-accounts.ts in @pando/node to use @pando/identity primitives:
-    hashPassword/verifyPassword from @pando/identity/password
-    encrypt/decrypt from @pando/identity/encryption
-    generate/sign/verify from @pando/identity/keypair + signing
-    issueJwt/verifyJwt from @pando/identity/jwt
-    Account storage stays in MongoDB (via @pando/node, NOT in identity)
-  - Remove duplicated crypto from shared/crypto.ts (keep only re-exports)
-  - Remove duplicated types from shared/types.ts (keep only re-exports)
-  - Run FULL monorepo build: npm run build
-  - Run ALL existing tests
-  - Fix any breakage
+COMPLETED:
+  - shared/crypto.ts replaced with re-exports from @pando/identity
+    406 lines of duplicated crypto deleted, 107 lines of re-exports remain
+  - @pando/shared depends on @pando/identity (package.json updated)
+  - Domain-specific wrappers kept in shared (signMessage, signTransaction,
+    signProposal, verifyProposalSignature — delegate to identity's sign/verify)
+  - Full monorepo builds clean (shared → identity → ledger → node → gateway → mcp-server)
+  - 89 identity tests pass (11 test files)
+  - Structural typing integration test proves identity→code type compatibility
+  - Zero regressions. Old imports via @pando/shared still work.
+  Commit: 993be684
 
-Tests:
-  - npm run build passes (all packages)
-  - All existing node tests pass
-  - All existing ledger tests pass
-  - P2P signing still works (two-node test)
-  - Gateway auth still works
-
-Acceptance: Zero regressions. The monorepo builds and all tests pass.
-Old imports via @pando/shared still work (re-exports).
+REMAINING:
+  - Update user-accounts.ts to use @pando/identity JWT + password primitives
+  - Update auth middleware to use @pando/identity JWT functions
+  - Update shared/types.ts to re-export identity types (NodeIdentity etc.)
+  - Direct @pando/identity imports in node/ code (optional — shared re-exports work)
 ```
 
 ## Phase 7: Cleanup + publish
@@ -501,12 +497,12 @@ Zero storage dependencies. Zero infrastructure deps.
 # DONE CRITERIA
 
 @pando/identity is DONE when:
-1. All 10 test files pass (83 tests — core crypto, identity, auth)
-2. Package compiles standalone (no monorepo deps at build time)
-3. All existing monorepo tests still pass (zero regressions)
-4. shared/crypto.ts is just re-exports (no own implementation)
-5. Published to npm as @pando/identity@0.1.0
-6. Zero storage dependencies (no SQLite, no MongoDB)
+1. All 11 test files pass (89 tests — core crypto, identity, auth, structural typing) ✓
+2. Package compiles standalone (no monorepo deps at build time) ✓
+3. All existing monorepo tests still pass (zero regressions) ✓
+4. shared/crypto.ts is just re-exports (no own implementation) ✓
+5. Published to npm as @pando/identity@0.1.0 — PENDING
+6. Zero storage dependencies (no SQLite, no MongoDB) ✓
 
 ---
 
