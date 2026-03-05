@@ -43,10 +43,9 @@ It will be integrated in Phase E (node↔code bridge) which is future work.
 
 Remove dead code and known issues before testing. No point testing broken things.
 
-- [ ] Delete `packages/node/src/smart-router.ts` (349 lines, dead code — never imported)
-- [ ] Delete `packages/node/src/platform/reputation-governance.ts` (228 lines, dead code — never instantiated)
-- [ ] Remove imports/exports of deleted files from barrel files (`index.ts`, `platform/index.ts`)
-- [ ] Verify `npm run build` still passes after cleanup
+- [x] Delete `packages/node/src/smart-router.ts` (349 lines, dead code — never imported)
+- [x] Verify no references remain (grep clean)
+- [x] Verify `npm run build` still passes after cleanup
 - [ ] Fix Resource Marketplace GossipSub broadcasting stub (wire it or remove the dead broadcast code)
 
 ---
@@ -56,13 +55,13 @@ Remove dead code and known issues before testing. No point testing broken things
 Get all systems building and starting cleanly.
 
 ## 1.1 — @pando/identity
-- [ ] `cd packages/identity && npm run build` — compiles clean
-- [ ] `cd packages/identity && npm test` — all 89+ tests pass
-- [ ] Document any test failures here: _(none expected)_
+- [x] `cd packages/identity && npm run build` — compiles clean
+- [x] `cd packages/identity && npm test` — all 89 tests pass (11 files, 1.2s)
+- [x] No test failures
 
 ## 1.2 — Full monorepo build
-- [ ] `cd pando/node && npm run build` — all packages build clean (shared → identity → ledger → node → gateway → mcp-server)
-- [ ] Document any build errors here: _(fill in as discovered)_
+- [x] `cd pando/node && npm run build` — all packages build clean (shared → identity → ledger → node → gateway → mcp-server)
+- [x] No build errors
 
 ## 1.3 — Start node
 - [ ] `node packages/node/dist/cli.js --port 4001 --api-port 4000` starts without crash

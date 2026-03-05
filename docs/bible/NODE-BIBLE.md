@@ -749,7 +749,6 @@ Witness-based emission: peers must attest that work happened before Lux is minte
 | File | Lines | Why Dead |
 |------|-------|----------|
 | `smart-router.ts` | 349 | Phase 18 heuristic classifier. Exported but never imported or instantiated anywhere. |
-| `platform/reputation-governance.ts` | 228 | Phase 12.4 reputation-weighted voting. Exported but never instantiated in PandoNode. |
 
 ---
 
