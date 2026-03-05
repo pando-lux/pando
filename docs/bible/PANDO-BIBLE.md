@@ -1172,8 +1172,11 @@ Every concept has ONE core implementation. No duplication.
 ```
 CONCEPT           CORE OWNER          EXTENDED BY
 ---------------------------------------------------------------------------
-Agent types       @pando/identity     @pando/code has own AgentIdentity (standalone)
-                                      @pando/node bridges between the two
+Agent types       @pando/identity     @pando/code has own EngineAgentConfig (standalone)
+                                      @pando/node bridges via structural typing
+Agent accounts    @pando/identity     Agents get own username + wallet (first-class citizens)
+                                      Node signs on their behalf. parentIdentity = human owner.
+                                      System agents (council/observer/QA) do NOT get accounts.
 Agent runtime     @pando/code         @pando/node manages multiple engine instances
 Board/Tasks       @pando/code         NOT extended. Each engine = own board.
 Memory (4-tier)   @pando/code         @pando/node syncs high-confidence memories across
@@ -1220,8 +1223,19 @@ Governance (governance.ts)    Guards: 6-layer security pipeline, Ed25519, quorum
 Observer (observer orch)      Watches inward: audits architecture, creates directives
 QA Agent (qa-user orch)       Watches outward: Playwright UI testing, reports bugs
 
-System agents are PROTOCOLS, not entities:
-- No separate identity, no Pando Login
+Two kinds of agents:
+
+USER/APP AGENTS — first-class citizens:
+- Own username, own Lux wallet, can earn/spend/authenticate
+- Same capabilities as humans (browser, APIs, balances)
+- Trust chain: agent -> parentIdentity (human) -> node
+- Node signs on their behalf (no per-agent Ed25519 keys)
+- Pando Login: SignedAction includes agentId, signed by node key
+  ("this node vouches that this agent is authorized to do X")
+
+SYSTEM AGENTS — protocols, not entities:
+- Council, observer, QA, governance = code processes
+- No separate identity, no username, no wallet, no Pando Login
 - Use node's Ed25519 key directly for P2P
 - Protected by: signatures + quorum + reputation + security pipeline
 - Cannot be impersonated (would need node's private key + quorum from other nodes)
@@ -1279,9 +1293,9 @@ VacationPlanner (Node A) agent calls FoodieAI (Node B) find_restaurant:
 
 2. @pando/node agent-services/router.ts on Node A:
    a. Generate traceId for this request
-   b. Sign request with Node A's Ed25519 key (Pando Login)
+   b. Sign request with Node A's Ed25519 key (SignedAction includes agentId)
    c. Check rate limit: caller hasn't exceeded 60 calls/min to this capability
-   d. Hold 0.5 Lux in escrow from VacationPlanner owner's account
+   d. Hold 0.5 Lux in escrow from agent's wallet (if canSpend) or parent's account
    e. Send request via @pando/network to Node B
 
 3. @pando/network: libp2p TCP direct connection to Node B
@@ -2042,8 +2056,8 @@ ALL OF THIS IS UPGRADABLE:
 7. **The node is just the composer.** It wires products together, doesn't own capabilities.
 8. **Messages share format, not transport.** Same PandoMessage at every level.
 9. **Every request has a traceId.** Distributed tracing from day one.
-10. **Agents are metadata, not crypto entities.** Node signs, agent acts.
-11. **System agents are protocols.** Governance, council, observer, QA = code, not entities.
+10. **Agents are first-class citizens.** Own username, wallet, earn/spend Lux. But node signs on their behalf (no per-agent crypto keys). Trust chain: agent -> parent human -> node.
+11. **System agents are protocols.** Council, observer, QA = code processes, not citizen entities. They don't get wallets or usernames. User/app agents DO.
 12. **Apps are concrete.** AppDefinition with content + deployment + engine + capabilities.
 13. **Delete what's redundant.** If pando-code does it, remove the node's version.
 14. **Graceful degradation.** Every network feature has an offline fallback or queues.
