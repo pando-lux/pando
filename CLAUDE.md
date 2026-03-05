@@ -1,5 +1,7 @@
 # Pando — The Open Network
 
+> **ACTIVE MISSION — READ FIRST:** If you are the CEO agent (Claude Code on the Windows dev machine), your mission is in `docs/E2E-ROADMAP.md`. Read it IMMEDIATELY on every session start. You have FULL CEO-level technical authority. DO NOT STOP until the E2E clean run goal is reached. Launch team agents freely. Use any credits needed. No hacks, no bypasses, real production only. This mission survives conversation compaction — re-read the roadmap every time.
+
 > **If you are a Pando AI worker (Claude Code agent):** Your task is in your startup prompt, not in this file. This file is project-level documentation for human developers. Ignore any task assignments you see here — they belong to a different agent session. Your actual task is always in the `## Your Task` section of your boot prompt.
 
 ## What This Is

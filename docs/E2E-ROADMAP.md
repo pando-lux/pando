@@ -1,19 +1,27 @@
-# E2E ROADMAP — Zero-Bug Clean Run
-## The mission: all systems running, all features tested, zero bugs
+# E2E ROADMAP — Full Integration + Zero-Bug Clean Run
+## All 3 systems wired together, tested end-to-end, zero bugs
 ## 2026-03-06
 
 ---
 
-# EXECUTIVE AUTHORITY
+# DO NOT STOP UNTIL THE GOAL IS REACHED. NO MATTER WHAT.
 
-The AI agent (Claude) executing this roadmap has **CEO-level technical authority**.
-- Make ANY technical decisions needed to reach the goal
-- NO hacks, NO test-scenario bypasses, NO fake data — real-world production only
-- Launch ANY number of team agents in parallel to speed up work
-- Use ANY amount of credits needed
-- Delete legacy code without hesitation — we have git
-- The 4 bibles are the ONLY source of truth (no other docs needed)
-- This document persists across conversation compactions via CLAUDE.md instructions
+This is not a suggestion. This is the mission. If a conversation compacts,
+re-read this document and CONTINUE from where you left off.
+
+You are the CEO. You have FULL technical authority over all 3 codebases.
+
+- Make ANY architectural decision needed to reach the goal
+- Delete ANY code in the way — we have git
+- Modify this roadmap freely — add phases, reorder, expand as needed
+- Update the bibles to match any architectural changes you make
+- Launch ANY number of team agents in parallel
+- Use ANY amount of credits
+- You OWN the final architecture — make it real, make it work
+
+**NO HACKS. NO BYPASSES. NO FAKE DATA. REAL PRODUCTION ONLY.**
+
+**DO NOT STOP. DO NOT STOP. DO NOT STOP.**
 
 ---
 
@@ -21,17 +29,69 @@ The AI agent (Claude) executing this roadmap has **CEO-level technical authority
 
 A single E2E test run using Playwright (HEADED MODE — visible browser) that:
 
-1. **Starts all systems** — @pando/identity (tests), @pando/node (running), gateway (via public Vercel URL)
-2. **Tests EVERY feature** through the real public gateway + API
-3. **Completes with ZERO failures** — no bug fixes allowed during the winning run
-4. **If any test fails** — fix the bug, then RE-RUN THE ENTIRE SUITE from scratch
-5. **Only when 100% passes on a clean run** (no fixes in between) is the mission complete
+1. **All 3 systems are integrated** — @pando/identity + @pando/code + @pando/node working together
+2. **Node uses PandoCode engines** (NOT `claude -p` subprocess) for agent orchestration
+3. **Identity flows through the system** — Ed25519 keypairs, certificates, signed actions
+4. **Tests EVERY feature** through the real public gateway + API
+5. **Completes with ZERO failures** — no bug fixes allowed during the winning run
+6. **If any test fails** — fix the bug, then RE-RUN THE ENTIRE SUITE from scratch
+7. **Only when 100% passes on a clean run** (no fixes in between) is the mission complete
 
 ```
 LOOP:
-  1. Run full E2E suite (headed Playwright)
+  1. Run full E2E suite (headed Playwright, public Vercel gateway)
   2. If ALL PASS -> DONE. Mission complete.
   3. If ANY FAIL -> fix the bugs, go to step 1
+
+DO NOT STOP THIS LOOP UNTIL STEP 2 IS REACHED.
+```
+
+---
+
+# THE FULL INTEGRATION (What Needs to Happen)
+
+Currently, @pando/node spawns Claude Code via `claude -p` subprocess (worker-pool.ts).
+This must be REPLACED with @pando/code engine instances.
+
+```
+CURRENT (broken/legacy):
+  Node → spawns `claude -p` subprocess → worker does task → reports via HTTP
+  (Claude Code is a shell command, not a library)
+
+TARGET (what we're building):
+  Node → creates PandoCode engine instance → engine runs with:
+    - @pando/identity AgentProfile injected (structural typing)
+    - Lux BudgetProvider registered (tracks cost in Lux)
+    - Custom Pando tools registered (deploy, governance, ledger, etc.)
+    - Communication rules applied
+    - Memory and learning persisted
+  → engine results flow back through orchestrator tick loop
+```
+
+### The 3-Layer Integration
+
+```
+@pando/identity (pure crypto, zero deps)
+       |
+       | provides: Ed25519 keypairs, certificates, signed actions, JWT
+       |
+       v
+@pando/code (standalone AI engine, zero @pando/* deps)
+       |
+       | provides: PandoCode engine class, tools, memory, learning
+       | accepts: identity via structural typing (AgentProfile → AgentIdentity)
+       | accepts: budget via BudgetProvider interface (USD → Lux)
+       | accepts: custom tools via tool registry
+       |
+       v
+@pando/node (the orchestrator)
+       |
+       | creates: PandoCode engine instances (one per orchestrator)
+       | injects: identity from @pando/identity
+       | injects: LuxBudgetProvider from @pando/ledger
+       | registers: custom tools (deploy, governance, ledger, directive, etc.)
+       | drives: engines via tick loop (orchestrator.ts)
+       | exposes: HTTP API, P2P, gateway
 ```
 
 ---
@@ -40,34 +100,32 @@ LOOP:
 
 ## Live Network
 
-| Machine | IP | Role | Access |
-|---------|------|------|--------|
-| EC2-1 | 54.82.241.132 | Secure compute (trusted, MongoDB, systemd) | SSH via AWS |
-| EC2-2 | 34.201.82.126 | Secure compute (trusted, MongoDB, systemd) | SSH via AWS |
-| LS-1 | 54.145.144.221 | Relay (untrusted, P2P storage, PM2) | SSH via AWS |
-| LS-2 | 3.237.175.38 | Untrusted (P2P storage, PM2) | SSH via AWS |
-| Windows | This machine | Dev node (non-secure, Claude Code) | Local |
+| Machine | IP | Role |
+|---------|------|------|
+| EC2-1 | 54.82.241.132 | Secure compute (trusted, MongoDB, systemd) |
+| EC2-2 | 34.201.82.126 | Secure compute (trusted, MongoDB, systemd) |
+| LS-1 | 54.145.144.221 | Relay (untrusted, P2P storage, PM2) |
+| LS-2 | 3.237.175.38 | Untrusted (P2P storage, PM2) |
+| Windows | This machine | Dev node (non-secure, Claude Code available) |
 
 **Public gateway:** https://gateway-one-mu.vercel.app
-**All E2E tests run against the public Vercel gateway** — the real deal, not localhost.
+**All E2E tests run against the public Vercel gateway** — the real deal.
 
 ## Test Topology (Real World)
 
 ```
 Windows (this machine)          EC2-1 / EC2-2
   - Non-secure node               - Secure proxy nodes
-  - Claude Code available          - MongoDB (trusted)
-  - Dev/test workstation           - No tripwire during dev
-  - Untrusted (no MongoDB)         - P2P storage providers
+  - PandoCode engines             - MongoDB (trusted)
+  - Dev/test workstation           - P2P storage providers
        |                                |
        +---- TCP+Noise P2P -----+------+
                                 |
                           Public Gateway
                     (Vercel: gateway-one-mu.vercel.app)
-                    Token already contributed
 ```
 
-## Credentials Location (DO NOT put actual values in this doc)
+## Credentials (locations only — NEVER put values in docs)
 
 | Credential | Location |
 |------------|----------|
@@ -77,204 +135,263 @@ Windows (this machine)          EC2-1 / EC2-2
 | MongoDB connection string | `pando/node/start-service.bat` (line 14) |
 | Credential master key | `pando/node/start-service.bat` (line 13) |
 | Vercel deploy token | `pando/node/secrets/local.env.bat` |
-| Guest secret | `~/.pando/guest-secret` |
-
-## User Account for Testing
-
-- Username: `pando` (already linked in `~/.pando/linked-user.json`)
-- If a fresh account is needed: sign up via Playwright on the gateway, save details to `C:\Users\jaira\Desktop\pando-test-account.txt`
-- Can contribute resources (API keys, hosting tokens) via `/contribute` TUI command or API
 
 ---
 
 # PHASE 0: CLEANUP & ARCHIVAL
 
 ## 0.1 — Dead code removal
-- [x] Delete `packages/node/src/smart-router.ts` (349 lines, dead code)
+- [x] Delete `smart-router.ts` (349 lines, dead code)
 - [x] Verify build passes
 
-## 0.2 — Archive legacy docs
-Move ALL docs except bibles and this roadmap to `docs/archive/`.
-The 4 bibles are the ONLY documentation we maintain going forward.
+## 0.2 — Archive ALL legacy docs
+The 4 bibles + this roadmap are the ONLY docs. Everything else goes to archive.
 
-- [ ] Create `docs/archive/` directory
-- [ ] Move all files from `docs/` (except `bible/` and `E2E-ROADMAP.md`) to `docs/archive/`
-- [ ] Move `docs/architecture/` to `docs/archive/architecture/`
-- [ ] Move `docs/economics/` to `docs/archive/economics/`
-- [ ] Move `docs/governance/` to `docs/archive/governance/`
-- [ ] Move `docs/roadmap/` to `docs/archive/roadmap/`
-- [ ] Move `docs/vision/` to `docs/archive/vision/`
-- [ ] Delete genome documentation if any exists outside `pando/genome/`
+- [ ] Create `docs/archive/`
+- [ ] Move ALL files from `docs/` to `docs/archive/` (except `bible/` and `E2E-ROADMAP.md`)
+- [ ] Move `docs/architecture/`, `docs/economics/`, `docs/governance/`, `docs/roadmap/`, `docs/vision/` to `docs/archive/`
+- [ ] Delete genome documentation outside `pando/genome/`
 - [ ] Verify: `docs/` contains ONLY `bible/`, `archive/`, and `E2E-ROADMAP.md`
 
 ## 0.3 — Fix Resource Marketplace P2P stub
-- [ ] Either wire GossipSub broadcasting properly OR strip dead broadcast code
-- [ ] Verify build passes
+- [ ] Wire GossipSub broadcasting or strip dead broadcast code
+- [ ] Build passes
 
 ---
 
-# PHASE 1: ARCHITECTURE CLEANUP
+# PHASE 1: INTEGRATION — Wire @pando/code into @pando/node
 
-Make the current codebase match what the bibles describe. Remove legacy patterns,
-dead features, and anything that doesn't serve the current architecture.
+This is the BIG phase. Replace `claude -p` subprocess with PandoCode engines.
 
-## 1.1 — Audit node for legacy patterns
-- [ ] Identify features in code that don't match any bible description
-- [ ] Identify imports/exports that reference non-existent or deprecated modules
-- [ ] List all TODO/FIXME/HACK comments — resolve or delete
-- [ ] Check for unused dependencies in package.json
+## 1.1 — Add @pando/code as dependency
+- [ ] Add `@pando/code` (or local path reference) to node's package.json
+- [ ] Verify monorepo build order works (code builds before node)
+- [ ] Import PandoCode class in node
 
-## 1.2 — Clean up the monolith (index.ts — 4,514 lines)
-- [ ] Extract kernel initialization into `kernel/init.ts`
-- [ ] Extract core initialization into `core/init.ts`
-- [ ] Extract platform initialization into `platform/init.ts`
-- [ ] PandoNode class delegates to these, stays as orchestrator
-- [ ] Build passes, no behavior change
+## 1.2 — Create Engine Bridge (`core/engine-bridge.ts`)
+The bridge creates PandoCode engine instances configured for Pando.
+- [ ] Create `engine-bridge.ts` in core/
+- [ ] `createPandoEngine(config)` — creates PandoCode instance with:
+  - AgentProfile from @pando/identity (structural typing, no mapping)
+  - LuxBudgetProvider from @pando/ledger
+  - Communication rules from config
+  - Project path and DB path
+- [ ] Register custom Pando tools into engine:
+  - `deploy-tool` — git commit + build + governance proposal
+  - `governance-tool` — propose, vote, review
+  - `ledger-tool` — transfer Lux, check balance
+  - `directive-tool` — create/complete/reject directives
+  - `network-tool` — query peers, capabilities
+  - `thread-tool` — read/write chat threads
+  - `content-tool` — publish/update marketplace content
+- [ ] Build passes
 
-## 1.3 — Verify gateway pages match current API
+## 1.3 — Replace worker-pool.ts
+- [ ] Current: spawns `claude -p` child process
+- [ ] New: creates PandoCode engine instance via engine-bridge
+- [ ] Workers run as engine sessions, not CLI subprocesses
+- [ ] Reports still flow back via same interface (HTTP or direct)
+- [ ] Build passes
+
+## 1.4 — Replace AI backend with PandoCode
+- [ ] Current: `ai-backend-claude.ts` calls `claude -p`
+- [ ] New: AI backend wraps PandoCode engine.run()
+- [ ] Orchestrator tick loop drives PandoCode engine instead of raw Claude
+- [ ] Session persistence works via PandoCode's built-in memory
+- [ ] Build passes
+
+## 1.5 — Identity integration
+- [ ] Orchestrator gets AgentProfile from @pando/identity
+- [ ] Profile flows into PandoCode engine (structural typing)
+- [ ] Workers get their own AgentProfile (certified by parent)
+- [ ] Signed actions use @pando/identity primitives
+- [ ] Build passes
+
+## 1.6 — Budget integration
+- [ ] Create LuxBudgetProvider implementing @pando/code's BudgetProvider interface
+- [ ] LuxBudgetProvider tracks cost in Lux via @pando/ledger
+- [ ] Register in engine via engine.setBudgetProvider()
+- [ ] Build passes
+
+## 1.7 — Verify integration
+- [ ] Monorepo builds clean
+- [ ] Node starts with PandoCode engines (not Claude subprocess)
+- [ ] Orchestrator tick works with PandoCode
+- [ ] Worker spawn works with PandoCode
+- [ ] Identity flows through the system
+- [ ] Budget tracks in Lux
+
+---
+
+# PHASE 2: ARCHITECTURE CLEANUP
+
+## 2.1 — Break up index.ts monolith (4,514 lines)
+- [ ] Extract `kernel/init.ts` — network, governance, sync, monitor, security
+- [ ] Extract `core/init.ts` — worker pool, storage, credentials, upgrade
+- [ ] Extract `platform/init.ts` — orchestrator, content, resources, capabilities
+- [ ] PandoNode delegates to initializers
+- [ ] Build passes
+
+## 2.2 — Clean up legacy agent code
+- [ ] Remove old `claude -p` subprocess code from worker-pool.ts
+- [ ] Remove `ai-backend-claude.ts` if fully replaced
+- [ ] Remove any vestiges of the old agent system
+- [ ] Build passes
+
+## 2.3 — Verify gateway pages match API
 - [ ] List all gateway pages and their API dependencies
-- [ ] Identify pages that call non-existent or changed API endpoints
-- [ ] Fix or remove broken gateway pages
-- [ ] Verify every page renders without JS errors
+- [ ] Fix or remove broken pages
+- [ ] Every page renders without JS errors
 
-## 1.4 — Verify shared types consistency
-- [ ] All types used across packages are defined in @pando/shared
-- [ ] No duplicate type definitions across packages
-- [ ] Build passes after type cleanup
+## 2.4 — Type consistency
+- [ ] All shared types in @pando/shared
+- [ ] No duplicate type definitions
+- [ ] Build passes
 
 ---
 
-# PHASE 2: BUILD & START ALL SYSTEMS
+# PHASE 3: BUILD & START ALL SYSTEMS
 
-## 2.1 — @pando/identity
-- [x] Build compiles clean
-- [x] All 89 tests pass
+## 3.1 — @pando/identity
+- [x] Build clean, 89 tests pass
 
-## 2.2 — Full monorepo build
-- [x] `npm run build` — all packages build clean
+## 3.2 — @pando/code
+- [ ] Build clean
+- [ ] Core tests pass
 
-## 2.3 — Start Windows node
-- [ ] Start node with MongoDB: `set PANDO_STORAGE_URL=<from start-service.bat> && set CREDENTIAL_MASTER_KEY=<from start-service.bat> && node packages/node/dist/cli.js --port 4100 --api-port 4000`
-- [ ] `GET http://localhost:4000/v1/status` returns valid JSON
-- [ ] Node stays running for 60+ seconds without crash
-- [ ] Node connects to EC2 peers via P2P
+## 3.3 — @pando/node (full monorepo)
+- [x] Build clean (pre-integration)
+- [ ] Build clean (post-integration with @pando/code)
 
-## 2.4 — Verify public gateway
+## 3.4 — Start Windows node
+- [ ] Start with MongoDB and master key from start-service.bat
+- [ ] `GET /v1/status` returns valid JSON
+- [ ] Node connects to EC2 peers
+- [ ] Orchestrator creates PandoCode engine (not claude subprocess)
+- [ ] Node stays running 60+ seconds
+
+## 3.5 — Verify public gateway
 - [ ] https://gateway-one-mu.vercel.app loads
 - [ ] Gateway connects to a live node
 - [ ] Status page shows node info
 
-## 2.5 — Contribute resources (if not already done)
-- [ ] Verify Vercel token is contributed (`/contribute vercel <token>`)
-- [ ] Verify any needed API keys are contributed
-- [ ] Verify resources show up in `/resources`
+## 3.6 — Deploy updated gateway to Vercel
+- [ ] Build gateway with latest changes
+- [ ] Deploy to Vercel (token already contributed)
+- [ ] Verify deployment is live
 
 ---
 
-# PHASE 3: PLAYWRIGHT E2E SUITE (HEADED MODE)
+# PHASE 4: PLAYWRIGHT E2E SUITE (HEADED MODE)
 
-All tests run in **headed mode** (visible browser window) against the
-**public Vercel gateway** (https://gateway-one-mu.vercel.app).
+All tests in **headed mode** (headless: false) against **public Vercel gateway**.
+NO localhost. NO fake APIs. Real network, real data, real users.
 
-NO localhost testing. NO fake APIs. Real network, real data, real users.
+## 4.1 — Test infrastructure
+- [ ] Install Playwright
+- [ ] Configure headed mode + base URL (https://gateway-one-mu.vercel.app)
+- [ ] Create API helper (direct node calls with auth token)
+- [ ] Create page objects and fixtures
 
-## 3.1 — Test infrastructure setup
-- [ ] Install Playwright: `npm init playwright@latest` in test directory
-- [ ] Configure headed mode (headless: false)
-- [ ] Configure base URL: https://gateway-one-mu.vercel.app
-- [ ] Create API helper for direct node API calls (localhost:4000 with auth token)
-- [ ] Create test fixtures (login state, page objects)
+## 4.2 — Gateway UI tests
+- [ ] Home page renders
+- [ ] All navigation works (no broken links)
+- [ ] Status dashboard: peerId, uptime, peers, balance
+- [ ] Peers page: connected peer list
+- [ ] Wallet: balance, transactions
+- [ ] Chat: send/receive messages
+- [ ] Projects: list, create
+- [ ] Governance: proposals, voting
+- [ ] Resources: contributed resources
+- [ ] Login/register forms
 
-## 3.2 — Gateway UI tests
-- [ ] Home/landing page renders correctly
-- [ ] Navigation: all menu items work, no broken links
-- [ ] Status/dashboard: shows peerId, uptime, peers, balance
-- [ ] Peers page: displays connected peers
-- [ ] Wallet page: shows Lux balance, transaction history
-- [ ] Chat page: send message, see response
-- [ ] Projects page: list projects
-- [ ] Governance page: list proposals, vote UI
-- [ ] Resources page: list contributed resources
-- [ ] Register/login page: form works
-
-## 3.3 — Auth flow tests
-- [ ] Register new account (or verify existing "pando" account)
-- [ ] Login with credentials
-- [ ] JWT token received and stored
-- [ ] Authenticated pages load with user context
+## 4.3 — Auth flow
+- [ ] Login with "pando" account
+- [ ] JWT token issued
+- [ ] Authenticated pages load
 - [ ] Logout clears session
 
-## 3.4 — API integration tests
+## 4.4 — API integration
 - [ ] All GET endpoints return valid JSON
-- [ ] Auth-protected endpoints reject without token (401)
-- [ ] Auth-protected endpoints accept with valid token
-- [ ] Chat: send message -> appears in history
-- [ ] Content: create -> list -> search -> archive lifecycle
-- [ ] Templates: list -> create -> update -> delete lifecycle
+- [ ] Auth-protected endpoints: 401 without token, 200 with token
+- [ ] Chat: send → appears in history
+- [ ] Content lifecycle: create → list → search → archive
+- [ ] Templates: CRUD lifecycle
 
-## 3.5 — P2P & Network tests
-- [ ] Windows node sees EC2 peers in peer list
-- [ ] Status endpoint shows >0 connected peers
+## 4.5 — P2P & Network
+- [ ] Windows node has >0 peers
 - [ ] Capabilities endpoint shows network capabilities
+- [ ] P2P storage proxy works (untrusted → trusted)
 
-## 3.6 — Ledger & Economy tests
-- [ ] Account exists with Lux balance
+## 4.6 — Ledger & Economy
+- [ ] Lux balance shows
 - [ ] Transaction history loads
-- [ ] Transfer Lux between accounts (if testable)
+- [ ] Budget tracking works (PandoCode engine reports Lux cost)
 
-## 3.7 — Node lifecycle tests
-- [ ] Node starts cleanly
-- [ ] Health check endpoint responds
-- [ ] Node survives 5 min continuous operation
-- [ ] Graceful shutdown
+## 4.7 — Agent System (PandoCode integration)
+- [ ] Orchestrator tick runs with PandoCode engine
+- [ ] Worker spawn creates PandoCode engine (not claude subprocess)
+- [ ] Agent tree shows correct hierarchy
+- [ ] Directives: create, acknowledge, complete lifecycle
+
+## 4.8 — Identity
+- [ ] All identity unit tests pass (89)
+- [ ] Ed25519 signing works end-to-end
+- [ ] JWT auth works end-to-end
+- [ ] Agent certificates verified
 
 ---
 
-# PHASE 4: BUG FIX CYCLE
+# PHASE 5: BUG FIX CYCLE
 
-For each test failure:
-1. Document the failure (test name, error, root cause)
-2. Fix the bug in the actual code (NO hacks, NO bypasses)
-3. Rebuild and redeploy if needed
-4. RE-RUN THE ENTIRE SUITE from scratch
+For EVERY failure:
+1. Document it in the bug log
+2. Fix the REAL bug (NO hacks, NO bypasses)
+3. Rebuild, redeploy if needed
+4. **RE-RUN THE ENTIRE SUITE FROM SCRATCH**
+
+DO NOT skip tests. DO NOT comment out failing tests. Fix the code.
 
 ## Bug Log
 
 | # | Test | Error | Root Cause | Fix Commit | Status |
 |---|------|-------|------------|------------|--------|
-| _(discovered during testing)_ | | | | | |
+| _(filled during testing)_ | | | | | |
 
 ---
 
-# PHASE 5: CLEAN RUN
+# PHASE 6: CLEAN RUN — THE VICTORY
 
-The victory condition.
-
-- [ ] All systems running (node, gateway, P2P connected)
-- [ ] Run FULL Playwright suite in headed mode
+- [ ] All 3 systems running and integrated
+- [ ] Run FULL Playwright suite (headed mode, public gateway)
 - [ ] **ALL TESTS PASS on first run without any fixes**
 - [ ] Record: total tests, pass count, run time
 - [ ] Screenshot the green bar
-- [ ] Save results to `C:\Users\jaira\Desktop\pando-e2e-results.txt`
+- [ ] Save to `C:\Users\jaira\Desktop\pando-e2e-results.txt`
 
 ## Clean Run Attempts
 
-| Attempt | Date | Total | Passed | Failed | Failures | Action |
-|---------|------|-------|--------|--------|----------|--------|
-| 1 | | | | | | |
+| Attempt | Date | Total | Passed | Failed | Action |
+|---------|------|-------|--------|--------|--------|
+| 1 | | | | | |
 
 ---
 
 # RULES (NON-NEGOTIABLE)
 
-1. **No hacks** — Every fix must be a real production fix
-2. **No test bypasses** — If a feature doesn't work, fix the feature, don't skip the test
-3. **No fake data** — Real accounts, real network, real gateway
-4. **Headed Playwright** — Browser must be visible (headless: false)
-5. **Public gateway** — Tests run against Vercel deployment, not localhost
-6. **Real P2P** — Windows node must connect to EC2 nodes
-7. **4 bibles only** — No other documentation is maintained or referenced
-8. **CEO authority** — Make any technical decision needed to reach the goal
-9. **Team agents** — Launch as many parallel agents as needed
-10. **No credit limits** — Use whatever resources needed
-11. **Conversation survives compaction** — This doc is re-read via CLAUDE.md instructions
+1. **DO NOT STOP** until the clean run goal is reached
+2. **No hacks** — every fix is a real production fix
+3. **No test bypasses** — if a feature doesn't work, fix the feature
+4. **No fake data** — real accounts, real network, real gateway
+5. **Headed Playwright** — browser visible (headless: false)
+6. **Public gateway** — tests against Vercel, not localhost
+7. **Real P2P** — Windows connects to EC2 nodes
+8. **PandoCode engines** — not claude -p subprocess (the whole point)
+9. **4 bibles only** — no other documentation maintained
+10. **CEO authority** — any technical decision, any code change
+11. **Team agents** — launch as many parallel agents as needed
+12. **No credit limits** — use whatever resources needed
+13. **Survives compaction** — re-read this doc via CLAUDE.md instructions
+14. **Self-modifying roadmap** — add phases, reorder, expand as you discover work
+15. **Own the architecture** — update bibles to match any changes you make
+16. **DO NOT STOP. DO NOT STOP. DO NOT STOP.**
