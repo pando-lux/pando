@@ -15,6 +15,7 @@
  */
 
 import type { ResourceRegistry } from '../platform/resource-registry.js';
+import { OBSERVER_PROMPT, QA_PROMPT, COUNCIL_PROMPT, TOOL_SETS } from './council-prompts.js';
 
 // ─── Dynamic imports (pando-code is ESM, loaded at runtime) ─────────────
 
@@ -197,6 +198,51 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
       parameters: z.object({}),
       execute: async () => ok(await api('GET', '/v1/testing/status')),
     },
+    // ── Findings tools (Council/Observer/QA) ──
+    {
+      name: 'pando_create_finding',
+      description: 'Create a finding (observation or test failure). Used by Observer and QA agents.',
+      parameters: z.object({
+        source: z.enum(['observer', 'qa', 'council', 'user']).describe('Who created this finding'),
+        severity: z.enum(['info', 'warning', 'critical']).describe('Severity level'),
+        category: z.enum(['health', 'test_failure', 'security', 'performance', 'suggestion']).describe('Category'),
+        title: z.string().describe('Short title'),
+        detail: z.string().describe('Full diagnostic detail'),
+        target: z.string().optional().describe('Affected component (e.g. "@pando/node")'),
+      }),
+      execute: async (args: any) => ok(await api('POST', '/v1/findings', args)),
+    },
+    {
+      name: 'pando_list_findings',
+      description: 'List findings. Filter by status, severity, or source.',
+      parameters: z.object({
+        status: z.enum(['open', 'in_progress', 'resolved', 'wont_fix']).optional().describe('Filter by status'),
+        severity: z.enum(['info', 'warning', 'critical']).optional().describe('Filter by severity'),
+        source: z.enum(['observer', 'qa', 'council', 'user']).optional().describe('Filter by source'),
+      }),
+      execute: async (args: any) => {
+        const params = new URLSearchParams();
+        if (args.status) params.set('status', args.status);
+        if (args.severity) params.set('severity', args.severity);
+        if (args.source) params.set('source', args.source);
+        const qs = params.toString();
+        return ok(await api('GET', `/v1/findings${qs ? '?' + qs : ''}`));
+      },
+    },
+    {
+      name: 'pando_update_finding',
+      description: 'Update a finding status. Used by Council to resolve findings.',
+      parameters: z.object({
+        id: z.string().describe('Finding ID'),
+        status: z.enum(['open', 'in_progress', 'resolved', 'wont_fix']).optional().describe('New status'),
+        resolvedBy: z.string().optional().describe('Who resolved it'),
+        actionTaken: z.string().optional().describe('What was done to resolve'),
+      }),
+      execute: async (args: any) => {
+        const { id, ...body } = args;
+        return ok(await api('PATCH', `/v1/findings/${id}`, body));
+      },
+    },
   ];
 }
 
@@ -216,6 +262,10 @@ export interface AdapterConfig {
   observerIntervalMs?: number;
   /** QA check interval (ms). Default: 30 min. */
   qaIntervalMs?: number;
+  /** Council check interval (ms). Default: 15 min. */
+  councilIntervalMs?: number;
+  /** Enable council/observer/QA agents. Default: false (opt-in). */
+  enableCouncil?: boolean;
 }
 
 export interface ReviewResult {
@@ -289,6 +339,11 @@ export class EngineAdapter {
       });
 
       this.scheduler.start();
+    }
+
+    // Start council agents if enabled
+    if (config.enableCouncil) {
+      await this.startCouncilAgents();
     }
 
     this.started = true;
@@ -395,6 +450,93 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     await this.pool?.shutdown();
     this.started = false;
     console.log('[EngineAdapter] Shut down.');
+  }
+
+  // ─── Council Agents ──────────────────────────────────────────────────
+
+  /**
+   * Start the three council agents: Observer, QA, Council.
+   * Each is a PandoCode engine with a specialized system prompt and tool set.
+   * See BIBLE.md Section 5.10 for architecture.
+   */
+  private async startCouncilAgents(): Promise<void> {
+    if (!this.pool || !this.config) return;
+
+    const { join } = await import('node:path');
+    const { mkdirSync } = await import('node:fs');
+    const baseDir = this.config.dataDir || join((await import('node:os')).homedir(), '.pando');
+
+    const agents = [
+      { id: 'observer', prompt: OBSERVER_PROMPT, toolSet: TOOL_SETS.observer },
+      { id: 'qa',       prompt: QA_PROMPT,       toolSet: TOOL_SETS.qa },
+      { id: 'council',  prompt: COUNCIL_PROMPT,  toolSet: TOOL_SETS.council },
+    ] as const;
+
+    for (const agent of agents) {
+      const agentDir = join(baseDir, 'council', agent.id);
+      mkdirSync(agentDir, { recursive: true });
+
+      await this.pool.getOrCreate(agent.id, {
+        projectPath: agentDir,
+        systemPrompt: agent.prompt,
+      });
+
+      // Apply tool filtering for restricted agents
+      if (agent.toolSet) {
+        const engine = this.pool.get(agent.id);
+        if (engine?.tools) {
+          const allowed = new Set(agent.toolSet);
+          const allTools = engine.tools.list?.() || [];
+          for (const tool of allTools) {
+            if (tool.name?.startsWith('pando_') && !allowed.has(tool.name)) {
+              engine.tools.unregister?.(tool.name);
+            }
+          }
+        }
+      }
+
+      console.log(`[EngineAdapter] Council agent "${agent.id}" started.`);
+    }
+
+    // Register scheduler ticks for each agent
+    if (this.scheduler) {
+      const observerInterval = this.config.observerIntervalMs ?? 30 * 60_000;
+      const qaInterval = this.config.qaIntervalMs ?? 30 * 60_000;
+      const councilInterval = this.config.councilIntervalMs ?? 15 * 60_000;
+
+      this.scheduler.register({
+        name: 'observer-tick',
+        engineId: 'observer',
+        intervalMs: observerInterval,
+        prompt: 'Run your periodic checks. Monitor network health, peer connectivity, deployment status. Report anomalies as findings.',
+        active: true,
+      });
+
+      this.scheduler.register({
+        name: 'qa-tick',
+        engineId: 'qa',
+        intervalMs: qaInterval,
+        prompt: 'Run your test suite. Check API health, peer connectivity, project system integrity. Report failures as findings.',
+        active: true,
+        delayMs: Math.floor(observerInterval / 2), // offset by half to stagger
+      });
+
+      this.scheduler.register({
+        name: 'council-tick',
+        engineId: 'council',
+        intervalMs: councilInterval,
+        prompt: 'Check findings. Read open findings, prioritize by severity, and act on actionable items. Resolve what you can.',
+        active: true,
+      });
+
+      console.log('[EngineAdapter] Council scheduler ticks registered.');
+    }
+  }
+
+  /** Check if council agents are running. */
+  isCouncilActive(): boolean {
+    if (!this.pool) return false;
+    return this.pool.has('observer') && this.pool.has('qa') && this.pool.has('council');
   }
 
   // ─── Internal ─────────────────────────────────────────────────────────

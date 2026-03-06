@@ -11,6 +11,8 @@
 import { execSync } from 'node:child_process';
 import { safeGitReset } from '../core/upgrade-protocol.js';
 import type { RouteHelpers } from './middleware/auth.js';
+import { getFindingsStore } from '../core/findings-store.js';
+import type { CreateFindingInput, UpdateFindingInput, FindingStatus, FindingSeverity, FindingSource } from '../core/findings-store.js';
 
 export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Promise<void> {
   const { node } = deps;
@@ -380,6 +382,52 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         return reply.code(404).send({ error: 'Peer not found in active quarantine.' });
       }
       return { appealed: true, entry };
+    });
+
+    // ── Findings API (Council/Observer/QA communication) ────────────────────
+
+    const findings = getFindingsStore();
+
+    // POST /findings — Create a finding
+    fastify.post('/findings', async (request: any, reply: any) => {
+      const body = request.body as CreateFindingInput | undefined;
+      if (!body?.title || !body?.severity || !body?.category || !body?.source) {
+        return reply.code(400).send({ error: 'Required: source, severity, category, title, detail' });
+      }
+      const finding = findings.create({
+        source: body.source,
+        severity: body.severity,
+        category: body.category,
+        title: body.title,
+        detail: body.detail || '',
+        target: body.target,
+      });
+      console.log(`[findings] Created: [${finding.severity}] ${finding.title} (by ${finding.source})`);
+      return finding;
+    });
+
+    // GET /findings — List findings with optional filters
+    fastify.get('/findings', async (request: any) => {
+      const status = request.query?.status as FindingStatus | undefined;
+      const severity = request.query?.severity as FindingSeverity | undefined;
+      const source = request.query?.source as FindingSource | undefined;
+      return { findings: findings.list({ status, severity, source }) };
+    });
+
+    // PATCH /findings/:id — Update a finding (Council resolves)
+    fastify.patch('/findings/:id', async (request: any, reply: any) => {
+      const id = request.params.id as string;
+      const body = request.body as UpdateFindingInput | undefined;
+      if (!body) return reply.code(400).send({ error: 'Body required' });
+      const updated = findings.update(id, body);
+      if (!updated) return reply.code(404).send({ error: 'Finding not found' });
+      console.log(`[findings] Updated ${id}: status=${updated.status}`);
+      return updated;
+    });
+
+    // GET /findings/summary — Counts by severity/status
+    fastify.get('/findings/summary', async () => {
+      return findings.summary();
     });
 
     // ── Chat API (Phase 27: AgentManager) ──────────────────────────────────
