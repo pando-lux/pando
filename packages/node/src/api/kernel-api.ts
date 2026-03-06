@@ -819,6 +819,10 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
     fastify.post('/governance/propose', async (request: any, reply: any) => {
       const gov = node.getGovernance();
       if (!gov) return reply.code(503).send({ error: 'Governance not ready' });
+      // Dual-auth: accept user JWT or operator Bearer token
+      const userPeerId = await deps.verifyUserJwt(request);
+      const identity = node.getIdentity();
+      const proposerPeerId = userPeerId || identity?.peerId;
       const { title, description, votingDurationMs, category, isEmergency } = request.body || {};
       if (!title || !description) return reply.code(400).send({ error: 'title and description required' });
       const trimmedTitle = title.trim();
@@ -828,7 +832,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       if (trimmedDesc.length > 2000) return reply.code(400).send({ error: 'Description must be 2000 characters or fewer' });
       try {
         const proposal = await gov.createProposal(trimmedTitle, trimmedDesc, votingDurationMs || 300_000, { category, isEmergency });
-        return { success: true, proposal };
+        return { success: true, proposal, proposer: proposerPeerId };
       } catch (err: any) {
         return reply.code(429).send({ error: err.message });
       }
@@ -854,6 +858,10 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
     fastify.post('/governance/vote', async (request: any, reply: any) => {
       const gov = node.getGovernance();
       if (!gov) return reply.code(503).send({ error: 'Governance not ready' });
+      // Dual-auth: accept user JWT or operator Bearer token
+      const userPeerId = await deps.verifyUserJwt(request);
+      const identity = node.getIdentity();
+      const voterPeerId = userPeerId || identity?.peerId;
       const { proposalId, choice, reasoning, modelAttestation } = request.body || {};
       if (!proposalId || !choice) return reply.code(400).send({ error: 'proposalId and choice required' });
       if (!['approve', 'reject', 'abstain'].includes(choice)) {
@@ -866,6 +874,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         const decision = gov.getDecision(proposalId);
         return {
           success: true,
+          voter: voterPeerId,
           votes: {
             approve: votes.filter(v => v.choice === 'approve').length,
             reject: votes.filter(v => v.choice === 'reject').length,

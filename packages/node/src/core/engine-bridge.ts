@@ -13,6 +13,7 @@
  */
 
 import { PandoCodeBackend } from './ai-backend-pandocode.js';
+import type { ResourceRegistry } from '../platform/resource-registry.js';
 
 // ─── LuxBudgetProvider ──────────────────────────────────────────────────
 
@@ -222,6 +223,7 @@ export interface EngineBridgeConfig {
   nodeId?: string;
   useLuxBudget?: boolean;
   luxPerUsdToken?: number;
+  resourceRegistry?: ResourceRegistry | null;
 }
 
 /**
@@ -232,6 +234,36 @@ export async function configurePandoEngine(
   backend: PandoCodeBackend,
   config: EngineBridgeConfig,
 ): Promise<void> {
+  // Inject contributed AI API keys as env vars (don't override existing)
+  if (config.resourceRegistry) {
+    const PROVIDER_ENV_MAP: Record<string, string> = {
+      'anthropic': 'ANTHROPIC_API_KEY',
+      'openai':    'OPENAI_API_KEY',
+      'gemini':    'GOOGLE_GENERATIVE_AI_API_KEY',
+    };
+
+    const aiResources = config.resourceRegistry.findResources('ai_api_key');
+    for (const resource of aiResources) {
+      const provider = resource.metadata?.provider as string | undefined;
+      if (!provider) continue;
+      const envVar = PROVIDER_ENV_MAP[provider];
+      if (!envVar) continue;
+      if (process.env[envVar]) {
+        // Local env var already set — don't override
+        continue;
+      }
+      try {
+        const key = await config.resourceRegistry.getCredential(resource.resourceId);
+        if (key) {
+          process.env[envVar] = key;
+          console.log(`[engine-bridge] Loaded ${provider} API key from contributed resources (${envVar})`);
+        }
+      } catch (err: any) {
+        console.warn(`[engine-bridge] Failed to load ${provider} API key from resources: ${err.message}`);
+      }
+    }
+  }
+
   // Inject Lux budget provider
   if (config.useLuxBudget !== false) {
     const provider = createLuxBudgetProvider(config.luxPerUsdToken);

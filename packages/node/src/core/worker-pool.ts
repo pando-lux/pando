@@ -1,13 +1,13 @@
 /**
- * WorkerPool — Manages Claude Code worker processes.
+ * WorkerPool — Manages PandoCode worker processes.
  *
- * Extracted from agent-manager.ts. Does ONE thing: spawn/kill Claude Code workers.
+ * Extracted from agent-manager.ts. Does ONE thing: spawn/kill PandoCode workers.
  * All orchestration logic lives in the Orchestrator class.
  *
  * Responsibilities:
  *   - Create workspace directories
  *   - Build slim boot prompt via buildBootPrompt() (workers query context API on demand)
- *   - Start Claude Code processes via AIBackendRegistry
+ *   - Start PandoCode engine instances via AIBackendRegistry
  *   - Register workers in agent_identity table
  *   - Kill workers and clean up
  *
@@ -127,7 +127,7 @@ export class WorkerPool {
   }
 
   /**
-   * Spawn a fresh Claude Code worker process.
+   * Spawn a fresh PandoCode worker process.
    */
   async spawn(config: WorkerConfig): Promise<string> {
     // ── Memory guard: refuse to spawn if system RAM is critically low ──────
@@ -195,7 +195,7 @@ export class WorkerPool {
     const backend = this.aiRegistry.getBest('code-execution');
     if (!backend) {
       this.db.updateAgent(workerId, { status: 'failed' });
-      throw new Error('No AI backend available (Claude Code not found)');
+      throw new Error('No AI backend available (PandoCode engine not loaded)');
     }
 
     // Build the task prompt
@@ -228,16 +228,16 @@ export class WorkerPool {
     const taskPrompt = this.buildBootPrompt(agent, config, workerId, projectRoot, workspaceDir);
 
     // Clone backend for per-worker callbacks
-    const claudeBackend = backend as any;
-    const onProgressOrig = claudeBackend.onProgress;
-    const onPidOrig = claudeBackend.onPid;
+    const engineBackend = backend as any;
+    const onProgressOrig = engineBackend.onProgress;
+    const onPidOrig = engineBackend.onPid;
 
-    claudeBackend.onPid = (pid: number) => {
+    engineBackend.onPid = (pid: number) => {
       this.db.updateAgent(workerId, { pid, status: 'active' });
       this.workerPids.set(workerId, pid);  // track for memory monitoring
     };
 
-    // Start Claude Code process
+    // Start PandoCode engine process
     const resultPromise = backend.execute({
       type: 'code',
       prompt: taskPrompt,
@@ -260,8 +260,8 @@ export class WorkerPool {
     // Handle completion asynchronously
     resultPromise.then((result: AIResult) => {
       // Restore original callbacks
-      claudeBackend.onProgress = onProgressOrig;
-      claudeBackend.onPid = onPidOrig;
+      engineBackend.onProgress = onProgressOrig;
+      engineBackend.onPid = onPidOrig;
 
       this.activeProcesses.delete(workerId);
       this.workerPids.delete(workerId);  // stop tracking memory
@@ -353,8 +353,8 @@ export class WorkerPool {
 
       // Keep sessionId — idle workers can be resumed with assign_task
     }).catch((err) => {
-      claudeBackend.onProgress = onProgressOrig;
-      claudeBackend.onPid = onPidOrig;
+      engineBackend.onProgress = onProgressOrig;
+      engineBackend.onPid = onPidOrig;
       this.activeProcesses.delete(workerId);
       this.workerPids.delete(workerId);  // stop tracking memory
       const agentBeforeCrash = this.db.getAgent(workerId);
@@ -593,7 +593,7 @@ export class WorkerPool {
    */
   private runMemoryWatchdog(): void {
     // Use system free RAM as the trigger, not a hard per-worker limit.
-    // Claude Code sessions vary wildly in size depending on machine RAM — a 9GB worker is
+    // PandoCode sessions vary wildly in size depending on machine RAM — a 9GB worker is
     // fine on a 64GB EC2 but catastrophic on an 8GB laptop. Let the OS tell us when we're desperate.
     const TWO_GB  = 2 * 1024 * 1024 * 1024;
     const ONE_GB  = 1 * 1024 * 1024 * 1024;
@@ -907,11 +907,11 @@ export class WorkerPool {
     const backend = this.aiRegistry.getBest('code-execution');
     if (!backend) throw new Error('No code-execution backend available');
 
-    const claudeBackend = backend as any;
-    const onProgressOrig = claudeBackend.onProgress;
-    const onPidOrig = claudeBackend.onPid;
+    const engineBackend = backend as any;
+    const onProgressOrig = engineBackend.onProgress;
+    const onPidOrig = engineBackend.onPid;
 
-    claudeBackend.onPid = (pid: number) => {
+    engineBackend.onPid = (pid: number) => {
       this.db.updateAgent(workerId, { pid, status: 'active' });
       this.workerPids.set(workerId, pid);
     };
@@ -941,8 +941,8 @@ export class WorkerPool {
 
     // Handle completion asynchronously (mirrors spawn pattern)
     resultPromise.then((result: AIResult) => {
-      claudeBackend.onProgress = onProgressOrig;
-      claudeBackend.onPid = onPidOrig;
+      engineBackend.onProgress = onProgressOrig;
+      engineBackend.onPid = onPidOrig;
       this.activeProcesses.delete(workerId);
       this.workerPids.delete(workerId);
 
@@ -987,8 +987,8 @@ export class WorkerPool {
         }
       }
     }).catch((err) => {
-      claudeBackend.onProgress = onProgressOrig;
-      claudeBackend.onPid = onPidOrig;
+      engineBackend.onProgress = onProgressOrig;
+      engineBackend.onPid = onPidOrig;
       this.activeProcesses.delete(workerId);
       this.workerPids.delete(workerId);
       const agentBeforeCrash = this.db.getAgent(workerId);

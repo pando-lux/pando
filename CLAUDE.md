@@ -80,7 +80,7 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
 1. User request → MessageBus → Orchestrator inbox
 2. Orchestrator tick (60s) → Tier 2 → session-persistent AI call (boot prompt on first tick, tick update on subsequent)
 3. AI investigates if needed (CAN read files, MUST NOT write code), returns action array
-4. WorkerPool spawns Claude Code worker in project root
+4. WorkerPool spawns PandoCode engine worker in project root
 5. Builder reads/writes code, runs build, reports done via HTTP (3000-char reports + git diff)
 6. Next tick → AI reads builder report (remembers context from previous ticks), decides next step
 7. QA tester independently verifies → reports PASS/FAIL
@@ -134,7 +134,7 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
 |---|---|---|
 | **AgentDatabase** | `platform/agent-database.ts` | SQLite storage for agents, messages, lessons, reflections, tick logs. Single source of truth. |
 | **Orchestrator** | `platform/orchestrator.ts` | Deterministic tick loop with session-persistent AI brain. Tier 1 (deterministic) or Tier 2 (Opus with tools). Session rotates every ~200 ticks. Same class at every hierarchy level. |
-| **WorkerPool** | `core/worker-pool.ts` | Spawn fresh Claude Code workers. Each task gets a clean session with full boot prompt. |
+| **WorkerPool** | `core/worker-pool.ts` | Spawn fresh PandoCode engine workers. Each task gets a clean session with full boot prompt. |
 | **MessageBus** | `core/message-bus.ts` | SQLite-backed persistent message routing. Priority, type-based, sender validation. |
 | **OrgManager** | `platform/org-manager.ts` | Hierarchy: create/dissolve orchestrators, route messages, authority inheritance. |
 | **AIBackendRegistry** | `core/ai-backend-registry.ts` | Pluggable AI backends. Default model: `claude-opus-4-6`. |
@@ -178,10 +178,27 @@ The genome is a knowledge graph compiled from `.know` files. Test scenarios live
 Claude Code is a **contributed resource**, not a node requirement. Most nodes won't have it. The network discovers which nodes have Claude Code via CapabilityProfile (`shareCompute: true`, `sharedCapabilities: ["claude-code"]`). The council runs on whichever node has Claude Code available — it doesn't matter which one. `/contribute claude-code` makes a node available for AI work.
 
 ### Worker lifecycle
-**Workers are always fresh.** Each spawn creates a new Claude Code session with a full boot prompt. Workers do not resume previous sessions — each task gets a clean context. Lessons from previous sessions accumulate in SQLite and are injected into future workers' context API responses.
+**Workers are always fresh.** Each spawn creates a new PandoCode engine session with a full boot prompt. Workers do not resume previous sessions — each task gets a clean context. Lessons from previous sessions accumulate in SQLite and are injected into future workers' context API responses.
+
+### Agent Identity & Pando Login (Phase 8 — live)
+Agents are first-class citizens with their own Ed25519 identity, certified by a human. No passwords — pure cryptographic proof of ownership.
+
+```
+Human (Ed25519 keypair in ~/.pando/identity.json)
+  ↓ createAgent() → signs certificate
+Agent (own Ed25519 keypair, own peerId = wallet)
+  ↓ POST /auth/challenge → nonce
+  ↓ sign(nonce, agentPrivateKey) → hex signature
+  ↓ POST /auth/verify → JWT (24h, stateless)
+  ↓ X-User-Token: <jwt> → authenticated API access
+```
+
+**Key APIs:** `/auth/challenge` (get nonce), `/auth/verify` (Ed25519 sig → JWT), `/auth/me` (profile + balance), `/auth/refresh` (rotate JWT). JWT goes in `X-User-Token` header (not `Authorization: Bearer`, which is operator token).
+
+**Trust chain:** `verifySignedActionFull(action, humanPublicKey)` verifies: action signature (agent key) → certificate signature (human key) → expiry check. All offline, no network needed.
 
 ### Key principle
-**State lives in SQLite, AI brain lives in session.** Orchestrators are deterministic code (setInterval) that resume a persistent Claude Code session each tick. The session provides memory across ticks; SQLite provides ground truth. Sessions rotate every ~200 ticks. Every tick is logged. Lessons, worker sessions, and orchestrator sessions persist across runs.
+**State lives in SQLite, AI brain lives in session.** Orchestrators are deterministic code (setInterval) that resume a persistent PandoCode engine session each tick. The session provides memory across ticks; SQLite provides ground truth. Sessions rotate every ~200 ticks. Every tick is logged. Lessons, worker sessions, and orchestrator sessions persist across runs.
 
 ## How to Build and Run
 
@@ -254,6 +271,10 @@ Key endpoints:
 - `GET /v1/context/identity` — agent identity details
 - `POST /v1/context/discover` — share a discovery (UPSERT by confidence)
 - `GET /v1/gateways` — list all known live gateway deployments across network
+- `POST /v1/auth/challenge` — get Ed25519 challenge token for Pando Login
+- `POST /v1/auth/verify` — verify signed nonce, get JWT (stateless challenge-response)
+- `GET /v1/auth/me` — current user profile + Lux balance (requires JWT)
+- `POST /v1/auth/refresh` — refresh JWT
 
 ## TUI Commands
 
@@ -287,7 +308,7 @@ Key endpoints:
 | Ledger | SQLite via better-sqlite3 |
 | HTTP API | Fastify |
 | Gateway | Next.js 16 + Tailwind |
-| Agent Runtime | Claude Code (Opus) via `claude -p` (child_process spawn) |
+| Agent Runtime | PandoCode engine (@pando-code/core) — in-process, multi-provider |
 | AI Search | OpenAI/Gemini via ResourceRegistry + CredentialStore |
 
 ## Token Economics
@@ -327,6 +348,28 @@ Witness-based emission — peers must attest that work happened before Lux is mi
 | **Shared** | `packages/shared/src/types.ts`, `packages/shared/src/crypto.ts` |
 | **Ledger** | `packages/ledger/src/index.ts`, `packages/ledger/src/transactions.ts` |
 | **Gateway** | `packages/gateway/app/page.tsx`, `packages/gateway/lib/node-connection.ts` |
+
+## Credential Security (IMMUTABLE)
+
+**ALL external credentials are CONTRIBUTED RESOURCES.** Never stored in plaintext.
+
+**The ONLY path for credentials:**
+1. User runs `/contribute <service> <token>` in TUI
+2. Node encrypts with AES-256-GCM → stored in MongoDB `pando_credentials`
+3. `ResourceRegistry` stores metadata (type + status, NEVER the credential)
+4. Metadata broadcasts via GossipSub (NEVER the credential value)
+5. At use time: `ResourceRegistry.getCredential(id)` decrypts from MongoDB
+
+**NEVER:**
+- Read tokens from `secrets/`, env files, bat files, or shell scripts
+- Pass tokens as CLI arguments
+- Log, print, display, or output credential values
+- Store tokens in docs, code, comments, or agent reports
+- Access `pando_credentials` MongoDB collection directly
+
+**ALWAYS:**
+- Use `/contribute` to register → `ResourceRegistry.getCredential()` to access
+- Let `GatewayDeployPool` handle hosting tokens, `ResourceRouter` handle API keys
 
 ## Sprint Rules
 

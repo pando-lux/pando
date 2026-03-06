@@ -78,8 +78,6 @@ import { CloudInstanceManager } from './core/cloud-instance-manager.js';
 import { GatewayDeployPool } from './core/gateway-deploy-pool.js';
 import type { StorageBackend } from './core/storage-backend.js';
 import { AIBackendRegistry } from './core/ai-backend-registry.js';
-import { ClaudeBackend } from './core/ai-backend-claude.js';
-import { OllamaBackend } from './core/ai-backend-ollama.js';
 import { PandoCodeBackend } from './core/ai-backend-pandocode.js';
 import { configurePandoEngine } from './core/engine-bridge.js';
 import { OrchestratorProcessManager } from './platform/orchestrator-manager.js';
@@ -98,8 +96,8 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, openSyn
 const DEFAULT_MANAGER_ID = 'pando-node-mgr';
 
 /**
- * Phase 52.3: Detect if Claude Code CLI is installed and available in PATH.
- * Used to auto-enable the scheduler when Claude Code is present.
+ * Phase 52.3: Detect if PandoCode engine / Claude Code CLI is available.
+ * Used to auto-enable the scheduler when AI capability is present.
  * Has a 10-second timeout to handle slow Windows startup.
  */
 export function detectClaudeCode(): boolean {
@@ -720,7 +718,7 @@ export class PandoNode {
       if (!message) return { error: 'message required' };
 
       // Generate project ID locally — skip MongoDB to avoid circular P2P proxy calls.
-      // When EC2 (no Claude Code) forwards to Windows (has Claude Code) via chat_proxy,
+      // When EC2 (no AI capability) forwards to Windows (has PandoCode) via chat_proxy,
       // calling projectStore.createProject() would P2P-proxy back to EC2 → timeout.
       // The orchestrator only needs a projectId string; full MongoDB record is not required.
       const projectId = randomUUID();
@@ -1781,10 +1779,12 @@ location /apps/${projectId}/ {
     this.resourceMarketplace.setNetwork(this.network);
     this.resourceMarketplace.setLocalPeerId(this.identity.peerId);
 
-    // Handle incoming price broadcasts via capabilities topic (Phase D)
+    // Subscribe to pando/marketplace GossipSub topic for peer price broadcasts
+    await this.resourceMarketplace.subscribeMarketplaceTopic();
+
+    // Also handle legacy price broadcasts via capabilities topic (Phase D backward compat)
     this.network.onPriceBroadcast((priceList, fromPeerId) => {
       this.resourceMarketplace?.handlePriceBroadcast(fromPeerId, priceList);
-      console.log(`[marketplace] Received prices from ${fromPeerId.slice(0, 12)}`);
     });
 
     // Broadcast initial prices
@@ -2119,8 +2119,8 @@ location /apps/${projectId}/ {
 
     });
 
-    // Start agent system (Orchestrator + WorkerPool) — only in 'full' mode (needs Claude Code).
-    // 'compute' and 'relay' modes skip agents (cloud instances don't have Claude Code).
+    // Start agent system (Orchestrator + WorkerPool) — only in 'full' mode (needs PandoCode engine).
+    // 'compute' and 'relay' modes skip agents (cloud instances don't have PandoCode).
     if (this.config.nodeMode !== 'compute' && this.config.nodeMode !== 'relay') {
       this.startAgentSystem();
     } else {
@@ -3339,14 +3339,10 @@ location /apps/${projectId}/ {
 
     const dataDir = this.config.dataDir;
 
-    // v2.1: Initialize AI Backend Registry — detect available backends
-    // PandoCode engine is preferred (in-process, full tool system).
-    // ClaudeBackend (claude -p subprocess) kept as fallback.
+    // Initialize AI Backend Registry — PandoCode is the only backend.
     this.aiBackendRegistry = new AIBackendRegistry();
     const pandoCodeBackend = new PandoCodeBackend();
     this.aiBackendRegistry.register(pandoCodeBackend);
-    this.aiBackendRegistry.register(new ClaudeBackend());
-    this.aiBackendRegistry.register(new OllamaBackend());
     this.aiBackendRegistry.detectAll().then(async () => {
       // Configure PandoCode with Pando-specific integrations (Lux budget, custom tools)
       if (pandoCodeBackend.available) {
@@ -3361,6 +3357,7 @@ location /apps/${projectId}/ {
             apiToken: token,
             nodeId: this.identity?.peerId,
             useLuxBudget: true,
+            resourceRegistry: this.resourceRegistry,
           });
           console.log('[ai-backend] PandoCode engine configured with Lux budget and Pando tools');
         } catch (err: any) {
@@ -4026,7 +4023,7 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
   }
 
   /**
-   * Route a chat/build request to a peer with Claude Code via P2P chat_proxy.
+   * Route a chat/build request to a peer with PandoCode via P2P chat_proxy.
    * Triggers the full pipeline on the remote node (project creation → orchestrator → builder → deploy).
    * Returns immediately with queued status. Results come back via SSE/thread.
    */

@@ -26,7 +26,7 @@ import { Orchestrator } from './orchestrator.js';
 import type { OrchestratorDeps } from './orchestrator.js';
 import { MessageBus } from '../core/message-bus.js';
 import { AIBackendRegistry } from '../core/ai-backend-registry.js';
-import { ClaudeBackend } from '../core/ai-backend-claude.js';
+import { PandoCodeBackend } from '../core/ai-backend-pandocode.js';
 import { OrgManager } from './org-manager.js';
 import { GenomeBridge, GenomeBridgeRegistry } from './genome-bridge.js';
 import { ScenarioRunner } from './scenario-runner.js';
@@ -146,9 +146,9 @@ process.on('message', async (msg: any) => {
     const db = new AgentDatabase(config.dataDir);
     const messageBus = new MessageBus(db);
 
-    // Create own AI backend registry
+    // Create own AI backend registry — PandoCode is the only backend
     const aiRegistry = new AIBackendRegistry();
-    aiRegistry.register(new ClaudeBackend());
+    aiRegistry.register(new PandoCodeBackend());
     await aiRegistry.detectAll();
 
     // Template registry shares the same db

@@ -183,6 +183,22 @@ Third-party service wants to verify an agent:
 The trust chain is: agent key → certificate → human key. Nodes are irrelevant to identity.
 Step 3 adds network-backed reputation but is optional.
 
+**Network-level Pando Login (Ed25519 challenge-response):**
+```
+Agent authenticates to a Pando node:
+
+1. POST /v1/auth/challenge { peerId: agentPeerId }
+   → Node creates challenge token (nonce + sig), returns { challengeToken, nonce }
+2. Agent signs nonce bytes with own Ed25519 private key → hex signature
+3. POST /v1/auth/verify { peerId, challengeToken, signature }
+   → Node verifies challenge token sig (node's key)
+   → Node verifies agent's nonce sig (agent's key from peerId)
+   → Issues JWT: { token, expiresAt } (24h, stateless)
+4. Agent uses JWT via X-User-Token header for authenticated API calls
+   → /auth/me, /projects, /chat/*, /transfer, /transactions
+```
+**E2E verified:** 201 tests including full agent lifecycle (identity→login→Lux→actions→chat).
+
 ### Dependencies
 
 ```
@@ -386,7 +402,7 @@ Today, @pando/node is a single package at `packages/node/` with a 3-layer archit
 
 packages/node/src/
   kernel/     14 files — P2P core (network, sync, governance, guardrails, monitor, security)
-  core/       21 files — Agent system, storage, deploy, credentials, upgrade, payment
+  core/       19 files — Agent system, storage, deploy, credentials, upgrade, payment
   platform/   41 files — Orchestrator, resources, content, chat, projects, hosting
   api/         6 files — HTTP API (kernel-api, core-api, platform-api, context-api, server, auth)
   index.ts    4,514 lines — PandoNode class monolith (wires all components)
@@ -395,7 +411,7 @@ packages/node/src/
   supervisor.ts  Process manager with auto-restart
 ```
 
-The node does NOT yet integrate with @pando/code. There is no `@pando/network` or
+The node integrates with @pando/code via PandoCodeBackend (the ONLY AI backend). ClaudeBackend and OllamaBackend have been removed. There is no `@pando/network` or
 `@pando/governance` as separate packages — that code lives inside the node package.
 
 See NODE-BIBLE.md for detailed documentation of every file in the current architecture.
@@ -466,11 +482,12 @@ It will be extracted into its own package in Phase 3.
     capability-sync.ts Node capability advertisement
     content-sync.ts    Content registry sync (marketplace items)
 
-  topics.ts            10 GossipSub topics:
-                       pando/transactions, pando/proposals, pando/sync,
-                       pando/reputation, pando/emissions, pando/gateways,
-                       pando/capabilities, pando/security, pando/activity,
-                       pando/content
+  topics.ts            13 GossipSub topics:
+                       pando/transactions, pando/governance, pando/sync,
+                       pando/agent-events, pando/emissions, pando/gateways,
+                       pando/capabilities, pando/activity, pando/content,
+                       pando/agents, pando/agent-messages, pando/tasks,
+                       pando/marketplace
 
   Dependencies: @pando/shared (types), @pando/identity (Ed25519 signing)
 ```
@@ -807,7 +824,7 @@ This restructuring happens in Phase 5 of the migration strategy.
   Capability Types (8 — broadcast in CapabilityProfile):
     relay              P2P traffic routing (always on)
     api_keys           AI model access (if any AI keys registered)
-    compute_cpu        Claude Code agent execution (opt-in only)
+    compute_cpu        PandoCode engine execution (opt-in only)
     compute_gpu        ML inference, image generation (opt-in only)
     storage            File hosting, CDN, backup (always on)
     gateway            HTTP API proxy, web UI (always on)
@@ -822,9 +839,44 @@ This restructuring happens in Phase 5 of the migration strategy.
       -> Broadcast profile via GossipSub pando/capabilities
       -> Other nodes update CapabilityRegistry (15-min TTL)
     User: /contribute claude-code
-      -> No credential needed (opts in to share local compute)
+      -> Opts in to share local PandoCode compute with the network
+      -> PandoCode engine handles all AI work (Anthropic/OpenAI/Google providers)
       -> CapabilityProfile updated (compute_cpu: true, shareCompute: true)
       -> Broadcast profile
+      -> Claude Code CLI is just a provider that PandoCode manages internally
+      -> No separate "Claude Code backend" — PandoCode IS the engine
+
+  ================================================================
+  CREDENTIAL SECURITY LAW (IMMUTABLE — applies to ALL agents)
+  ================================================================
+
+  ALL external credentials (Vercel tokens, AWS keys, API keys, MongoDB URIs,
+  GitHub PATs) are CONTRIBUTED RESOURCES. The ONLY path for credentials into
+  the system is: /contribute <service> <token> → AES-256-GCM encrypt →
+  MongoDB pando_credentials → ResourceRegistry metadata (no credential) →
+  GossipSub broadcast (metadata only, NEVER the credential).
+
+  NEVER:
+    - Read tokens from env files, bat files, shell scripts, or secrets/ dir
+    - Pass tokens as CLI arguments (e.g., vercel --token <raw>)
+    - Log, print, display, or output credential values in any form
+    - Store tokens in docs, bibles, roadmaps, comments, or source code
+    - Hardcode tokens anywhere in the codebase
+    - Expose tokens in conversation output, tool calls, or agent reports
+    - Access pando_credentials MongoDB collection directly (use ResourceRegistry)
+    - Bypass CredentialVault encryption for "convenience" or "testing"
+
+  ALWAYS:
+    - Use /contribute <service> <token> to register credentials
+    - Access via ResourceRegistry.getCredential(id) (decrypts at use time)
+    - Let GatewayDeployPool.deployToAll() handle Vercel/Netlify tokens
+    - Let CloudInstanceManager handle AWS credentials
+    - Let ResourceRouter handle AI API keys for task routing
+    - Wipe credential material from memory after use (tripwire pattern)
+
+  This law applies to: human developers, AI agents (Claude Code workers,
+  PandoCode engines, orchestrators, observers, QA agents), and any future
+  automated system interacting with the Pando codebase.
 
   ============================================================
   SECURITY + MONITORING
@@ -1307,12 +1359,13 @@ SYSTEM AGENTS — protocols, not entities:
 
 ---
 
-# ENGINE INSTANCE LIFECYCLE [TARGET]
+# ENGINE INSTANCE LIFECYCLE [CURRENT]
 
-Each orchestrator will get a PERSISTENT PandoCode engine that lives across ticks.
-Today, orchestrators use Claude Code sessions via `claude -p` (child_process spawn),
-not the @pando/code engine. This section describes the target architecture after
-the @pando/code integration (Phase 5).
+Each orchestrator gets a PERSISTENT PandoCode engine that lives across ticks.
+Orchestrators use PandoCode engine instances (@pando-code/core) for all AI operations.
+PandoCode manages providers (Anthropic, OpenAI, Google, Ollama) internally.
+No subprocess spawning — the engine runs in-process. `ai-backend-pandocode.ts` is the
+ONLY AI backend registered in AIBackendRegistry. ClaudeBackend has been removed.
 
 ```
 Node starts
@@ -1565,6 +1618,8 @@ CREDENTIAL TRUST:
   - No per-credential access control (master key decrypts ALL — gap acknowledged)
   - P2P credential proxy restricted: blocks pando_credentials collection
   - Tripwire wipe: zeros master key in memory on compromise detection
+  - NEVER in plaintext files, env vars, CLI args, docs, or agent output
+  - ONLY path in: /contribute → encrypt → MongoDB. ONLY path out: ResourceRegistry.getCredential()
 ```
 
 ---

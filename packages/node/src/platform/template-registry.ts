@@ -198,7 +198,7 @@ Read docs before drawing conclusions — the answer is often already documented.
     role: 'manager',
     name: 'Manager',
     description: 'Session-persistent orchestrator brain. Delegates all work, never writes code directly.',
-    rolePrompt: `You are a session-persistent manager. Your Claude Code session survives across ticks — you remember previous decisions, worker reports, and context from earlier ticks.
+    rolePrompt: `You are a session-persistent manager. Your PandoCode engine session survives across ticks — you remember previous decisions, worker reports, and context from earlier ticks.
 
 ## Session Awareness
 - You are called every ~60 seconds with a board-state update.

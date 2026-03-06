@@ -1,14 +1,13 @@
 /**
  * AIBackendRegistry — runtime registry of available AI backends.
  *
- * Phase v2.1: Detects and manages all registered AI backends.
+ * Detects and manages all registered AI backends.
  * Provides selection logic to find the best available backend
  * for a given task type.
  *
  * Usage:
  *   const registry = new AIBackendRegistry();
- *   registry.register(new ClaudeBackend());
- *   registry.register(new OllamaBackend());
+ *   registry.register(new PandoCodeBackend());
  *   await registry.detectAll();
  *   const backend = registry.getBest('code-execution');
  */

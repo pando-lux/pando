@@ -87,13 +87,13 @@ export async function registerPlatformRoutes(
           // P2P chat proxy — forward to a Claude-capable node for full pipeline
           const p2pResult = await node.routeChatProxyP2P?.(trimmed, threadId);
           if (p2pResult) {
-            const routingReply = 'Routing your request to a Claude-capable node. Full pipeline will run — this may take a few minutes...';
+            const routingReply = 'Routing your request to an AI-capable node. Full pipeline will run — this may take a few minutes...';
             if (threadStore && threadId) {
               await threadStore.addMessage(threadId, { role: 'assistant', content: routingReply, timestamp: Date.now(), tier: 'simple' as any });
             }
             return { status: 'queued', threadId, reply: routingReply, tier: 'complex', routedTo: p2pResult.executedBy };
           }
-          const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
+          const noAgentReply = 'No AI-capable nodes available on the network right now. Run /contribute claude-code on a node with PandoCode to enable this.';
           if (threadStore && threadId) {
             await threadStore.addMessage(threadId, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' as any });
           }
@@ -111,7 +111,7 @@ export async function registerPlatformRoutes(
       const classification = await deps.doormanClassify(trimmed);
 
       if (classification.intent === 'simple' || classification.intent === 'question') {
-        // Doorman answers directly — no Claude Code needed
+        // Doorman answers directly — no PandoCode engine needed
         const doormanReply = classification.response || 'I can help you build apps or answer questions. Try "build me a todo app"!';
         if (threadStore) {
           threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
@@ -132,13 +132,13 @@ export async function registerPlatformRoutes(
         }
         const p2pResult = await node.routeChatProxyP2P?.(trimmed, threadId, String(classification.tier || 1));
         if (p2pResult) {
-          const routingReply = 'Routing your request to a Claude-capable node. Full pipeline will run — this may take a few minutes...';
+          const routingReply = 'Routing your request to an AI-capable node. Full pipeline will run — this may take a few minutes...';
           if (threadStore) {
             await threadStore.addMessage(threadId, { role: 'assistant', content: routingReply, timestamp: Date.now(), tier: 'simple' as any });
           }
           return { status: 'queued', threadId, reply: routingReply, tier: 'complex', routedTo: p2pResult.executedBy };
         }
-        const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
+        const noAgentReply = 'No AI-capable nodes available on the network right now. Run /contribute claude-code on a node with PandoCode to enable this.';
         if (threadStore) {
           await threadStore.addMessage(threadId, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' as any });
         }
@@ -390,7 +390,7 @@ export async function registerPlatformRoutes(
             });
             return { status: 'queued', threadId: id, reply: routingReply, tier: 'complex' };
           }
-          const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
+          const noAgentReply = 'No AI-capable nodes available on the network right now. Run /contribute claude-code on a node with PandoCode to enable this.';
           await threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
           return { status: 'ok', threadId: id, reply: noAgentReply, tier: 'simple' };
         }
@@ -455,7 +455,7 @@ export async function registerPlatformRoutes(
           });
           return { status: 'queued', threadId: id, reply: routingReply, tier: 'complex' };
         }
-        const noAgentReply = 'No Claude-capable nodes available on the network right now. Run /contribute claude-code on a node with Claude Code to enable this.';
+        const noAgentReply = 'No AI-capable nodes available on the network right now. Run /contribute claude-code on a node with PandoCode to enable this.';
         await threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
         return { status: 'ok', threadId: id, reply: noAgentReply, tier: 'simple' };
       }
@@ -1394,12 +1394,15 @@ export async function registerPlatformRoutes(
         return reply.code(400).send({ error: `type must be one of: ${validTypes.join(', ')}` });
       }
 
+      // Dual-auth: use JWT user's peerId if available, fall back to node identity
+      const userPeerId = await deps.verifyUserJwt(request);
       const identity = node.getIdentity();
+      const ownerPeerId = userPeerId || identity?.peerId;
       const record = registry.create({
         type,
         title,
         description,
-        ownerPeerId: identity?.peerId,
+        ownerPeerId,
         repoUrl,
         liveUrl,
         tags,

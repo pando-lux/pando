@@ -5,7 +5,7 @@
  *   - Create and dissolve orchestrators
  *   - Maintain the hierarchy tree (parent/child relationships)
  *   - Route cross-team messages through the hierarchy
- *   - Council selection (top reputation nodes with Claude Code)
+ *   - Council selection (top reputation nodes with AI capability)
  *   - Authority inheritance (children can never exceed parent's authority)
  *   - Find or create project orchestrators
  *
@@ -356,7 +356,7 @@ If stuck, escalate to the council orchestrator.`,
   }
 
   /**
-   * Select council members (top reputation nodes with Claude Code).
+   * Select council members (top reputation nodes with AI capability).
    * Returns node IDs (peer IDs) that should run the council orchestrator.
    *
    * For dev mode: returns the local node as the only council member.

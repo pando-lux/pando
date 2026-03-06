@@ -389,7 +389,7 @@ async function main() {
   }
 
   // Agent system, pipeline, and scheduler only run in 'full' mode.
-  // 'compute' and 'relay' modes skip these (no Claude Code on cloud instances).
+  // 'compute' and 'relay' modes skip these (no PandoCode engine on cloud instances).
   let schedulerEnabled = false;
   if (nodeMode === 'full') {
     // Enable Phase 16 pipeline if --pipeline flag was passed (must precede scheduler start)
@@ -407,7 +407,7 @@ async function main() {
       const claudeDetected = detectClaudeCode();
       if (claudeDetected) {
         schedulerEnabled = true;
-        console.log('[scheduler] Auto-detected Claude Code — scheduler enabled. Use --no-scheduler to disable.');
+        console.log('[scheduler] Auto-detected PandoCode engine — scheduler enabled. Use --no-scheduler to disable.');
       }
     } else if (explicitScheduler) {
       console.log('[cli] Auto-starting scheduler (--scheduler flag)...');

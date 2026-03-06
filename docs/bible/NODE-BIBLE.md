@@ -15,8 +15,8 @@ same node. The node IS the network.
 - `@pando/identity` — Ed25519 identity, agent certificates, JWT, passwords
 - `@pando/ledger` — Lux economy (accounts, transactions, emissions)
 
-**Will integrate (future):**
-- `@pando/code` — AI coding engine (one instance per orchestrator)
+**Integrates with:**
+- `@pando-code/core` — PandoCode AI engine (one instance per orchestrator, ONLY AI backend)
 
 **Modes:**
 - **Network** (default): connected to peers, full P2P, governance, economy
@@ -73,23 +73,26 @@ packages/node/src/
 libp2p P2P networking:
 - **Transport**: TCP + Noise encryption + Yamux multiplexing
 - **Discovery**: mDNS (local), KadDHT, bootstrap peers, manual connect
-- **Pub/Sub**: GossipSub with 10 topics
+- **Pub/Sub**: GossipSub with 13 topics
 - **Relay**: Circuit Relay for NAT traversal
 
-### GossipSub Topics (10)
+### GossipSub Topics (13)
 
 | Topic | Purpose |
 |-------|---------|
 | `pando/transactions` | Lux transfers, emissions |
-| `pando/proposals` | Governance proposals |
+| `pando/governance` | Governance proposals + decisions |
 | `pando/sync` | Ledger catch-up sync |
-| `pando/reputation` | Peer reputation broadcasts |
+| `pando/agent-events` | Peer reputation broadcasts + agent events |
 | `pando/emissions` | Witness emission attestations |
 | `pando/gateways` | Live gateway URL registry |
 | `pando/capabilities` | Node capability advertisements |
-| `pando/security` | Security alerts |
 | `pando/activity` | Node activity summaries (60s interval) |
 | `pando/content` | Content registry sync (marketplace) |
+| `pando/agents` | Agent hierarchy sync |
+| `pando/agent-messages` | Inter-agent P2P messages |
+| `pando/tasks` | Task broadcast + routing |
+| `pando/marketplace` | Resource pricing broadcasts (60s cooldown) |
 
 ## Governance (`kernel/governance.ts`)
 
@@ -174,8 +177,8 @@ Governance bypass for approved changes.
 
 ## Worker Pool (`core/worker-pool.ts`)
 
-Spawns Claude Code workers as child processes:
-- Each task gets a fresh `claude -p` session with full boot prompt
+Spawns AI workers via PandoCode engine instances:
+- Each task gets a fresh PandoCode engine session
 - `buildBootPrompt()` gives ~500 token boot prompt
 - Workers query Context API on demand (not dumped upfront)
 - Workers report via HTTP (`POST /v1/agents/:id/report`)
@@ -192,15 +195,15 @@ SQLite-backed persistent message routing:
 ## AI Backend Registry (`core/ai-backend-registry.ts`)
 
 Pluggable AI backends:
-- `ai-backend-claude.ts` — Claude Code via `claude -p` subprocess
-- `ai-backend-ollama.ts` — Local Ollama models
+- `ai-backend-pandocode.ts` — PandoCode engine (PRIMARY, in-process)
 - Default model: `claude-opus-4-6`
+- PandoCode handles all AI providers internally (Anthropic, OpenAI, Google, Ollama)
 
 ## AI Backend Interface (`core/ai-backend.ts`)
 
 TypeScript interfaces for pluggable AI backends:
 - `AIBackend`, `AITask`, `AIResult` interfaces
-- Implemented by `ai-backend-claude.ts` and `ai-backend-ollama.ts`
+- Implemented by `ai-backend-pandocode.ts`
 - 37 lines — pure type definitions
 
 ## Credential Vault (`core/credential-vault.ts`)
@@ -235,6 +238,51 @@ AES-256-GCM encrypted credentials:
 - Wipe function zeros key in memory
 - Only trusted nodes (with MongoDB) can decrypt
 
+### SECURITY LAW: How Resources Are Contributed
+
+**ALL external credentials (Vercel tokens, AWS keys, API keys, MongoDB URIs, GitHub PATs) are CONTRIBUTED RESOURCES.** They are never stored in plaintext, never in env files, never in code, never in docs.
+
+**The flow:**
+```
+1. User runs: /contribute vercel <token>
+   (or /contribute aws <key> or /contribute openai <key> etc.)
+
+2. Node encrypts the token with AES-256-GCM:
+   - Master key: CREDENTIAL_MASTER_KEY (256-bit, env var on trusted nodes)
+   - Random nonce per credential
+   - Stored in MongoDB collection: pando_credentials
+
+3. ResourceRegistry creates metadata record:
+   - type: hosting_platform (or ai_api_key, storage_db, etc.)
+   - provider: vercel (or netlify, aws, openai, etc.)
+   - status: active
+   - NO credential value in metadata — only type + status
+
+4. Metadata broadcasts to peers via GossipSub (NEVER the credential)
+
+5. When needed (e.g., gateway deploy), code calls:
+   ResourceRegistry.getCredential(resourceId) → decrypts from MongoDB
+```
+
+**NEVER DO:**
+- Read tokens from env files, bat files, or shell scripts
+- Pass tokens as command-line arguments
+- Log, print, or display credential values
+- Store tokens in docs, bibles, roadmaps, or comments
+- Hardcode tokens in source code
+- Expose tokens in conversation output or tool calls
+
+**ALWAYS DO:**
+- Use `/contribute <service> <token>` to register credentials
+- Access via `ResourceRegistry.getCredential(id)` (decrypts at use time)
+- Let `GatewayDeployPool.deployToAll()` handle Vercel/Netlify tokens
+- Let `CloudInstanceManager` handle AWS credentials
+- Let `ResourceRouter` handle AI API keys
+
+**Legacy migration:** If `VERCEL_DEPLOY_TOKEN` env var exists at startup, the node auto-migrates it to an encrypted `hosting_platform` resource and logs a deprecation warning. The env var should then be removed.
+
+**Agent rules:** AI agents (PandoCode engines, Claude Code workers) MUST NOT attempt to read, display, or use raw credential values. They call Pando API tools (`pando_deploy`, `pando_network_capabilities`) which handle credentials internally.
+
 ## Deploy Manager (`core/deploy-manager.ts`)
 
 Git commit + `npm run build` pipeline:
@@ -255,6 +303,10 @@ Deploy gateway to ALL contributed hosting accounts:
 - Provider-agnostic: Vercel, Netlify (`hosting-adapters.ts`)
 - Broadcasts URLs via GossipSub `pando/gateways`
 - Health checks every 5 min
+- **Triggered by:** governance upgrade approval (when diff touches `packages/gateway/`)
+- **Token source:** `ResourceRegistry.getCredential(resourceId)` — decrypts from CredentialStore
+- **NEVER reads raw tokens from env vars, files, or CLI args**
+- **Flow:** governance approves → `deployToAll(commitHash)` → finds hosting_platform resources → decrypts tokens → deploys via adapter → broadcasts URLs
 
 ## Payment Gate (`core/payment-gate.ts`)
 
@@ -580,10 +632,19 @@ All routes prefixed `/v1/`.
 | `/v1/context/team` | GET | Team member status |
 | `/v1/context/identity` | GET | Agent identity details |
 | `/v1/context/discover` | POST | Share a discovery (UPSERT by confidence) |
+| `/v1/auth/challenge` | POST | Get Ed25519 challenge token for Pando Login |
+| `/v1/auth/verify` | POST | Verify signed nonce → issue JWT (stateless) |
+| `/v1/auth/me` | GET | User profile + Lux balance (requires JWT) |
+| `/v1/auth/refresh` | POST | Refresh JWT (returns new token) |
+| `/v1/auth/login` | POST | Username/password login → JWT |
+| `/v1/auth/guest` | POST | Generate ephemeral guest identity → JWT |
+| `/v1/auth/stats` | GET | Identity statistics (public) |
 
 ## Auth Middleware (`api/middleware/auth.ts`)
 
-Bearer token from `~/.pando/api-token`. Required on all POST routes.
+Two auth mechanisms:
+1. **Operator Bearer token** — `Authorization: Bearer <token>` from `~/.pando/api-token`. Required on POST routes for system operations.
+2. **User JWT** — `X-User-Token: <jwt>` or `Authorization: Bearer <jwt>` (if != operator token and >= 64 chars). Issued via Pando Login (Ed25519 challenge-response) or username/password. Required for user-scoped operations (chat, projects, transfers).
 
 ---
 
@@ -718,7 +779,7 @@ Witness-based emission: peers must attest that work happened before Lux is minte
 | Ledger | SQLite via better-sqlite3 |
 | HTTP API | Fastify |
 | Gateway | Next.js 16 + Tailwind |
-| Agent Runtime | Claude Code (Opus) via `claude -p` (child_process spawn) |
+| Agent Runtime | PandoCode engine (@pando-code/core) — in-process, multi-provider |
 | AI Search | OpenAI/Gemini via ResourceRegistry + CredentialStore |
 
 ---

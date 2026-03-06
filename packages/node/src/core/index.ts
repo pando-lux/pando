@@ -8,11 +8,9 @@
  * @pando/ledger, and external npm packages. NOT from platform/*.
  */
 
-// AI Backend abstraction (v2.1)
+// AI Backend abstraction
 export type { AIBackend, AITask, AIResult } from './ai-backend.js';
 export { AIBackendRegistry } from './ai-backend-registry.js';
-export { ClaudeBackend, detectClaudePath } from './ai-backend-claude.js';
-export { OllamaBackend } from './ai-backend-ollama.js';
 
 // Legacy agent system removed — replaced by AgentDatabase + MessageBus + WorkerPool + OrgManager + Orchestrator
 

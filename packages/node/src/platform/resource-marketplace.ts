@@ -3,7 +3,7 @@
  *
  * Node operators set prices for their resources. Buyers can find the
  * cheapest provider for their requirements. Prices are broadcast via
- * GossipSub and cached locally for fast lookups.
+ * GossipSub topic `pando/marketplace` and cached locally for fast lookups.
  */
 
 import type { CapabilityRegistry } from './capability-registry.js';
@@ -16,6 +16,12 @@ import type {
   MarketStats,
   ResourceRoutingRequirements,
 } from '@pando/shared';
+
+// ── Constants ──────────────────────────────────────────────────────────────
+
+export const TOPIC_MARKETPLACE = 'pando/marketplace';
+
+const BROADCAST_COOLDOWN_MS = 60_000; // Max one broadcast per 60 seconds
 
 // ── Default prices (Lux per unit) ──────────────────────────────────────────
 
@@ -36,6 +42,7 @@ export class ResourceMarketplace {
   private registry: CapabilityRegistry;
   private network: PandoNetwork | null = null;
   private localPeerId: string = '';
+  private lastBroadcastAt: number = 0;
 
   // Local node's prices
   private localPrices: Record<string, { pricePerUnit: number; unit: string; currency: 'lux' }> = {};
@@ -220,23 +227,64 @@ export class ResourceMarketplace {
 
   // ── Broadcasting ──────────────────────────────────────────────────────
 
-  /** Broadcast local prices to the network via GossipSub. */
+  /** Subscribe to the `pando/marketplace` GossipSub topic. */
+  async subscribeMarketplaceTopic(): Promise<void> {
+    if (!this.network) return;
+    await this.network.subscribeTopic(TOPIC_MARKETPLACE, (message) => {
+      if (!message.payload) return;
+      const fromPeerId = message.from || 'unknown';
+      if (fromPeerId === this.localPeerId) return;
+      const payload = message.payload as any;
+      if (payload.type === 'price_broadcast' && payload.priceList) {
+        this.handlePriceBroadcast(fromPeerId, payload.priceList);
+        console.log(`[marketplace] Received prices from ${fromPeerId.slice(0, 12)}`);
+      }
+    });
+    console.log(`[marketplace] Subscribed to GossipSub topic: ${TOPIC_MARKETPLACE}`);
+  }
+
+  /** Broadcast local prices to the network via GossipSub.
+   *  Spam-limited to one broadcast per 60 seconds. */
   async broadcastPrices(): Promise<void> {
     if (!this.network || !this.localPeerId) return;
+
+    // Spam prevention: don't broadcast more than once per 60s
+    const now = Date.now();
+    if (now - this.lastBroadcastAt < BROADCAST_COOLDOWN_MS) {
+      console.log('[marketplace] Broadcast throttled (60s cooldown)');
+      return;
+    }
+
+    const prices: Array<{ resourceType: string; pricePerUnit: number; currency: string }> = [];
+    for (const [resourceType, info] of Object.entries(this.localPrices)) {
+      prices.push({
+        resourceType,
+        pricePerUnit: info.pricePerUnit,
+        currency: info.currency,
+      });
+    }
 
     const priceList: PriceList = {
       peerId: this.localPeerId,
       prices: { ...this.localPrices },
-      updatedAt: Date.now(),
+      updatedAt: now,
     };
 
     try {
-      await this.network.publishToTopic('pando/capabilities', {
+      await this.network.publishToTopic(TOPIC_MARKETPLACE, {
         type: 'price_broadcast' as any,
         from: this.localPeerId,
-        timestamp: Date.now(),
-        payload: priceList,
+        timestamp: now,
+        payload: {
+          type: 'price_broadcast',
+          peerId: this.localPeerId,
+          prices,
+          priceList,
+          timestamp: now,
+        },
       } as any);
+      this.lastBroadcastAt = now;
+      console.log(`[marketplace] Broadcast ${prices.length} prices to ${TOPIC_MARKETPLACE}`);
     } catch (err: any) {
       console.error(`[marketplace] Price broadcast failed: ${err.message}`);
     }

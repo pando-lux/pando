@@ -2,7 +2,7 @@
  * Capability Detector — auto-detects node capabilities at startup.
  *
  * Checks for the presence of various tools and hardware:
- *   - claude-code: Claude CLI binary
+ *   - claude-code: Claude Code CLI binary (contributed compute resource)
  *   - docker: Docker daemon
  *   - python: Python 3 interpreter
  *   - node: Node.js runtime (always present)

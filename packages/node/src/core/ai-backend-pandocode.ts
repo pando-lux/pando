@@ -1,12 +1,10 @@
 /**
  * PandoCodeBackend — AI backend powered by @pando-code/core engine.
  *
- * Replaces ClaudeBackend (claude -p subprocess) with in-process PandoCode engine.
- * Implements the same AIBackend interface so the orchestrator and worker-pool
- * continue working via AIBackendRegistry without changes.
+ * The sole AI backend for Pando. Implements the AIBackend interface so the
+ * orchestrator and worker-pool work via AIBackendRegistry.
  *
- * Key differences from ClaudeBackend:
- *   - No subprocess spawn — runs in-process
+ *   - Runs in-process (no subprocess spawn)
  *   - Uses PandoCode's built-in tool system (file ops, edit, bash, search, etc.)
  *   - Supports BudgetProvider injection (Lux via @pando/node)
  *   - Supports custom tool registration (deploy, governance, ledger, etc.)

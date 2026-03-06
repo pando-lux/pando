@@ -74,6 +74,12 @@ export function registerAgentRoutes(
       return reply.code(400).send({ error: 'orchestratorId or projectId is required' });
     }
 
+    // Validate orchestrator exists in agent_identity table
+    const parentAgent = db.getAgent(parentId);
+    if (!parentAgent) {
+      return reply.code(400).send({ error: `Orchestrator "${parentId}" not found. Use GET /v1/agents/tree to see active orchestrators.` });
+    }
+
     try {
       const workerId = await pool.spawn({
         role,

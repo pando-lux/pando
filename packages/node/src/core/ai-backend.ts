@@ -2,7 +2,7 @@
  * AIBackend — interface for pluggable AI execution backends.
  *
  * Phase v2.1: Abstracts the AI execution layer so the agent system
- * is not hardcoded to Claude Code. Any backend (Claude Code, Ollama,
+ * is not hardcoded to PandoCode. Any backend (PandoCode, Ollama,
  * ComfyUI, etc.) can be registered and selected at runtime.
  *
  * Architecture rule: agent.ts must NEVER spawn 'claude' directly.
@@ -22,7 +22,7 @@ export interface AITask {
   type: 'text' | 'code' | 'image';
   prompt: string;
   context?: string;
-  sessionId?: string;       // For resume-able sessions (Claude Code)
+  sessionId?: string;       // For resume-able sessions (PandoCode)
   options?: Record<string, unknown>;
 }
 

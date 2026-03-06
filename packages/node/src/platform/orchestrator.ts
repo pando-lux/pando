@@ -136,7 +136,7 @@ export class Orchestrator {
   private _originPeerId: string | null = null;
   /** Tick counter for periodic self-check (every 10th tick) */
   private _tickCount = 0;
-  /** Claude Code session ID for persistent context across ticks */
+  /** PandoCode session ID for persistent context across ticks */
   private _sessionId: string | null = null;
   /** Number of ticks within the current session */
   private _sessionTickCount = 0;
@@ -753,7 +753,7 @@ export class Orchestrator {
     if (!backend) {
       // Fallback to text-generation if no code-execution backend
       const textBackend = this.deps.aiRegistry.getBest('text-generation');
-      if (!textBackend) throw new Error('Claude CLI not found.');
+      if (!textBackend) throw new Error('No AI backend available (PandoCode engine not loaded)');
       // Legacy path: stateless text call (no session, no tools)
       const prompt = this.buildBootPrompt(board, agent);
       const result = await textBackend.execute({
@@ -1282,7 +1282,7 @@ export class Orchestrator {
       sections.push(`# ROLE: Manager for orchestrator "${agent.role}" (${this.orchestratorId})`);
       sections.push('');
     }
-    sections.push('You are a SESSION-PERSISTENT AI. Your Claude Code session survives across ticks —');
+    sections.push('You are a SESSION-PERSISTENT AI. Your PandoCode engine session survives across ticks —');
     sections.push('you remember previous decisions, worker reports, and context from earlier ticks.');
     if (isObserver) {
       sections.push('You are called every ~30 minutes with a board-state update.');
@@ -1869,7 +1869,7 @@ export class Orchestrator {
     sections.push('');
     sections.push('### For spawning workers (ALWAYS use these for any real work):');
     sections.push(`Available roles: ${availableRoles.join(', ')}`);
-    sections.push('- spawn_worker: Spawn a FRESH Claude Code worker');
+    sections.push('- spawn_worker: Spawn a FRESH PandoCode worker');
     sections.push('  { "type": "spawn_worker", "role": "<role>", "rolePrompt": "description of the task" }');
     sections.push('  Common: role="builder" for code, role="tester" for QA, role="devops" for deployment');
     sections.push('- assign_task: Send a new task to an IDLE worker (reuses their session + context)');

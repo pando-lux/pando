@@ -3,7 +3,7 @@
 /**
  * Pando Interactive Terminal
  *
- * Like Claude Code, but for the Pando network.
+ * Interactive terminal for the Pando network.
  * Run `pando` to start an interactive node.
  *
  * Commands:
@@ -228,12 +228,12 @@ class PandoTUI {
       this.node.enablePipeline();
     }
 
-    // Auto-start scheduler if --scheduler flag was passed or Claude Code was auto-detected
+    // Auto-start scheduler if --scheduler flag was passed or PandoCode engine was auto-detected
     if (autoScheduler) {
       if (args.includes('--scheduler')) {
         this.log(`${c.dim}Auto-starting scheduler (--scheduler flag)...${c.reset}`);
       } else {
-        this.log(`${c.dim}[scheduler] Auto-detected Claude Code — scheduler enabled. Use --no-scheduler to disable.${c.reset}`);
+        this.log(`${c.dim}[scheduler] Auto-detected PandoCode engine — scheduler enabled. Use --no-scheduler to disable.${c.reset}`);
       }
       this.node.startScheduler();
     }
@@ -1269,7 +1269,7 @@ class PandoTUI {
     if (!scheduler) {
       this.log('');
       this.log(`${c.bold}Scheduler${c.reset}: ${c.red}off${c.reset}`);
-      this.log(`  ${c.dim}Scheduler auto-enables when Claude Code is in PATH. Install Claude Code or use ${c.cyan}--scheduler${c.dim} to force-enable.${c.reset}`);
+      this.log(`  ${c.dim}Scheduler auto-enables when PandoCode engine is available. Use ${c.cyan}--scheduler${c.dim} to force-enable.${c.reset}`);
       this.log('');
       return;
     }
@@ -1306,7 +1306,7 @@ class PandoTUI {
 
     const scheduler = this.node.getScheduler();
     if (!scheduler) {
-      this.log(`${c.red}Scheduler not running. Install Claude Code (auto-detects) or start with --scheduler.${c.reset}`);
+      this.log(`${c.red}Scheduler not running. PandoCode engine not detected — start with --scheduler to force-enable.${c.reset}`);
       return;
     }
 
@@ -1374,7 +1374,7 @@ class PandoTUI {
     if (!monitor) {
       this.log('');
       this.log(`${c.bold}Health Monitor${c.reset}: ${c.red}off${c.reset}`);
-      this.log(`  ${c.dim}Auto-enables with scheduler (Claude Code detection) or use ${c.cyan}--monitor${c.dim} flag.${c.reset}`);
+      this.log(`  ${c.dim}Auto-enables with scheduler (PandoCode detection) or use ${c.cyan}--monitor${c.dim} flag.${c.reset}`);
       this.log('');
       return;
     }
@@ -1496,7 +1496,7 @@ class PandoTUI {
     const serviceLower = firstArg?.toLowerCase() || '';
 
     if (serviceLower === 'claude-code' || serviceLower === 'claudecode') {
-      // Phase 97: Explicit opt-in to share Claude Code with the network
+      // Phase 97: Explicit opt-in to share AI compute with the network
       const localCapStore = this.node.getLocalCapabilityStore?.();
       if (!localCapStore) {
         this.log(`${c.red}Capability store not available.${c.reset}`);
@@ -1504,14 +1504,14 @@ class PandoTUI {
       }
       if (!localCapStore.has('claude-code')) {
         this.log('');
-        this.log(`${c.red}Claude Code is not detected on this node.${c.reset}`);
-        this.log(`${c.dim}Install Claude Code and log in (run: claude login), then restart the node.${c.reset}`);
+        this.log(`${c.red}Claude Code CLI is not detected on this node.${c.reset}`);
+        this.log(`${c.dim}Install Claude Code CLI (for contributed compute), or use PandoCode engine directly.${c.reset}`);
         this.log('');
         return;
       }
       if (localCapStore.isSharing('claude-code')) {
         this.log('');
-        this.log(`${c.yellow}Claude Code is already being shared with the network.${c.reset}`);
+        this.log(`${c.yellow}Claude Code compute is already being shared with the network.${c.reset}`);
         this.log(`${c.dim}Use /revoke claude-code to stop sharing.${c.reset}`);
         this.log('');
         return;
@@ -1519,7 +1519,7 @@ class PandoTUI {
       localCapStore.setShared('claude-code');
       this.node.rebuildCapabilityProfile?.();
       this.log('');
-      this.log(`${c.green}✓ Claude Code is now shared with the network.${c.reset}`);
+      this.log(`${c.green}✓ Claude Code compute is now shared with the network.${c.reset}`);
       this.log(`${c.dim}Peers can route compute tasks to your node. You will earn Lux per task.${c.reset}`);
       this.log(`${c.dim}Use /revoke claude-code to stop sharing at any time.${c.reset}`);
       this.log('');
@@ -1662,7 +1662,7 @@ class PandoTUI {
       }
       if (!localCapStore.isSharing('claude-code')) {
         this.log('');
-        this.log(`${c.yellow}Claude Code is not currently being shared.${c.reset}`);
+        this.log(`${c.yellow}Claude Code compute is not currently being shared.${c.reset}`);
         this.log(`${c.dim}Use /contribute claude-code to start sharing.${c.reset}`);
         this.log('');
         return;
@@ -1670,8 +1670,8 @@ class PandoTUI {
       localCapStore.unsetShared('claude-code');
       this.node.rebuildCapabilityProfile?.();
       this.log('');
-      this.log(`${c.green}✓ Claude Code is no longer shared with the network.${c.reset}`);
-      this.log(`${c.dim}Your node will still use Claude Code for its own tasks.${c.reset}`);
+      this.log(`${c.green}✓ Claude Code compute is no longer shared with the network.${c.reset}`);
+      this.log(`${c.dim}Your node will still use PandoCode engine for its own tasks.${c.reset}`);
       this.log(`${c.dim}Peers will stop routing tasks to you within 15 minutes (TTL).${c.reset}`);
       this.log('');
       return;
@@ -2476,7 +2476,7 @@ async function main() {
 
   // Phase 52.3: Scheduler auto-detection
   // --scheduler flag still works (backward compat), but scheduler now auto-enables
-  // when Claude Code is detected in PATH. Use --no-scheduler to explicitly disable.
+  // when AI capability is detected in PATH. Use --no-scheduler to explicitly disable.
   const explicitScheduler = args.includes('--scheduler');
   const noScheduler = args.includes('--no-scheduler');
   let autoScheduler = explicitScheduler;
