@@ -259,8 +259,8 @@ export function registerTestingRoutes(
     try {
       const query = request.query as Record<string, string>;
       const project = query.project || DEFAULT_PROJECT;
-      // Discover spec files from tests/e2e/ directory
-      const specsDir = join(opts.rootDir, 'tests', 'e2e');
+      // Per-project spec directories: tests/e2e/{project}/*.spec.ts
+      const specsDir = join(opts.rootDir, 'tests', 'e2e', project);
       if (!existsSync(specsDir)) {
         return reply.send([]);
       }

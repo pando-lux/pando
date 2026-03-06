@@ -274,7 +274,7 @@ pando/code/
       tool/
         registry.ts              ToolRegistry: register, execute, guardrail enforcement
         23+ built-in tools:      read_file, write_file, edit_file, multiedit, bash,
-                                 glob, grep, list_files, genome, test, run_tests, undo,
+                                 glob, grep, list_files, test, run_tests, undo,
                                  task, manage_tasks, batch, spawn_agent, check_agents,
                                  send_message, ask_user, save_memory, query_memory,
                                  query_knowledge, update_goal
@@ -1309,7 +1309,7 @@ Agent runtime     @pando/code         @pando/node manages multiple engine instan
 Board/Tasks       @pando/code         NOT extended. Each engine = own board.
 Memory (4-tier)   @pando/code         @pando/node syncs high-confidence memories across
                                       engines on same node (shared SQLite, WAL mode)
-Knowledge graph   @pando/code         @pando/node loads genome .know files at init
+Knowledge graph   @pando/code         @pando/node loads @pando/tests for E2E testing
 Tools             @pando/code         @pando/node registers custom tools per engine
 Tool registry     @pando/code         Only implementation. Enforces scope.
 Messaging L1      @pando/code         Intra-engine only. Not extended.
@@ -1991,7 +1991,7 @@ AGENT BUDGET ENFORCEMENT:
 - Stress tests: multiple nodes, cross-app calls, failure scenarios
 - Delete all deprecated code (old AI backends, old AgentDatabase, old MessageBus)
 - Update CLAUDE.md and all docs to match new architecture
-- Update genome .know files
+- Update @pando/tests playbooks and specs
 - **Data cleanup:** Drop deprecated tables (`messages_v1_archive`, old peers table) after 30 days of stable operation. Remove migration scripts from production builds (keep in repo under `scripts/migrations/`).
 
 ## Phase 8: Agent Identity + Launch — AGENT IDENTITY COMPLETE, LAUNCH PENDING

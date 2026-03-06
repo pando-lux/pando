@@ -113,7 +113,7 @@ libp2p P2P networking:
 2. **Security file check** — blocks proposals touching sensitive files
 3. **Diff content scan** — `eval(`, `new Function(` → BLOCK; `.privateKey`, `process.env[]` → WARN
 4. **Build verification** — `npm run build` must pass
-5. **Scenario tests** — API regression tests from genome graph
+5. **Scenario tests** — @pando/tests ScriptedRunner verifies API endpoints via Playwright
 6. **Kernel protection delay** — 60s delay for kernel/ file changes
 
 Proposal lifecycle: `pending → active → passed/rejected/expired`
@@ -431,40 +431,42 @@ The primary mechanism for persistent, reliable inter-agent instructions:
 
 **Rule:** NEVER use `send_message` for findings that must be acted on. Use `create_directive`.
 
-## Genome Bridge (`platform/genome-bridge.ts`)
+## Testing Architecture (@pando/tests)
 
-Reads compiled genome knowledge graph (`output/graph.json`):
-- `contextForTask()` — architecture context for worker boot prompts
-- `GenomeBridgeRegistry` maps `projectId → GenomeBridge`
+@pando/tests is the SINGLE SOURCE OF TRUTH for all testing. No other test framework.
 
-## Scenario Runner (`platform/scenario-runner.ts`)
+### File Layout (per-project)
+```
+tests/e2e/
+  pando-node/          ← Playwright specs for pando-node
+  pando-code/          ← Playwright specs for pando-code (future)
+packages/tests/playbooks/
+  pando-node/          ← Live playbooks for pando-node (6 JSON files)
+  pando-code/          ← Live playbooks for pando-code (future)
+.pando-tests/
+  results.db           ← SQLite (runs, findings, stats — per-project via PandoTester)
+  screenshots/         ← Test screenshots
+  config.json          ← Project config
+```
 
-Reads test scenarios from genome graph:
-- Executes API regression tests via fetch
-- Wired into governance pipeline (crash = abort proposal)
-- 204 E2E tests covering all 34 gateway pages + 80+ API routes (Playwright)
+### Node Integration
+- `testing-api.ts` registers all `/v1/testing/*` routes
+- `PandoTester` instances pooled per-project: `Map<string, PandoTester>`
+- Gateway proxy: `/api/testing/[...path]` → node `/v1/testing/*`
+- Dashboard: gateway `/testing` page
+- Playwright config: per-project projects array in `playwright.config.ts`
 
-## @pando/tests Integration
+### Two Test Modes
+1. **Static (Scripted)**: Playwright `.spec.ts` files, run via ScriptedRunner
+2. **Live**: JSON playbooks with browser automation steps, run via LiveRunner
 
-`@pando/tests` is THE official testing system for the Pando ecosystem. All testing is tracked through it.
-
-**Wiring:** `api/testing-api.ts` mounts `/v1/testing/*` routes that bridge @pando/node to @pando/tests. The gateway dashboard at `/testing` consumes these routes.
-
-**Key routes:**
-- `GET /v1/testing/status` — dashboard overview
+### Key Routes
+- `GET /v1/testing/status` — testing dashboard overview
 - `GET /v1/testing/runs` — run history
-- `GET /v1/testing/runs/:id` — single run detail
-- `POST /v1/testing/run/scripted` — trigger scripted (Playwright) test run
-- `POST /v1/testing/run/live` — trigger live (agent-driven) test run
-- `GET /v1/testing/scenarios` — list scenarios
-- `GET /v1/testing/findings` — findings list
-- `GET /v1/testing/stats` — daily aggregated stats
-
-**Two test modes:**
-- **Scripted** — Playwright automated tests, pass/fail results
-- **Live** — Agent-driven browser interaction, produces findings (bugs, UX issues, suggestions)
-
-**Dashboard:** Gateway page at `/testing` with sidebar navigation (Dashboard, Static Tests, Live Tests, Draft Scenarios), per-project switching (pando-node, pando-code), two-column detail views, 10s auto-refresh.
+- `GET /v1/testing/specs` — list Playwright spec files per project
+- `GET /v1/testing/playbooks` — list live test playbooks per project
+- `POST /v1/testing/run/scripted` — trigger Playwright run
+- `POST /v1/testing/run/live` — trigger live playbook run
 
 **Rule:** All testing goes through @pando/tests. Do not create ad-hoc test scripts outside the framework.
 
@@ -487,14 +489,6 @@ Full autonomous code pipeline with 7 sequential stages (724 lines):
 6. QA — run page/API tests on affected pages (QaRunner)
 7. Commit — stage and commit changes
 - Rollback at each stage on failure
-
-## Genome Agent (`platform/genome-agent.ts`)
-
-Self-maintaining project genome (808 lines):
-- Watches git commits, maps code changes to genome components
-- Detects drift between genome claims and actual filesystem state
-- Generates scoped context for worker boot prompts
-- Used for project architecture awareness
 
 ## Template Registry (`platform/template-registry.ts`)
 
@@ -655,15 +649,19 @@ All routes prefixed `/v1/`.
 | `/v1/chat/history` | GET | Conversation history |
 | `/v1/projects/:id/deploy` | POST | Deploy app |
 | `/v1/projects/:id/undeploy` | POST | Remove deployed app |
-| `/v1/scenarios` | GET | List test scenarios |
-| `/v1/scenarios/run` | POST | Run scenario tests |
+| `/v1/testing/status` | GET | Testing dashboard overview |
+| `/v1/testing/runs` | GET | Run history |
+| `/v1/testing/specs` | GET | List Playwright spec files per project |
+| `/v1/testing/playbooks` | GET | List live test playbooks per project |
+| `/v1/testing/run/scripted` | POST | Trigger Playwright run |
+| `/v1/testing/run/live` | POST | Trigger live playbook run |
 | `/v1/gateways` | GET | All live gateway deployments |
 
 ## Context API (`api/context-api.ts`)
 
 | Endpoint | Method | Purpose |
 |----------|--------|---------|
-| `/v1/context/project` | GET | Genome + lessons context |
+| `/v1/context/project` | GET | Project + lessons context |
 | `/v1/context/lessons` | GET | Lessons by role and project |
 | `/v1/context/team` | GET | Team member status |
 | `/v1/context/identity` | GET | Agent identity details |

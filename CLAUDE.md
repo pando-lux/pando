@@ -105,7 +105,7 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
   2. **Security file check**: Blocks proposals modifying sensitive files (`credential-store.ts`, `governance.ts`, `upgrade-protocol.ts`, etc.) unless description mentions 'security' or 'credential'.
   3. **Diff content scan**: Parses `git diff` for dangerous patterns in ADDED lines. `eval(`, `new Function(` → **block** auto-approve. `.privateKey` access, dynamic `require()`, `process.env[]` → **warn** (logged). `fetch()` and `writeFileSync()` in kernel/ → **warn**.
   4. **Build verification** (`npm run build`): Runs in orchestrator pre-commit pipeline. Failure aborts proposal.
-  5. **Scenario tests** (API regression): ScenarioRunner verifies API endpoints. Failure aborts proposal.
+  5. **Scenario tests** (@pando/tests): ScriptedRunner verifies API endpoints via Playwright. Failure aborts proposal.
   6. **Kernel protection delay**: 60s delay before approval for kernel/ file changes.
 - **Locked upgrade API routes**: All `POST /upgrade/*` routes require operator bearer token (`~/.pando/api-token`). Prevents unauthenticated code injection via HTTP. TUI `/upgrade pull` shows governance-approval warning for unapproved commits.
 - **Observer orchestrator**: Autonomous observer agent (role='observer') created on boot alongside council. 5-min tick interval. Always Tier 2 (AI). Proactively audits architecture, finds bugs, reports issues as directives to council. Cannot spawn workers — observation only.
@@ -126,7 +126,7 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
   - **Observer** (observer orchestrator): Watches inward — audits architecture, verifies design intent matches reality, creates persistent directives for CEO with findings. Cannot write code.
   - **QA User Agent** (qa-user orchestrator): Watches outward — tests gateway UI from a human perspective using Playwright. Spawns qa-tester workers every 5 min. Reports UX issues, bugs, stale data to CEO via directives. Cannot write code or deploy.
   - **Self-check dissolution rule**: Council self-check (every 10th tick) dissolves stale orchestrators. Persistent orchestrators (observer, qa-user) are **exempt** — `if (orch.persistent) continue;` guards in both the stale-check loop and OOM prevention loop. Only project orchestrators dissolve when idle.
-- **Verify-before-deploy hardening**: ScenarioRunner crash now ABORTS proposal (not silent pass-through). Upgrade-protocol hash mismatch STRICTLY rejects pull (no soft warnings). Proposal descriptions include test result audit trail. Commit hash verification: exact match, prefix match, or ancestor check — all others abort.
+- **Verify-before-deploy hardening**: ScriptedRunner crash now ABORTS proposal (not silent pass-through). Upgrade-protocol hash mismatch STRICTLY rejects pull (no soft warnings). Proposal descriptions include test result audit trail. Commit hash verification: exact match, prefix match, or ancestor check — all others abort.
 - **Distributed Hosting Pool**: Anyone contributes hosting tokens via `/contribute vercel <token>` (or `netlify`). On governance approval of gateway changes, ALL contributed hosting accounts get deployed to automatically via `GatewayDeployPool.deployToAll()`. Provider-agnostic adapter pattern (`core/hosting-adapters.ts`). Gateway URLs broadcast via GossipSub `pando/gateways` topic. All nodes know all live gateways. `GET /v1/gateways` returns the full registry. Legacy `VERCEL_DEPLOY_TOKEN` env var auto-migrates to hosting_platform resource on startup. Health checks every 5 min.
 
 ### Agent system components
@@ -139,8 +139,6 @@ Design: Session-persistent AI brain (Opus) inside a deterministic tick loop. Fir
 | **MessageBus** | `core/message-bus.ts` | SQLite-backed persistent message routing. Priority, type-based, sender validation. |
 | **OrgManager** | `platform/org-manager.ts` | Hierarchy: create/dissolve orchestrators, route messages, authority inheritance. |
 | **AIBackendRegistry** | `core/ai-backend-registry.ts` | Pluggable AI backends. Default model: `claude-opus-4-6`. |
-| **GenomeBridge** | `platform/genome-bridge.ts` | Reads compiled genome knowledge graph (`output/graph.json`). Provides `contextForTask()` — architecture context injected into worker boot prompts and council AI prompts. |
-| **ScenarioRunner** | `platform/scenario-runner.ts` | Reads test scenarios from genome graph. Executes API regression tests via fetch. Wired into self-sustaining loop after upgrade. |
 | **QA User Agent** | `platform/orchestrator.ts` (role=`qa-user`) | Autonomous UI tester. Spawns Playwright workers every 5 min to test gateway pages from a human perspective. Reports to CEO via directives. |
 | **OrchestratorProcessManager** | `platform/orchestrator-manager.ts` | Forks system orchestrators (council, observer, qa-user) into separate child processes. IPC bridge for actions needing main process (spawn_worker, commit_code, push_event). Auto-restart on crash. |
 | **orchestrator-process** | `platform/orchestrator-process.ts` | Child process entry point. Creates own AgentDatabase, MessageBus, AIBackendRegistry (WAL-mode SQLite). Proxies workerPool and commit/propose via IPC. |
@@ -170,10 +168,9 @@ Workers no longer get a 20K-token context dump. Instead:
 - **buildBootPrompt()** in `worker-pool.ts` gives workers a slim ~500 token boot prompt
 - Workers query **Context API** on demand: `/v1/context/project`, `/v1/context/lessons`, `/v1/context/team`, `/v1/context/identity`
 - Workers share discoveries via `POST /v1/context/discover` (UPSERT by confidence)
-- **GenomeBridgeRegistry** maps `projectId → GenomeBridge` for per-project genome context
 
-### Genome knowledge system
-The genome is a knowledge graph compiled from `.know` files. Test scenarios live in `genome/knowledge/scenarios/*.know` (64 test nodes). Compile: `python tools/genome/genome.py compile .` → `output/graph.json`. GenomeBridge reads the compiled graph at runtime — zero Python dependency for agents.
+### Testing system (@pando/tests)
+@pando/tests is the single source of truth for all testing. Static tests (Playwright specs) live in `tests/e2e/{project}/`. Live tests (JSON playbooks) live in `packages/tests/playbooks/{project}/`. Results stored in `.pando-tests/results.db` (SQLite). Dashboard at `/testing` in gateway. No other test framework exists.
 
 ### Claude Code as a network resource
 Claude Code is a **contributed resource**, not a node requirement. Most nodes won't have it. The network discovers which nodes have Claude Code via CapabilityProfile (`shareCompute: true`, `sharedCapabilities: ["claude-code"]`). The council runs on whichever node has Claude Code available — it doesn't matter which one. `/contribute claude-code` makes a node available for AI work.
@@ -225,8 +222,8 @@ PANDO_NODE_URL=http://localhost:4000 npx next dev --port 3222
 ### Run tests:
 ```bash
 npm run build
-node tests/test-ledger.mjs         # Unit: ledger operations
-node tests/test-two-nodes.mjs      # Integration: P2P discovery + messaging
+npx playwright test --project pando-node   # Run all E2E tests for pando-node
+npx playwright test --project pando-code   # Run all E2E tests for pando-code
 ```
 
 ## Node CLI Flags
@@ -263,10 +260,13 @@ Key endpoints:
 - `GET /v1/network/capabilities` — all node capabilities across network
 - `POST /v1/projects/:id/deploy` — deploy app
 - `POST /v1/projects/:id/undeploy` — remove deployed app
-- `GET /v1/scenarios` — list test scenarios from genome graph
-- `POST /v1/scenarios/run` — run scenario tests (optional `?category=api`)
-- `GET /v1/scenarios/status` — last scenario run results
-- `GET /v1/context/project` — genome + lessons context for current project
+- `GET /v1/testing/status` — testing dashboard overview
+- `GET /v1/testing/runs` — run history
+- `GET /v1/testing/specs` — list Playwright spec files per project
+- `GET /v1/testing/playbooks` — list live test playbooks per project
+- `POST /v1/testing/run/scripted` — trigger Playwright run
+- `POST /v1/testing/run/live` — trigger live playbook run
+- `GET /v1/context/project` — project + lessons context for current project
 - `GET /v1/context/lessons` — lessons by role and project
 - `GET /v1/context/team` — team member status for an orchestrator
 - `GET /v1/context/identity` — agent identity details
@@ -342,8 +342,8 @@ Witness-based emission — peers must attest that work happened before Lux is mi
 |---|---|
 | **Entry** | `index.ts`, `cli.ts`, `tui.ts` |
 | **Kernel** | `kernel/network.ts` (libp2p), `kernel/governance.ts`, `kernel/monitor.ts`, `kernel/guardrails.ts`, `kernel/sync.ts`, `kernel/reputation.ts`, `kernel/emission-witness.ts`, `kernel/security-monitor.ts` |
-| **Core** | `core/ai-backend-claude.ts`, `core/ai-backend-registry.ts`, `core/storage-backend.ts`, `core/deploy-manager.ts`, `core/upgrade-protocol.ts`, `core/payment-gate.ts`, `core/request-reply.ts`, `core/gateway-deploy-pool.ts`, `core/hosting-adapters.ts` |
-| **Platform** | `platform/agent-tools.ts` (HTTP API), `platform/genome-bridge.ts` (reads compiled genome graph), `platform/scenario-runner.ts` (automated test runner from graph), `platform/resource-router.ts`, `platform/content-registry.ts`, `platform/thread-store.ts`, `platform/capability-detector.ts` |
+| **Core** | `core/ai-backend-pandocode.ts`, `core/ai-backend-registry.ts`, `core/storage-backend.ts`, `core/deploy-manager.ts`, `core/upgrade-protocol.ts`, `core/payment-gate.ts`, `core/request-reply.ts`, `core/gateway-deploy-pool.ts`, `core/hosting-adapters.ts` |
+| **Platform** | `platform/agent-tools.ts` (HTTP API), `platform/orchestrator-process.ts` (child process entry), `platform/resource-router.ts`, `platform/content-registry.ts`, `platform/thread-store.ts`, `platform/capability-detector.ts` |
 | **API** | `api/api-server.ts`, `api/kernel-api.ts`, `api/core-api.ts`, `api/platform-api.ts` |
 | **Agent** | `platform/orchestrator.ts`, `platform/orchestrator-manager.ts` (process isolation), `platform/orchestrator-process.ts` (child entry), `platform/org-manager.ts`, `core/worker-pool.ts`, `core/worker-mcp.ts`, `core/message-bus.ts` |
 | **Shared** | `packages/shared/src/types.ts`, `packages/shared/src/crypto.ts` |

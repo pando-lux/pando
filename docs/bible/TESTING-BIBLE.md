@@ -28,7 +28,7 @@ It is a **standalone package** with zero `@pando/*` dependencies. Any developer 
 
 Think of it as: **Playwright for robots, but with a brain when you need one.**
 
-**Single-project context:** The entire system — dashboard, database, screenshots, playbooks, findings — operates on ONE loaded project at a time. When you initialize `PandoTester({ project: 'pando-node' })`, everything is scoped to that project. Switch projects by pointing to a different root directory. No multi-project views — keep it simple.
+**Per-project isolation:** The node maintains a `Map<string, PandoTester>` — one instance per project. Each shares the same `.pando-tests/results.db` but tags all data with its project name. The gateway dashboard has a project selector dropdown that switches between projects instantly. Playwright specs live in per-project subdirectories: `tests/e2e/{project}/`. Live playbooks live in `packages/tests/playbooks/{project}/`.
 
 ---
 
@@ -512,7 +512,7 @@ This package does NOT import from @pando/identity, @pando/code, @pando/node, or 
 - [x] Reusable helpers: fetchWithRetry, apiGet/Post/Raw (parameterized baseUrl)
 - [x] Wire runner to record runs + step results in SQLite
 - [x] Verified: 227/227 Playwright tests pass through ScriptedRunner pipeline
-- [ ] Move existing tests from `tests/e2e/` into package (deferred — working fine in current location)
+- [x] Move existing tests into per-project directories: `tests/e2e/{project}/*.spec.ts` — DONE 2026-03-06
 
 ### Phase 3: Live Runner — DONE
 - [x] Implement LiveRunner using Playwright library API (chromium.launch, direct page control)

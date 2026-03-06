@@ -1,5 +1,10 @@
 import { defineConfig } from 'playwright/test';
 
+// Per-project test directories: tests/e2e/{project}/*.spec.ts
+// Run all:    npx playwright test
+// Run one:    npx playwright test --project pando-node
+const PROJECTS = ['pando-node', 'pando-code'];
+
 export default defineConfig({
   testDir: './tests/e2e',
   timeout: 60_000,
@@ -15,10 +20,9 @@ export default defineConfig({
     actionTimeout: 15_000,
     navigationTimeout: 30_000,
   },
-  projects: [
-    {
-      name: 'chromium',
-      use: { channel: 'chromium' },
-    },
-  ],
+  projects: PROJECTS.map(name => ({
+    name,
+    testDir: `./tests/e2e/${name}`,
+    use: { channel: 'chromium' },
+  })),
 });

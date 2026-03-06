@@ -274,7 +274,7 @@ Frame history is stored in `frame_history` table for debugging/visibility.
 
 | Type | Role | Tools | Purpose |
 |------|------|-------|---------|
-| `explore` | explorer | read, glob, grep, list, genome, run_tests | Read-only code exploration |
+| `explore` | explorer | read, glob, grep, list, run_tests | Read-only code exploration |
 | `builder` | builder | ALL file tools + bash + test | Write code, edit files |
 | `tester` | tester | read, glob, grep, bash, test, run_tests | Run tests, no file writes |
 | `lead` | coordinator | read + spawn_agent, manage_tasks, check_agents, ask_user, send_message | Delegate work, don't edit |
@@ -371,7 +371,6 @@ Execution pipeline:
 | `glob` | Find files by pattern |
 | `grep` | Search file contents (regex) |
 | `list_files` | List directory contents |
-| `genome` | Query the genome knowledge graph |
 | `test` | Run a specific test file |
 | `run_tests` | Detect and run project test suite |
 | `undo` | Undo last file change (git-based) |
@@ -507,7 +506,7 @@ Scans project source code and builds an AST-based symbol index:
 1. **L3 frame layer**: relevant symbols injected into prompt based on working set
 2. **`query_knowledge` tool**: agents query the graph mid-task
 3. **`read_file` enrichment**: when reading a file, cross-references are appended
-4. **`genome` tool**: query the knowledge graph directly
+4. **`query_knowledge` tool**: query the knowledge graph directly
 
 ---
 
@@ -600,13 +599,13 @@ Enforced at tool execution (NOT advisory):
 
 | Role | Allowed Tools | Max Risk Tier |
 |------|--------------|---------------|
-| builder | read, write, edit, bash, glob, grep, genome, test, undo | Tier 1 (all) |
-| tester | read, bash, glob, grep, genome, test | Tier 4 (tests only) |
-| reviewer | read, glob, grep, genome | Tier 4 (read-only) |
-| planner | read, glob, grep, genome | Tier 4 (read-only) |
-| coordinator | read, glob, grep, genome | Tier 4 (delegates) |
-| explorer | read, glob, grep, genome | Tier 4 (read-only) |
-| lead | read, glob, grep, genome | Tier 4 (delegates) |
+| builder | read, write, edit, bash, glob, grep, test, undo | Tier 1 (all) |
+| tester | read, bash, glob, grep, test | Tier 4 (tests only) |
+| reviewer | read, glob, grep | Tier 4 (read-only) |
+| planner | read, glob, grep | Tier 4 (read-only) |
+| coordinator | read, glob, grep | Tier 4 (delegates) |
+| explorer | read, glob, grep | Tier 4 (read-only) |
+| lead | read, glob, grep | Tier 4 (delegates) |
 | **Custom** | explicit `tools[]` required | Tier 4 (conservative) |
 
 Custom roles (from @pando/identity) must provide an explicit `tools[]` on the agent profile.
@@ -777,7 +776,7 @@ HTTP + WebSocket server. Routes:
 - `GET /v1/agents` — agent tree
 - `POST /v1/chat/approve` — respond to `ask_user` approval
 - `PUT /v1/model` — switch AI model
-- `GET /v1/tests/scenarios` — list test scenarios
+- `GET /v1/testing/scenarios` — list test scenarios
 
 Port 4873 (must match Vite proxy config).
 
