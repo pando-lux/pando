@@ -225,6 +225,13 @@ export async function registerPlatformRoutes(
             tier: deployTier,
           });
           newProjectId = project.id;
+
+          // Set workspace directory so engine + deploy pipeline know where files go
+          const { join: joinPath } = await import('node:path');
+          const { homedir: getHome } = await import('node:os');
+          const wsDir = joinPath(getHome(), '.pando', 'projects', newProjectId);
+          await projectStore.updateProject(newProjectId, { workspaceDir: wsDir });
+
           console.log(`[router] Created project ${newProjectId}: ${projName} (tier ${deployTier}, builder: ${builder.isLocal ? 'local' : builder.peerId})`);
 
           // Run preflight (auto-generates API key, assigns MongoDB)
@@ -531,6 +538,13 @@ export async function registerPlatformRoutes(
           });
           newProjectId = project.id;
           threadStore.updateThread(id, { projectId: newProjectId });
+
+          // Set workspace directory so engine + deploy pipeline know where files go
+          const { join: joinPath } = await import('node:path');
+          const { homedir: getHome } = await import('node:os');
+          const wsDir = joinPath(getHome(), '.pando', 'projects', newProjectId);
+          await projectStore.updateProject(newProjectId, { workspaceDir: wsDir });
+
           console.log(`[router] Created project ${newProjectId} for thread ${id} (tier ${deployTier}, builder: ${builder.isLocal ? 'local' : builder.peerId})`);
 
           // Run preflight

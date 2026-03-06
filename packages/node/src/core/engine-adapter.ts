@@ -298,10 +298,22 @@ export class EngineAdapter {
   /**
    * Send a message to an engine. Routes by projectId.
    * No projectId → system engine.
+   * Project engines get a dedicated workspace directory under dataDir/projects/.
    */
   async *send(message: string, projectId?: string): AsyncGenerator<any> {
     if (!this.pool) throw new Error('EngineAdapter not started');
     const id = projectId || 'system';
+
+    if (id !== 'system' && !this.pool.has(id)) {
+      // Create project workspace directory
+      const { mkdirSync } = await import('node:fs');
+      const { join } = await import('node:path');
+      const baseDir = this.config?.dataDir || join((await import('node:os')).homedir(), '.pando');
+      const projectDir = join(baseDir, 'projects', id);
+      mkdirSync(projectDir, { recursive: true });
+      await this.pool.getOrCreate(id, { projectPath: projectDir });
+    }
+
     yield* this.pool.send(id, message);
   }
 
