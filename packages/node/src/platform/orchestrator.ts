@@ -29,8 +29,6 @@ import type { MessageBus } from '../core/message-bus.js';
 import type { WorkerPool } from '../core/worker-pool.js';
 import type { OrgManager } from './org-manager.js';
 import type { AIBackendRegistry } from '../core/ai-backend-registry.js';
-import type { GenomeBridge, GenomeBridgeRegistry } from './genome-bridge.js';
-import type { ScenarioRunner } from './scenario-runner.js';
 import type { TemplateRegistry } from './template-registry.js';
 import type { ThreadStore } from './thread-store.js';
 
@@ -48,12 +46,6 @@ export interface OrchestratorDeps {
   onPropose?: (title: string, description: string, diff?: string) => Promise<void>;
   /** Callback to commit code */
   onCommit?: (message: string) => Promise<boolean>;
-  /** Genome knowledge graph bridge for architecture context */
-  genomeBridge?: GenomeBridge;
-  /** Per-project genome registry (prefers project-specific genome over Pando's) */
-  genomeBridgeRegistry?: GenomeBridgeRegistry;
-  /** Scenario runner for post-upgrade regression testing */
-  scenarioRunner?: ScenarioRunner;
   /** Phase 105: Template registry for available roles */
   templateRegistry?: TemplateRegistry;
   /** API port for worker HTTP calls (deploy, validate, etc.) */
@@ -85,7 +77,6 @@ export type OrchestratorAction =
   | { type: 'propose_upgrade'; title: string; description: string }
   | { type: 'commit_code'; message: string }
   | { type: 'respond_to_user'; message: string }
-  | { type: 'run_scenarios'; category?: string }
   | { type: 'delay_rotation'; reason: string }
   | { type: 'complete_directive'; directiveId: number; summary?: string }
   | { type: 'reject_directive'; directiveId: number; reason: string }
@@ -1064,7 +1055,7 @@ export class Orchestrator {
       sections.push('The CEO executes. Governance guards. You OBSERVE — and when something is wrong, you');
       sections.push('create a directive that the CEO MUST address. You are the reason this system self-heals.');
       sections.push('');
-      sections.push('You CAN: Read files, query HTTP APIs (curl), analyze logs, inspect SQLite, run scenario tests');
+      sections.push('You CAN: Read files, query HTTP APIs (curl), analyze logs, inspect SQLite');
       sections.push('You CANNOT: Write code, commit, push, deploy, spawn workers, kill processes, propose upgrades');
       sections.push('');
       sections.push(`The CEO orchestrator ID is: ${councilId}`);
@@ -1103,7 +1094,6 @@ export class Orchestrator {
       sections.push('### Domain 3: DOCS & KNOWLEDGE FRESHNESS');
       sections.push('Are docs matching reality? Check:');
       sections.push('- Read CLAUDE.md — does it describe current architecture accurately?');
-      sections.push('- Read genome .know files — do they match actual code behavior?');
       sections.push('- Check docs/how-agents-work.md — still accurate?');
       sections.push('- Any new features added without doc updates?');
       sections.push('Create directive: "[OBSERVER] DOCS STALE: {file} says X but code does Y. CEO: update in next commit."');
@@ -1119,7 +1109,7 @@ export class Orchestrator {
       sections.push('');
       sections.push('### Domain 5: ARCHITECTURE & CODE QUALITY');
       sections.push('Is the codebase sound? Pick ONE module per tick:');
-      sections.push('- Read the source. Does it match genome docs? Are there obvious bugs?');
+      sections.push('- Read the source. Are there obvious bugs?');
       sections.push('- Check for patterns that keep causing failures (read recent lessons)');
       sections.push('- Verify import boundaries (kernel→core→platform, never upward)');
       sections.push('- Look for dead code, unused exports, stale TODO comments');
@@ -1168,14 +1158,12 @@ export class Orchestrator {
       sections.push('## HOW TO THINK');
       sections.push('- QUESTION your own data. If 80% of workers "fail," is that real or is your data corrupt? Investigate.');
       sections.push('- Find ROOT CAUSES, not symptoms. If workers keep failing, find out WHY. Don\'t just retry.');
-      sections.push('- After every fix, VERIFY it in production. Spawn a tester. Run scenarios. Check before/after.');
+      sections.push('- After every fix, VERIFY it in production. Spawn a tester. Check before/after.');
       sections.push('- Think about ARCHITECTURE, not just tasks. If the same bug keeps appearing, the design is wrong.');
       sections.push('- You CAN change your own infrastructure — the orchestrator, worker pool, board state, tick loop.');
       sections.push('  If your own code is broken, fix it. You are not a passenger in this system.');
       sections.push('- Plan MULTI-STEP initiatives. Not everything is one builder. Some problems need:');
       sections.push('  investigate → design → implement → test → verify → upgrade all nodes.');
-      sections.push('- DOCS ON COMMIT: When committing architecture changes, update the relevant genome .know files');
-      sections.push('  in the SAME commit. Future agents read genome context — stale docs = bad decisions.');
       sections.push('');
       sections.push('## GOVERNANCE DISCIPLINE');
       sections.push('');
@@ -1638,36 +1626,6 @@ export class Orchestrator {
       }
     } catch { /* non-fatal */ }
 
-    // Genome architecture knowledge
-    const requestText = board.userRequests.length > 0
-      ? board.userRequests.map(r => {
-          try { return JSON.parse(r.payload).message || r.payload; } catch { return r.payload; }
-        }).join(' ')
-      : 'platform maintenance, self-improvement, and issue resolution';
-
-    let activeGenomeBridge = this.deps.genomeBridge || null;
-    if (this.deps.genomeBridgeRegistry && agent.projectId) {
-      const projectBridge = this.deps.genomeBridgeRegistry.getForProject(agent.projectId);
-      if (projectBridge?.isLoaded()) activeGenomeBridge = projectBridge;
-    }
-
-    if (activeGenomeBridge?.isLoaded() && agent.projectId) {
-      const ctx = activeGenomeBridge.contextForTask({ taskDescription: requestText });
-      if (ctx) {
-        sections.push('## Architecture Knowledge');
-        sections.push(ctx);
-        sections.push('');
-      }
-      const failing = activeGenomeBridge.failingTests();
-      if (failing.length > 0) {
-        sections.push(`### Failing Tests (${failing.length}):`);
-        for (const t of failing) {
-          sections.push(`- ${t._name}: ${t.description || ''}`);
-        }
-        sections.push('');
-      }
-    }
-
     // Project discoveries
     if (agent.projectId) {
       try {
@@ -1745,8 +1703,7 @@ export class Orchestrator {
         sections.push('AUDIT CHECKLIST:');
         sections.push('1. **Data integrity**: Is the System Health data above accurate? High failure rates = investigate, don\'t retry.');
         sections.push('2. **Directives** (if any above): Execute them. These are suggestions from humans — evaluate and act.');
-        sections.push('3. **Failing tests**: If genome scenarios are failing, fix them.');
-        sections.push('4. **Architecture debt**: What patterns keep causing bugs? Can you fix the root cause?');
+        sections.push('3. **Architecture debt**: What patterns keep causing bugs? Can you fix the root cause?');
         sections.push('5. **Network health**: Are all peers connected? Any nodes behind on commits?');
         sections.push('6. **Self-improvement**: Is this prompt missing something? Is the tick loop optimal? Fix your own infrastructure.');
         sections.push('');
@@ -1995,7 +1952,6 @@ export class Orchestrator {
     sections.push('- Check "Lessons Learned" above — avoid repeating past mistakes.');
     sections.push('- Inbox empty on a reflection tick? Review directives, failing tests, and lessons — proactively fix issues.');
     sections.push('- Only return [] if you have reviewed everything and there is genuinely nothing to improve.');
-    sections.push('- When genome-updater reports done, commit_code the .know changes, then propose_upgrade. Genome-only commits will NOT trigger another genome-updater (no recursion).');
     sections.push('');
     if (agent.projectId) {
       sections.push('### Deployment Context (for devops worker):');
@@ -2199,44 +2155,7 @@ export class Orchestrator {
             break;
           }
 
-          // Scenario test verification gate — abort proposal if API scenarios fail
-          let scenarioSummary = '';
-          if (this.deps.scenarioRunner) {
-            try {
-              const result = await this.deps.scenarioRunner.runCategory('api');
-              if (result.failed > 0) {
-                console.log(`[Orchestrator ${this.orchestratorId}] Scenario verification failed: ${result.failed}/${result.total} API scenarios failed — aborting proposal`);
-                this.deps.messageBus.send({
-                  recipientId: this.orchestratorId,
-                  senderId: this.orchestratorId,
-                  senderType: 'orchestrator',
-                  type: 'health_alert',
-                  payload: {
-                    severity: 'critical',
-                    message: `Scenario verification failed: ${result.failed}/${result.total} API scenarios failed before propose_upgrade — proposal aborted`,
-                  },
-                });
-                break;
-              }
-              console.log(`[Orchestrator ${this.orchestratorId}] Scenario verification passed: ${result.passed}/${result.total} API scenarios passed`);
-              scenarioSummary = ` [build: PASS, scenarios: ${result.passed}/${result.passed + result.failed} passed]`;
-            } catch (scenarioErr) {
-              console.error(`[Orchestrator ${this.orchestratorId}] Scenario runner crashed — aborting proposal:`, scenarioErr);
-              this.deps.messageBus.send({
-                recipientId: this.orchestratorId,
-                senderId: this.orchestratorId,
-                senderType: 'orchestrator',
-                type: 'health_alert',
-                payload: {
-                  severity: 'critical',
-                  message: `Scenario runner crashed before propose_upgrade — proposal aborted: ${scenarioErr instanceof Error ? scenarioErr.message : String(scenarioErr)}`,
-                },
-              });
-              break;
-            }
-          }
-
-          const proposalDescription = action.description + (scenarioSummary || ' [build: PASS]');
+          const proposalDescription = action.description + ' [build: PASS]';
           await this.deps.onPropose(action.title, proposalDescription);
         }
         break;
@@ -2340,36 +2259,6 @@ export class Orchestrator {
         break;
       }
 
-      case 'run_scenarios': {
-        // Run genome-based scenario tests (regression after upgrades)
-        if (this.deps.scenarioRunner) {
-          try {
-            const cat = action.category || 'api';
-            console.log(`[Orchestrator ${this.orchestratorId}] Running ${cat} scenarios...`);
-            const result = await this.deps.scenarioRunner.runCategory(cat);
-            this.deps.scenarioRunner.saveResults(result as any);
-            console.log(`[Orchestrator ${this.orchestratorId}] Scenarios: ${result.passed}/${result.total} passed, ${result.failed} failed`);
-
-            if (result.failed > 0) {
-              // Alert orchestrator about regression failures
-              this.deps.messageBus.send({
-                recipientId: this.orchestratorId,
-                senderId: 'scenario-runner',
-                senderType: 'system' as any,
-                type: 'health_alert',
-                payload: {
-                  severity: 'warning',
-                  message: `Scenario regression: ${result.failed}/${result.total} failed after upgrade`,
-                },
-                priority: 0,
-              });
-            }
-          } catch (err: any) {
-            console.error(`[Orchestrator ${this.orchestratorId}] Scenario run error:`, err.message?.slice(0, 200));
-          }
-        }
-        break;
-      }
     }
   }
 

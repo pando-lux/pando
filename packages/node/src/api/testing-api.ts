@@ -254,6 +254,81 @@ export function registerTestingRoutes(
     }
   });
 
+  // ── GET /testing/specs — List Playwright spec files (describe blocks) ──
+  server.get('/testing/specs', async (request, reply) => {
+    try {
+      const query = request.query as Record<string, string>;
+      const project = query.project || DEFAULT_PROJECT;
+      // Discover spec files from tests/e2e/ directory
+      const specsDir = join(opts.rootDir, 'tests', 'e2e');
+      if (!existsSync(specsDir)) {
+        return reply.send([]);
+      }
+
+      const specFiles = readdirSync(specsDir).filter(f => f.endsWith('.spec.ts') || f.endsWith('.spec.js'));
+      const specs: Array<{
+        file: string;
+        name: string;
+        description: string;
+        mode: string;
+        tags: string[];
+        steps: number;
+        describes: Array<{ name: string; line: number; testCount: number }>;
+      }> = [];
+
+      for (const file of specFiles) {
+        const filePath = join(specsDir, file);
+        const content = readFileSync(filePath, 'utf-8');
+
+        // Parse test.describe blocks and count tests in each
+        const describes: Array<{ name: string; line: number; testCount: number }> = [];
+        const lines = content.split('\n');
+        let currentDescribe: { name: string; line: number; testCount: number } | null = null;
+        let depth = 0;
+
+        for (let i = 0; i < lines.length; i++) {
+          const line = lines[i];
+          const descMatch = line.match(/test\.describe\(['"`](.+?)['"`]/);
+          if (descMatch) {
+            if (currentDescribe) describes.push(currentDescribe);
+            currentDescribe = { name: descMatch[1], line: i + 1, testCount: 0 };
+            depth = 0;
+          }
+          // Count test() calls within current describe
+          if (currentDescribe && /^\s+test\(/.test(line)) {
+            currentDescribe.testCount++;
+          }
+        }
+        if (currentDescribe) describes.push(currentDescribe);
+
+        const totalTests = describes.reduce((sum, d) => sum + d.testCount, 0);
+
+        // Extract unique tags from describe names (e.g., "4.2 — Gateway UI" → ["gateway", "ui"])
+        const allTags = new Set<string>();
+        for (const d of describes) {
+          const parts = d.name.replace(/[\d.]+\s*[—-]\s*/, '').toLowerCase().split(/[\s&,]+/);
+          for (const p of parts) {
+            if (p.length > 1 && !['the', 'and', 'for', 'with'].includes(p)) allTags.add(p);
+          }
+        }
+
+        specs.push({
+          file,
+          name: file.replace(/\.spec\.(ts|js)$/, ''),
+          description: `${describes.length} test groups, ${totalTests} tests`,
+          mode: 'scripted',
+          tags: [...allTags].slice(0, 10),
+          steps: totalTests,
+          describes,
+        });
+      }
+
+      return reply.send(specs);
+    } catch (err: any) {
+      return reply.code(500).send({ error: 'Failed to list specs', detail: err.message });
+    }
+  });
+
   // ── GET /testing/stats — Stats trend ───────────────────────────────────
   server.get('/testing/stats', async (request, reply) => {
     try {
@@ -274,15 +349,21 @@ export function registerTestingRoutes(
     try {
       const query = request.query as Record<string, string>;
       const project = query.project || DEFAULT_PROJECT;
-      const body = request.body as { specFile?: string } | null;
+      const body = request.body as { specFile?: string; grep?: string } | null;
       const tester = getTester(project, opts);
-      // Run in background, return immediately with run ID
+
+      const runOpts: any = { testDir: opts.rootDir };
+      if (body?.specFile) runOpts.specFile = body.specFile;
+      if (body?.grep) runOpts.tags = [body.grep]; // tags maps to --grep in ScriptedRunner
+
+      // Run in background, return immediately
       const resultPromise = body?.specFile
-        ? tester.scripted.run({ specFile: body.specFile, testDir: opts.rootDir })
-        : tester.scripted.runAll({ testDir: opts.rootDir });
+        ? tester.scripted.run(runOpts)
+        : tester.scripted.runAll(runOpts);
 
       resultPromise.catch(() => {}); // prevent unhandled rejection
-      return reply.send({ started: true, message: body?.specFile ? `Running ${body.specFile}` : 'Running all specs' });
+      const label = body?.grep || body?.specFile || 'all specs';
+      return reply.send({ started: true, message: `Running ${label}` });
     } catch (err: any) {
       return reply.code(500).send({ error: 'Failed to start scripted run', detail: err.message });
     }

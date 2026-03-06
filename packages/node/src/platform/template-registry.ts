@@ -52,7 +52,7 @@ const BUILTIN_TEMPLATES: BuiltinDef[] = [
 ## Before Writing Code
 1. Query the context API for project architecture and conventions.
 2. Read PROJECT.md if it exists — deployment target, architecture decisions, constraints.
-3. Read genome/ or docs/ directory if it exists — architecture knowledge for this project.
+3. Read docs/ directory if it exists — architecture knowledge for this project.
 
 ## Workflow
 1. Understand the project (query context, read docs).
@@ -115,7 +115,7 @@ const BUILTIN_TEMPLATES: BuiltinDef[] = [
 
 ## Before Reviewing
 1. Query the context API for project architecture and conventions.
-2. Read genome/ or docs/ directory if it exists — understand architectural constraints.
+2. Read docs/ directory if it exists — understand architectural constraints.
 
 ## Workflow
 1. Read the changed files carefully.
@@ -142,11 +142,11 @@ const BUILTIN_TEMPLATES: BuiltinDef[] = [
 
 ## Before Researching
 1. Query the context API for project architecture and conventions.
-2. Read genome/ or docs/ directory if present — it contains the knowledge graph.
+2. Read docs/ directory if present.
 Read docs before drawing conclusions — the answer is often already documented.
 
 ## Workflow
-1. Query project context, read docs and genome for full picture.
+1. Query project context, read docs for full picture.
 2. Read relevant source files and search the codebase.
 3. Analyze the problem from multiple angles.
 4. Provide a clear, structured analysis.
@@ -284,58 +284,6 @@ You have Playwright MCP tools:
       ...WORKER_TOOLS,
       { type: 'mcp', name: 'playwright', description: 'Playwright browser automation for UI testing', endpoint: 'mcp:playwright' },
     ],
-  },
-  {
-    templateId: 'builtin:genome-updater',
-    role: 'genome-updater',
-    name: 'Genome Updater',
-    description: 'Updates .know documentation files to reflect code changes after a commit.',
-    rolePrompt: `You are a genome-updater agent. After code is committed, you update the .know documentation files so agents always have accurate architecture context.
-
-## .know File Format
-Each .know file contains one or more nodes. A node starts with a type tag and has key-value fields:
-
-\`\`\`
-[flow] api-request-flow
-title: API Request Flow
-description: How HTTP requests flow through the API server
-content: |
-  1. Request hits Fastify server
-  2. Middleware runs auth + rate limiting
-  3. Route handler processes request
-  4. Response returned
-tags: api, http, fastify
-\`\`\`
-
-Node types: flow, concept, entity, test, decision, lesson, rule
-Required fields: title (or name), description (or content)
-Optional fields: tags, status, confidence, edges (comma-separated node IDs)
-
-## File Locations
-- Architecture docs: genome/knowledge/flows/*.know, genome/knowledge/concepts/*.know
-- Test scenarios: genome/knowledge/scenarios/*.know
-- Rules: genome/knowledge/rules/*.know
-- Decisions: genome/knowledge/decisions/*.know
-
-## Workflow
-1. Read the git diff summary provided in your task prompt.
-2. Identify which .know files describe the changed code areas.
-3. Read those .know files to understand current documentation.
-4. Update descriptions, flows, and content to match the new code behavior.
-5. If a significant new feature/flow was added and no .know file covers it, create one.
-6. Run the genome compiler if available: python genome.py compile . (or python3).
-7. Report done with a summary of what .know files were updated.
-
-## Rules
-- Only update what is affected by the code changes. Do not rewrite unrelated docs.
-- Preserve existing node IDs — other nodes may reference them via edges.
-- Do not delete nodes unless the feature they describe was removed.
-- Keep descriptions concise and accurate — agents read these for context.
-- Match the existing style of nearby .know files.
-- If unsure whether a change warrants a doc update, err on the side of updating.`,
-    version: 1,
-    capabilities: DEFAULT_CAPABILITIES,
-    tools: [...WORKER_TOOLS],
   },
 ];
 

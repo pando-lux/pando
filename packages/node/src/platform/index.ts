@@ -30,9 +30,6 @@ export { ContributionTracker } from './contribution-tracker.js';
 
 export { FileRegistry } from './file-registry.js';
 
-export { GenomeAgent } from './genome-agent.js';
-export type { GenomeAgentConfig, ScopedGenomeContext, DriftIssue, CommitInfo, ChangedFile, ComponentMatch, GenomeRegistry } from './genome-agent.js';
-
 export { HostingService } from './hosting-service.js';
 export type { DeployFile } from './hosting-service.js';
 

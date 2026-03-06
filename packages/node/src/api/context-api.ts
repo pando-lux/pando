@@ -6,7 +6,7 @@
  *
  * Endpoints:
  *   GET  /context/identity   — Agent identity, authority, tools
- *   GET  /context/project    — Project architecture, genome, discoveries, framework
+ *   GET  /context/project    — Project architecture, discoveries, framework
  *   GET  /context/lessons    — Relevant lessons for role + project
  *   GET  /context/team       — Sibling worker status and recent discoveries
  *   POST /context/discover   — Record a project discovery for shared memory
@@ -14,7 +14,6 @@
 
 import type { FastifyInstance } from 'fastify';
 import type { AgentDatabase, DiscoveryCategory } from '../platform/agent-database.js';
-import type { GenomeBridge, GenomeBridgeRegistry } from '../platform/genome-bridge.js';
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { join, basename } from 'node:path';
 
@@ -24,13 +23,11 @@ import { join, basename } from 'node:path';
 
 export interface ContextApiDeps {
   getDb: () => AgentDatabase;
-  getGenomeBridge: () => GenomeBridge | null;
-  getGenomeBridgeRegistry?: () => GenomeBridgeRegistry | null;
   apiPort: number;
 }
 
 // ---------------------------------------------------------------------------
-// Auto-generated project context (for projects without genome)
+// Auto-generated project context from workspace inspection
 // ---------------------------------------------------------------------------
 
 interface AutoProjectContext {
@@ -183,7 +180,7 @@ export function registerContextRoutes(
   });
 
   // -------------------------------------------------------------------------
-  // GET /context/project — Project architecture, genome, discoveries
+  // GET /context/project — Project architecture, discoveries
   // -------------------------------------------------------------------------
   server.get<{ Querystring: { id?: string; task?: string; workspaceDir?: string } }>('/context/project', async (request, reply) => {
     const query = request.query as any;
@@ -191,29 +188,6 @@ export function registerContextRoutes(
     const task = query.task || '';
     const workspaceDir = query.workspaceDir || null;
     const db = deps.getDb();
-
-    // Genome context — use per-project registry if available, else fall back to single bridge
-    let genomeContext: string | null = null;
-    const registry = deps.getGenomeBridgeRegistry?.();
-    if (registry && projectId) {
-      const projectBridge = registry.getForProject(projectId);
-      if (projectBridge?.isLoaded() && task) {
-        genomeContext = projectBridge.contextForTask({ taskDescription: task });
-      }
-      // Fallback: user-project workers get Pando's general architecture context
-      if (!genomeContext && task) {
-        const pandoBridge = registry.getPandoBridge();
-        if (pandoBridge?.isLoaded()) {
-          genomeContext = pandoBridge.contextForTask({ taskDescription: task });
-        }
-      }
-    } else {
-      // No registry — use single genome bridge (backward compat)
-      const bridge = deps.getGenomeBridge();
-      if (bridge?.isLoaded() && task) {
-        genomeContext = bridge.contextForTask({ taskDescription: task });
-      }
-    }
 
     // Auto-generated project context (from workspace)
     let autoContext: AutoProjectContext | null = null;
@@ -234,7 +208,6 @@ export function registerContextRoutes(
       description: autoContext?.description || null,
       fileTree: autoContext?.fileTree || [],
       buildCommand: autoContext?.buildCommand || 'npm run build',
-      genome: genomeContext,
       discoveries: discoveries.map(d => ({
         category: d.category,
         content: d.content,

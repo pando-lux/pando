@@ -37,9 +37,7 @@ import { SecurityMonitor } from './kernel/security-monitor.js';
 import { ResourceProofChallenger } from './platform/resource-proof.js';
 import { ReputationWeightedGovernance } from './platform/reputation-governance.js';
 import { ContentSafetyReviewer } from './platform/content-safety.js';
-import { GenomeBridge, GenomeBridgeRegistry } from './platform/genome-bridge.js';
 import { TemplateRegistry } from './platform/template-registry.js';
-import { ScenarioRunner } from './platform/scenario-runner.js';
 import { ContentRegistry } from './platform/content-registry.js';
 import { ContentPublisher } from './platform/content-publish.js';
 import { ContentMaintenance } from './platform/content-maintenance.js';
@@ -69,7 +67,6 @@ import { ProjectRegistry, TOPIC_PROJECTS } from './platform/project-registry.js'
 import { RevenueEngine } from './platform/revenue-engine.js';
 import { randomUUID } from 'node:crypto';
 import { ContributionTracker } from './platform/contribution-tracker.js';
-import { GenomeAgent } from './platform/genome-agent.js';
 // Council replaced by Orchestrator
 import { NetworkState } from './kernel/network-state.js';
 import { ThreadStore } from './platform/thread-store.js';
@@ -148,10 +145,7 @@ export class PandoNode {
   private resourceProofChallenger: ResourceProofChallenger | null = null;
   private reputationGovernance: ReputationWeightedGovernance | null = null;
   private contentSafetyReviewer: ContentSafetyReviewer | null = null;
-  private genomeBridge: GenomeBridge | null = null;
-  private genomeBridgeRegistry: GenomeBridgeRegistry | null = null;
   private templateRegistry: TemplateRegistry | null = null;
-  private scenarioRunner: ScenarioRunner | null = null;
   private pipelineRunner: PipelineRunner | null = null;
   private pipelineEnabled = false;
   private schedulerEnabled = false;
@@ -205,8 +199,6 @@ export class PandoNode {
   private contentRegistry: ContentRegistry | null = null;
   private contentPublisher: ContentPublisher | null = null;
   private contentMaintenance: ContentMaintenance | null = null;
-  // Phase 25: Genome Agent
-  private genomeAgent: GenomeAgent | null = null;
   // Phase 27: Thread Store for gateway chat
   private threadStore: ThreadStore | null = null;
   // Phase 32: S3 Hosting Service
@@ -525,23 +517,12 @@ export class PandoNode {
     // Create Guardrails — safety system for self-generated changes (Phase 9.3)
     this.guardrails = new Guardrails(dataDir);
 
-    // Phase 25: Create GenomeAgent — self-maintaining project genome
-    const repoDir = process.cwd();
-    this.genomeAgent = new GenomeAgent({
-      repoDir,
-      genomeDir: join(repoDir, 'genome'),
-      dataDir,
-    });
-    if (this.genomeAgent.isAvailable()) {
-      console.log('[genome] GenomeAgent initialized (genome.yaml found)');
-    }
-
     // Phase 13: Create UpgradeProtocol — self-evolving upgrade lifecycle
     this.upgradeProtocol = new UpgradeProtocol({
       governance: this.governance!,
       guardrails: this.guardrails,
       dataDir,
-      repoDir,
+      repoDir: process.cwd(),
       localPeerId: this.identity.peerId,
       networkProvider: () => this.network,
       workersActiveFn: () => this.workerPool?.getActiveWorkerCount() ?? 0,
@@ -2870,58 +2851,6 @@ location /apps/${projectId}/ {
       writeFileSync(claudeMdPath, content);
     }
 
-    // Bootstrap genome directory structure if it doesn't exist
-    const genomeDir = join(wsDir, 'genome');
-    if (!existsSync(genomeDir)) {
-      try {
-        mkdirSync(genomeDir, { recursive: true });
-        mkdirSync(join(genomeDir, 'rules'), { recursive: true });
-
-        writeFileSync(join(genomeDir, 'genome.yaml'), [
-          'version: 1',
-          'project: auto-bootstrapped',
-          'description: Project knowledge base',
-        ].join('\n'));
-
-        writeFileSync(join(genomeDir, 'state.md'), [
-          '# Project State',
-          '',
-          '## Status',
-          'Initialized',
-          '',
-          '## Recent Changes',
-          '(none yet)',
-        ].join('\n'));
-
-        writeFileSync(join(genomeDir, 'rules', 'deployment.md'), [
-          '# Deployment Rules',
-          '',
-          '## Tier 1 — Static Apps (S3)',
-          '- HTML/CSS/JS only apps are deployed to AWS S3 static hosting.',
-          '- Build output goes to dist/ or build/ directory.',
-          '- No server-side code.',
-          '',
-          '## Tier 2 — Server Apps (PM2 + nginx)',
-          '- Node.js or other server apps run via PM2.',
-          '- Served at /apps/<projectId>/ via nginx reverse proxy.',
-          '- App must listen on the assigned PORT environment variable.',
-          '',
-          '## CRITICAL: URL Rules',
-          '- NEVER hardcode localhost or 127.0.0.1 in client-facing code.',
-          '- Browsers: use window.location.origin or relative paths for API calls.',
-          '- Servers: bind to 0.0.0.0 (not localhost) so nginx can proxy to the process.',
-          '- WebSocket: use wss:// with window.location.host, not ws://localhost.',
-          '',
-          '## Port Assignment',
-          '- The PORT env var is set by the deployment system. Always use process.env.PORT.',
-        ].join('\n'));
-
-        console.log(`[project-workspace] Bootstrapped genome in ${genomeDir}`);
-      } catch (err: any) {
-        console.warn(`[project-workspace] Genome bootstrap failed (non-fatal): ${err.message?.slice(0, 100)}`);
-      }
-    }
-
     // Import team-state.json if it exists (from a previous clone)
     const teamStatePath = join(wsDir, 'team-state.json');
     if (existsSync(teamStatePath) && this.agentDb) {
@@ -3145,17 +3074,6 @@ location /apps/${projectId}/ {
           console.warn(`[project-orch] GitHub push failed (non-fatal): ${pushErr.message?.slice(0, 100)}`);
         }
 
-        // Post-commit: recompile genome graph if genome.py exists in project
-        try {
-          execSync('python genome.py compile . 2>/dev/null || python3 genome.py compile . 2>/dev/null', {
-            cwd: wsDir, timeout: 15000, stdio: 'ignore'
-          });
-          this.genomeBridgeRegistry?.reloadAll();
-          console.log(`[project-orch] Genome recompiled for project ${projectId}`);
-        } catch {
-          // Python or genome.py not available in project — skip silently
-        }
-
         return true;
       } catch (err: any) {
         console.error(`[project-orch] Commit failed: ${err.message?.slice(0, 200)}`);
@@ -3236,16 +3154,6 @@ location /apps/${projectId}/ {
             return false;
           }
 
-          // Post-build: recompile genome graph and reload bridges
-          try {
-            execSync('python genome.py compile . 2>/dev/null || python3 genome.py compile . 2>/dev/null', {
-              cwd, timeout: 15000, stdio: 'ignore'
-            });
-            this.genomeBridgeRegistry?.reloadAll();
-            console.log('[orchestrator] Genome recompiled + bridge reloaded');
-          } catch {
-            // Python not available or compiler not found — skip silently
-          }
           return true;
         } catch (err: any) {
           console.error('[orchestrator] Commit failed:', err.message?.slice(0, 200));
@@ -3268,9 +3176,6 @@ location /apps/${projectId}/ {
       workerPool: this.workerPool,
       orgManager: this.orgManager,
       aiRegistry: this.aiBackendRegistry,
-      genomeBridge: this.genomeBridge || undefined,
-      genomeBridgeRegistry: this.genomeBridgeRegistry ?? undefined,
-      scenarioRunner: this.scenarioRunner || undefined,
       templateRegistry: this.templateRegistry || undefined,
       threadStore: this.threadStore || undefined,
       pushEvent: (event: string, data: any) => this.apiServer?.pushEvent(event, data),
@@ -3409,32 +3314,6 @@ location /apps/${projectId}/ {
       console.log(`[agents] Notified orchestrator(s) about ${interruptedWorkers.length} interrupted worker(s)`);
     }
 
-    // Initialize GenomeBridge + Registry (reads compiled knowledge graph for agent context)
-    const graphPath = join(process.cwd(), 'output', 'graph.json');
-    this.genomeBridgeRegistry = new GenomeBridgeRegistry(graphPath);
-    this.genomeBridge = this.genomeBridgeRegistry.getPandoBridge();
-    if (this.genomeBridge.isLoaded()) {
-      const stats = this.genomeBridge.getStats();
-      console.log(`[agents] GenomeBridge loaded: ${stats.totalNodes} nodes, ${stats.testNodes} tests`);
-
-      // Initialize ScenarioRunner (reads test scenarios from genome graph)
-      let apiToken = '';
-      try {
-        const tokenPath = join(dataDir, 'api-token');
-        if (existsSync(tokenPath)) {
-          apiToken = readFileSync(tokenPath, 'utf-8').trim();
-        }
-      } catch { /* no token available */ }
-      this.scenarioRunner = new ScenarioRunner({
-        graphPath,
-        apiBaseUrl: `http://127.0.0.1:${this.config.apiPort}`,
-        apiToken,
-      });
-      console.log('[agents] ScenarioRunner initialized');
-    } else {
-      console.log('[agents] GenomeBridge: no graph.json found (genome context disabled)');
-    }
-
     // Phase 105: Initialize TemplateRegistry (shares agents.db)
     this.templateRegistry = new TemplateRegistry(this.agentDb.getRawDb());
     const tmplCount = this.templateRegistry.listTemplates().length;
@@ -3446,7 +3325,7 @@ location /apps/${projectId}/ {
       this.agentDb,
       this.aiBackendRegistry,
       this.messageBus,
-      { dataDir, apiPort: this.config.apiPort, genomeBridge: this.genomeBridge, genomeBridgeRegistry: this.genomeBridgeRegistry ?? undefined, templateRegistry: this.templateRegistry, isRestartPending: () => this.restartPending },
+      { dataDir, apiPort: this.config.apiPort, templateRegistry: this.templateRegistry, isRestartPending: () => this.restartPending },
     );
     console.log('[agents] WorkerPool initialized');
 
@@ -3531,14 +3410,6 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
           }
           return false;
         }
-        // Post-build: recompile genome
-        try {
-          await execAsync('python genome.py compile . 2>/dev/null || python3 genome.py compile . 2>/dev/null', {
-            cwd, timeout: 15000,
-          });
-          this.genomeBridgeRegistry?.reloadAll();
-          console.log('[orchestrator] Genome recompiled + bridge reloaded');
-        } catch { /* Python not available */ }
         return true;
       } catch (err: any) {
         console.error('[orchestrator] Commit failed:', err.message?.slice(0, 200));
@@ -3961,14 +3832,6 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     return this.contentSafetyReviewer;
   }
 
-  getGenomeBridge(): GenomeBridge | null {
-    return this.genomeBridge;
-  }
-
-  getGenomeBridgeRegistry(): GenomeBridgeRegistry | null {
-    return this.genomeBridgeRegistry;
-  }
-
   // ----------------------------------------------------------
   // Health Monitor (Phase 9 — self-healing foundation)
   // ----------------------------------------------------------
@@ -4282,10 +4145,6 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     return this.aiBackendRegistry;
   }
 
-  getGenomeAgent(): GenomeAgent | null {
-    return this.genomeAgent;
-  }
-
   getContentRegistry(): ContentRegistry | null {
     return this.contentRegistry;
   }
@@ -4302,10 +4161,6 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
 
   getRegressionSuite(): RegressionSuite | null {
     return this.regressionSuite;
-  }
-
-  getScenarioRunner(): ScenarioRunner | null {
-    return this.scenarioRunner;
   }
 
   getPaymentGate(): PaymentGate | null {
@@ -4452,7 +4307,6 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     this.taskQueue = null;
     this.requestReply = null;
     this.reputation = null;
-    this.genomeAgent = null;
     // Agent system cleanup handled by stopAgentSystem() via stopScheduler()
     if (this.apiServer) {
       await this.apiServer.stop();
@@ -4486,8 +4340,6 @@ export { WorkerPool } from './core/worker-pool.js';
 export { OrgManager } from './platform/org-manager.js';
 export { Orchestrator } from './platform/orchestrator.js';
 export { TemplateRegistry } from './platform/template-registry.js';
-export { GenomeBridge } from './platform/genome-bridge.js';
-export { ScenarioRunner } from './platform/scenario-runner.js';
 export { registerAgentRoutes } from './platform/agent-tools.js';
 export { Scheduler } from './platform/scheduler.js';
 export type { SchedulerConfig, SchedulerStatus, ActiveTask, TaskLifecycle } from './platform/scheduler.js';
@@ -4526,8 +4378,6 @@ export { UserAccountStore } from './platform/user-accounts.js';
 export { ProjectStore } from './platform/project-store.js';
 export { ProjectRegistry, TOPIC_PROJECTS } from './platform/project-registry.js';
 export type { CreateProjectOpts, ListProjectsOpts, ProjectStats } from './platform/project-store.js';
-export { GenomeAgent } from './platform/genome-agent.js';
-export type { GenomeAgentConfig, ScopedGenomeContext, DriftIssue, CommitInfo, ChangedFile, ComponentMatch, GenomeRegistry } from './platform/genome-agent.js';
 // Phase 50: Network State exports
 export { NetworkState } from './kernel/network-state.js';
 export type { NetworkStateSnapshot } from './kernel/network-state.js';

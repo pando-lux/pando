@@ -105,7 +105,37 @@ const TAG_COLORS: Record<string, string> = {
   agent: "text-orange-400", flow: "text-indigo-400", economy: "text-yellow-400",
   navigation: "text-teal-400", lifecycle: "text-rose-400", onboarding: "text-lime-400",
   experience: "text-violet-400", general: "text-neutral-400",
+  api: "text-sky-400", network: "text-emerald-400", identity: "text-fuchsia-400",
+  auth: "text-red-400", tasks: "text-orange-300", security: "text-rose-500",
+  monitoring: "text-teal-300", marketplace: "text-amber-300", testing: "text-indigo-300",
+  engine: "text-cyan-300", projects: "text-green-300", functional: "text-violet-300",
+  advanced: "text-blue-300",
 };
+
+function describeToTag(name: string): string {
+  const clean = name.replace(/^[\d.]+\s*[—-]\s*/, "").toLowerCase();
+  if (clean.includes("gateway") && clean.includes("api")) return "gateway";
+  if (clean.includes("gateway")) return "gateway";
+  if (clean.includes("auth") && !clean.includes("identity")) return "auth";
+  if (clean.includes("api")) return "api";
+  if (clean.includes("p2p") || clean.includes("network") || clean.includes("topology")) return "network";
+  if (clean.includes("ledger") || clean.includes("economy") || clean.includes("emission") || clean.includes("payment")) return "economy";
+  if (clean.includes("agent") || clean.includes("council")) return "agent";
+  if (clean.includes("identity") || clean.includes("login")) return "identity";
+  if (clean.includes("governance")) return "governance";
+  if (clean.includes("content") || clean.includes("template")) return "content";
+  if (clean.includes("chat") || clean.includes("thread") || clean.includes("message")) return "chat";
+  if (clean.includes("task") || clean.includes("scheduler") || clean.includes("queue")) return "tasks";
+  if (clean.includes("security") || clean.includes("reputation")) return "security";
+  if (clean.includes("health") || clean.includes("monitor")) return "monitoring";
+  if (clean.includes("project") || clean.includes("deploy") || clean.includes("app")) return "projects";
+  if (clean.includes("resource") || clean.includes("marketplace")) return "marketplace";
+  if (clean.includes("testing")) return "testing";
+  if (clean.includes("pandocode") || clean.includes("engine")) return "engine";
+  if (clean.includes("context")) return "api";
+  if (/^\(functional\)$|functional/.test(clean)) return "functional";
+  return "general";
+}
 
 function getTagColor(tag: string): string {
   return TAG_COLORS[tag.toLowerCase()] || "text-neutral-400";
@@ -143,7 +173,8 @@ export default function TestingPage() {
   // Data
   const [runs, setRuns] = useState<TestRun[]>([]);
   const [findings, setFindings] = useState<Finding[]>([]);
-  const [playbooks, setPlaybooks] = useState<PlaybookInfo[]>([]);
+  const [specs, setSpecs] = useState<PlaybookInfo[]>([]);       // Static: Playwright describe blocks
+  const [playbooks, setPlaybooks] = useState<PlaybookInfo[]>([]); // Live: JSON playbooks
   const [offline, setOffline] = useState(false);
   const [loaded, setLoaded] = useState(false);
 
@@ -181,10 +212,11 @@ export default function TestingPage() {
 
   const refresh = useCallback(async () => {
     try {
-      const [runsRes, findingsRes, playbooksRes] = await Promise.all([
+      const [runsRes, findingsRes, playbooksRes, specsRes] = await Promise.all([
         fetch(`/api/testing/runs?limit=50&project=${project}`).catch(() => null),
         fetch(`/api/testing/findings?project=${project}`).catch(() => null),
         fetch(`/api/testing/playbooks?project=${project}`).catch(() => null),
+        fetch(`/api/testing/specs?project=${project}`).catch(() => null),
       ]);
 
       setOffline(false);
@@ -192,6 +224,26 @@ export default function TestingPage() {
       if (runsRes?.ok) setRuns((await runsRes.json()) || []);
       if (findingsRes?.ok) setFindings((await findingsRes.json()) || []);
       if (playbooksRes?.ok) setPlaybooks((await playbooksRes.json()) || []);
+
+      // Transform spec describe blocks into PlaybookInfo entries for Static Tests
+      if (specsRes?.ok) {
+        const specsData = (await specsRes.json()) || [];
+        const specEntries: PlaybookInfo[] = [];
+        for (const spec of specsData) {
+          for (const d of (spec.describes || [])) {
+            const tag = describeToTag(d.name);
+            specEntries.push({
+              file: `${spec.file}::${d.name}`,
+              name: d.name,
+              description: `${d.testCount} tests`,
+              mode: "scripted",
+              tags: [tag],
+              steps: d.testCount,
+            });
+          }
+        }
+        setSpecs(specEntries);
+      }
 
       setLoaded(true);
     } catch {
@@ -212,8 +264,20 @@ export default function TestingPage() {
     setRunningId(pb.file);
     setRunOutput(prev => [...prev, `\n--- Running: ${pb.name} (${mode}) ---\n`]);
     try {
-      const endpoint = mode === "scripted" ? "/api/testing/run/scripted" : "/api/testing/run/live";
-      const body = mode === "scripted" ? { specFile: pb.file } : { playbook: pb.file };
+      let endpoint: string;
+      let body: Record<string, string>;
+
+      if (mode === "scripted") {
+        endpoint = `/api/testing/run/scripted?project=${project}`;
+        // pb.file is "specfile.spec.ts::describe name" — extract parts
+        const [specFile, grep] = pb.file.includes("::") ? pb.file.split("::", 2) : [pb.file, undefined];
+        body = { specFile } as any;
+        if (grep) (body as any).grep = grep;
+      } else {
+        endpoint = `/api/testing/run/live?project=${project}`;
+        body = { playbook: pb.file } as any;
+      }
+
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -232,14 +296,17 @@ export default function TestingPage() {
   const triggerRunAll = async (mode: "scripted" | "live") => {
     setRunningAll(true);
     setRunOutput([]);
-    const filtered = getFilteredPlaybooks();
+    const filtered = getFilteredEntries();
     for (const pb of filtered) {
       await triggerRun(pb, mode);
     }
     setRunningAll(false);
   };
 
-  // Get runs for a specific playbook
+  // Active entries based on current page (specs for static, playbooks for live)
+  const entries = page === "scripted" ? specs : playbooks;
+
+  // Get runs for a specific entry
   const getPlaybookRuns = (pb: PlaybookInfo): TestRun[] => {
     return runs.filter(r => r.scenario_name === pb.name);
   };
@@ -257,10 +324,10 @@ export default function TestingPage() {
   const openFindings = findings.filter(f => f.status === "open");
   const passedRuns = runs.filter(r => r.status === "passed").length;
   const failedRuns = runs.filter(r => r.status === "failed").length;
-  const allTags = [...new Set(playbooks.flatMap(pb => pb.tags))].sort();
+  const allTags = [...new Set(entries.flatMap(pb => pb.tags))].sort();
 
-  const getFilteredPlaybooks = () => {
-    return playbooks.filter(pb => {
+  const getFilteredEntries = () => {
+    return entries.filter(pb => {
       if (search && !pb.name.toLowerCase().includes(search.toLowerCase()) &&
           !pb.description.toLowerCase().includes(search.toLowerCase())) return false;
       if (filterTag && !pb.tags.includes(filterTag)) return false;
@@ -268,8 +335,8 @@ export default function TestingPage() {
     });
   };
 
-  const getGroupedPlaybooks = () => {
-    const filtered = getFilteredPlaybooks();
+  const getGroupedEntries = () => {
+    const filtered = getFilteredEntries();
     const grouped: Record<string, PlaybookInfo[]> = {};
     for (const pb of filtered) {
       const tag = pb.tags[0] || "general";
@@ -280,7 +347,8 @@ export default function TestingPage() {
   };
 
   const getTagStats = (tag: string) => {
-    const pbs = playbooks.filter(pb => pb.tags.includes(tag));
+    const allEntries = [...specs, ...playbooks];
+    const pbs = allEntries.filter(pb => pb.tags.includes(tag));
     const passed = pbs.filter(pb => getPlaybookStatus(pb) === "passed").length;
     const failed = pbs.filter(pb => ["failed", "error"].includes(getPlaybookStatus(pb))).length;
     const notRun = pbs.length - passed - failed;
@@ -314,7 +382,7 @@ export default function TestingPage() {
         <nav className="flex-1 py-2">
           {([
             { key: "dashboard" as Page, label: "Dashboard", icon: "\u25A3", color: "text-blue-400", count: null },
-            { key: "scripted" as Page, label: "Static Tests", icon: "\u25B6", color: "text-indigo-400", count: playbooks.length },
+            { key: "scripted" as Page, label: "Static Tests", icon: "\u25B6", color: "text-indigo-400", count: specs.length },
             { key: "live" as Page, label: "Live Tests", icon: "\u26A1", color: "text-cyan-400", count: playbooks.length },
             { key: "drafts" as Page, label: "Draft Scenarios", icon: "\u270E", color: "text-amber-400", count: drafts.length },
           ]).map((item) => (
@@ -364,7 +432,7 @@ export default function TestingPage() {
         {page === "dashboard" && (
           <DashboardView
             project={project}
-            playbooks={playbooks}
+            playbooks={[...specs, ...playbooks]}
             runs={runs}
             findings={findings}
             openFindings={openFindings}
@@ -381,15 +449,15 @@ export default function TestingPage() {
         {(page === "scripted" || page === "live") && !selectedFile && subTab === "tests" && (
           <TestListView
             page={page}
-            playbooks={playbooks}
+            playbooks={entries}
             loaded={loaded}
             search={search}
             setSearch={setSearch}
             filterTag={filterTag}
             setFilterTag={setFilterTag}
             allTags={allTags}
-            getFilteredPlaybooks={getFilteredPlaybooks}
-            getGroupedPlaybooks={getGroupedPlaybooks}
+            getFilteredPlaybooks={getFilteredEntries}
+            getGroupedPlaybooks={getGroupedEntries}
             getLastRun={getLastRun}
             getPlaybookRuns={getPlaybookRuns}
             getPlaybookStatus={getPlaybookStatus}
@@ -409,7 +477,7 @@ export default function TestingPage() {
           <HistoryView
             page={page}
             runs={runs}
-            playbooks={playbooks}
+            playbooks={entries}
             findings={findings}
             loaded={loaded}
             subTab={subTab}
@@ -420,7 +488,7 @@ export default function TestingPage() {
 
         {/* ═══ Detail View ═══ */}
         {(page === "scripted" || page === "live") && selectedFile && (() => {
-          const pb = playbooks.find(p => p.file === selectedFile);
+          const pb = entries.find(p => p.file === selectedFile);
           if (!pb) return null;
           return (
             <TestDetailView
@@ -491,7 +559,7 @@ function DashboardView({
 
       {loaded && (
         <p className="text-xs text-neutral-500">
-          {runs.length} total runs -- <span className="text-indigo-400">{playbooks.length} playbooks</span> available
+          {runs.length} total runs -- <span className="text-indigo-400">{playbooks.length} test groups</span> tracked
         </p>
       )}
 

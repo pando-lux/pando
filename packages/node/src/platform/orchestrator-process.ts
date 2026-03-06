@@ -19,8 +19,6 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { join } from 'node:path';
-import { existsSync, readFileSync } from 'node:fs';
 import { AgentDatabase } from './agent-database.js';
 import { Orchestrator } from './orchestrator.js';
 import type { OrchestratorDeps } from './orchestrator.js';
@@ -28,8 +26,6 @@ import { MessageBus } from '../core/message-bus.js';
 import { AIBackendRegistry } from '../core/ai-backend-registry.js';
 import { PandoCodeBackend } from '../core/ai-backend-pandocode.js';
 import { OrgManager } from './org-manager.js';
-import { GenomeBridge, GenomeBridgeRegistry } from './genome-bridge.js';
-import { ScenarioRunner } from './scenario-runner.js';
 import { TemplateRegistry } from './template-registry.js';
 
 // ---------------------------------------------------------------------------
@@ -122,7 +118,6 @@ interface StartConfig {
   dataDir: string;
   apiPort: number;
   repoDir: string;
-  graphPath?: string;
   isCouncil: boolean;
   apiToken?: string;
 }
@@ -163,28 +158,6 @@ process.on('message', async (msg: any) => {
     // OrgManager with own db + proxy workerPool
     const orgManager = new OrgManager(db, workerPoolProxy, messageBus);
 
-    // Genome bridge (reads graph.json file — self-contained)
-    let genomeBridge: GenomeBridge | undefined;
-    let genomeBridgeRegistry: GenomeBridgeRegistry | undefined;
-    if (config.graphPath && existsSync(config.graphPath)) {
-      try {
-        genomeBridge = new GenomeBridge(config.graphPath);
-        genomeBridgeRegistry = new GenomeBridgeRegistry(config.graphPath);
-      } catch { /* graph not available */ }
-    }
-
-    // Scenario runner (HTTP calls to local API — self-contained)
-    let scenarioRunner: ScenarioRunner | undefined;
-    if (config.apiToken) {
-      try {
-        scenarioRunner = new ScenarioRunner({
-          graphPath: config.graphPath || join(config.repoDir, 'output', 'graph.json'),
-          apiBaseUrl: `http://127.0.0.1:${config.apiPort}`,
-          apiToken: config.apiToken,
-        });
-      } catch { /* scenario runner not available */ }
-    }
-
     // Build dependencies — mix of real (self-contained) and IPC-proxied
     const deps: OrchestratorDeps = {
       db,
@@ -193,9 +166,6 @@ process.on('message', async (msg: any) => {
       orgManager,
       aiRegistry,
       templateRegistry,
-      genomeBridge,
-      genomeBridgeRegistry,
-      scenarioRunner,
       apiPort: config.apiPort,
       dataDir: config.dataDir,
       repoDir: config.repoDir,

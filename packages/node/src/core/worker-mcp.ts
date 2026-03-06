@@ -250,7 +250,7 @@ curl ${base}/worker/${workerId}/identity
 \`\`\`
 Returns: { id, role, scope, parentId, projectId, authority, budget }
 
-### Get project context (architecture, genome, discoveries)
+### Get project context (architecture, discoveries)
 \`\`\`bash
 curl "${base}/context/project?id=<projectId>&task=<taskDescription>&workspaceDir=<path>"
 \`\`\`

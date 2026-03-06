@@ -30,7 +30,6 @@ import type { AIResult } from './ai-backend.js';
 import { MessageBus } from './message-bus.js';
 // generateWorkerToolsDocs is exported from worker-mcp.ts for external use
 // Boot prompt (buildBootPrompt) handles tool docs inline for new workers
-import type { GenomeBridge, GenomeBridgeRegistry } from '../platform/genome-bridge.js';
 import type { TemplateRegistry } from '../platform/template-registry.js';
 
 // ---------------------------------------------------------------------------
@@ -78,8 +77,6 @@ export class WorkerPool {
   /** Maps workerId → child process PID for memory tracking. */
   private workerPids = new Map<string, number>();
 
-  private genomeBridge: GenomeBridge | null = null;
-  private genomeBridgeRegistry: GenomeBridgeRegistry | null = null;
   private templateRegistry: TemplateRegistry | null = null;
 
   private reapInterval: NodeJS.Timeout | null = null;
@@ -90,12 +87,10 @@ export class WorkerPool {
     private db: AgentDatabase,
     private aiRegistry: AIBackendRegistry,
     private messageBus: MessageBus,
-    opts?: { dataDir?: string; apiPort?: number; genomeBridge?: GenomeBridge; genomeBridgeRegistry?: GenomeBridgeRegistry; templateRegistry?: TemplateRegistry; isRestartPending?: () => boolean },
+    opts?: { dataDir?: string; apiPort?: number; templateRegistry?: TemplateRegistry; isRestartPending?: () => boolean },
   ) {
     this.dataDir = opts?.dataDir || join(homedir(), '.pando');
     this.apiPort = opts?.apiPort || 4000;
-    this.genomeBridgeRegistry = opts?.genomeBridgeRegistry || null;
-    this.genomeBridge = opts?.genomeBridge || this.genomeBridgeRegistry?.getPandoBridge() || null;
     this.templateRegistry = opts?.templateRegistry || null;
     this.isRestartPending = opts?.isRestartPending || null;
 
