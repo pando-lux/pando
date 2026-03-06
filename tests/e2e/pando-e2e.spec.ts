@@ -2392,3 +2392,57 @@ test.describe('9.5 — Payment & Activity', () => {
     expect(res.status).toBeLessThan(500);
   });
 });
+
+// ═════════════════════════════════════════════════════════════════════════
+// 10. — @pando/tests Module API
+// ═════════════════════════════════════════════════════════════════════════
+
+test.describe('10.1 — Testing API Endpoints', () => {
+  test('Testing status returns dashboard overview', async () => {
+    const data = await apiGet('/v1/testing/status');
+    expect(data.project).toBe('pando-node');
+    expect(typeof data.total_scenarios).toBe('number');
+    expect(typeof data.total_runs).toBe('number');
+    expect(typeof data.pass_rate).toBe('number');
+    expect(typeof data.open_findings).toBe('number');
+  });
+
+  test('Testing runs returns array', async () => {
+    const data = await apiGet('/v1/testing/runs');
+    expect(Array.isArray(data)).toBe(true);
+  });
+
+  test('Testing findings returns array', async () => {
+    const data = await apiGet('/v1/testing/findings');
+    expect(Array.isArray(data)).toBe(true);
+  });
+
+  test('Testing scenarios returns array', async () => {
+    const data = await apiGet('/v1/testing/scenarios');
+    expect(Array.isArray(data)).toBe(true);
+  });
+
+  test('Testing playbooks returns 6 pando-node playbooks', async () => {
+    const data = await apiGet('/v1/testing/playbooks');
+    expect(Array.isArray(data)).toBe(true);
+    expect(data.length).toBe(6);
+    const names = data.map((p: any) => p.name);
+    expect(names).toContain('governance-flow');
+    expect(names).toContain('gateway-navigation');
+    expect(names).toContain('wallet-economy');
+  });
+
+  test('Testing stats returns array', async () => {
+    const data = await apiGet('/v1/testing/stats');
+    expect(Array.isArray(data)).toBe(true);
+  });
+});
+
+test.describe('10.2 — Testing Gateway Page', () => {
+  test('Testing dashboard page loads', async ({ page }) => {
+    await page.goto(`${GATEWAY_URL}/testing`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await expect(page.locator('body')).toBeVisible();
+    const text = await page.textContent('body');
+    expect(text?.length).toBeGreaterThan(50);
+  });
+});
