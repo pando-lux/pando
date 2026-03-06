@@ -661,53 +661,26 @@ npx playwright test --project pando-code
 
 ---
 
-## 9. MIGRATION: CURRENT STATE → TARGET
+## 9. BRAIN-KILL MIGRATION (COMPLETED 2026-03-06)
 
-### Files to DELETE from pando-node (duplicate brain)
+**9,414 lines deleted. 15 brain files removed. 280 lines of engine-adapter.ts replaced everything.**
 
-| File | Lines | Why it goes |
-|---|---|---|
-| `platform/orchestrator.ts` | ~2,200 | pando-code IS the orchestrator |
-| `platform/orchestrator-manager.ts` | ~300 | No child process forking needed |
-| `platform/orchestrator-process.ts` | ~400 | Same |
-| `platform/org-manager.ts` | ~500 | pando-code has sub-agent hierarchy |
-| `platform/agent-database.ts` | ~1,265 | pando-code has MemoryStore + Board |
-| `platform/template-registry.ts` | ~200 | pando-code has FrameBuilder |
-| `platform/agent-tools.ts` | ~374 | Agent routes replaced by engine routes |
-| `core/message-bus.ts` | ~400 | pando-code has Board |
-| `core/worker-pool.ts` | ~500 | pando-code spawns its own sub-agents |
-| `core/ai-backend-pandocode.ts` | ~245 | No wrapper — engine used directly |
-| `core/ai-backend-registry.ts` | ~100 | No registry — adapter manages engines |
-| `core/ai-backend.ts` | ~50 | No interface needed |
-| `core/engine-bridge.ts` | ~300 | Replaced by engine-adapter.ts |
-| **TOTAL** | **~6,834** | |
+The dual coordination system is dead. pando-node no longer has any intelligence of its own. All AI flows through EngineAdapter → @pando-code/core.
 
-### Files to CREATE
+### What was deleted
+orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), template-registry.ts (476), org-manager.ts (377), agent-tools.ts (373), orchestrator-manager.ts (333), engine-bridge.ts (283), worker-mcp.ts (274), orchestrator-process.ts (248), ai-backend-pandocode.ts (244), message-bus.ts (143), ai-backend-registry.ts (43), ai-backend.ts (37), context-api.ts (336).
 
-| File | Lines | What it does |
-|---|---|---|
-| `core/engine-adapter.ts` | ~200 | The ONE pando-code integration point (see Section 6) |
+### What replaced it
+`core/engine-adapter.ts` (~280 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand. Registers 14 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL.
 
-### Migration Steps
-
-1. **Create engine-adapter.ts** — works alongside existing system
-2. **Rewire chat API** — `/v1/chat/message` routes through adapter
-3. **Remove brain from index.ts** — stop creating orchestrators, message bus, agent database
-4. **Delete brain files** — all files listed above
-5. **Fix imports** — chase down every broken reference
-6. **Fix build** — `npm run build` zero errors
-7. **Update tests** — agent routes removed, engine routes added
-8. **Add governance AI review** — hook adapter.reviewDiff() into Layer 5
+### API changes
+- **Removed:** `/v1/council/*`, `/v1/bridge/*`, `/v1/agents/*`, `/v1/context/*`
+- **Added:** `/v1/engines`, `/v1/engines/schedules`
+- **Unchanged:** `/v1/chat/message` (same interface, different backend)
 
 ---
 
 ## 10. TECHNICAL DEBT (honest status)
-
-### Active Migration
-
-| Issue | Status | Description |
-|---|---|---|
-| **Dual coordination system** | IN PROGRESS | pando-node has its own brain (orchestrator, message bus, agent database). Being replaced by engine adapter. See Section 9 for migration plan. |
 
 ### Stubs
 
@@ -721,7 +694,7 @@ npx playwright test --project pando-code
 
 | Issue | Why it's OK |
 |---|---|
-| index.ts is a monolith (4,388 lines) | It works. Decompose after engine adapter migration. |
+| index.ts is a monolith (~3,600 lines) | Shrunk by 783 lines after brain removal. Further decomposition possible but not urgent. |
 | Agent identity is ephemeral | Ephemeral agents are sufficient for dev mode. |
 | Governance auto-approves (<=8 peers) | Dev mode only. Real voting kicks in with more peers. |
 
