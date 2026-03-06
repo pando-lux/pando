@@ -125,6 +125,9 @@ export class WorkerPool {
    * Spawn a fresh PandoCode worker process.
    */
   async spawn(config: WorkerConfig): Promise<string> {
+    // ── Await engine configuration (Lux budget, Pando tools, credentials) ──
+    await this.aiRegistry.configReady;
+
     // ── Memory guard: refuse to spawn if system RAM is critically low ──────
     const freeRam = freemem();
     const THREE_GB = 3 * 1024 * 1024 * 1024;

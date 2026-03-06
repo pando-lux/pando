@@ -40,6 +40,14 @@ export class PandoCodeBackend implements AIBackend {
 
   /** Shared engine instances keyed by project path. */
   private engines = new Map<string, any>();
+  /** Last access time per engine key, for TTL eviction. */
+  private engineLastUsed = new Map<string, number>();
+  /** Engine TTL: evict after 30 minutes of inactivity. */
+  private static ENGINE_TTL_MS = 30 * 60 * 1000;
+  /** Pending budget provider for future engines. */
+  private pendingBudgetProvider: { currency: string; calculateCost: (usage: any) => number } | null = null;
+  /** Pending custom tools for future engines. */
+  private pendingTools: Array<{ name: string; description: string; parameters: any; execute: (args: any) => Promise<any> }> = [];
 
   async detect(): Promise<boolean> {
     try {
@@ -60,8 +68,12 @@ export class PandoCodeBackend implements AIBackend {
   private async getEngine(projectPath: string, model?: string): Promise<any> {
     const key = projectPath;
     if (this.engines.has(key)) {
+      this.engineLastUsed.set(key, Date.now());
       return this.engines.get(key);
     }
+
+    // Evict stale engines before creating a new one
+    this.evictStaleEngines();
 
     await loadPandoCode();
     const engine = await _PandoCode.create({
@@ -73,7 +85,24 @@ export class PandoCodeBackend implements AIBackend {
     });
 
     this.engines.set(key, engine);
+    this.engineLastUsed.set(key, Date.now());
     return engine;
+  }
+
+  /** Evict engines that haven't been used within the TTL window. */
+  private evictStaleEngines(): void {
+    const now = Date.now();
+    for (const [key, lastUsed] of this.engineLastUsed) {
+      if (now - lastUsed > PandoCodeBackend.ENGINE_TTL_MS) {
+        const engine = this.engines.get(key);
+        if (engine) {
+          engine.shutdown().catch(() => {});
+          this.engines.delete(key);
+          this.engineLastUsed.delete(key);
+          console.log(`[PandoCodeBackend] Evicted stale engine for ${key} (idle ${Math.round((now - lastUsed) / 60000)}min)`);
+        }
+      }
+    }
   }
 
   /**
@@ -83,8 +112,7 @@ export class PandoCodeBackend implements AIBackend {
     for (const engine of this.engines.values()) {
       engine.setBudgetProvider(provider);
     }
-    // Store for future engines
-    (this as any)._pendingBudgetProvider = provider;
+    this.pendingBudgetProvider = provider;
   }
 
   /**
@@ -94,9 +122,7 @@ export class PandoCodeBackend implements AIBackend {
     for (const engine of this.engines.values()) {
       engine.tools.register(tool);
     }
-    // Store for future engines
-    if (!(this as any)._pendingTools) (this as any)._pendingTools = [];
-    (this as any)._pendingTools.push(tool);
+    this.pendingTools.push(tool);
   }
 
   async execute(task: AITask): Promise<AIResult> {
@@ -111,16 +137,14 @@ export class PandoCodeBackend implements AIBackend {
       const engine = await this.getEngine(projectPath, model);
 
       // Apply pending budget provider if set
-      if ((this as any)._pendingBudgetProvider) {
-        engine.setBudgetProvider((this as any)._pendingBudgetProvider);
+      if (this.pendingBudgetProvider) {
+        engine.setBudgetProvider(this.pendingBudgetProvider);
       }
 
       // Apply pending custom tools
-      if ((this as any)._pendingTools) {
-        for (const tool of (this as any)._pendingTools) {
-          if (!engine.tools.has(tool.name)) {
-            engine.tools.register(tool);
-          }
+      for (const tool of this.pendingTools) {
+        if (!engine.tools.has(tool.name)) {
+          engine.tools.register(tool);
         }
       }
 
@@ -215,5 +239,6 @@ export class PandoCodeBackend implements AIBackend {
       } catch { /* best effort */ }
     }
     this.engines.clear();
+    this.engineLastUsed.clear();
   }
 }

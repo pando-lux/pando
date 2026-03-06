@@ -19,7 +19,7 @@ export async function GET() {
         const url: string = p.deploymentUrl || "";
         if (url.includes("s3-website") || url.includes("s3.amazonaws.com")) {
           hostType = "s3";
-        } else if (url.includes("gateway-one-mu.vercel.app") || url.includes("/apps/")) {
+        } else if (url.includes("vercel.app") || url.includes("/apps/")) {
           hostType = "gateway";
         } else if (p.deployPeerId) {
           hostType = "ec2";

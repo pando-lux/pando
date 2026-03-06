@@ -3248,7 +3248,8 @@ location /apps/${projectId}/ {
     this.aiBackendRegistry = new AIBackendRegistry();
     const pandoCodeBackend = new PandoCodeBackend();
     this.aiBackendRegistry.register(pandoCodeBackend);
-    this.aiBackendRegistry.detectAll().then(async () => {
+    // Store the config promise so WorkerPool.spawn() can await it before first use
+    this.aiBackendRegistry.configReady = this.aiBackendRegistry.detectAll().then(async () => {
       // Configure PandoCode with Pando-specific integrations (Lux budget, custom tools)
       if (pandoCodeBackend.available) {
         try {

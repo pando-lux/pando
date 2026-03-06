@@ -17,6 +17,13 @@ import type { AIBackend, AITask, AIResult } from './ai-backend.js';
 export class AIBackendRegistry {
   private backends: AIBackend[] = [];
 
+  /**
+   * Promise that resolves when engine configuration (budget, tools, credentials)
+   * is complete. Set by index.ts / orchestrator-process.ts after configurePandoEngine.
+   * WorkerPool.spawn() awaits this before first use to prevent race conditions.
+   */
+  configReady: Promise<void> = Promise.resolve();
+
   register(backend: AIBackend): void {
     this.backends.push(backend);
   }

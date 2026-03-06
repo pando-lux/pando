@@ -167,7 +167,7 @@ Detailed component breakdown in Section 4.
 
 **Location:** `packages/gateway/` in pando/node monorepo
 **Stack:** Next.js 16 + Tailwind
-**Status:** DONE (34 pages verified, all loading)
+**Status:** DONE (36 pages verified, all loading)
 
 Reads from @pando/node HTTP API. No direct database access.
 **Public deployment:** https://gateway-one-mu.vercel.app
@@ -196,7 +196,7 @@ Reads from @pando/node HTTP API. No direct database access.
 |---|---|---|---|
 | **PandoCodeBackend** | `core/ai-backend-pandocode.ts` | DONE | Wraps @pando-code/core engine. Singleton. Per-project engine caching. |
 | **AIBackendRegistry** | `core/ai-backend-registry.ts` | DONE | Registry pattern. PandoCode is the ONLY backend. |
-| **EngineBridge** | `core/engine-bridge.ts` | DONE | Injects LuxBudgetProvider + 10 custom Pando tools into engines |
+| **EngineBridge** | `core/engine-bridge.ts` | DONE | Injects LuxBudgetProvider + 9 custom Pando tools into engines |
 | **WorkerPool** | `core/worker-pool.ts` | DONE | Spawns fresh PandoCode engine instances per task. ~500 token boot prompt. Memory watchdog. |
 | **MessageBus** | `core/message-bus.ts` | DONE | SQLite-backed message routing. Sender validation. |
 | **CredentialStore** | `core/credential-store.ts` | DONE | AES-256-GCM encrypt/decrypt. Compute nodes only. |
@@ -217,7 +217,7 @@ Reads from @pando/node HTTP API. No direct database access.
 | **AgentDatabase** | `platform/agent-database.ts` | DONE | SQLite: agent_identity, message_inbox, tick_log, lessons, directives, reflections, discoveries, governance_audit, qa_test_runs. WAL mode. |
 | **TemplateRegistry** | `platform/template-registry.ts` | DONE | Role templates (builder, tester, reviewer prompts) |
 | **CapabilityDetector** | `platform/capability-detector.ts` | DONE | Auto-detect: PandoCode, storage, compute, hosting |
-| **ResourceMarketplace** | `platform/resource-marketplace.ts` | STUB | GossipSub price broadcasting. Prices never actually synced. |
+| **ResourceMarketplace** | `platform/resource-marketplace.ts` | DONE | GossipSub price broadcasting, resource discovery, metering. API routes active. |
 | **ContentRegistry** | `platform/content-registry.ts` | DONE | Content management |
 | **ThreadStore** | `platform/thread-store.ts` | DONE | Chat thread persistence (MongoDB) |
 
@@ -436,9 +436,9 @@ This section is the ground truth for what's broken, stubbed, or missing. Check t
 
 | Issue | Location | Problem |
 |---|---|---|
-| **Resource Marketplace** | `platform/resource-marketplace.ts` | GossipSub price broadcasting is scaffolded. Prices never actually synced across network. `GET /v1/resources/marketplace/find` may not exist. |
+| **Resource Marketplace** | `platform/resource-marketplace.ts` | GossipSub price broadcasting, resource listing, metering all implemented (362 lines). API endpoints exist and function. Minor: prices not confirmed synced across multi-node network in production. |
 | **Private/offline mode** | Various | Documented as [TARGET]. Ollama provider exists in pando-code but not wired into pando-node. SQLite fallback for no-MongoDB unclear. |
-| **Lux witness verification** | `kernel/emission-witness.ts` | "Peers must attest work happened before Lux minted" — but HOW a peer verifies work happened is not specified. Incentive to attest honestly not addressed. |
+| **Lux witness verification** | `kernel/emission-witness.ts` | Emission witness system is implemented (571 lines). Peer attestation works. Minor: incentive structure for honest attestation not formalized. |
 
 ### DESIGNED (no code, only in docs/brainstorms)
 
@@ -457,7 +457,7 @@ This section is the ground truth for what's broken, stubbed, or missing. Check t
 | index.ts is a monolith | It works, 204 tests pass. Decompose only when we need to. |
 | Agent storage is ephemeral | Ephemeral agents are sufficient for current dev mode. Persistent storage is Phase 8.6. |
 | Governance auto-approves (<=8 peers) | Dev mode only. When network grows past 8 peers, real voting kicks in. |
-| Smart-router.ts is dead code (349 lines) | Phase 18 heuristic classifier. Delete when doing cleanup. |
+| qa-memory.ts was dead code (146 lines) | Deleted. Never imported anywhere. |
 
 ---
 
@@ -601,7 +601,7 @@ Not every subsystem is required. Here's what's essential vs optional:
 - MongoDB (falls back to P2P storage proxy)
 - CredentialStore (only on compute nodes with CREDENTIAL_MASTER_KEY)
 - GatewayDeployPool (only if hosting tokens contributed)
-- ResourceMarketplace (stub anyway)
+- ResourceMarketplace (operational, not critical path)
 - SecurityMonitor, ReputationManager (enhance but don't block)
 - Observer, QA Agent (monitoring, not core function)
 

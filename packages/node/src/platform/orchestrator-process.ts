@@ -25,6 +25,7 @@ import type { OrchestratorDeps } from './orchestrator.js';
 import { MessageBus } from '../core/message-bus.js';
 import { AIBackendRegistry } from '../core/ai-backend-registry.js';
 import { PandoCodeBackend } from '../core/ai-backend-pandocode.js';
+import { configurePandoEngine } from '../core/engine-bridge.js';
 import { OrgManager } from './org-manager.js';
 import { TemplateRegistry } from './template-registry.js';
 
@@ -143,8 +144,34 @@ process.on('message', async (msg: any) => {
 
     // Create own AI backend registry — PandoCode is the only backend
     const aiRegistry = new AIBackendRegistry();
-    aiRegistry.register(new PandoCodeBackend());
+    const pandoCodeBackend = new PandoCodeBackend();
+    aiRegistry.register(pandoCodeBackend);
     await aiRegistry.detectAll();
+
+    // Configure PandoCode with Lux budget + custom Pando tools (same as main process).
+    // Store on configReady so WorkerPool proxy can await before spawning.
+    aiRegistry.configReady = (async () => {
+      if (pandoCodeBackend.available) {
+        try {
+          let token: string | undefined;
+          try {
+            const { existsSync, readFileSync } = await import('node:fs');
+            const { join } = await import('node:path');
+            const tokenPath = join(config.dataDir, 'api-token');
+            if (existsSync(tokenPath)) token = readFileSync(tokenPath, 'utf-8').trim();
+          } catch { /* no token */ }
+          await configurePandoEngine(pandoCodeBackend, {
+            apiPort: config.apiPort,
+            apiToken: token,
+            useLuxBudget: true,
+            // No resourceRegistry in child process — credentials injected by main process env
+          });
+          console.log(`[orch-process:${process.pid}] PandoCode configured with Lux budget + Pando tools`);
+        } catch (err: any) {
+          console.warn(`[orch-process:${process.pid}] PandoCode configuration failed:`, err.message);
+        }
+      }
+    })();
 
     // Template registry shares the same db
     const templateRegistry = new TemplateRegistry(db.getRawDb());
