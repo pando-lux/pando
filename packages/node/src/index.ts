@@ -1664,6 +1664,108 @@ location /apps/${projectId}/ {
       return { error: 'AI query failed' };
     });
 
+    // P2P doorman proxy: EC2 nodes classify/answer chat messages using contributed OpenAI keys.
+    // Non-EC2 nodes (Windows contributors) route here when they have no local OpenAI key.
+    this.requestReply.registerHandler('pando/doorman-classify', async (req) => {
+      const credStore = (this as any)._credentialStore as CredentialStore | undefined;
+      if (!credStore?.hasDecryptionCapability()) {
+        return { error: 'Not a credential node' };
+      }
+      const { message } = req.payload || {};
+      if (!message || typeof message !== 'string') return { error: 'Missing message' };
+
+      const aiKey = await credStore.getActiveByType('ai_api_key');
+      if (!aiKey || aiKey.metadata?.provider !== 'openai') return { error: 'No OpenAI key' };
+
+      try {
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${aiKey.credential}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content: `You are the doorman for Pando, an AI-powered network that builds software projects.
+Classify the user's message into ONE of these categories and respond with ONLY valid JSON:
+
+1. "question" — general question, small talk, greeting, asking about Pando. You answer it directly.
+2. "build" — user wants to BUILD something (app, website, tool, game, etc). Extract a short description.
+
+JSON format:
+For questions: {"intent":"question","response":"<your friendly answer, 1-3 sentences>"}
+For builds: {"intent":"build","description":"<what they want built, 1 sentence>","tier":<1 or 2>}
+
+Tier rules:
+- Tier 1: Pure static apps (portfolio, landing page, simple form with no backend). HTML/CSS/JS only, no server.
+- Tier 2: Anything that needs a server (chat, real-time, backend, database, auth, etc). When in doubt, Tier 2.
+
+Be friendly and helpful. Keep answers short.`
+              },
+              { role: 'user', content: message },
+            ],
+            max_tokens: 256,
+            temperature: 0.3,
+          }),
+          signal: AbortSignal.timeout(8000),
+        });
+        if (res.ok) {
+          const data = await res.json() as any;
+          const content = data?.choices?.[0]?.message?.content?.trim();
+          if (content) {
+            const cleaned = content.replace(/^```json?\s*/, '').replace(/\s*```$/, '');
+            const parsed = JSON.parse(cleaned);
+            this.resourceMeter?.recordUsage(aiKey.resourceId, 'api_keys', {
+              resourceType: 'api_keys', quantity: 1, unit: 'calls', timestamp: Date.now(),
+            });
+            return parsed;
+          }
+        }
+      } catch (err: any) {
+        console.log(`[doorman-proxy] Classification failed: ${err.message?.slice(0, 100)}`);
+      }
+      return { error: 'Classification failed' };
+    });
+
+    this.requestReply.registerHandler('pando/doorman-chat', async (req) => {
+      const credStore = (this as any)._credentialStore as CredentialStore | undefined;
+      if (!credStore?.hasDecryptionCapability()) {
+        return { error: 'Not a credential node' };
+      }
+      const { message, history } = req.payload || {};
+      if (!message || typeof message !== 'string') return { error: 'Missing message' };
+
+      const aiKey = await credStore.getActiveByType('ai_api_key');
+      if (!aiKey || aiKey.metadata?.provider !== 'openai') return { error: 'No OpenAI key' };
+
+      try {
+        const messages = [
+          { role: 'system', content: 'You are a helpful AI assistant on the Pando network. Answer questions clearly and concisely.' },
+          ...(Array.isArray(history) ? history.slice(-10) : []),
+          { role: 'user', content: message },
+        ];
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${aiKey.credential}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'gpt-4o-mini', messages, max_tokens: 512, temperature: 0.7 }),
+          signal: AbortSignal.timeout(12000),
+        });
+        if (res.ok) {
+          const data = await res.json() as any;
+          const reply = data?.choices?.[0]?.message?.content?.trim();
+          if (reply) {
+            this.resourceMeter?.recordUsage(aiKey.resourceId, 'api_keys', {
+              resourceType: 'api_keys', quantity: 1, unit: 'calls', timestamp: Date.now(),
+            });
+            return { reply };
+          }
+        }
+      } catch (err: any) {
+        console.log(`[doorman-proxy] Chat failed: ${err.message?.slice(0, 100)}`);
+      }
+      return { error: 'Chat failed' };
+    });
+
     // Phase 83: Register pando/storage-proxy handler on compute nodes
     // Untrusted nodes proxy StorageBackend CRUD operations here
     this.requestReply.registerHandler('pando/storage-proxy', async (req) => {

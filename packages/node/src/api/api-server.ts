@@ -531,7 +531,7 @@ export class ApiServer {
     }
 
     // ── OpenAI classification ($0.001, <2s) ──────────────────────────────
-    // Priority: local OPENAI_API_KEY env var (contributor's own key), then contributed key via CredentialStore (EC2)
+    // Priority: 1) local OPENAI_API_KEY, 2) CredentialStore (EC2), 3) P2P proxy to EC2 peer
     let openaiKey: string | null = process.env.OPENAI_API_KEY || null;
     if (!openaiKey) {
       const registry = this.node.getResourceRegistry();
@@ -540,17 +540,19 @@ export class ApiServer {
         if (aiKey && aiKey.provider === 'openai') openaiKey = aiKey.key;
       }
     }
+
     if (openaiKey) {
-        try {
-          const classifyRes = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({
-              model: 'gpt-4o-mini',
-              messages: [
-                {
-                  role: 'system',
-                  content: `You are the doorman for Pando, an AI-powered network that builds software projects.
+      // Local or CredentialStore key available — classify directly
+      try {
+        const classifyRes = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            model: 'gpt-4o-mini',
+            messages: [
+              {
+                role: 'system',
+                content: `You are the doorman for Pando, an AI-powered network that builds software projects.
 Classify the user's message into ONE of these categories and respond with ONLY valid JSON:
 
 1. "question" — general question, small talk, greeting, asking about Pando. You answer it directly.
@@ -565,38 +567,44 @@ Tier rules:
 - Tier 2: Anything that needs a server. This includes: chat, messaging, real-time, polls, voting, multiplayer, games with scores, dashboards with live data, APIs, WebSocket, Express, Node.js backend, database queries, user accounts, login systems. When in doubt, choose Tier 2 — it's safer than deploying a server app to static hosting.
 
 Be friendly and helpful. Keep answers short.`
-                },
-                { role: 'user', content: message },
-              ],
-              max_tokens: 256,
-              temperature: 0.3,
-            }),
-            signal: AbortSignal.timeout(8000),
-          });
+              },
+              { role: 'user', content: message },
+            ],
+            max_tokens: 256,
+            temperature: 0.3,
+          }),
+          signal: AbortSignal.timeout(8000),
+        });
 
-          if (classifyRes.ok) {
-            const data = await classifyRes.json() as any;
-            const content = data?.choices?.[0]?.message?.content?.trim();
-            if (content) {
-              try {
-                // Parse JSON response (strip markdown code fences if present)
-                const cleaned = content.replace(/^```json?\s*/, '').replace(/\s*```$/, '');
-                const parsed = JSON.parse(cleaned);
-                if (parsed.intent === 'question' && parsed.response) {
-                  return { intent: 'question', response: parsed.response };
-                }
-                if (parsed.intent === 'build' && parsed.description) {
-                  return { intent: 'build', description: parsed.description, tier: parsed.tier || 1 };
-                }
-              } catch {
-                // JSON parse failed — treat as question with raw response
-                return { intent: 'question', response: content };
+        if (classifyRes.ok) {
+          const data = await classifyRes.json() as any;
+          const content = data?.choices?.[0]?.message?.content?.trim();
+          if (content) {
+            try {
+              const cleaned = content.replace(/^```json?\s*/, '').replace(/\s*```$/, '');
+              const parsed = JSON.parse(cleaned);
+              if (parsed.intent === 'question' && parsed.response) {
+                return { intent: 'question', response: parsed.response };
               }
+              if (parsed.intent === 'build' && parsed.description) {
+                return { intent: 'build', description: parsed.description, tier: parsed.tier || 1 };
+              }
+            } catch {
+              return { intent: 'question', response: content };
             }
           }
-        } catch (err: any) {
-          console.log(`[doorman] OpenAI classification failed: ${err.message}`);
         }
+      } catch (err: any) {
+        console.log(`[doorman] Local OpenAI classification failed: ${err.message}`);
+      }
+    } else {
+      // No local key — route to EC2 peer via P2P (Path A: contributed keys on secure nodes)
+      try {
+        const result = await this.proxyDoormanClassify(message);
+        if (result) return result;
+      } catch (err: any) {
+        console.log(`[doorman] P2P classify proxy failed: ${err.message?.slice(0, 100)}`);
+      }
     }
 
     // ── Fallback: no AI key available → deterministic keyword matching ────
@@ -629,7 +637,7 @@ Be friendly and helpful. Keep answers short.`
    * Falls back to a canned response if no AI key is available.
    */
   private async doormanChat(message: string, history: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<string> {
-    // Priority: local OPENAI_API_KEY (contributor's own key), then contributed key via CredentialStore (EC2)
+    // Priority: 1) local OPENAI_API_KEY, 2) CredentialStore (EC2), 3) P2P proxy to EC2 peer
     let openaiKey: string | null = process.env.OPENAI_API_KEY || null;
     if (!openaiKey) {
       const registry = this.node.getResourceRegistry();
@@ -642,7 +650,7 @@ Be friendly and helpful. Keep answers short.`
       try {
         const messages = [
           { role: 'system', content: 'You are a helpful AI assistant on the Pando network. Answer questions clearly and concisely. You can help with general questions, coding, analysis, and more.' },
-          ...history.slice(-10), // last 10 messages for context window
+          ...history.slice(-10),
           { role: 'user', content: message },
         ];
         const res = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -657,10 +665,66 @@ Be friendly and helpful. Keep answers short.`
           if (reply) return reply;
         }
       } catch (err: any) {
-        console.log(`[doorman] Smart chat failed: ${err.message}`);
+        console.log(`[doorman] Local smart chat failed: ${err.message}`);
+      }
+    } else {
+      // No local key — route to EC2 peer via P2P
+      try {
+        const reply = await this.proxyDoormanChat(message, history);
+        if (reply) return reply;
+      } catch (err: any) {
+        console.log(`[doorman] P2P chat proxy failed: ${err.message?.slice(0, 100)}`);
       }
     }
-    return `I'd love to help, but no AI key is available right now. Set OPENAI_API_KEY in your environment or contribute a key with /contribute openai.`;
+    return `I'd love to help, but no AI-capable peers are available right now. Try again when an EC2 node is connected.`;
+  }
+
+  // ── Doorman P2P proxy methods (route to EC2 peers with contributed keys) ──────
+
+  private async proxyDoormanClassify(message: string): Promise<{ intent: 'question' | 'build'; response?: string; description?: string; tier?: number } | null> {
+    const requestReply = this.node.getRequestReply();
+    const capabilityRegistry = this.node.getCapabilityRegistry();
+    if (!requestReply || !capabilityRegistry) return null;
+
+    const allProfiles = capabilityRegistry.getAllProfiles();
+    const credentialPeers = allProfiles.filter((p: any) =>
+      p.credentialAccess === true && p.peerId !== this.node.getIdentity()?.peerId
+    );
+
+    for (const peer of credentialPeers.slice(0, 3)) {
+      try {
+        const resp = await requestReply.request(peer.peerId, 'pando/doorman-classify', { message }, 10_000);
+        if (resp?.success && resp.payload && !resp.payload.error) {
+          console.log(`[doorman] P2P classify via ${peer.peerId.slice(0, 12)}`);
+          const p = resp.payload;
+          if (p.intent === 'question' && p.response) return { intent: 'question', response: p.response };
+          if (p.intent === 'build' && p.description) return { intent: 'build', description: p.description, tier: p.tier || 1 };
+        }
+      } catch { /* try next peer */ }
+    }
+    return null;
+  }
+
+  private async proxyDoormanChat(message: string, history: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<string | null> {
+    const requestReply = this.node.getRequestReply();
+    const capabilityRegistry = this.node.getCapabilityRegistry();
+    if (!requestReply || !capabilityRegistry) return null;
+
+    const allProfiles = capabilityRegistry.getAllProfiles();
+    const credentialPeers = allProfiles.filter((p: any) =>
+      p.credentialAccess === true && p.peerId !== this.node.getIdentity()?.peerId
+    );
+
+    for (const peer of credentialPeers.slice(0, 3)) {
+      try {
+        const resp = await requestReply.request(peer.peerId, 'pando/doorman-chat', { message, history }, 15_000);
+        if (resp?.success && resp.payload?.reply) {
+          console.log(`[doorman] P2P chat via ${peer.peerId.slice(0, 12)}`);
+          return resp.payload.reply;
+        }
+      } catch { /* try next peer */ }
+    }
+    return null;
   }
 
   // ── Doorman helper methods ──────
