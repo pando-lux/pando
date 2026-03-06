@@ -18,9 +18,9 @@ Pando is a decentralized, AI-managed network. Every participant runs the same no
 
 ---
 
-## 2. THE FOUR PACKAGES
+## 2. THE PACKAGES
 
-Pando is four independent packages composed by a fifth (the node).
+Pando is independent packages composed by the node.
 
 ```
 @pando/identity    Pure crypto primitives. No dependencies. No storage.
@@ -35,16 +35,45 @@ Pando is four independent packages composed by a fifth (the node).
 
 **Dependency rule: one-way, never circular.**
 ```
-shared ← ledger ← node
-                ← identity (standalone, no shared dep)
-                ← code (standalone, no shared dep)
-                ← tests (standalone, no shared dep)
+shared < ledger < node
+                < identity (standalone, no shared dep)
+                < code (standalone, no shared dep)
+                < tests (standalone, no shared dep)
 ```
 
-**The brain/body split:**
-- **@pando-code/core** = the brain. ALL intelligence, task management, memory, sub-agents, tools.
-- **@pando/node** = the body. P2P networking, identity, economy, governance, storage, HTTP API.
-- **engine-bridge.ts** = the nervous system. Injects identity, economy, and custom tools into the brain.
+### The Brain / Body / Nervous System
+
+```
+@pando-code/core = THE BRAIN
+  All intelligence. Task management. Memory. Sub-agents. Tools.
+  Standalone product — works without pando-node.
+  Doesn't import @pando/node. Doesn't know about P2P, Lux, or governance.
+
+@pando/node = THE BODY
+  Pure infrastructure. P2P networking. Identity. Economy. Governance. Storage. HTTP API.
+  Has ZERO intelligence of its own. No orchestrator. No agent database. No message bus.
+
+engine-adapter.ts = THE NERVOUS SYSTEM (~200 lines)
+  The ONE file that connects brain to body.
+  Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
+  Pando tools are just HTTP calls to the node's own API — the engine doesn't know the difference.
+```
+
+**How the brain sees the body:**
+```
+The engine has 23 built-in tools (read_file, write_file, bash, grep, etc.)
+When inside a pando-node, it gets EXTRA tools:
+  pando_deploy       → POST /v1/projects/:id/deploy
+  pando_transfer     → POST /v1/ledger/transfer
+  pando_propose      → POST /v1/governance/propose
+  pando_status       → GET  /v1/status
+  pando_peers        → GET  /v1/peers
+  ...etc
+
+The engine doesn't import anything from pando-node.
+It just has tools that happen to call localhost.
+That's the ENTIRE integration.
+```
 
 ---
 
@@ -73,14 +102,14 @@ Pure cryptographic primitives. No storage, no SQLite, no MongoDB, no network.
 
 **Key files:** `core/keypair.ts`, `core/signing.ts`, `core/encryption.ts`, `identity/agent-profile.ts`, `identity/signed-action.ts`, `auth/verifier.ts`, `auth/jwt.ts`
 
-### 3.2 @pando-code/core (COMPLETE)
+### 3.2 @pando-code/core
 
 **Location:** Separate repo at `pando/code/`
-**Lines:** 60K+ TypeScript | **Status:** DONE, standalone product
+**Lines:** 60K+ TypeScript | **Status:** DONE as standalone. Needs upgrades for network integration.
 
 The AI coding engine. Multi-provider (Anthropic, OpenAI, Google, Ollama). Multi-agent orchestration. Persistent memory. AST-based code intelligence.
 
-**What it provides:**
+**What it provides TODAY:**
 - `PandoCode` class — the engine. Create, send messages, get streaming responses.
 - 8-layer frame system (L0 identity → L6 conversation). `FrameBuilder.build()` is the ONLY prompt assembly path.
 - Board — SQLite-backed task/discovery tracking. Snapshot injected into every prompt.
@@ -91,6 +120,12 @@ The AI coding engine. Multi-provider (Anthropic, OpenAI, Google, Ollama). Multi-
 - Guardrails — hard (enforced), role permissions matrix, risk tiers, git checkpoints.
 - Event bus — 20+ event types streamed via WebSocket.
 - MCP client — connects to external MCP servers (Playwright built-in).
+- **API mode** — `PandoCode.create()` + `engine.send()` works programmatically today. No CLI required.
+
+**Infrastructure for network integration (DONE):**
+- **EnginePool** (`pool/engine-pool.ts`) — Multi-engine management. `Map<id, PandoCode>` with lazy creation, TTL eviction, lifecycle hooks (`onAfterCreate` for tool/budget injection), max engine limits, concurrent-safe creation locks. ~230 lines.
+- **Scheduler** (`pool/scheduler.ts`) — Periodic task execution. Register named tasks with interval + prompt. Sends to engines via pool. Pause/resume/trigger. ~200 lines.
+- **PandoServer** (`server/server.ts`) — HTTP API with SSE streaming. `POST /api/send` streams EngineEvents. Engine/schedule/health endpoints. Standalone: run `PandoServer.start()`. ~200 lines.
 
 **Key files:** `engine/engine.ts` (~1400 lines, main loop), `board/board.ts`, `agent/sub-agent.ts`, `agent/frame-builder.ts`, `memory/store.ts`, `tool/registry.ts`, `provider/provider.ts`
 
@@ -138,18 +173,18 @@ SQLite database for accounts, transactions, emissions. P2P synced via GossipSub 
 - Daily cap: 500 Lux per node per day
 - Witness-based emission: peers attest work before Lux minted
 
-### 3.5 @pando/node (THE COMPOSER)
+### 3.5 @pando/node (THE BODY)
 
 **Location:** `packages/node/` in pando/node monorepo
-**Lines:** ~15,000+ | **Status:** Working but has architectural debt
+**Status:** Working. Undergoing architectural refactor to remove duplicate brain.
 
-The node composes all packages and adds: P2P networking, governance, storage, HTTP API, agent orchestration.
+The node composes all packages. It is PURE INFRASTRUCTURE — no intelligence of its own.
 
 **Source layout (3-layer architecture):**
 ```
 kernel/    Layer 0: P2P core (network, sync, governance, guardrails, monitor, security, reputation, emission)
-core/      Layer 1: Agent system, storage, deploy, credentials, upgrade, payment
-platform/  Layer 2: Orchestrator, resources, content, chat, projects, hosting
+core/      Layer 1: Storage, deploy, credentials, upgrade, payment, engine-adapter
+platform/  Layer 2: Resources, content, threads, capabilities
 api/       HTTP API (kernel-api, core-api, platform-api, testing-api, server, middleware/)
 (root)     Entry points: index.ts, cli.ts, tui.ts, logger.ts, config.ts
 ```
@@ -158,10 +193,8 @@ api/       HTTP API (kernel-api, core-api, platform-api, testing-api, server, mi
 
 **Three node modes:**
 - `full` — everything (dev machines with PandoCode available)
-- `compute` — no agent system (EC2 nodes without AI)
+- `compute` — no AI engine (EC2 nodes without PandoCode)
 - `relay` — P2P only (lightweight relay nodes)
-
-Detailed component breakdown in Section 4.
 
 ### 3.6 @pando/gateway
 
@@ -174,15 +207,15 @@ Reads from @pando/node HTTP API. No direct database access.
 
 ---
 
-## 4. NODE COMPONENTS (detailed)
+## 4. NODE COMPONENTS
 
-### 4.1 Kernel Layer (infrastructure — KEEP ALL)
+### 4.1 Kernel Layer (infrastructure)
 
 | Component | File | Status | What it does |
 |---|---|---|---|
 | **PandoNetwork** | `kernel/network.ts` | DONE | libp2p: TCP, Noise, Yamux, GossipSub, Circuit Relay, KadDHT |
 | **LedgerSync** | `kernel/sync.ts` | DONE | P2P ledger synchronization via GossipSub |
-| **Governance** | `kernel/governance.ts` | DONE | 6-layer security pipeline (see 5.5) |
+| **Governance** | `kernel/governance.ts` | DONE | 6-layer security pipeline + AI review hook (see 5.4) |
 | **HealthMonitor** | `kernel/monitor.ts` | DONE | System health polling + alerts |
 | **Guardrails** | `kernel/guardrails.ts` | DONE | 4-tier rate limiting + anomaly detection |
 | **SecurityMonitor** | `kernel/security-monitor.ts` | DONE | 5 detectors: DDoS, Sybil, spam, anomaly, resource abuse |
@@ -190,34 +223,25 @@ Reads from @pando/node HTTP API. No direct database access.
 | **EmissionWitness** | `kernel/emission-witness.ts` | DONE | Witness-based Lux emission |
 | **CrashGuard** | `kernel/crash-guard.ts` | DONE | Crash loop detection + circuit breaker |
 
-### 4.2 Core Layer (services)
+### 4.2 Core Layer (services + engine adapter)
 
 | Component | File | Status | What it does |
 |---|---|---|---|
-| **PandoCodeBackend** | `core/ai-backend-pandocode.ts` | DONE | Wraps @pando-code/core engine. Singleton. Per-project engine caching. |
-| **AIBackendRegistry** | `core/ai-backend-registry.ts` | DONE | Registry pattern. PandoCode is the ONLY backend. |
-| **EngineBridge** | `core/engine-bridge.ts` | DONE | Injects LuxBudgetProvider + 9 custom Pando tools into engines |
-| **WorkerPool** | `core/worker-pool.ts` | DONE | Spawns fresh PandoCode engine instances per task. ~500 token boot prompt. Memory watchdog. |
-| **MessageBus** | `core/message-bus.ts` | DONE | SQLite-backed message routing. Sender validation. |
+| **EngineAdapter** | `core/engine-adapter.ts` | TARGET | The ONE pando-code integration point. Multi-engine management, routing, Pando tools, Lux budget. |
 | **CredentialStore** | `core/credential-store.ts` | DONE | AES-256-GCM encrypt/decrypt. Compute nodes only. |
 | **StorageBackend** | `core/storage-backend.ts` | DONE | MongoDB direct or P2P proxy to compute nodes |
 | **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Git pull + build + restart. GossipSub broadcast. |
 | **GatewayDeployPool** | `core/gateway-deploy-pool.ts` | DONE | Deploy gateway to all contributed hosting accounts |
 | **PaymentGate** | `core/payment-gate.ts` | DONE | Lux escrow for task execution |
 | **RequestReply** | `core/request-reply.ts` | DONE | P2P unicast calls (TCP + GossipSub fallback) |
+| **HostingAdapters** | `core/hosting-adapters.ts` | DONE | Provider-agnostic deployment (Vercel, Netlify) |
 
-### 4.3 Platform Layer (orchestration)
+### 4.3 Platform Layer (non-brain services)
 
 | Component | File | Status | What it does |
 |---|---|---|---|
-| **Orchestrator** | `platform/orchestrator.ts` | DONE | Deterministic tick loop. Tier 1 (no AI) or Tier 2 (PandoCode). Session-persistent. |
-| **OrchestratorProcessManager** | `platform/orchestrator-manager.ts` | DONE | Forks system orchestrators into child processes |
-| **orchestrator-process** | `platform/orchestrator-process.ts` | DONE | Child process entry point. Own DB, MessageBus, AI registry. |
-| **OrgManager** | `platform/org-manager.ts` | DONE | Orchestrator hierarchy. Create/dissolve. Authority narrowing. Max depth 5. |
-| **AgentDatabase** | `platform/agent-database.ts` | DONE | SQLite: agent_identity, message_inbox, tick_log, lessons, directives, reflections, discoveries, governance_audit, qa_test_runs. WAL mode. |
-| **TemplateRegistry** | `platform/template-registry.ts` | DONE | Role templates (builder, tester, reviewer prompts) |
 | **CapabilityDetector** | `platform/capability-detector.ts` | DONE | Auto-detect: PandoCode, storage, compute, hosting |
-| **ResourceMarketplace** | `platform/resource-marketplace.ts` | DONE | GossipSub price broadcasting, resource discovery, metering. API routes active. |
+| **ResourceMarketplace** | `platform/resource-marketplace.ts` | DONE | GossipSub price broadcasting, resource discovery, metering |
 | **ContentRegistry** | `platform/content-registry.ts` | DONE | Content management |
 | **ThreadStore** | `platform/thread-store.ts` | DONE | Chat thread persistence (MongoDB) |
 
@@ -234,10 +258,9 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 |---|---|---|
 | Kernel | `/v1/status`, `/v1/peers` | Node health, connected peers |
 | Core | `/v1/tasks`, `/v1/upgrade` | Task management, safe upgrade |
-| Agents | `/v1/agents/*` | Spawn, message, report, tree |
-| Chat | `/v1/chat/*` | Message to orchestrator, history |
+| Chat | `/v1/chat/*` | Message → engine adapter → engine.send(). History from engine sessions. |
+| Engines | `/v1/engines/*` | List active engines, board snapshots, memory |
 | Projects | `/v1/projects/*` | Create, deploy, undeploy |
-| Context | `/v1/context/*` | Project context, lessons, team, identity, discoveries |
 | Auth | `/v1/auth/*` | Challenge, verify (Pando Login), me, refresh |
 | Testing | `/v1/testing/*` | Status, runs, findings, scenarios, playbooks, specs, stats |
 | Gateways | `/v1/gateways` | All known live gateway deployments |
@@ -245,83 +268,225 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 
 ---
 
-## 5. HOW THINGS WORK (composition)
+## 5. HOW THINGS WORK
 
-### 5.1 Agent System — The Self-Sustaining Loop
-
-```
-1. User request → HTTP API → MessageBus → Orchestrator inbox
-2. Orchestrator tick (60s) → classify Tier 1 or Tier 2
-3. Tier 2 → session-persistent PandoCode AI call
-4. AI returns action array (spawn_worker, commit_code, respond_to_user, etc.)
-5. WorkerPool spawns fresh PandoCode engine in project root
-6. Worker reads/writes code, runs build, reports via HTTP (3000-char + git diff)
-7. Next tick → AI reads report (remembers context), decides next step
-8. PASS → git commit + propose_upgrade (10 Lux stake)
-9. Governance 6-layer check → auto-approve (dev mode, <=8 peers)
-10. Broadcast via GossipSub → all nodes: git pull → build → restart
-```
-
-**Idle ticks = zero cost.** When inbox empty, tick is Tier 1 (deterministic, no AI call).
-
-### 5.2 Orchestrator Tick Loop
-
-The Orchestrator class (`platform/orchestrator.ts`) runs at every hierarchy level: council, observer, QA agent, project orchestrators. Same code, different roles.
-
-**Each tick:**
-1. Health guard (skip first 120s, skip if heap > 500MB)
-2. `readBoard()` — fetch pending tasks, workers, inbox messages, directives
-3. `classify()` — Tier 1 if idle/healthy, Tier 2 if inbox has items or directives pending
-4. Tier 1: `deterministic(board)` — health checks, deploy URL broadcast, directive ack
-5. Tier 2: `callAI(board)` — session-persistent PandoCode call. Boot prompt on first tick, short board-state update on subsequent ticks.
-6. Execute returned actions
-7. Log tick, mark messages read
-
-**Session rotation:** Every ~200 ticks to keep context fresh. Lessons survive rotation.
-
-### 5.3 Process Isolation (Phase 200)
-
-System orchestrators run in separate child processes. Main process handles only infrastructure.
+### 5.1 Gateway Chat — User Sends a Message
 
 ```
-Main Process (PID 1)                  Child Processes
-├── HTTP API (Fastify)                ├── Council (PID 2) — CEO brain, 60s tick
-├── P2P Network (libp2p)             ├── Observer (PID 3) — architecture audit, 30min tick
-├── WorkerPool (spawn/kill)           └── QA Agent (PID 4) — UX testing, 30min tick
-├── Governance (deterministic)
-├── OrchestratorProcessManager        IPC Protocol:
-│   └── Handles IPC from children     Child → Parent: spawn_worker, commit_code, push_event
-└── SQLite (WAL mode)                 Parent → Child: start, stop, peer_count, action_result
+User on gateway types: "Build me a bakery website"
+  |
+  v
+POST /v1/chat/message { message: "Build me a bakery website" }
+  |
+  v
+pando-node HTTP API receives request
+  |
+  v
+Engine Adapter: no projectId → route to System Engine
+  |
+  v
+System Engine (pando-code) thinks: "User wants a new project"
+  |
+  v
+System Engine calls pando_create_project tool
+  → tool calls POST /v1/projects { name: "bakery-website" }
+  → pando-node creates project record, returns projectId
+  |
+  v
+Engine Adapter creates new Project Engine for this projectId
+  → registers Pando tools scoped to this project
+  |
+  v
+Project Engine takes over:
+  → Plans on its Board: "Goal: Build bakery website"
+  → Spawns builder sub-agent → writes HTML/CSS/JS
+  → Spawns tester sub-agent → tests locally
+  → Uses pando_deploy tool → deploys to hosting
+  |
+  v
+SSE streams all responses back to gateway in real-time
+  |
+  v
+User sees: "Your bakery website is live at https://..."
 ```
 
-Each child creates own AgentDatabase, MessageBus, AIBackendRegistry (WAL mode allows concurrent access).
+**Subsequent messages** with `projectId` route directly to that project's engine. The system engine is only involved for project creation and system-level queries.
 
-### 5.4 Pando Login (Agent Identity)
+### 5.2 Multi-Project Engine Management
 
 ```
-Human (Ed25519 keypair in ~/.pando/identity.json)
-  ↓ createAgent() → signs AgentCertificate
-Agent (own Ed25519 keypair, own peerId = wallet)
-  ↓ POST /auth/challenge → nonce
-  ↓ sign(nonce, agentPrivateKey) → signature
-  ↓ POST /auth/verify → JWT (24h, stateless)
-  ↓ X-User-Token: <jwt> → authenticated API access
+Engine Adapter manages: Map<string, PandoCode>
+
+  "system"     → System Engine (always running)
+                  Manages pando-node itself.
+                  Governance review on demand.
+                  Periodic: observer checks, QA runs.
+
+  "proj-abc"   → Project Engine (bakery website)
+                  Created when user started chat about this project.
+                  Evicted after 30 min idle.
+
+  "proj-def"   → Project Engine (marketplace app)
+                  Another user's project.
+                  Independent board + memory.
+
+  "proj-ghi"   → Project Engine (any other project)
+                  Created on demand, evicted when idle.
+
+Each engine:
+  - Has its own Board (tasks, goals, status)
+  - Has its own MemoryStore (lessons, reflections)
+  - Has its own sub-agents (builder, tester, explorer)
+  - Has Pando tools registered (calls node HTTP API)
+  - Is a STANDARD pando-code engine instance
+  - Doesn't know about other engines
+  - Doesn't know it's inside pando-node
 ```
 
-**Trust chain verification:** `verifySignedActionFull(action, humanPublicKey)` verifies: action signature (agent key) → certificate signature (human key) → expiry check. All offline.
+**Routing rule:**
+- `POST /v1/chat/message { projectId: "proj-abc" }` → `engines.get("proj-abc").send(message)`
+- `POST /v1/chat/message { no projectId }` → `engines.get("system").send(message)`
 
-### 5.5 Governance Security Pipeline (6 layers)
+### 5.3 Standalone pando-code vs Inside pando-node
 
-1. **Ed25519 signature verification** — upgrade proposals MUST be signed by proposer's key
-2. **Security file check** — blocks proposals modifying sensitive files unless description mentions 'security'
-3. **Diff content scan** — parses git diff for dangerous patterns: `eval(`, `new Function(` → block; `.privateKey`, dynamic `require()` → warn
-4. **Build verification** — `npm run build` must pass
-5. **Scenario tests** — API regression tests must pass
-6. **Kernel protection delay** — 60s delay for kernel/ changes
+```
+STANDALONE pando-code              PANDO-NODE pando-code
+(any dev, any project)             (inside the network)
+
+  23 built-in tools                  23 built-in tools        IDENTICAL
+  Board                              Board                    IDENTICAL
+  Memory                             Memory                   IDENTICAL
+  Sub-agents                         Sub-agents               IDENTICAL
+  FrameBuilder                       FrameBuilder             IDENTICAL
+  Guardrails                         Guardrails               IDENTICAL
+
+  Budget: USD                        Budget: Lux              DIFFERENT
+  (pays Anthropic)                   (network economy)
+
+  Extra tools: none                  Extra tools:             DIFFERENT
+                                     + pando_deploy
+                                     + pando_transfer
+                                     + pando_propose
+                                     + pando_peers
+                                     + pando_status
+                                     + pando_create_project
+                                     + pando_test_run
+                                     + ...etc
+
+  Network: NONE                      Network: P2P             DIFFERENT
+                                     (via tools)
+```
+
+pando-code doesn't import @pando/node. It just has extra tools registered. That's the ENTIRE difference.
+
+### 5.4 Governance Security Pipeline (6 layers + AI review)
+
+```
+Proposal arrives (diff + description)
+  |
+  v
+Layer 1: Ed25519 signature check              DETERMINISTIC (pando-node)
+Layer 2: Security file check                   DETERMINISTIC (pando-node)
+Layer 3: Diff content scan (dangerous patterns) DETERMINISTIC (pando-node)
+Layer 4: Build verification (npm run build)    DETERMINISTIC (pando-node)
+  |
+  v
+Layer 5: AI REVIEW
+  → governance.ts calls adapter.reviewDiff(diff, description)
+  → adapter routes to System Engine
+  → System Engine analyzes:
+     - Architecture violations?
+     - Injection risks (eval, dynamic require)?
+     - Data leaks (credentials, private keys)?
+     - Logic errors?
+  → Returns: { safe: boolean, risks: string[], recommendation: string }
+  → governance.ts uses this as INPUT (not final word — governance decides)
+  |
+  v
+Layer 6: Kernel protection delay (60s for kernel/ changes)
+  |
+  v
+DECISION: APPROVE or REJECT
+  → logged to governance_audit table
+  → if approved: broadcast via GossipSub
+  → all nodes: git pull → build → restart
+```
 
 **Auto-approve** when <=8 peers (dev mode). All logged to `governance_audit` table.
 
-### 5.6 Credential Security (IMMUTABLE LAW)
+### 5.5 Multi-Node P2P (nodes without AI)
+
+```
+Node A (has pando-code)           Node B (no pando-code)
++--------------------+            +--------------------+
+| Infrastructure     |<--- P2P -->| Infrastructure     |
+| Engine Adapter     |  TCP+Noise | (no adapter)       |
+| System Engine      |            |                    |
+| Project Engines    |            | chat_proxy handler |
++--------------------+            +--------------------+
+
+When a user hits Node B's gateway:
+1. User → Node B: POST /v1/chat/message
+2. Node B has no pando-code
+3. Node B discovers Node A via capability profile: [pando-code: yes]
+4. Node B forwards via P2P: chat_proxy → Node A
+5. Node A's engine adapter processes the request
+6. Response flows back: Node A → Node B → User
+
+The user doesn't know which node ran the AI.
+Node B is just a proxy. Node A has the brain.
+```
+
+### 5.6 Periodic Autonomous Behavior
+
+The node sends periodic "check" messages to the system engine. The engine decides what to do.
+
+```
+pando-node (body)                         pando-code (brain)
+
+  setInterval(5 min):
+    adapter.send("system",               → System Engine receives
+      "Periodic check. Run scheduled       → Decides what's needed:
+       tasks if needed.")                    - Nothing? "All clear."
+                                             - Time to audit? Spawns explorer sub-agent.
+                                             - Time for QA? Spawns tester sub-agent.
+                                             - Issue found? Spawns builder to fix.
+                                             - Fix ready? Calls pando_propose tool.
+
+  Events also trigger engine calls:
+    New chat message    → adapter.send(projectId, message)
+    Governance proposal → adapter.reviewDiff(diff)
+    Test failure        → adapter.send("system", "Test failed: ...")
+    Peer connected      → adapter.send("system", "New peer: X")
+```
+
+No tick loop. No orchestrator. No message bus. The engine runs when it has something to do.
+
+### 5.7 The Four Actors (via pando-code sub-agents)
+
+| Actor | How it works | Triggered by |
+|---|---|---|
+| **System Engine** (CEO) | Main engine instance. Plans, coordinates, delegates. | Chat messages, periodic checks, events |
+| **Observer** | Explorer sub-agent spawned by system engine. Read-only. Audits architecture, reports issues. | Periodic check (every 30 min) |
+| **QA Tester** | Tester sub-agent spawned by system engine. Runs Playwright tests against gateway. | Periodic check (every 30 min) |
+| **Builder** | Builder sub-agent spawned by any engine. Full tools. Writes code, runs builds. | When work is needed |
+| **Governance** | Deterministic code in kernel/governance.ts. NOT an AI agent. Calls engine for AI review only. | On proposal arrival |
+
+### 5.8 Pando Login (Agent Identity)
+
+```
+Human (Ed25519 keypair in ~/.pando/identity.json)
+  | createAgent() → signs AgentCertificate
+Agent (own Ed25519 keypair, own peerId = wallet)
+  | POST /auth/challenge → nonce
+  | sign(nonce, agentPrivateKey) → signature
+  | POST /auth/verify → JWT (24h, stateless)
+  | X-User-Token: <jwt> → authenticated API access
+```
+
+**Trust chain:** `verifySignedActionFull(action, humanPublicKey)` verifies: action signature (agent key) → certificate signature (human key) → expiry check. All offline.
+
+### 5.9 Credential Security (IMMUTABLE LAW)
 
 **The ONLY path for external credentials:**
 1. User runs `/contribute <service> <token>` in TUI
@@ -331,47 +496,123 @@ Agent (own Ed25519 keypair, own peerId = wallet)
 
 **NEVER:** read from env files, secrets/, CLI args. NEVER log, print, output credential values. NEVER store in docs, code, comments, agent reports.
 
-**One exception (documented):** Legacy `VERCEL_DEPLOY_TOKEN` env var auto-migrates to hosting_platform resource on startup with a deprecation warning. This is a migration path, not a pattern to follow.
+---
 
-### 5.7 Worker Lifecycle
+## 6. THE ENGINE ADAPTER (detailed spec)
 
-**Workers are always fresh.** Each spawn creates a new PandoCode engine session with a ~500 token boot prompt. Workers do NOT resume previous sessions.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. ~200 lines.
 
-Workers query context on demand via HTTP:
-- `/v1/context/project` — genome + lessons for current project
-- `/v1/context/lessons` — lessons by role and project
-- `/v1/context/team` — team member status
-- `/v1/context/identity` — agent identity details
-- `POST /v1/context/discover` — share a discovery (UPSERT by confidence)
+### Class Interface
 
-### 5.8 Four-Actor Model
+```typescript
+class EngineAdapter {
+  // Engine management
+  private systemEngine: PandoCode | null;
+  private projectEngines: Map<string, PandoCode>;
+  private engineLastUsed: Map<string, number>;
 
-| Actor | Role | Tick | Can write code? |
-|---|---|---|---|
-| **Council** | CEO — executes, spawns workers, ships code | 60s | Yes (via workers) |
-| **Observer** | Watches inward — audits architecture, verifies design | 30min | No. Sends directives to Council. |
-| **QA Agent** | Watches outward — tests gateway UI from human perspective | 30min | No. Reports UX issues to Council. |
-| **Governance** | Guards — 6-layer security pipeline | On proposal | No. Approves/rejects proposals. |
+  // Lifecycle
+  async start(config: AdapterConfig): Promise<void>
+  async stop(): Promise<void>
 
-**Persistent orchestrators** (council, observer, qa-user) are exempt from stale-check dissolution. Only project orchestrators dissolve when idle.
+  // Message routing
+  async send(message: string, projectId?: string): AsyncGenerator<Event>
+  async getOrCreateProjectEngine(projectId: string): PandoCode
 
-### 5.9 Directives (Cross-Agent Communication)
+  // Governance hook
+  async reviewDiff(diff: string, description: string): Promise<ReviewResult>
 
-Directives are the primary mechanism for persistent cross-agent tasks. They survive session rotations, node restarts, and crashes (stored in SQLite).
+  // Management
+  getActiveEngines(): EngineInfo[]
+  evictIdle(): void  // TTL cleanup (30 min for project engines)
+}
+```
 
-**Status lifecycle:** `pending` → `acknowledged` → `completed` / `rejected`
-- `pending`: New, never seen by AI. Forces Tier 2 tick.
-- `acknowledged`: AI has seen it (times_seen incremented). Rides along on natural Tier 2 ticks.
-- After 5 ticks without completion → shown as OVERDUE, forces Tier 2.
-- Actions: `complete_directive(id, summary)`, `reject_directive(id, reason)`, `create_directive(target, content)`
+### Pando Tools (registered on each engine)
 
-**Rule:** NEVER use send_message for findings that must be acted on. Use create_directive instead. Messages are fire-and-forget; directives persist.
+These tools call the node's own HTTP API. The engine doesn't import pando-node.
+
+| Tool | What it does | HTTP call |
+|---|---|---|
+| `pando_status` | Node health, peers, uptime | GET /v1/status |
+| `pando_peers` | List connected P2P peers | GET /v1/peers |
+| `pando_capabilities` | Network capabilities | GET /v1/network/capabilities |
+| `pando_balance` | Check Lux balance | GET /v1/ledger/balance |
+| `pando_transfer` | Send Lux to peer | POST /v1/ledger/transfer |
+| `pando_deploy` | Deploy a project | POST /v1/projects/:id/deploy |
+| `pando_undeploy` | Remove deployment | POST /v1/projects/:id/undeploy |
+| `pando_create_project` | Create a new project | POST /v1/projects |
+| `pando_list_projects` | List all projects | GET /v1/projects |
+| `pando_governance_propose` | Create upgrade proposal | POST /v1/governance/propose |
+| `pando_governance_vote` | Vote on proposal | POST /v1/governance/vote |
+| `pando_broadcast` | Send P2P GossipSub message | POST /v1/broadcast |
+| `pando_test_run` | Trigger test run | POST /v1/testing/run |
+| `pando_test_status` | Get test results | GET /v1/testing/status |
+
+### Lux Budget Provider
+
+```typescript
+LuxBudgetProvider {
+  currency: 'lux';
+  calculateCost(usage: { model, inputTokens, outputTokens }): number;
+}
+// 100 Lux per $1 USD of compute. Injected into every engine instance.
+```
 
 ---
 
-## 6. INFRASTRUCTURE
+## 7. PANDO-CODE UPGRADES NEEDED
 
-### 6.1 Live Network
+These are additions to @pando-code/core (the separate repo). No refactoring — all new code.
+
+### DONE (infrastructure built)
+
+| Feature | File | Lines | Description |
+|---|---|---|---|
+| **EnginePool** | `pool/engine-pool.ts` | ~230 | Multi-engine management. Lazy creation, TTL eviction, lifecycle hooks (`onAfterCreate`), max limits, concurrent-safe locks. |
+| **Scheduler** | `pool/scheduler.ts` | ~200 | Periodic tasks. Named schedules with interval + prompt. Pause/resume/trigger. Sends to engines via pool. |
+| **PandoServer** | `server/server.ts` | ~200 | HTTP API + SSE streaming. `POST /api/send`, engine/schedule/health endpoints. Standalone server mode. |
+
+### Nice to Have (future)
+
+| Feature | Description |
+|---|---|
+| **Structured output** | `engine.query(prompt, { format: 'json' })` for governance review. Alternative: register a `respond_json` tool. |
+| **Engine lifecycle events** | `engine.on('idle')`, `engine.on('error')` for adapter management. |
+| **Resource limits** | `maxMemoryMB`, `maxConcurrentSubAgents` per engine config. |
+
+### How pando-node uses it
+
+```typescript
+import { EnginePool, Scheduler } from "@pando-code/core";
+
+// engine-adapter.ts uses EnginePool directly (not PandoServer)
+const pool = new EnginePool({
+  defaultModel: "claude-sonnet-4-6",
+  maxEngines: 20,
+  idleTTLMs: 30 * 60 * 1000,
+  onAfterCreate: async (id, engine) => {
+    // Register Pando tools (deploy, governance, transfer, etc.)
+    // Inject Lux budget provider
+  },
+});
+
+// Scheduler for periodic autonomous behavior
+const scheduler = new Scheduler(pool);
+scheduler.register({
+  name: "observer-audit",
+  engineId: "system",
+  intervalMs: 30 * 60 * 1000,
+  prompt: "Run architecture audit. Report any issues found.",
+  active: true,
+});
+```
+
+---
+
+## 8. INFRASTRUCTURE
+
+### 8.1 Live Network
 
 | Machine | IP | Role | Features |
 |---|---|---|---|
@@ -383,7 +624,7 @@ Directives are the primary mechanism for persistent cross-agent tasks. They surv
 
 **Public gateway:** https://gateway-one-mu.vercel.app
 
-### 6.2 How to Build and Run
+### 8.2 How to Build and Run
 
 ```bash
 # Build all packages (shared → ledger → identity → node → gateway → mcp-server)
@@ -403,7 +644,7 @@ npx playwright test --project pando-node
 npx playwright test --project pando-code
 ```
 
-### 6.3 Node CLI Flags
+### 8.3 Node CLI Flags
 
 | Flag | Default | Description |
 |---|---|---|
@@ -420,90 +661,86 @@ npx playwright test --project pando-code
 
 ---
 
-## 7. TECHNICAL DEBT (honest status)
+## 9. MIGRATION: CURRENT STATE → TARGET
 
-This section is the ground truth for what's broken, stubbed, or missing. Check this FIRST before assuming a feature works.
+### Files to DELETE from pando-node (duplicate brain)
 
-### BROKEN (code exists, doesn't work correctly)
+| File | Lines | Why it goes |
+|---|---|---|
+| `platform/orchestrator.ts` | ~2,200 | pando-code IS the orchestrator |
+| `platform/orchestrator-manager.ts` | ~300 | No child process forking needed |
+| `platform/orchestrator-process.ts` | ~400 | Same |
+| `platform/org-manager.ts` | ~500 | pando-code has sub-agent hierarchy |
+| `platform/agent-database.ts` | ~1,265 | pando-code has MemoryStore + Board |
+| `platform/template-registry.ts` | ~200 | pando-code has FrameBuilder |
+| `platform/agent-tools.ts` | ~374 | Agent routes replaced by engine routes |
+| `core/message-bus.ts` | ~400 | pando-code has Board |
+| `core/worker-pool.ts` | ~500 | pando-code spawns its own sub-agents |
+| `core/ai-backend-pandocode.ts` | ~245 | No wrapper — engine used directly |
+| `core/ai-backend-registry.ts` | ~100 | No registry — adapter manages engines |
+| `core/ai-backend.ts` | ~50 | No interface needed |
+| `core/engine-bridge.ts` | ~300 | Replaced by engine-adapter.ts |
+| **TOTAL** | **~6,834** | |
+
+### Files to CREATE
+
+| File | Lines | What it does |
+|---|---|---|
+| `core/engine-adapter.ts` | ~200 | The ONE pando-code integration point (see Section 6) |
+
+### Migration Steps
+
+1. **Create engine-adapter.ts** — works alongside existing system
+2. **Rewire chat API** — `/v1/chat/message` routes through adapter
+3. **Remove brain from index.ts** — stop creating orchestrators, message bus, agent database
+4. **Delete brain files** — all files listed above
+5. **Fix imports** — chase down every broken reference
+6. **Fix build** — `npm run build` zero errors
+7. **Update tests** — agent routes removed, engine routes added
+8. **Add governance AI review** — hook adapter.reviewDiff() into Layer 5
+
+---
+
+## 10. TECHNICAL DEBT (honest status)
+
+### Active Migration
+
+| Issue | Status | Description |
+|---|---|---|
+| **Dual coordination system** | IN PROGRESS | pando-node has its own brain (orchestrator, message bus, agent database). Being replaced by engine adapter. See Section 9 for migration plan. |
+
+### Stubs
 
 | Issue | Location | Problem |
 |---|---|---|
-| **Dual coordination system** | orchestrator.ts + worker-pool.ts vs pando-code board + sub-agents | pando-node built its own task board (MessageBus + directives) AND uses pando-code as a dumb AI backend. Two brains, two boards. pando-code's board, memory, and sub-agent system are ignored by pando-node's orchestrator. |
-| **Agent identity ephemeral** | agent-database.ts | Agents are created per session, not persisted to MongoDB. Can't port across nodes. System agents (council, observer, QA) use NODE's key, not their own. IDENTITY-BIBLE documents agents as "first-class citizens" but they're ephemeral. |
-| **Memory threshold contradiction** | pando-code: 24h stale detection vs pando-node: 30d cold storage | Two different systems, two different thresholds, no reconciliation. |
+| **Private/offline mode** | Various | Ollama provider exists in pando-code but not wired. SQLite fallback unclear. |
+| **Governance fork resolution** | Designed only | 5-step resolution protocol, zero code. No conflict detection. |
+| **Distributed tracing** | Designed only | traceId, correlation IDs — designed but not built. |
 
-### STUB (code exists, incomplete)
-
-| Issue | Location | Problem |
-|---|---|---|
-| **Resource Marketplace** | `platform/resource-marketplace.ts` | GossipSub price broadcasting, resource listing, metering all implemented (362 lines). API endpoints exist and function. Minor: prices not confirmed synced across multi-node network in production. |
-| **Private/offline mode** | Various | Documented as [TARGET]. Ollama provider exists in pando-code but not wired into pando-node. SQLite fallback for no-MongoDB unclear. |
-| **Lux witness verification** | `kernel/emission-witness.ts` | Emission witness system is implemented (571 lines). Peer attestation works. Minor: incentive structure for honest attestation not formalized. |
-
-### DESIGNED (no code, only in docs/brainstorms)
-
-| Issue | Location | Problem |
-|---|---|---|
-| **Governance fork resolution** | Was in PANDO-BIBLE | 5-step resolution protocol fully designed, zero code. Auto-approve for <=8 peers means forks CAN happen. No conflict detection. |
-| **Distributed tracing** | Was in PANDO-BIBLE | traceId flowing through system, correlation IDs — designed but not built. Currently FileLogger with no correlation. |
-| **@pando/network extraction** | Phase 3 migration plan | Extract network from kernel/ into own package. Not started. |
-| **@pando/governance extraction** | Phase 4 migration plan | Extract governance from kernel/. Not started. |
-| **index.ts decomposition** | Phase 5 migration plan | 4,388-line god object with 50+ private fields, 200+ methods. Works fine, risky to touch. |
-
-### ACCEPTABLE TRADE-OFFS (known, not worth fixing now)
+### Acceptable Trade-offs
 
 | Issue | Why it's OK |
 |---|---|
-| index.ts is a monolith | It works, 204 tests pass. Decompose only when we need to. |
-| Agent storage is ephemeral | Ephemeral agents are sufficient for current dev mode. Persistent storage is Phase 8.6. |
-| Governance auto-approves (<=8 peers) | Dev mode only. When network grows past 8 peers, real voting kicks in. |
-| qa-memory.ts was dead code (146 lines) | Deleted. Never imported anywhere. |
+| index.ts is a monolith (4,388 lines) | It works. Decompose after engine adapter migration. |
+| Agent identity is ephemeral | Ephemeral agents are sufficient for dev mode. |
+| Governance auto-approves (<=8 peers) | Dev mode only. Real voting kicks in with more peers. |
 
 ---
 
-## 8. THE DUAL SYSTEM PROBLEM (most important debt)
-
-This is the #1 architectural issue. Understanding it prevents you from making wrong decisions.
-
-### What happened
-pando-code was built as a standalone AI coding engine with its own Board, sub-agents, memory, and tools. pando-node was built as a network orchestrator with its own MessageBus, WorkerPool, Orchestrator, OrgManager, and AgentDatabase. When they were integrated, pando-node treats pando-code as a dumb text-in/text-out AI backend — completely ignoring pando-code's internal coordination systems.
-
-### The duplication
-
-| Concept | pando-code | pando-node | Should win |
-|---|---|---|---|
-| Task board | Board (goals, tasks, status) | MessageBus + directives | pando-code (it's the brain) |
-| Sub-agents/workers | Sub-agent system (internal) | WorkerPool (spawns whole engines) | pando-code (but needs network awareness) |
-| Memory/lessons | Reflection engine + SQLite | Agent database lessons table | pando-code (richer system) |
-| Agent coordination | Board view + agent status | OrgManager + MessageBus | Merge: pando-code board + pando-node P2P |
-| Identity | None (engine has no identity) | @pando/identity | pando-node (network concept) |
-| Economy | BudgetProvider interface | Lux ledger + emissions | pando-node (network concept) |
-
-### Target architecture
-pando-code IS the brain. pando-node IS the body. One board, one memory, one agent system. pando-node only provides infrastructure (P2P, identity, economy, governance, storage). engine-bridge.ts grows from "inject budget + tools" to "pando-code runs the show, pando-node provides infrastructure callbacks."
-
-### Migration plan (when we do this)
-- **Phase A (non-breaking):** Read from pando-code's board/memory instead of agent database
-- **Phase B (medium risk):** Replace orchestrator tick loop with pando-code engine as brain
-- **Phase C (high risk):** Replace WorkerPool with pando-code sub-agent spawning
-- **Phase D (cleanup):** Delete MessageBus, Agent Database duplication, OrgManager, TemplateRegistry
-
----
-
-## 9. KEY FILES REFERENCE
+## 11. KEY FILES REFERENCE
 
 ### Entry Points
 | File | Purpose |
 |---|---|
-| `index.ts` | PandoNode class — 4,388-line god object. Boot sequence, P2P handlers, governance wiring, agent system, shutdown. |
-| `cli.ts` | Non-interactive entry. Supervisor bootstrap, crash guard, port check, MongoDB init, file logging, heartbeat. |
+| `index.ts` | PandoNode class. Boot sequence, P2P, governance, shutdown. |
+| `cli.ts` | Non-interactive entry. Supervisor, crash guard, port check. |
 | `tui.ts` | Interactive terminal. 30+ slash commands. |
 
 ### Kernel (Layer 0)
 | File | Purpose |
 |---|---|
 | `kernel/network.ts` | libp2p: TCP, Noise, Yamux, GossipSub, Circuit Relay, KadDHT |
-| `kernel/governance.ts` | 6-layer security pipeline, proposal lifecycle, voting |
+| `kernel/governance.ts` | 6-layer security pipeline + AI review hook |
 | `kernel/sync.ts` | Ledger P2P sync via GossipSub |
 | `kernel/monitor.ts` | Health polling, alerting |
 | `kernel/guardrails.ts` | 4-tier rate limiting |
@@ -514,11 +751,7 @@ pando-code IS the brain. pando-node IS the body. One board, one memory, one agen
 ### Core (Layer 1)
 | File | Purpose |
 |---|---|
-| `core/ai-backend-pandocode.ts` | PandoCode engine wrapper. Per-project caching. |
-| `core/ai-backend-registry.ts` | Backend selection (PandoCode only) |
-| `core/engine-bridge.ts` | Integration: LuxBudgetProvider + 10 custom Pando tools |
-| `core/worker-pool.ts` | Worker spawning, boot prompt, memory watchdog |
-| `core/message-bus.ts` | SQLite message routing, sender validation |
+| `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. |
 | `core/credential-store.ts` | AES-256-GCM encrypt/decrypt |
 | `core/storage-backend.ts` | MongoDB or P2P proxy |
 | `core/upgrade-protocol.ts` | Git pull + build + restart + broadcast |
@@ -528,27 +761,23 @@ pando-code IS the brain. pando-node IS the body. One board, one memory, one agen
 ### Platform (Layer 2)
 | File | Purpose |
 |---|---|
-| `platform/orchestrator.ts` | Tick loop, Tier 1/2 classification, session-persistent AI |
-| `platform/orchestrator-manager.ts` | Fork system orchestrators into child processes |
-| `platform/orchestrator-process.ts` | Child process entry, IPC bridge |
-| `platform/org-manager.ts` | Hierarchy, authority narrowing, dissolution |
-| `platform/agent-database.ts` | All agent SQLite tables (1,265 lines) |
-| `platform/template-registry.ts` | Role templates |
 | `platform/capability-detector.ts` | Auto-detect capabilities |
-| `platform/resource-marketplace.ts` | Price broadcasting (STUB) |
+| `platform/resource-marketplace.ts` | Resource discovery + pricing |
+| `platform/content-registry.ts` | Content management |
+| `platform/thread-store.ts` | Chat persistence (MongoDB) |
 
 ### API
 | File | Purpose |
 |---|---|
 | `api/api-server.ts` | Fastify server setup |
-| `api/kernel-api.ts` | Status, peers, capabilities routes |
-| `api/core-api.ts` | Tasks, upgrade, capabilities routes |
-| `api/platform-api.ts` | Agents, chat, projects, auth routes |
+| `api/kernel-api.ts` | Status, peers, capabilities, governance routes |
+| `api/core-api.ts` | Tasks, upgrade, credentials routes |
+| `api/platform-api.ts` | Projects, auth, chat, engine routes |
 | `api/testing-api.ts` | Testing dashboard routes (11 endpoints) |
 
 ---
 
-## 10. RULES
+## 12. RULES
 
 ### Sprint Rules
 1. No legacy code protection. Delete if it's in the way. We have git.
@@ -563,27 +792,17 @@ pando-code IS the brain. pando-node IS the body. One board, one memory, one agen
 - api → platform + core + kernel + @pando/*
 - Never upward.
 
-### Database Cleanup Timers
-- 60s: prune read messages (>7d), expired discoveries
-- 10min: prune tick_log (>7d), failed/dissolved workers (>7d), old reflections (>30d), inactive directives (>7d)
-
-### Governance Rate Limiting
-- One active proposal per node at a time
-- Tests must handle "already have active proposal" gracefully
-
 ### Token Economics
 | Parameter | Value |
 |---|---|
 | Hard cap | 10,000,000,000 Lux |
 | Relay fee | 0.1% per transfer |
 | Daily cap | 500 Lux max per node per day |
-| Exchange rate | 100 Lux per $1 USD (engine bridge) |
+| Exchange rate | 100 Lux per $1 USD (engine adapter) |
 
 ---
 
-## 11. WHAT A MINIMAL NODE NEEDS
-
-Not every subsystem is required. Here's what's essential vs optional:
+## 13. WHAT A MINIMAL NODE NEEDS
 
 **Essential (node won't function without):**
 - Ed25519 identity (keypair)
@@ -593,9 +812,8 @@ Not every subsystem is required. Here's what's essential vs optional:
 - Governance (security pipeline)
 
 **Required for AI features:**
-- PandoCode backend + engine bridge
-- WorkerPool + Orchestrator
-- AgentDatabase + MessageBus
+- Engine adapter + @pando-code/core
+- That's it. One file. One dependency.
 
 **Optional (graceful degradation if missing):**
 - MongoDB (falls back to P2P storage proxy)
@@ -603,30 +821,27 @@ Not every subsystem is required. Here's what's essential vs optional:
 - GatewayDeployPool (only if hosting tokens contributed)
 - ResourceMarketplace (operational, not critical path)
 - SecurityMonitor, ReputationManager (enhance but don't block)
-- Observer, QA Agent (monitoring, not core function)
 
 ---
 
-## 12. THINGS THAT WILL CONFUSE YOU
+## 14. THINGS THAT WILL CONFUSE YOU
 
-These are patterns that look wrong but are intentional, or look right but are broken.
+1. **Pando tools are just HTTP calls to localhost.** The engine calls `pando_deploy` which does `POST http://localhost:4000/v1/projects/:id/deploy`. The engine doesn't import pando-node. The tools are the entire integration layer.
 
-1. **PandoCodeBackend caches engines per project path.** If you see `Map<string, any>` in ai-backend-pandocode.ts, that's the engine cache. Each project gets one engine instance, reused across ticks. This is correct — it enables session persistence.
+2. **Each project gets its own engine instance.** The adapter manages `Map<projectId, PandoCode>`. Engines don't know about each other. They communicate only through Pando tools (which call the shared HTTP API).
 
-2. **The orchestrator builds a "BoardState" from MessageBus.** This looks like it should use pando-code's Board, but it doesn't. It reads from SQLite message_inbox and directives tables. This is the dual-system problem (Section 8).
+3. **The system engine manages the node itself.** It's just another pando-code engine with Pando tools. It gets periodic "check for work" messages and decides what to do. It can spawn sub-agents (observer, QA, builder) using pando-code's native sub-agent system.
 
-3. **Workers report via HTTP, not via the engine.** When a worker finishes, it POSTs to `/v1/agents/:id/report`. The orchestrator reads this from MessageBus next tick. This indirection exists because workers run in separate processes.
+4. **Governance is NOT an AI agent.** It's deterministic code in kernel/governance.ts. It only calls the AI (via adapter.reviewDiff) for Layer 5 smart analysis. The 6-layer pipeline is deterministic code, not an LLM.
 
-4. **Three different "lesson" systems exist.** pando-code's memory (append-only lessons), pando-node's AgentDatabase lessons table, and pando-node's org_knowledge table. They don't talk to each other.
+5. **`X-User-Token` vs `Authorization: Bearer`.** Two different auth systems. Bearer = operator (node admin). X-User-Token = user/agent JWT (Pando Login). Both can be present. Agent JWT takes precedence.
 
-5. **`X-User-Token` vs `Authorization: Bearer`.** Two different auth systems. Bearer = operator (node admin). X-User-Token = user/agent JWT (Pando Login). Both can be present on the same request. Agent JWT takes precedence for identity resolution.
+6. **RESTART_EXIT_CODE = 75.** When stale code detected (git HEAD moved), node exits with 75. Supervisor restarts and picks up new code.
 
-6. **Persistent vs non-persistent orchestrators.** Council, observer, qa-user are `persistent: true` — exempt from stale-check dissolution. Project orchestrators dissolve after 3 min idle. The persistence flag is checked in both the stale-check loop AND the OOM prevention loop.
+7. **Triple-broadcast on peer connect.** Capability profiles broadcast 3 times (immediate + 10s + 30s) because GossipSub mesh formation is slow.
 
-7. **RESTART_EXIT_CODE = 75.** When an orchestrator detects stale code (git HEAD moved), it exits with code 75. The supervisor sees this and restarts the node, picking up new code.
+8. **`createRequire` in testing-api.ts.** @pando/tests is CJS, node is ESM. `createRequire(import.meta.url)` bridges this. Not a bug.
 
-8. **Auto-propose after commit.** `commit_code` action automatically triggers `propose_upgrade` in the same tick. This prevents governance gaps where committed code sits unproposed.
+9. **Standalone pando-code is identical to pando-node's engines.** The only difference is: inside pando-node, engines get Pando tools registered and Lux budget instead of USD. The engine code is the same.
 
-9. **Triple-broadcast on peer connect.** Capability profiles are broadcast 3 times (immediate + 10s + 30s) because GossipSub mesh formation is slow. Without this, new peers don't discover capabilities.
-
-10. **`createRequire` in testing-api.ts.** The @pando/tests package is CJS but the node is ESM. `createRequire(import.meta.url)` bridges this gap. Not a bug, just the CJS/ESM interop pattern.
+10. **No process isolation needed.** The old orchestrator needed child processes because the tick loop blocked the event loop. `engine.send()` is async and non-blocking. All engines run in the main process (or a single worker thread if memory is a concern).
