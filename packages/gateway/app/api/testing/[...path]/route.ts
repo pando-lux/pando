@@ -1,15 +1,21 @@
 import { NextResponse } from "next/server";
-import { getNodeUrl } from "@/lib/node-connection";
+import { getNodeUrl, getApiToken } from "@/lib/node-connection";
 
-const NODE_URL = getNodeUrl();
-
+function authHeaders(extra?: Record<string, string>): Record<string, string> {
+  const headers: Record<string, string> = { ...extra };
+  const token = getApiToken();
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  return headers;
+}
 
 export async function GET(request: Request, { params }: { params: Promise<{ path: string[] }> }) {
   const { path } = await params;
   const subPath = path.join("/");
   const qs = new URL(request.url).search;
+  const nodeUrl = getNodeUrl('primary');
   try {
-    const res = await fetch(`${NODE_URL}/v1/testing/${subPath}${qs}`, {
+    const res = await fetch(`${nodeUrl}/v1/testing/${subPath}${qs}`, {
+      headers: authHeaders(),
       signal: AbortSignal.timeout(5000),
       cache: "no-store",
     });
@@ -24,13 +30,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ pat
   const { path } = await params;
   const subPath = path.join("/");
   const qs = new URL(request.url).search;
+  const nodeUrl = getNodeUrl('primary');
   try {
     const body = await request.json().catch(() => ({}));
-    const res = await fetch(`${NODE_URL}/v1/testing/${subPath}${qs}`, {
+    const res = await fetch(`${nodeUrl}/v1/testing/${subPath}${qs}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: authHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(5000),
+      signal: AbortSignal.timeout(30000),
     });
     if (!res.ok) return NextResponse.json({ error: "Upstream error" }, { status: res.status });
     return NextResponse.json(await res.json());

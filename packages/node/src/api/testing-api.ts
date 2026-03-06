@@ -248,4 +248,59 @@ export function registerTestingRoutes(
       return reply.code(500).send({ error: 'Failed to get stats trend', detail: err.message });
     }
   });
+
+  // ── POST /testing/run/scripted — Trigger a scripted (Playwright) run ──
+  server.post('/testing/run/scripted', async (request, reply) => {
+    try {
+      const body = request.body as { specFile?: string } | null;
+      const tester = getTester(opts);
+      // Run in background, return immediately with run ID
+      const resultPromise = body?.specFile
+        ? tester.scripted.run({ specFile: body.specFile, testDir: opts.rootDir })
+        : tester.scripted.runAll({ testDir: opts.rootDir });
+
+      resultPromise.catch(() => {}); // prevent unhandled rejection
+      return reply.send({ started: true, message: body?.specFile ? `Running ${body.specFile}` : 'Running all specs' });
+    } catch (err: any) {
+      return reply.code(500).send({ error: 'Failed to start scripted run', detail: err.message });
+    }
+  });
+
+  // ── POST /testing/run/live — Trigger a live playbook run ──────────────
+  server.post('/testing/run/live', async (request, reply) => {
+    try {
+      const body = request.body as { playbook?: string } | null;
+      if (!body?.playbook) {
+        return reply.code(400).send({ error: 'playbook filename is required' });
+      }
+
+      const playbooksDir = join(opts.rootDir, 'packages', 'tests', 'playbooks', 'pando-node');
+      const playbookPath = join(playbooksDir, body.playbook);
+
+      if (!existsSync(playbookPath)) {
+        return reply.code(404).send({ error: `Playbook not found: ${body.playbook}` });
+      }
+
+      const tester = getTester(opts);
+      const playbook = tester.playbooks.load(playbookPath);
+
+      // Resolve template variables
+      const req = createRequire(import.meta.url);
+      const { resolvePlaybookVariables } = req('@pando/tests');
+      const resolved = resolvePlaybookVariables(playbook, {
+        GATEWAY_URL: opts.gatewayUrl,
+        API_URL: opts.apiUrl,
+      });
+
+      const resultPromise = tester.live.run(resolved, {
+        headed: false,
+        screenshotDir: join(opts.rootDir, '.pando-tests', 'screenshots'),
+      });
+
+      resultPromise.catch(() => {}); // prevent unhandled rejection
+      return reply.send({ started: true, message: `Running live playbook: ${body.playbook}` });
+    } catch (err: any) {
+      return reply.code(500).send({ error: 'Failed to start live run', detail: err.message });
+    }
+  });
 }
