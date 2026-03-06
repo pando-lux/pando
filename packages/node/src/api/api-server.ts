@@ -531,14 +531,20 @@ export class ApiServer {
     }
 
     // ── OpenAI classification ($0.001, <2s) ──────────────────────────────
-    const registry = this.node.getResourceRegistry();
-    if (registry) {
-      const aiKey = await registry.getActiveAiKey();
-      if (aiKey && aiKey.provider === 'openai') {
+    // Priority: local OPENAI_API_KEY env var (contributor's own key), then contributed key via CredentialStore (EC2)
+    let openaiKey: string | null = process.env.OPENAI_API_KEY || null;
+    if (!openaiKey) {
+      const registry = this.node.getResourceRegistry();
+      if (registry) {
+        const aiKey = await registry.getActiveAiKey();
+        if (aiKey && aiKey.provider === 'openai') openaiKey = aiKey.key;
+      }
+    }
+    if (openaiKey) {
         try {
           const classifyRes = await fetch('https://api.openai.com/v1/chat/completions', {
             method: 'POST',
-            headers: { 'Authorization': `Bearer ${aiKey.key}`, 'Content-Type': 'application/json' },
+            headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({
               model: 'gpt-4o-mini',
               messages: [
@@ -591,7 +597,6 @@ Be friendly and helpful. Keep answers short.`
         } catch (err: any) {
           console.log(`[doorman] OpenAI classification failed: ${err.message}`);
         }
-      }
     }
 
     // ── Fallback: no AI key available → deterministic keyword matching ────
@@ -624,33 +629,38 @@ Be friendly and helpful. Keep answers short.`
    * Falls back to a canned response if no AI key is available.
    */
   private async doormanChat(message: string, history: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<string> {
-    const registry = this.node.getResourceRegistry();
-    if (registry) {
-      const aiKey = await registry.getActiveAiKey();
-      if (aiKey && aiKey.provider === 'openai') {
-        try {
-          const messages = [
-            { role: 'system', content: 'You are a helpful AI assistant on the Pando network. Answer questions clearly and concisely. You can help with general questions, coding, analysis, and more.' },
-            ...history.slice(-10), // last 10 messages for context window
-            { role: 'user', content: message },
-          ];
-          const res = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${aiKey.key}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ model: 'gpt-4o-mini', messages, max_tokens: 512, temperature: 0.7 }),
-            signal: AbortSignal.timeout(12000),
-          });
-          if (res.ok) {
-            const data = await res.json() as any;
-            const reply = data?.choices?.[0]?.message?.content?.trim();
-            if (reply) return reply;
-          }
-        } catch (err: any) {
-          console.log(`[doorman] Smart chat failed: ${err.message}`);
-        }
+    // Priority: local OPENAI_API_KEY (contributor's own key), then contributed key via CredentialStore (EC2)
+    let openaiKey: string | null = process.env.OPENAI_API_KEY || null;
+    if (!openaiKey) {
+      const registry = this.node.getResourceRegistry();
+      if (registry) {
+        const aiKey = await registry.getActiveAiKey();
+        if (aiKey && aiKey.provider === 'openai') openaiKey = aiKey.key;
       }
     }
-    return `I'd love to help, but no AI key is available right now. Try contributing an OpenAI key with /contribute openai.`;
+    if (openaiKey) {
+      try {
+        const messages = [
+          { role: 'system', content: 'You are a helpful AI assistant on the Pando network. Answer questions clearly and concisely. You can help with general questions, coding, analysis, and more.' },
+          ...history.slice(-10), // last 10 messages for context window
+          { role: 'user', content: message },
+        ];
+        const res = await fetch('https://api.openai.com/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'Authorization': `Bearer ${openaiKey}`, 'Content-Type': 'application/json' },
+          body: JSON.stringify({ model: 'gpt-4o-mini', messages, max_tokens: 512, temperature: 0.7 }),
+          signal: AbortSignal.timeout(12000),
+        });
+        if (res.ok) {
+          const data = await res.json() as any;
+          const reply = data?.choices?.[0]?.message?.content?.trim();
+          if (reply) return reply;
+        }
+      } catch (err: any) {
+        console.log(`[doorman] Smart chat failed: ${err.message}`);
+      }
+    }
+    return `I'd love to help, but no AI key is available right now. Set OPENAI_API_KEY in your environment or contribute a key with /contribute openai.`;
   }
 
   // ── Doorman helper methods ──────

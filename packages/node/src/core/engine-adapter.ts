@@ -382,31 +382,53 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
   // ─── Internal ─────────────────────────────────────────────────────────
 
-  /** Inject contributed AI API keys from ResourceRegistry as env vars. */
+  /**
+   * Ensure AI API keys are available for PandoCode.
+   *
+   * Priority: local env vars first (contributor's own keys), then contributed
+   * resources via CredentialStore (EC2 nodes with MongoDB). Keys never travel
+   * over P2P — they're either local or decrypted server-side on EC2.
+   */
   private async injectApiKeys(registry?: ResourceRegistry | null): Promise<void> {
-    if (!registry) return;
-
     const PROVIDER_ENV_MAP: Record<string, string> = {
       'anthropic': 'ANTHROPIC_API_KEY',
       'openai':    'OPENAI_API_KEY',
       'gemini':    'GOOGLE_GENERATIVE_AI_API_KEY',
     };
 
-    const aiResources = registry.findResources('ai_api_key');
-    for (const resource of aiResources) {
-      const provider = resource.metadata?.provider as string | undefined;
-      if (!provider) continue;
-      const envVar = PROVIDER_ENV_MAP[provider];
-      if (!envVar || process.env[envVar]) continue;
-      try {
-        const key = await registry.getCredential(resource.resourceId);
-        if (key) {
-          process.env[envVar] = key;
-          console.log(`[EngineAdapter] Loaded ${provider} API key from contributed resources`);
+    // 1. Check what's already in local env (contributor's own keys)
+    const available: string[] = [];
+    for (const [provider, envVar] of Object.entries(PROVIDER_ENV_MAP)) {
+      if (process.env[envVar]) available.push(provider);
+    }
+    if (available.length > 0) {
+      console.log(`[EngineAdapter] Local API keys found: ${available.join(', ')}`);
+    }
+
+    // 2. For any missing keys, try contributed resources (EC2 with CredentialStore only)
+    if (registry) {
+      const aiResources = registry.findResources('ai_api_key');
+      for (const resource of aiResources) {
+        const provider = resource.metadata?.provider as string | undefined;
+        if (!provider) continue;
+        const envVar = PROVIDER_ENV_MAP[provider];
+        if (!envVar || process.env[envVar]) continue; // already have it locally
+        try {
+          const key = await registry.getCredential(resource.resourceId);
+          if (key) {
+            process.env[envVar] = key;
+            console.log(`[EngineAdapter] Loaded ${provider} API key from contributed resources (EC2 decrypt)`);
+          }
+        } catch {
+          // Expected on non-EC2 nodes — no CredentialStore, no MongoDB. Not an error.
         }
-      } catch (err: any) {
-        console.warn(`[EngineAdapter] Failed to load ${provider} API key: ${err.message}`);
       }
+    }
+
+    // 3. Warn if no keys available at all
+    const finalAvailable = Object.entries(PROVIDER_ENV_MAP).filter(([_, v]) => process.env[v]);
+    if (finalAvailable.length === 0) {
+      console.warn('[EngineAdapter] No AI API keys available. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in your environment, or contribute keys via /contribute on an EC2 node.');
     }
   }
 }

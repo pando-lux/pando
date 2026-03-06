@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-06. Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-06 (distributed compute model added). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -53,7 +53,7 @@ shared < ledger < node
   Pure infrastructure. P2P networking. Identity. Economy. Governance. Storage. HTTP API.
   Has ZERO intelligence of its own. No orchestrator. No agent database. No message bus.
 
-engine-adapter.ts = THE NERVOUS SYSTEM (~200 lines)
+engine-adapter.ts = THE NERVOUS SYSTEM (~280 lines)
   The ONE file that connects brain to body.
   Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
   Pando tools are just HTTP calls to the node's own API — the engine doesn't know the difference.
@@ -105,7 +105,7 @@ Pure cryptographic primitives. No storage, no SQLite, no MongoDB, no network.
 ### 3.2 @pando-code/core
 
 **Location:** Separate repo at `pando/code/`
-**Lines:** 60K+ TypeScript | **Status:** DONE as standalone. Needs upgrades for network integration.
+**Lines:** 60K+ TypeScript | **Status:** DONE as standalone. Network integration infra built (EnginePool, Scheduler, PandoServer). Claude Code CLI integration pending.
 
 The AI coding engine. Multi-provider (Anthropic, OpenAI, Google, Ollama). Multi-agent orchestration. Persistent memory. AST-based code intelligence.
 
@@ -176,7 +176,7 @@ SQLite database for accounts, transactions, emissions. P2P synced via GossipSub 
 ### 3.5 @pando/node (THE BODY)
 
 **Location:** `packages/node/` in pando/node monorepo
-**Status:** Working. Undergoing architectural refactor to remove duplicate brain.
+**Status:** Working. Brain-kill migration complete (9,414 lines removed). Distributed compute model designed.
 
 The node composes all packages. It is PURE INFRASTRUCTURE — no intelligence of its own.
 
@@ -191,10 +191,11 @@ api/       HTTP API (kernel-api, core-api, platform-api, testing-api, server, mi
 
 **Import boundary rule (enforced):** kernel → only kernel + @pando/*. core → kernel + @pando/*. platform → core + kernel + @pando/*. Never upward.
 
-**Three node modes:**
-- `full` — everything (dev machines with PandoCode available)
-- `compute` — no AI engine (EC2 nodes without PandoCode)
-- `relay` — P2P only (lightweight relay nodes)
+**Four node types** (see Section 5.5 for full details):
+- `contributor` — PandoCode + local API keys. Builds apps, earns Lux. The common case.
+- `secure` — EC2 with MongoDB + CredentialStore. Handles contributed keys, simple AI.
+- `lightweight` — P2P, ledger, governance only. Routes AI work to peers.
+- `full` — Contributor + local MongoDB. Full self-sufficiency (dev machines).
 
 ### 3.6 @pando/gateway
 
@@ -227,8 +228,8 @@ Reads from @pando/node HTTP API. No direct database access.
 
 | Component | File | Status | What it does |
 |---|---|---|---|
-| **EngineAdapter** | `core/engine-adapter.ts` | TARGET | The ONE pando-code integration point. Multi-engine management, routing, Pando tools, Lux budget. |
-| **CredentialStore** | `core/credential-store.ts` | DONE | AES-256-GCM encrypt/decrypt. Compute nodes only. |
+| **EngineAdapter** | `core/engine-adapter.ts` | DONE | The ONE pando-code integration point. PandoCode contributor nodes only. Multi-engine, routing, Pando tools, Lux budget. |
+| **CredentialStore** | `core/credential-store.ts` | DONE | AES-256-GCM encrypt/decrypt. Secure compute nodes (EC2) only. |
 | **StorageBackend** | `core/storage-backend.ts` | DONE | MongoDB direct or P2P proxy to compute nodes |
 | **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Git pull + build + restart. GossipSub broadcast. |
 | **GatewayDeployPool** | `core/gateway-deploy-pool.ts` | DONE | Deploy gateway to all contributed hosting accounts |
@@ -243,7 +244,7 @@ Reads from @pando/node HTTP API. No direct database access.
 | **CapabilityDetector** | `platform/capability-detector.ts` | DONE | Auto-detect: PandoCode, storage, compute, hosting |
 | **ResourceMarketplace** | `platform/resource-marketplace.ts` | DONE | GossipSub price broadcasting, resource discovery, metering |
 | **ContentRegistry** | `platform/content-registry.ts` | DONE | Content management |
-| **ThreadStore** | `platform/thread-store.ts` | DONE | Chat thread persistence (MongoDB) |
+| **ThreadStore** | `platform/thread-store.ts` | DONE | Chat thread persistence. Requires MongoDB (EC2) or P2P proxy. Unavailable on lightweight nodes. |
 
 ### 4.4 HTTP API
 
@@ -270,47 +271,83 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 
 ## 5. HOW THINGS WORK
 
-### 5.1 Gateway Chat — User Sends a Message
+### 5.1 Two Compute Paths — How Work Flows Through the Network
+
+The network has **two distinct compute paths**. Keys never travel. Work travels to the compute.
+
+#### Path A: Simple AI (chat, questions, doorman classification)
+
+No PandoCode involved. Uses contributed API keys on secure proxy nodes (EC2).
 
 ```
-User on gateway types: "Build me a bakery website"
+User asks: "What is machine learning?"
   |
   v
-POST /v1/chat/message { message: "Build me a bakery website" }
+POST /v1/chat/message → any node receives it
   |
   v
-pando-node HTTP API receives request
+Doorman classifies intent:
+  1. Regex fast-path (zero cost): /status, /balance, /help → instant response
+  2. Local OpenAI key available (contributor node)? → classify locally
+  3. No local key → route to EC2 proxy via P2P → EC2 decrypts contributed key → classifies
+  4. No peers available → fallback keyword matching
   |
   v
-Engine Adapter: no projectId → route to System Engine
+Intent = "question" → answer via same path (local key or EC2 proxy)
+  → Keys never leave their origin (local env or EC2)
   |
   v
-System Engine (pando-code) thinks: "User wants a new project"
+Response returned to user
+```
+
+**Contributed API keys** (via `/contribute openai sk-xxx`) are encrypted and stored in MongoDB on EC2. Used server-side on EC2 for simple LLM calls. The contributor doesn't need to run a node.
+
+**Local API keys** (contributor node with OPENAI_API_KEY in env) can handle Path A locally — no EC2 needed. This is the common case for contributor nodes that have both PandoCode and an OpenAI key.
+
+#### Path B: Build (PandoCode — full app construction)
+
+```
+User says: "Build me a bakery website"
   |
   v
-System Engine calls pando_create_project tool
-  → tool calls POST /v1/projects { name: "bakery-website" }
-  → pando-node creates project record, returns projectId
+POST /v1/chat/message → any node receives it
   |
   v
-Engine Adapter creates new Project Engine for this projectId
-  → registers Pando tools scoped to this project
+Doorman classifies: intent = "build"
+  → Project metadata created and saved on network
   |
   v
-Project Engine takes over:
-  → Plans on its Board: "Goal: Build bakery website"
+Node checks: do I have PandoCode locally?
+  YES → process locally (my keys, my compute, I earn Lux)
+  NO  → find a peer with pando-code capability via P2P
+        → route job to that peer → they process, they earn
+  |
+  v
+PandoCode node processes the build:
+  → Engine Adapter creates Project Engine for this projectId
+  → Project Engine plans on its Board: "Goal: Build bakery website"
   → Spawns builder sub-agent → writes HTML/CSS/JS
+  → Code committed to GitHub (checkpoint — enables transfer if node goes down)
   → Spawns tester sub-agent → tests locally
   → Uses pando_deploy tool → deploys to hosting
   |
   v
-SSE streams all responses back to gateway in real-time
+PandoCode can use EITHER:
+  a) API-based agents (Anthropic/OpenAI API with local keys)
+  b) Claude Code CLI as subprocess (superior for coding tasks)
+  |
+  v
+SSE streams progress back through P2P → to user
   |
   v
 User sees: "Your bakery website is live at https://..."
 ```
 
-**Subsequent messages** with `projectId` route directly to that project's engine. The system engine is only involved for project creation and system-level queries.
+**PandoCode contributor's keys stay LOCAL.** They never leave the contributor's machine. The network routes work TO the compute, not keys FROM storage.
+
+**Build resilience:** Code is committed to GitHub during build. If the PandoCode node goes offline mid-build, another node clones from GitHub and continues.
+
+**Subsequent messages** with `projectId` route directly to that project's engine on the same PandoCode node.
 
 ### 5.2 Multi-Project Engine Management
 
@@ -412,34 +449,87 @@ DECISION: APPROVE or REJECT
   → all nodes: git pull → build → restart
 ```
 
+**Layer 5 (AI review) only runs on PandoCode contributor nodes** (they have an engine to review with). On lightweight/secure nodes without PandoCode, Layer 5 is skipped (fail-open). Layers 1-4 and 6 are deterministic and run everywhere.
+
 **Auto-approve** when <=8 peers (dev mode). All logged to `governance_audit` table.
 
-### 5.5 Multi-Node P2P (nodes without AI)
+### 5.5 Distributed Compute — Four Node Types
 
 ```
-Node A (has pando-code)           Node B (no pando-code)
-+--------------------+            +--------------------+
-| Infrastructure     |<--- P2P -->| Infrastructure     |
-| Engine Adapter     |  TCP+Noise | (no adapter)       |
-| System Engine      |            |                    |
-| Project Engines    |            | chat_proxy handler |
-+--------------------+            +--------------------+
-
-When a user hits Node B's gateway:
-1. User → Node B: POST /v1/chat/message
-2. Node B has no pando-code
-3. Node B discovers Node A via capability profile: [pando-code: yes]
-4. Node B forwards via P2P: chat_proxy → Node A
-5. Node A's engine adapter processes the request
-6. Response flows back: Node A → Node B → User
-
-The user doesn't know which node ran the AI.
-Node B is just a proxy. Node A has the brain.
++─────────────────────────────────────────────────────────────────────+
+│                        THE PANDO NETWORK                            │
+│                                                                     │
+│  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐           │
+│  │ PandoCode    │   │ EC2 Secure   │   │ Lightweight  │           │
+│  │ Contributor  │   │ Compute      │   │ Node         │           │
+│  │              │   │              │   │              │           │
+│  │ - PandoCode  │   │ - MongoDB    │   │ - P2P only   │           │
+│  │ - Local keys │   │ - Cred Store │   │ - Ledger     │           │
+│  │ - Claude Code│   │ - Contrib'd  │   │ - Relay      │           │
+│  │ - Earns Lux  │   │   API keys   │   │ - Relay fees │           │
+│  │              │   │ - Earns Lux  │   │              │           │
+│  │ BUILDS APPS  │   │ SIMPLE AI    │   │ ROUTES ONLY  │           │
+│  └──────┬───────┘   └──────┬───────┘   └──────┬───────┘           │
+│         │                  │                   │                    │
+│         └──────── P2P (TCP + Noise) ───────────┘                   │
++─────────────────────────────────────────────────────────────────────+
 ```
 
-### 5.6 Periodic Autonomous Behavior
+#### Type 1: PandoCode Contributor Node (the common case)
 
-The node sends periodic "check" messages to the system engine. The engine decides what to do.
+A regular user with PandoCode installed. The backbone of network intelligence.
+
+- Has PandoCode + Engine Adapter
+- Has their OWN API keys locally (env vars, or Claude Code access)
+- Keys **NEVER leave** the machine — work comes TO them
+- Advertises capability: `pando-code: true` in capability profile
+- Network routes build jobs to them via P2P
+- Can set limits: max requests/day, budget caps, model preferences
+- Earns Lux per job completed
+- PandoCode can use Claude Code CLI as subprocess for superior coding
+
+```
+Build request arrives via P2P
+  → Engine Adapter creates project engine
+  → PandoCode builds using LOCAL keys (Anthropic API, Claude Code CLI, etc.)
+  → Code committed to GitHub (checkpoint)
+  → Deployed via pando_deploy tool
+  → Earns Lux based on compute cost
+```
+
+#### Type 2: Secure Compute Node (EC2)
+
+Trusted infrastructure. Stores network-level contributed credentials.
+
+- Has MongoDB + CredentialStore + CREDENTIAL_MASTER_KEY
+- Stores contributed API keys (encrypted AES-256-GCM)
+- Handles Path A (simple AI): decrypts contributed key → makes LLM call → returns response
+- Can also run PandoCode for builds
+- Proxy: decrypts credentials for other node types on P2P request (code_repository only)
+
+#### Type 3: Lightweight Node
+
+Minimal participant. P2P, ledger, governance. No AI compute.
+
+- Routes AI work to peers who have PandoCode or secure compute
+- Earns relay fees (0.1% of transfers)
+- Participates in governance voting
+- Contributes to P2P mesh health
+
+#### Type 4: Full Dev Node (Type 1 + local MongoDB)
+
+Developer's machine. PandoCode + local MongoDB for full self-sufficiency.
+
+```
+Routing priority for AI work:
+1. Can I handle this locally? (PandoCode for builds, API key for questions) → do it
+2. Find capable peer via capability profile → route via P2P
+3. No peers available → degrade gracefully (canned doorman response)
+```
+
+### 5.6 Periodic Autonomous Behavior (PandoCode contributor nodes only)
+
+On nodes with PandoCode, the Scheduler sends periodic "check" messages to the system engine. The engine decides what to do. Lightweight and secure-only nodes don't have engines and skip this entirely.
 
 ```
 pando-node (body)                         pando-code (brain)
@@ -462,7 +552,7 @@ pando-node (body)                         pando-code (brain)
 
 No tick loop. No orchestrator. No message bus. The engine runs when it has something to do.
 
-### 5.7 The Four Actors (via pando-code sub-agents)
+### 5.7 The Four Actors (PandoCode contributor nodes only)
 
 | Actor | How it works | Triggered by |
 |---|---|---|
@@ -488,43 +578,81 @@ Agent (own Ed25519 keypair, own peerId = wallet)
 
 ### 5.9 Credential Security (IMMUTABLE LAW)
 
-**The ONLY path for external credentials:**
-1. User runs `/contribute <service> <token>` in TUI
-2. Node encrypts with AES-256-GCM → stored in MongoDB `pando_credentials`
-3. `ResourceRegistry` stores metadata (type + status, NEVER the value)
-4. At use time: `ResourceRegistry.getCredential(id)` decrypts from MongoDB
+**Two credential models. Both are valid. Keys NEVER travel over the network.**
 
-**NEVER:** read from env files, secrets/, CLI args. NEVER log, print, output credential values. NEVER store in docs, code, comments, agent reports.
+#### Model A: Contributed Credentials (for the network)
+
+Used by Path A (simple AI). Contributor donates an API key for the network to use.
+
+```
+/contribute openai sk-xxx
+  → AES-256-GCM encrypt → stored in MongoDB on EC2
+  → EC2 decrypts and uses server-side
+  → Contributor doesn't need to run a node
+  → Key NEVER leaves EC2
+```
+
+1. User runs `/contribute <service> <token>` in TUI
+2. Encrypted → stored in MongoDB `pando_credentials` on secure compute nodes
+3. `ResourceRegistry` stores metadata (type + status, NEVER the value)
+4. At use time: EC2 node decrypts locally → makes API call → returns result
+
+#### Model B: Local Credentials (PandoCode contributor)
+
+Used by Path B (builds). Contributor runs PandoCode with their own keys.
+
+```
+Contributor's machine:
+  ANTHROPIC_API_KEY in local env
+  OR Claude Code CLI authenticated
+  → PandoCode uses local keys directly
+  → Keys NEVER leave the machine
+  → Work comes TO the contributor via P2P
+  → Contributor earns Lux for compute
+```
+
+No encryption, no MongoDB, no CredentialStore needed. The keys are just local env vars or Claude Code auth on the contributor's own machine.
+
+**IMMUTABLE RULES (both models):**
+- NEVER transmit raw API keys over P2P
+- NEVER log, print, or output credential values
+- NEVER store keys in docs, code, comments, agent reports
+- Contributed keys: ONLY decrypted and used on EC2 (server-side)
+- Local keys: ONLY used by local PandoCode process
 
 ---
 
 ## 6. THE ENGINE ADAPTER (detailed spec)
 
-The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. ~200 lines.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. ~280 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
+
+**Key principle:** The engine uses whatever API keys are available in the LOCAL environment. No MongoDB decryption needed. The contributor's keys stay on their machine.
+
+```
+PandoCode reads: process.env.ANTHROPIC_API_KEY  (set by contributor)
+           OR:   Claude Code CLI (authenticated locally)
+           OR:   process.env.OPENAI_API_KEY, etc.
+```
 
 ### Class Interface
 
 ```typescript
 class EngineAdapter {
-  // Engine management
-  private systemEngine: PandoCode | null;
-  private projectEngines: Map<string, PandoCode>;
-  private engineLastUsed: Map<string, number>;
-
   // Lifecycle
   async start(config: AdapterConfig): Promise<void>
-  async stop(): Promise<void>
+  async shutdown(): Promise<void>
 
   // Message routing
-  async send(message: string, projectId?: string): AsyncGenerator<Event>
-  async getOrCreateProjectEngine(projectId: string): PandoCode
+  async *send(message: string, projectId?: string): AsyncGenerator<Event>
 
   // Governance hook
   async reviewDiff(diff: string, description: string): Promise<ReviewResult>
 
   // Management
+  get available(): boolean
   getActiveEngines(): EngineInfo[]
-  evictIdle(): void  // TTL cleanup (30 min for project engines)
+  hasEngine(projectId: string): boolean
+  getSchedules(): ScheduleInfo[]
 }
 ```
 
@@ -587,6 +715,7 @@ These are additions to @pando-code/core (the separate repo). No refactoring — 
 import { EnginePool, Scheduler } from "@pando-code/core";
 
 // engine-adapter.ts uses EnginePool directly (not PandoServer)
+// PandoCode reads API keys from LOCAL env (contributor's own keys)
 const pool = new EnginePool({
   defaultModel: "claude-sonnet-4-6",
   maxEngines: 20,
@@ -600,13 +729,28 @@ const pool = new EnginePool({
 // Scheduler for periodic autonomous behavior
 const scheduler = new Scheduler(pool);
 scheduler.register({
-  name: "observer-audit",
+  name: "periodic-check",
   engineId: "system",
   intervalMs: 30 * 60 * 1000,
-  prompt: "Run architecture audit. Report any issues found.",
+  prompt: "Periodic check. Review system health. Spawn sub-agents if needed.",
   active: true,
 });
 ```
+
+### PandoCode + Claude Code CLI (future)
+
+PandoCode can use Claude Code CLI as a subprocess for superior coding:
+
+```
+PandoCode receives build request
+  → Breaks into tasks on its Board
+  → For coding tasks: spawns `claude -p "implement feature X"` as subprocess
+  → Claude Code does file editing, testing, git commits
+  → PandoCode reviews output, continues orchestration
+  → Result: better code quality than API-only agents
+```
+
+This makes a contributor's Claude Code subscription a network resource — they earn Lux when Claude Code processes jobs for the network.
 
 ---
 
@@ -620,7 +764,7 @@ scheduler.register({
 | EC2-2 | 34.201.82.126 | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY |
 | LS-1 | 54.145.144.221 | Relay (untrusted) | P2P storage, PM2 |
 | LS-2 | 3.237.175.38 | Untrusted | P2P storage, PM2 |
-| Windows | 100.87.67.78 | Dev (full mode) | MongoDB, PandoCode, Claude Code, manual |
+| Windows | 100.87.67.78 | Dev (contributor) | PandoCode, Claude Code, P2P storage, manual |
 
 **Public gateway:** https://gateway-one-mu.vercel.app
 
@@ -652,12 +796,15 @@ npx playwright test --project pando-code
 | `--api-port <n>` | 4000 | HTTP API port |
 | `--bootstrap <multiaddr>` | Lightsail | Known peer to connect to |
 | `--data-dir <path>` | `~/.pando` | Data directory |
-| `--mode <full\|compute\|relay>` | full | Node operational mode |
+| `--mode <contributor\|secure\|lightweight\|full>` | contributor | Node type (see Section 5.5) |
 
 **Environment variables:**
-- `PANDO_STORAGE_URL` — MongoDB connection URL
-- `CREDENTIAL_MASTER_KEY` — 256-bit hex key for credential encryption (trusted nodes only)
+- `PANDO_STORAGE_URL` — MongoDB connection URL (secure compute nodes only)
+- `CREDENTIAL_MASTER_KEY` — 256-bit hex key for credential encryption (secure compute nodes only)
 - `GATEWAY_PUBLIC_URL` — Public gateway URL for deployed apps
+- `ANTHROPIC_API_KEY` — PandoCode contributor: local Anthropic API key (never leaves machine)
+- `OPENAI_API_KEY` — PandoCode contributor: local OpenAI API key (for doorman, simple AI)
+- `GOOGLE_GENERATIVE_AI_API_KEY` — PandoCode contributor: local Google AI key
 
 ---
 
@@ -681,6 +828,16 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 ---
 
 ## 10. TECHNICAL DEBT (honest status)
+
+### Needs Work
+
+| Issue | Location | Problem |
+|---|---|---|
+| **engine-adapter injectApiKeys** | `core/engine-adapter.ts` | Currently tries to decrypt keys from MongoDB via ResourceRegistry. Should just read local env vars. Remove MongoDB dependency from adapter. |
+| **Doorman AI classification** | `api/api-server.ts` | Doorman tries `getActiveAiKey()` (needs CredentialStore/MongoDB). On contributor nodes, should use local OPENAI_API_KEY env var directly. Or route classification to PandoCode engine. |
+| **P2P build routing** | `api/platform-api.ts` | chat_proxy exists but build routing to PandoCode peers is incomplete. Need to route "build" intent to a pando-code capable peer when local PandoCode is unavailable. |
+| **Claude Code CLI integration** | `@pando-code/core` | Not built yet. PandoCode needs a tool/subprocess to invoke `claude -p` for coding tasks. |
+| **Contributor limits/earning** | Not built | Contributors need to set max requests/day, budget caps. Earning model (Lux per job) not implemented. |
 
 ### Stubs
 
@@ -775,22 +932,29 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 ---
 
-## 13. WHAT A MINIMAL NODE NEEDS
+## 13. WHAT EACH NODE TYPE NEEDS
 
-**Essential (node won't function without):**
+**Every node (lightweight baseline):**
 - Ed25519 identity (keypair)
 - SQLite ledger
 - P2P networking (libp2p)
 - HTTP API (Fastify)
 - Governance (security pipeline)
 
-**Required for AI features:**
-- Engine adapter + @pando-code/core
-- That's it. One file. One dependency.
+**PandoCode contributor (adds to baseline):**
+- @pando-code/core + Engine Adapter (one file, one dependency)
+- Local API keys (ANTHROPIC_API_KEY env var, or Claude Code CLI)
+- That's it. Contributor earns Lux for processing build jobs.
+
+**Secure compute / EC2 (adds to baseline):**
+- MongoDB (PANDO_STORAGE_URL)
+- CredentialStore (CREDENTIAL_MASTER_KEY)
+- Handles contributed API keys for Path A (simple AI)
+
+**Full dev node (contributor + secure):**
+- Everything above. Full self-sufficiency.
 
 **Optional (graceful degradation if missing):**
-- MongoDB (falls back to P2P storage proxy)
-- CredentialStore (only on compute nodes with CREDENTIAL_MASTER_KEY)
 - GatewayDeployPool (only if hosting tokens contributed)
 - ResourceMarketplace (operational, not critical path)
 - SecurityMonitor, ReputationManager (enhance but don't block)
@@ -818,3 +982,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 9. **Standalone pando-code is identical to pando-node's engines.** The only difference is: inside pando-node, engines get Pando tools registered and Lux budget instead of USD. The engine code is the same.
 
 10. **No process isolation needed.** The old orchestrator needed child processes because the tick loop blocked the event loop. `engine.send()` is async and non-blocking. All engines run in the main process (or a single worker thread if memory is a concern).
+
+11. **Keys don't travel. Work travels.** Contributed API keys stay on EC2 (Path A — simple AI). PandoCode contributor keys stay on their machine (Path B — builds). The network routes WORK to where the keys are, never the other way around. `injectApiKeys()` in engine-adapter is for loading local env vars, NOT for pulling keys from MongoDB.
+
+12. **Two kinds of "contribute."** `/contribute openai sk-xxx` donates a key to the network (encrypted on EC2, used server-side for Path A). Running PandoCode on your node contributes your COMPUTE (your local keys, your machine, you earn Lux for builds).
