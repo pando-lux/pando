@@ -1014,7 +1014,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 | Issue | Location | Problem |
 |---|---|---|
-| **Deploy Pipeline** | `core/deploy-pipeline.ts` | NOT BUILT — Glue module: build complete → GitHub push → governance check → P2P deploy to secure node → update metadata. See Section 5.8. |
+| **Deploy Pipeline** | `core/deploy-pipeline.ts` | BUILT — Glue module wired into all 4 build handlers in platform-api.ts. Sequences: GitHub push → find secure node → P2P deploy → update metadata. Triggered automatically after every sendToEngine() completion. See Section 5.8. |
 | **PandoCode Network Linking** | PandoCode config | NOT BUILT — Standalone vs linked mode toggle. When linked, node can create projects in PandoCode. See Section 5.9. |
 | **Claude Code CLI integration** | `@pando-code/core` | Not built yet. PandoCode needs a tool/subprocess to invoke `claude -p` for coding tasks. This would let contributors use their Claude Code subscription instead of a raw API key. |
 | **Contributor limits/earning** | Not built | Contributors need to set max requests/day, budget caps. Earning model (Lux per job) not implemented. |

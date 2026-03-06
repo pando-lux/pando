@@ -25,6 +25,8 @@ export { generateDataKey, encryptCredential, decryptCredential } from './credent
 // Deployment & versioning
 export { DeployManager } from './deploy-manager.js';
 export type { DeployStatus, CommitResult, BuildResult, BackupInfo } from './deploy-manager.js';
+export { DeployPipeline } from './deploy-pipeline.js';
+export type { DeployPipelineConfig, PipelineResult, PipelineStep } from './deploy-pipeline.js';
 export { VersionProtocol } from './version-protocol.js';
 export { UpgradeProtocol, TOPIC_UPGRADES } from './upgrade-protocol.js';
 export type { UpgradeProtocolDeps } from './upgrade-protocol.js';

@@ -80,6 +80,45 @@ export async function registerPlatformRoutes(
 
     return null;
   }
+
+  /**
+   * Trigger the deploy pipeline after a build completes for a project.
+   * Non-blocking — runs in background and logs results.
+   */
+  async function triggerDeployPipeline(projectId: string): Promise<void> {
+    try {
+      const { DeployPipeline } = await import('../core/deploy-pipeline.js');
+      const projectStore = node.getProjectStore?.();
+      const requestReply = node.getRequestReply?.();
+      const capRegistry = node.getCapabilityRegistry();
+      const selfPeerId = node.getIdentity()?.peerId;
+
+      if (!projectStore || !requestReply || !selfPeerId) {
+        console.log(`[deploy-pipeline] Skipping — missing dependencies (projectStore=${!!projectStore}, requestReply=${!!requestReply})`);
+        return;
+      }
+
+      const pipeline = new DeployPipeline({
+        apiPort: (fastify.server.address() as any)?.port || 4000,
+        apiToken: deps.apiToken,
+        projectStore,
+        requestReply,
+        capabilityRegistry: capRegistry || undefined,
+        localPeerId: selfPeerId,
+        pushEvent: deps.pushEvent,
+      });
+
+      const result = await pipeline.run(projectId);
+      if (result.success) {
+        console.log(`[deploy-pipeline] Project ${projectId} deployed: repo=${result.repoUrl}, url=${result.deploymentUrl}`);
+      } else {
+        console.warn(`[deploy-pipeline] Project ${projectId} pipeline incomplete: ${result.error || 'some steps failed'}`);
+      }
+    } catch (err: any) {
+      console.warn(`[deploy-pipeline] Failed for ${projectId}: ${err.message}`);
+    }
+  }
+
     fastify.post('/chat/message', async (request: any, reply: any) => {
       const peerId = await deps.verifyUserJwt(request);
       if (!peerId) { reply.status(401).send({ error: 'Unauthorized' }); return; }
@@ -124,6 +163,8 @@ export async function registerPlatformRoutes(
                 await threadStore.addMessage(threadId, { role: 'assistant', content: result.response, timestamp: Date.now(), tier: 'complex' as any });
               }
               deps.pushEvent('chat_message', { threadId, projectId, role: 'assistant', content: result.response || 'Build complete.', timestamp: Date.now(), tier: 'complex' });
+              // Trigger deploy pipeline after build
+              if (projectId) triggerDeployPipeline(projectId).catch(() => {});
             } catch (err) {
               console.error('[chat] sendToEngine failed:', (err as Error).message);
               if (threadStore && threadId) {
@@ -221,6 +262,8 @@ export async function registerPlatformRoutes(
               await threadStore.addMessage(threadId, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' as any });
             }
             deps.pushEvent('chat_message', { threadId, projectId: newProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
+            // Trigger deploy pipeline after build
+            if (newProjectId) triggerDeployPipeline(newProjectId).catch(() => {});
           } catch (err) {
             console.error('[router] Local engine failed:', (err as Error).message);
             if (threadStore && threadId) {
@@ -407,6 +450,8 @@ export async function registerPlatformRoutes(
                 await threadStore.addMessage(id, { role: 'assistant', content: engineResult.response, timestamp: Date.now(), tier: 'complex' as any });
               }
               deps.pushEvent('chat_message', { threadId: id, projectId: threadMeta.projectId, role: 'assistant', content: engineResult.response || 'Done.', timestamp: Date.now(), tier: 'complex' });
+              // Trigger deploy pipeline after build
+              if (threadMeta.projectId) triggerDeployPipeline(threadMeta.projectId).catch(() => {});
             } catch (err) {
               console.error('[router] Engine failed:', (err as Error).message);
               await threadStore.addMessage(id, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' as any });
@@ -513,6 +558,8 @@ export async function registerPlatformRoutes(
             const engineReply = result.response || 'Build complete.';
             await threadStore.addMessage(id, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' as any });
             deps.pushEvent('chat_message', { threadId: id, projectId: targetProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
+            // Trigger deploy pipeline after build
+            if (targetProjectId) triggerDeployPipeline(targetProjectId).catch(() => {});
           } catch (err) {
             console.error('[router] Local engine failed:', (err as Error).message);
             await threadStore.addMessage(id, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' as any });
