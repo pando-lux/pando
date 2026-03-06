@@ -12,7 +12,7 @@
 - LiveRunner: gateway-navigation playbook runs end-to-end (13/15 steps, 15 screenshots)
 - 6 starter playbooks for pando-node
 - Zero @pando/* dependencies — standalone, usable by anyone on any project
-- Next: Phase 4 (API routes + dashboard), Phase 5 (CLI)
+- Next: Phase 5 (CLI), Phase 6 (polish)
 
 ---
 
@@ -491,10 +491,13 @@ This package does NOT import from @pando/identity, @pando/code, @pando/node, or 
 - [x] Verified: gateway-navigation playbook runs end-to-end (13/15 steps pass, 15 screenshots captured)
 - [ ] Wire AIEvaluator to actual AI API (placeholder — falls back to BasicEvaluator)
 
-### Phase 4: API + Dashboard
-- [ ] Add /v1/testing/* routes to @pando/node
-- [ ] Create /testing page in @pando/gateway
-- [ ] Wire dashboard data provider
+### Phase 4: API + Dashboard — DONE
+- [x] Add /v1/testing/* routes to @pando/node (9 endpoints: status, runs, runs/:id, findings, acknowledge, resolve, scenarios, playbooks, stats)
+- [x] Create /testing page in @pando/gateway (overview cards, runs table, findings board, scenarios list, auto-refresh 15s)
+- [x] API proxy route in gateway (/api/testing/[...path])
+- [x] @pando/tests wired as workspace dependency + TypeScript project references
+- [x] Full monorepo build passes (npm run build zero errors)
+- [x] API endpoints verified live: /v1/testing/status returns real data from test runs
 
 ### Phase 5: CLI
 - [ ] Implement CLI commands (init, run, scenarios, findings, history, report)
