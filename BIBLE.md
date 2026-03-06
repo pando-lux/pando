@@ -1090,7 +1090,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | **S3 upload awaiting** | `index.ts:1400` | S3 PutObjectCommand calls are fire-and-forget with a 2s sleep. Large projects with many files may have incomplete uploads. Need proper `await Promise.all()`. |
 | **Tier 2 PM2 persistence** | `index.ts:1410-1473` | PM2 starts the app but may lose track after pando-node restarts (daemon context mismatch). Port registry persists but PM2 process list doesn't auto-reconcile. Consider using `pm2 save` + `pm2 resurrect` on node boot. |
 | **Deploy pipeline logging** | `core/deploy-pipeline.ts` | Pipeline errors are fire-and-forget (`.catch(() => {})`). Should persist pipeline results to project metadata for debugging. |
-| **deployPeerId not saved** | `deploy-pipeline.ts` | Pipeline currently doesn't save `deployPeerId` on the project record (shows "NOT SET"). Need to pass it through step 4. |
+| **deployPeerId not persisting** | `deploy-pipeline.ts` + `project-store.ts` | Code passes `deployPeerId` in step 4 but MongoDB record shows "NOT SET". Likely `updateProject()` filters unknown fields. Need to add `deployPeerId` to the project schema/whitelist. |
 
 ### Stubs
 
