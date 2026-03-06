@@ -728,9 +728,10 @@ These are additions to @pando-code/core (the separate repo). No refactoring — 
 import { EnginePool, Scheduler } from "@pando-code/core";
 
 // engine-adapter.ts uses EnginePool directly (not PandoServer)
-// PandoCode reads API keys from LOCAL env (contributor's own keys)
+// PandoCode uses its OWN configured provider/model (contributor's choice)
+// API keys from LOCAL env (contributor's own keys)
 const pool = new EnginePool({
-  defaultModel: "claude-sonnet-4-6",
+  // No defaultModel — PandoCode uses config (default: google/gemini-2.5-flash)
   maxEngines: 20,
   idleTTLMs: 30 * 60 * 1000,
   onAfterCreate: async (id, engine) => {
@@ -846,16 +847,20 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 | Issue | Location | Status |
 |---|---|---|
-| **engine-adapter injectApiKeys** | `core/engine-adapter.ts` | DONE — reads local env vars first, CredentialStore fallback for EC2. Clear warning if no keys. |
+| **engine-adapter injectApiKeys** | `core/engine-adapter.ts` | DONE — loads PandoCode's `.env` first, then checks local env, then CredentialStore fallback for EC2. Clear warning if no keys. |
 | **Doorman AI classification** | `api/api-server.ts` | DONE — 3-level priority: local OPENAI_API_KEY → CredentialStore → P2P proxy to EC2 peer. |
 | **Doorman P2P proxy** | `index.ts` + `api-server.ts` | DONE — `pando/doorman-classify` and `pando/doorman-chat` handlers on EC2. Windows routes to EC2 via requestReply. Tested live: "What is machine learning?" → AI answer via P2P. |
+| **PandoCode provider-agnostic** | `core/engine-adapter.ts` | DONE — Adapter no longer forces `claude-sonnet-4-6`. PandoCode uses its own configured provider (default: Google/gemini-2.5-flash). Contributors choose their own provider+model. Gemini pricing added to Lux table. |
+| **PandoCode .env auto-load** | `core/engine-adapter.ts` | DONE — Resolves `@pando-code/core` package path, loads `.env` from pando-code repo root. Handles Windows CRLF. Keys available to PandoCode engines without manual env setup. |
+| **Thread store non-blocking** | `platform/thread-store.ts` | DONE — `addMessage()` updates local cache immediately, persists to P2P storage backend async. Eliminated 15s+ blocking on storage timeouts per chat message. |
+| **Async build routing** | `api/platform-api.ts` | DONE — Build requests return immediately with project+thread ID. PandoCode engine runs in background. Results arrive via SSE + thread store. No more 120s HTTP timeouts. |
+| **Dev auth bypass** | `api/api-server.ts` | DONE — `API_AUTH_DISABLED=true` now also bypasses JWT verification for chat endpoints (uses node's peerId as dev identity). |
+| **Path B end-to-end** | Full pipeline | TESTED LIVE — "build me a hello world website" → doorman classifies (P2P to EC2) → project created → PandoCode engine (gemini-2.5-flash) builds → page.tsx created. Full pipeline works. |
 
 ### Needs Work
 
 | Issue | Location | Problem |
 |---|---|---|
-| **PandoCode provider fallback** | `@pando-code/core` | Engine configured with `claude-sonnet-4-6` but falls back to Google Generative AI when ANTHROPIC_API_KEY is missing. Should fail clearly instead of trying wrong provider. |
-| **Path B: local API key for PandoCode** | Contributor setup | PandoCode contributor needs ANTHROPIC_API_KEY in local env (or Claude Code CLI integration). Without it, build requests fail with "Google Generative AI API key is missing". |
 | **P2P build routing** | `api/platform-api.ts` | chat_proxy exists but build routing to PandoCode peers is incomplete. Need to route "build" intent to a pando-code capable peer when local PandoCode is unavailable. |
 | **Claude Code CLI integration** | `@pando-code/core` | Not built yet. PandoCode needs a tool/subprocess to invoke `claude -p` for coding tasks. This would let contributors use their Claude Code subscription instead of a raw API key. |
 | **Contributor limits/earning** | Not built | Contributors need to set max requests/day, budget caps. Earning model (Lux per job) not implemented. |
@@ -1005,6 +1010,6 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 10. **No process isolation needed.** The old orchestrator needed child processes because the tick loop blocked the event loop. `engine.send()` is async and non-blocking. All engines run in the main process (or a single worker thread if memory is a concern).
 
-11. **Keys don't travel. Work travels.** Contributed API keys stay on EC2 (Path A — simple AI). PandoCode contributor keys stay on their machine (Path B — builds). The network routes WORK to where the keys are, never the other way around. `injectApiKeys()` in engine-adapter is for loading local env vars, NOT for pulling keys from MongoDB.
+11. **Keys don't travel. Work travels.** Contributed API keys stay on EC2 (Path A — simple AI). PandoCode contributor keys stay on their machine (Path B — builds). The network routes WORK to where the keys are, never the other way around. `injectApiKeys()` loads: (1) PandoCode's `.env` file, (2) local env vars, (3) CredentialStore fallback (EC2 only). It does NOT pull keys over P2P.
 
 12. **Two kinds of "contribute."** `/contribute openai sk-xxx` donates a key to the network (encrypted on EC2, used server-side for Path A). Running PandoCode on your node contributes your COMPUTE (your local keys, your machine, you earn Lux for builds).

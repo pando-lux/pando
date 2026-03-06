@@ -473,6 +473,10 @@ export class ApiServer {
    */
   private async verifyUserJwt(request?: any): Promise<string | null> {
     if (!request) return null;
+    // Dev mode: skip JWT verification when API auth is disabled
+    if (process.env.API_AUTH_DISABLED === 'true') {
+      return this.node.getIdentity()?.peerId || 'dev-user';
+    }
     const token = this.extractUserToken(request);
     if (!token) return null;
     return this.verifyJwtToken(token);

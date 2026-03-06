@@ -136,26 +136,31 @@ export class ThreadStore {
     return meta;
   }
 
-  /** Add a message to a thread. Creates thread if it doesn't exist. */
+  /** Add a message to a thread. Creates thread if it doesn't exist.
+   *  Updates local cache immediately, persists to backend async (non-blocking). */
   async addMessage(threadId: string, message: ThreadMessage): Promise<void> {
     // Ensure thread exists
     let meta = this.index.find(t => t.id === threadId);
     if (!meta) {
-      // Auto-create thread from first user message
       const title = message.role === 'user'
         ? this.generateTitle(message.content)
         : 'New conversation';
       meta = this.createThread(threadId, title, 'conversation', message.content);
     }
 
-    // Update metadata
+    // Update local cache immediately (callers can read right away)
     meta.updatedAt = Date.now();
     meta.messageCount++;
     if (message.role === 'user' && !meta.preview) {
       meta.preview = message.content.slice(0, 200);
     }
 
-    // Await both writes so callers can rely on messages being readable immediately after
+    // Persist to backend async — don't block the caller on P2P storage timeouts
+    this.persistMessage(threadId, meta, message);
+  }
+
+  /** Background persist — writes meta + message to storage backend. */
+  private async persistMessage(threadId: string, meta: ThreadMeta, message: ThreadMessage): Promise<void> {
     try {
       await this.backend.putRecord('threads', threadId, meta);
     } catch (err: any) {

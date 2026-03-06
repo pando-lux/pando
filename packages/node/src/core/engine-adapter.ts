@@ -48,6 +48,9 @@ const MODEL_PRICING: Record<string, [number, number]> = {
   'gpt-5.2':          [0.00000175, 0.000014],
   'gpt-5':            [0.00000125, 0.00001],
   'gpt-4o':           [0.0000025,  0.00001],
+  'gemini-2.5-flash': [0.00000015, 0.0000006],
+  'gemini-2.5-pro':   [0.00000125, 0.00001],
+  'gemini-2.0-flash': [0.0000001,  0.0000004],
 };
 
 function createLuxBudgetProvider(luxPerUsd = 100) {
@@ -249,8 +252,10 @@ export class EngineAdapter {
     this.luxProvider = createLuxBudgetProvider(config.luxPerUsd);
 
     // Create engine pool with lifecycle hooks
+    // Do NOT override defaultModel — let PandoCode use its own configured provider/model.
+    // Contributors choose their own provider (Gemini, OpenAI, Anthropic, Ollama).
     this.pool = new _EnginePool({
-      defaultModel: config.model || 'claude-sonnet-4-6',
+      ...(config.model ? { defaultModel: config.model } : {}),
       defaultRole: 'lead',
       maxEngines: 20,
       idleTTLMs: 30 * 60 * 1000,
@@ -396,7 +401,33 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       'gemini':    'GOOGLE_GENERATIVE_AI_API_KEY',
     };
 
-    // 1. Check what's already in local env (contributor's own keys)
+    // 1. Load PandoCode's .env if it exists (contributor's configured keys)
+    try {
+      const { readFileSync, existsSync } = await import('fs');
+      const { resolve, dirname } = await import('path');
+      const { createRequire } = await import('module');
+      const require = createRequire(import.meta.url);
+      const corePkg = require.resolve('@pando-code/core/package.json');
+      const pandoCodeRoot = resolve(dirname(corePkg), '..', '..');
+      const envPath = resolve(pandoCodeRoot, '.env');
+      if (existsSync(envPath)) {
+        const lines = readFileSync(envPath, 'utf-8').split('\n');
+        for (const raw of lines) {
+          const line = raw.trim();
+          if (!line || line.startsWith('#')) continue;
+          const eq = line.indexOf('=');
+          if (eq < 1) continue;
+          const key = line.slice(0, eq);
+          const val = line.slice(eq + 1).trim();
+          if (val && !process.env[key]) {
+            process.env[key] = val;
+          }
+        }
+        console.log(`[EngineAdapter] Loaded PandoCode .env from ${pandoCodeRoot}`);
+      }
+    } catch { /* ok — no .env file or @pando-code/core not installed */ }
+
+    // 2. Check what's already in local env (contributor's own keys)
     const available: string[] = [];
     for (const [provider, envVar] of Object.entries(PROVIDER_ENV_MAP)) {
       if (process.env[envVar]) available.push(provider);
@@ -405,7 +436,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       console.log(`[EngineAdapter] Local API keys found: ${available.join(', ')}`);
     }
 
-    // 2. For any missing keys, try contributed resources (EC2 with CredentialStore only)
+    // 3. For any missing keys, try contributed resources (EC2 with CredentialStore only)
     if (registry) {
       const aiResources = registry.findResources('ai_api_key');
       for (const resource of aiResources) {
@@ -428,7 +459,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     // 3. Warn if no keys available at all
     const finalAvailable = Object.entries(PROVIDER_ENV_MAP).filter(([_, v]) => process.env[v]);
     if (finalAvailable.length === 0) {
-      console.warn('[EngineAdapter] No AI API keys available. Set ANTHROPIC_API_KEY or OPENAI_API_KEY in your environment, or contribute keys via /contribute on an EC2 node.');
+      console.warn('[EngineAdapter] No AI API keys found. PandoCode will use its own configured provider. Set GOOGLE_GENERATIVE_AI_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY if needed.');
     }
   }
 }

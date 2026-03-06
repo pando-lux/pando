@@ -189,33 +189,34 @@ export async function registerPlatformRoutes(
         await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
       }
 
-      // Route to project engine
-      let engineReply = 'Project created. AI engine is processing your request.';
+      // Route to project engine — async (don't block HTTP response on long builds)
       if (newProjectId) {
-        try {
-          const result = await sendToEngine(trimmed, newProjectId);
-          if (result.response) engineReply = result.response;
-        } catch (err) {
-          console.error('[chat] sendToEngine failed:', (err as Error).message);
-          return reply.code(503).send({ error: 'Engine unavailable, please try again', code: 'ENGINE_UNAVAILABLE' });
-        }
+        // Fire engine in background — results arrive via SSE + thread store
+        (async () => {
+          try {
+            const result = await sendToEngine(trimmed, newProjectId);
+            const engineReply = result.response || 'Build complete.';
+            if (threadStore && threadId) {
+              await threadStore.addMessage(threadId, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' as any });
+            }
+            deps.pushEvent('chat_message', {
+              threadId,
+              projectId: newProjectId,
+              role: 'assistant',
+              content: engineReply,
+              timestamp: Date.now(),
+              tier: 'complex',
+            });
+          } catch (err) {
+            console.error('[chat] sendToEngine failed:', (err as Error).message);
+            if (threadStore && threadId) {
+              await threadStore.addMessage(threadId, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' as any });
+            }
+          }
+        })();
       }
 
-      if (threadStore && threadId) {
-        await threadStore.addMessage(threadId, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' as any });
-      }
-
-      // Push response via SSE so gateway shows it immediately
-      deps.pushEvent('chat_message', {
-        threadId,
-        projectId: newProjectId,
-        role: 'assistant',
-        content: engineReply,
-        timestamp: Date.now(),
-        tier: 'complex',
-      });
-
-      return { status: 'ok', threadId, projectId: newProjectId, reply: engineReply, tier: 'complex' };
+      return { status: 'ok', threadId, projectId: newProjectId, reply: 'Project created. AI engine is building — check the thread for updates.', tier: 'complex' };
     });
 
     // GET /chat/history — return messages from the most recent thread for this user
