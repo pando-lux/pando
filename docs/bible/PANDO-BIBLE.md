@@ -22,14 +22,16 @@ Every decision is final. Every gap is addressed. Build exactly this.
 
 # VISION
 
-Pando is three products that work independently and compound together:
+Pando is four products that work independently and compound together:
 
 1. **@pando/identity** — Decentralized identity and auth for AI agents. Sold standalone.
 2. **@pando/code** — AI coding engine (Claude Code alternative). Sold standalone.
 3. **@pando/node** — Self-sustaining AI-managed network. Uses both products above.
+4. **@pando/tests** — Standalone testing framework. Two modes: Scripted (Playwright automated, pass/fail) and Live (agent-driven, intelligent findings). Per-project SQLite database, playbook format, screenshot capture, findings tracking. Zero @pando/* dependencies — usable by any developer on any project. Dashboard at /testing in gateway. Bible: `docs/bible/TESTING-BIBLE.md`.
 
 A developer can buy identity alone ("I want agent auth").
 A developer can buy code alone ("I want an AI coding tool").
+A developer can buy tests alone ("I want intelligent testing").
 A developer can run a node and get everything ("I want the full network").
 
 A node can run fully offline — no internet, no peers, no network. It becomes a private AI workstation (like Open WebUI / Ollama). Connect it to the network, and it joins the collective.
@@ -1038,6 +1040,7 @@ Three tiers of packages:
 Tier 1 — STANDALONE PRODUCTS (marketed, sold independently)
   @pando/identity      Agent identity and auth
   @pando/code          AI coding engine
+  @pando/tests         Standalone testing framework (scripted + live agent testing)
   @pando/node          Full network node
 
 Tier 2 — NODE SUB-PACKAGES (published on npm, usable independently, but primarily consumed by @pando/node)

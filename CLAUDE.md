@@ -50,6 +50,7 @@ pando/
 │   ├── node/         # THE CORE — P2P networking, HTTP API, agent system
 │   ├── gateway/      # Web UI — Next.js 16 + Tailwind
 │   ├── mcp-server/   # Pando MCP for Claude Code
+│   ├── tests/        # Standalone testing framework (@pando/tests)
 │   └── extension/    # Chrome extension (placeholder)
 ├── docs/             # Architecture brainstorms, strategy, vision
 ├── tests/            # Integration & E2E tests
@@ -348,6 +349,15 @@ Witness-based emission — peers must attest that work happened before Lux is mi
 | **Shared** | `packages/shared/src/types.ts`, `packages/shared/src/crypto.ts` |
 | **Ledger** | `packages/ledger/src/index.ts`, `packages/ledger/src/transactions.ts` |
 | **Gateway** | `packages/gateway/app/page.tsx`, `packages/gateway/lib/node-connection.ts` |
+| **Testing** | `packages/tests/src/index.ts` (PandoTester), `packages/tests/src/database.ts`, `packages/tests/src/scripted/runner.ts`, `packages/tests/src/live/runner.ts` |
+
+## Bibles (Architecture Documents)
+
+- `docs/bible/PANDO-BIBLE.md` — Master architecture (the whole ecosystem)
+- `docs/bible/NODE-BIBLE.md` — Node package bible
+- `docs/bible/CODE-BIBLE.md` — Pando-code bible
+- `docs/bible/IDENTITY-BIBLE.md` — Identity package bible
+- `docs/bible/TESTING-BIBLE.md` — Testing framework bible
 
 ## Credential Security (IMMUTABLE)
 
