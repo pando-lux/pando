@@ -3438,7 +3438,7 @@ export async function registerPlatformRoutes(
           const createRes = await fetch(createUrl, {
             method: 'POST',
             headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
-            signal: AbortSignal.timeout(20000),
+            signal: AbortSignal.timeout(45000),
           });
           if (createRes.ok) {
             const data = await createRes.json() as any;

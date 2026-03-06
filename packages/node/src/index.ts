@@ -1114,7 +1114,7 @@ export class PandoNode {
           );
           for (const peer of computePeers.slice(0, 3)) {
             try {
-              const resp = await this.requestReply.request(peer.peerId, 'pando/get-credential', { resourceId, type }, 10_000);
+              const resp = await this.requestReply.request(peer.peerId, 'pando/get-credential', { resourceId, type }, 30_000);
               if (resp?.success && resp.payload?.credential) {
                 console.log(`[resources] P2P credential proxy: got ${type} from ${peer.peerId.slice(0, 12)}`);
                 return resp.payload.credential;
