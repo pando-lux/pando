@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-06 (distributed compute model implemented + tested). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-06 (full E2E deploy pipeline proven — build → GitHub → S3/EC2 deploy → marketplace). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -176,7 +176,7 @@ SQLite database for accounts, transactions, emissions. P2P synced via GossipSub 
 ### 3.5 @pando/node (THE BODY)
 
 **Location:** `packages/node/` in pando/node monorepo
-**Status:** Working. Brain-kill migration complete (9,414 lines removed). Distributed compute model implemented and tested (both paths working end-to-end).
+**Status:** Working. Brain-kill migration complete (9,414 lines removed). Distributed compute model implemented and tested (both paths working end-to-end). Deploy pipeline proven live — build → GitHub → S3 deploy → marketplace.
 
 The node composes all packages. It is PURE INFRASTRUCTURE — no intelligence of its own.
 
@@ -229,6 +229,7 @@ Reads from @pando/node HTTP API. No direct database access.
 | Component | File | Status | What it does |
 |---|---|---|---|
 | **EngineAdapter** | `core/engine-adapter.ts` | DONE | The ONE pando-code integration point. PandoCode contributor nodes only. Multi-engine, routing, Pando tools, Lux budget. |
+| **DeployPipeline** | `core/deploy-pipeline.ts` | DONE | Auto-triggers after build: GitHub push → find EC2 secure node → P2P deploy → update metadata. |
 | **CredentialStore** | `core/credential-store.ts` | DONE | AES-256-GCM encrypt/decrypt. Secure compute nodes (EC2) only. |
 | **StorageBackend** | `core/storage-backend.ts` | DONE | MongoDB direct or P2P proxy to compute nodes |
 | **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Git pull + build + restart. GossipSub broadcast. |
@@ -275,7 +276,7 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 | `pando/doorman-chat` | EC2 (secure) | Multi-turn chat via contributed OpenAI key. Returns `{reply}`. |
 | `pando/ai-query` | EC2 (secure) | General AI query via contributed key. Returns `{answer, sources, confidence}`. |
 | `pando/get-credential` | EC2 (secure) | Decrypt a credential (code_repository only). Returns raw credential. |
-| `pando/deploy-app` | Any with hosting | Deploy project to hosting provider. |
+| `pando/deploy-app` | EC2 (secure) | Clone from GitHub, auto-detect tier, deploy to S3 (Tier 1) or PM2+nginx (Tier 2). Requires `credentialAccess` for S3 creds. |
 | `pando/storage-proxy` | EC2 (secure) | Proxy MongoDB CRUD for non-MongoDB nodes. |
 | `pando/upgrade-node` | Any | Trigger git pull + build + restart. |
 | `chat_proxy` | PandoCode nodes | Forward chat message for engine processing. |
@@ -532,14 +533,17 @@ Build request arrives via P2P (routed by any node that received user's message)
 
 #### Type 2: Secure Compute Node (EC2)
 
-Trusted infrastructure. Stores network-level contributed credentials.
+Trusted infrastructure. Stores network-level contributed credentials. **Deploys apps.**
 
 - Has MongoDB + CredentialStore + CREDENTIAL_MASTER_KEY
 - Stores contributed API keys (encrypted AES-256-GCM)
 - Handles Path A (simple AI): decrypts contributed key → makes LLM call → returns response
+- **Handles deployment** (`pando/deploy-app`): clones from GitHub, deploys to S3 (Tier 1) or PM2+nginx (Tier 2)
 - Could run PandoCode for builds if installed (not currently — EC2 nodes are secure-only)
 - Proxy: decrypts credentials for other node types on P2P request (code_repository only)
 - Proxy: P2P storage backend for non-MongoDB nodes (thread store, project store, etc.)
+
+**Capability profile broadcasts:** `credentialAccess: true`, `storageBackend: 'mongodb'`. These are the fields the deploy pipeline uses to find deploy targets — NOT `shareCompute`/`compute_cpu` (those identify PandoCode builders).
 
 #### Type 3: Lightweight Node
 
@@ -596,66 +600,123 @@ No tick loop. No orchestrator. No message bus. The engine runs when it has somet
 | **Builder** | Builder sub-agent spawned by any engine. Full tools. Writes code, runs builds. | When work is needed |
 | **Governance** | Deterministic code in kernel/governance.ts. NOT an AI agent. Calls engine for AI review only. | On proposal arrival |
 
-### 5.8 Deploy Pipeline (build → github → deploy → marketplace)
+### 5.8 Deploy Pipeline (build → github → deploy → marketplace) — PROVEN E2E
 
-The full lifecycle of a network-built project. PandoCode builds. Secure nodes deploy. Keys never travel.
+The full lifecycle of a network-built project. **Tested live 2026-03-06.** PandoCode builds. Secure nodes deploy. Keys never travel.
 
 ```
 PandoCode Contributor Node              EC2 Secure Node
 ───────────────────────────              ─────────────────
 1. Engine builds code in workspace
-   ~/.pando-code/network/{projectId}/
+   ~/.pando/projects/{projectId}/
                 │
-2. Build complete (stream ends)
+2. Build complete (sendToEngine stream ends)
                 │
-3. DeployPipeline triggers:
-   a. GitHub push ──────────────────────→ (GitHub API — token from CredentialStore)
-      └─ pando-lux/{projectId} repo       Creates repo if new, pushes code
+3. DeployPipeline auto-triggers (fire-and-forget from platform-api.ts):
                 │
-   b. Governance check (public only)
-      └─ AI review (Layer 5)
-      └─ Auto-approve in dev (≤8 peers)
+   Step 1: GitHub push
+      POST /v1/projects/:id/github/push
+      └─ git init (if needed)
+      └─ git add -A
+      └─ git commit "Deploy {ISO timestamp}"
+      └─ git push -u origin HEAD:main --force
+      └─ GitHub token decrypted via P2P credential proxy to EC2
+      └─ Repo created if new: pando-lux/app-{8chars}-{slug}
                 │
-   c. P2P deploy request ──────────────→ Receives pando/deploy-app
+   Step 2: Find deploy target
+      └─ Query CapabilityRegistry.getAllProfiles()
+      └─ Filter: credentialAccess === true && storageBackend === 'mongodb'
+      └─ This finds EC2 SECURE nodes (NOT PandoCode builders)
+      └─ Self-deploy fallback only if local node has credentialAccess
+                │
+   Step 3: P2P deploy ──────────────────→ Receives pando/deploy-app
                                           │
-                                          ├─ git clone from GitHub
-                                          ├─ Detect tier from code
+                                          ├─ git clone {repoUrl} (from GitHub)
+                                          │   OR git pull origin main (if re-deploy)
                                           │
-                                          ├─ Tier 1 (static HTML):
+                                          ├─ Auto-detect tier from package.json:
+                                          │   Tier 2 if: scripts.start, express/fastify/ws deps,
+                                          │              server.js/app.js main, backend/ dir
+                                          │   Tier 1 otherwise (static HTML/CSS/JS)
+                                          │
+                                          ├─ Tier 1 (static):
                                           │   Decrypt S3 creds (CREDENTIAL_MASTER_KEY)
-                                          │   Upload to s3://pando-deployments/
-                                          │   Return S3 URL
+                                          │   Inject window.PANDO_GATEWAY_URL into HTML <head>
+                                          │   Inject window.PANDO_PROJECT_ID into HTML <head>
+                                          │   Upload all static files to S3
+                                          │   Key format: public/{projectId}/{relPath}
+                                          │   Return S3 website URL
                                           │
                                           └─ Tier 2 (server app):
-                                              npm install + PM2 start
-                                              nginx reverse proxy
-                                              Return http://IP/apps/{projectId}/
+                                              npm install --production
+                                              PM2 start (persistent port registry)
+                                              nginx reverse proxy: /apps/{projectId}/ → localhost:{port}
+                                              Return http://{PUBLIC_IP}/apps/{projectId}/
                 │
-4. Update project metadata:
-   - deploymentUrl, deploymentStatus
-   - visibility → 'listed' (public) or 'private'
-   - githubRepo, deployPeerId
+   Step 4: Update project metadata
+      └─ repoUrl, deploymentUrl, deployPeerId
+      └─ deploymentStatus → 'live'
+      └─ Persisted to MongoDB via P2P storage proxy
                 │
-5. Project appears in marketplace (if public)
+5. Project appears in marketplace (GET /v1/marketplace)
    User sees: "Your app is live at https://..."
 ```
 
+**PROVEN LIVE (2026-03-06):** "build me a portfolio website" → PandoCode (Gemini 2.5 Flash) built index.html + style.css → GitHub push to pando-lux/app-b7880ae1-... → EC2 secure node cloned from GitHub → Tier 1 detected → S3 upload → live at `http://pando-deployments.s3-website-us-east-1.amazonaws.com/public/{projectId}/index.html` → marketplace shows project with `deploymentStatus: live`.
+
+**CRITICAL: Builder vs Deployer targeting (the #1 gotcha)**
+```
+findBestBuilder()      → shareCompute === true && compute_cpu === true   → PandoCode CONTRIBUTOR nodes
+stepFindDeployTarget() → credentialAccess === true && storageBackend === 'mongodb'  → EC2 SECURE nodes
+
+These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse them.
+```
+
 **Security model:**
-- **Credentials (AWS, GitHub) ONLY exist on EC2 secure nodes** — decrypted in-memory via `CREDENTIAL_MASTER_KEY`
+- **Credentials (AWS S3, GitHub) ONLY exist on EC2 secure nodes** — decrypted in-memory via `CREDENTIAL_MASTER_KEY`
 - **PandoCode contributor nodes NEVER touch deployment credentials** — they only build code
 - **GitHub is the handoff point** — PandoCode pushes code to GitHub, EC2 clones from GitHub. No workspace transfer over P2P.
 - **EC2 tripwire** — any SSH/SSM/debugger detected → wipe credentials + shutdown immediately
 
-**Where deploy code lives (all existing, working):**
+**Workspace directories:**
+- Engine workspace: `~/.pando/projects/{projectId}/` (set by platform-api.ts after project creation)
+- EC2 deploy workspace: `{dataDir}/hosted-apps/{projectId}/` (cloned from GitHub on the secure node)
+- PandoCode database: `.pando-code.db` inside the project workspace
+
+**Timeout chain (production-tuned):**
+- P2P credential proxy: 30s (decrypting GitHub token via EC2)
+- GitHub repo creation inner call: 45s (includes credential decrypt + GitHub API)
+- Deploy pipeline GitHub push: 120s (AbortSignal.timeout)
+- P2P deploy request: 300s (5 min — includes git clone + S3 upload or npm install + PM2)
+
+**Marketplace visibility:**
+- New projects start with `visibility: 'listed'`
+- Marketplace endpoint (`GET /v1/marketplace`) filters out test artifacts via regex:
+  `hello world`, `test app`, `untitled`, `my app`, `demo`, `example`, `placeholder`, etc.
+- Use a real project name to see it in the marketplace. "hello world" is intentionally filtered.
+- 128+ projects visible in marketplace as of 2026-03-06.
+
+**Where deploy code lives (all working):**
 | Component | File | What it does |
 |---|---|---|
-| Deploy route | `api/platform-api.ts` POST /projects/:id/deploy | Entry point — finds secure peer, sends P2P request |
-| P2P handler | `index.ts` handler for `pando/deploy-app` | Clone, detect tier, deploy to S3 or PM2 |
-| S3 hosting | `platform/hosting-service.ts` | S3Client upload, pre-signed URLs |
-| GitHub push | `api/platform-api.ts` POST /projects/:id/github/push | git add, commit, push to remote |
-| DeployPipeline | `core/deploy-pipeline.ts` | DONE — Sequences: build complete → GitHub push → find EC2 secure node → P2P deploy → update metadata |
+| **DeployPipeline** | `core/deploy-pipeline.ts` | Orchestrator — 4 steps: GitHub push → find EC2 → P2P deploy → update metadata |
+| **Trigger** | `api/platform-api.ts` `triggerDeployPipeline()` | Fire-and-forget after every `sendToEngine()` completion (4 call sites) |
+| **P2P handler** | `index.ts:1216` handler for `pando/deploy-app` | Clone from GitHub, detect tier, deploy to S3 or PM2+nginx |
+| **Tier 1 (S3)** | `index.ts:1303-1408` | S3Client + PutObjectCommand, HTML injection, MIME types |
+| **Tier 2 (PM2)** | `index.ts:1410-1473` | npm install, PM2, port registry, nginx config |
+| **Port registry** | `{dataDir}/app-ports.json` | Persistent port allocation — survives node restarts |
+| **S3 hosting service** | `platform/hosting-service.ts` | Standalone S3 service (pre-signed URLs for private projects) |
+| **GitHub push** | `api/platform-api.ts:3417-3499` | git add -A, commit, force push to origin/main |
+| **GitHub repo create** | `api/platform-api.ts:3326-3414` | GitHub API — create repo in pando-lux org |
+| **Undeploy** | `index.ts:1498-1550` handler for `pando/undeploy-app` | PM2 delete, nginx cleanup, port registry removal |
+| **Deploy route** | `api/platform-api.ts` POST /projects/:id/deploy | Manual trigger endpoint |
 
-**Deploy pipeline is live.** `core/deploy-pipeline.ts` triggers automatically after every `sendToEngine()` completion in platform-api.ts. Targets EC2 secure nodes (`credentialAccess + storageBackend='mongodb'`), NOT PandoCode contributors. GitHub is the handoff — PandoCode pushes, EC2 clones and deploys.
+**S3 bucket:** `pando-deployments` (us-east-1). URL pattern: `http://pando-deployments.s3-website-us-east-1.amazonaws.com/public/{projectId}/index.html`
+
+**Contributed S3 credentials format** (via `/contribute storage_blob <json>`):
+```json
+{ "accessKeyId": "...", "secretAccessKey": "...", "region": "us-east-1", "bucket": "pando-deployments" }
+```
 
 ### 5.9 PandoCode Network Linking
 
@@ -666,9 +727,9 @@ STANDALONE MODE (default)                LINKED MODE (network contributor)
 ─────────────────────────                ─────────────────────────────────
 PandoCode is just a dev tool.            PandoCode is a network resource.
 
-- Projects saved wherever you want       - Network workspace: ~/.pando-code/network/
+- Projects saved wherever you want       - Network workspace: ~/.pando/projects/
 - Your keys, your machine                - Node can CREATE projects here
-- No P2P, no Lux, no governance          - Each project: ~/.pando-code/network/{projectId}/
+- No P2P, no Lux, no governance          - Each project: ~/.pando/projects/{projectId}/
 - Works offline                          - Project metadata from node (visibility, owner)
 - No connection to any node              - You earn Lux per build job completed
                                          - API usage limits apply (future)
@@ -680,7 +741,7 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 1. PandoCode setting: `network.linked: true` (in PandoCode config)
 2. PandoCode setting: `network.nodeUrl: "http://localhost:4000"` (local node API)
 3. When linked, node's Engine Adapter can create project engines
-4. Network-created projects go to `~/.pando-code/network/{projectId}/`
+4. Network-created projects go to `~/.pando/projects/{projectId}/`
 5. Project metadata (visibility, owner) set by node based on user request
 6. When build completes → DeployPipeline triggers (GitHub → deploy → marketplace)
 
@@ -931,6 +992,8 @@ This makes a contributor's Claude Code subscription a network resource — they 
 | Windows | 100.87.67.78 | Contributor | PandoCode (gemini-2.5-flash), Claude Code, P2P port 4100, API port 4000 |
 
 **Public gateway:** https://gateway-one-mu.vercel.app
+**S3 deployments:** `http://pando-deployments.s3-website-us-east-1.amazonaws.com/public/{projectId}/index.html`
+**GitHub org:** `pando-lux` — repos auto-created as `app-{8chars}-{slug}`
 
 ### 8.2 How to Build and Run
 
@@ -969,6 +1032,7 @@ npx playwright test --project pando-code
 - `GOOGLE_GENERATIVE_AI_API_KEY` — PandoCode default provider (Google/Gemini). Auto-loaded from PandoCode's `.env`.
 - `OPENAI_API_KEY` — For doorman classification (local) or alternative PandoCode provider. Auto-loaded from PandoCode's `.env`.
 - `ANTHROPIC_API_KEY` — Alternative PandoCode provider (Anthropic/Claude)
+- `PUBLIC_IP` — Public IP address for Tier 2 deployment URLs (EC2 nodes). Used to construct `http://{PUBLIC_IP}/apps/{projectId}/`.
 - `API_AUTH_DISABLED=true` — Dev mode: bypasses API token auth AND JWT verification for chat endpoints
 
 ---
@@ -1006,7 +1070,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | **Thread store non-blocking** | `platform/thread-store.ts` | DONE — `addMessage()` updates local cache immediately, persists to P2P storage backend async. Eliminated 15s+ blocking on storage timeouts per chat message. |
 | **Async build routing** | `api/platform-api.ts` | DONE — Build requests return immediately with project+thread ID. PandoCode engine runs in background. Results arrive via SSE + thread store. No more 120s HTTP timeouts. |
 | **Dev auth bypass** | `api/api-server.ts` | DONE — `API_AUTH_DISABLED=true` now also bypasses JWT verification for chat endpoints (uses node's peerId as dev identity). |
-| **Path B end-to-end** | Full pipeline | TESTED LIVE — "build me a hello world website" → doorman classifies (P2P to EC2) → project created → PandoCode engine (gemini-2.5-flash) builds → page.tsx created. Full pipeline works. |
+| **Path B end-to-end** | Full pipeline | TESTED LIVE — "build me a portfolio website" → doorman classifies (P2P to EC2) → project created → PandoCode builds → DeployPipeline → GitHub push → P2P deploy to EC2 → S3 upload → live URL returned → marketplace listing. Full pipeline proven. |
 | **Unified build routing** | `api/platform-api.ts` | DONE — `findBestBuilder()` replaces the split `hasClaudeCodeAuth` logic. All 4 build handlers use unified flow: create project → find best PandoCode peer (including self) → route. `hasClaudeCodeAuth()` removed from routing (was Anthropic-only, broken for Gemini). |
 | **Circuit breaker fix** | `cli.ts`, `supervisor.ts`, `kernel/` | DONE — Port-conflict exits use code 78 (supervisor won't respawn). Immediate circuit breaker reset on successful boot. Thresholds raised (crash-guard 3→6, circuit-breaker 3→5). |
 | **Deploy Pipeline** | `core/deploy-pipeline.ts` | DONE — Targets EC2 secure nodes (`credentialAccess + storageBackend='mongodb'`). GitHub push → P2P `pando/deploy-app` to EC2 → S3 (Tier 1) or PM2+nginx (Tier 2) → update project metadata. Auto-triggers after every build completion. |
@@ -1019,6 +1083,10 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | **Claude Code CLI integration** | `@pando-code/core` | Not built yet. PandoCode needs a tool/subprocess to invoke `claude -p` for coding tasks. This would let contributors use their Claude Code subscription instead of a raw API key. |
 | **Contributor limits/earning** | Not built | Contributors need to set max requests/day, budget caps. Earning model (Lux per job) not implemented. |
 | **Node mode CLI flag** | `cli.ts` | Still uses old `--mode full|compute|relay`. Needs updating to `contributor|secure|lightweight|full` to match four node types. |
+| **S3 upload awaiting** | `index.ts:1400` | S3 PutObjectCommand calls are fire-and-forget with a 2s sleep. Large projects with many files may have incomplete uploads. Need proper `await Promise.all()`. |
+| **Tier 2 deploy untested** | `index.ts:1410-1473` | PM2+nginx path is fully coded but never exercised in production. Need to test with an Express app. |
+| **Deploy pipeline logging** | `core/deploy-pipeline.ts` | Pipeline errors are fire-and-forget (`.catch(() => {})`). Should persist pipeline results to project metadata for debugging. |
+| **deployPeerId not saved** | `deploy-pipeline.ts` | Pipeline currently doesn't save `deployPeerId` on the project record (shows "NOT SET"). Need to pass it through step 4. |
 
 ### Stubs
 
@@ -1168,3 +1236,15 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 11. **Keys don't travel. Work travels.** Contributed API keys stay on EC2 (Path A — simple AI). PandoCode contributor keys stay on their machine (Path B — builds). The network routes WORK to where the keys are, never the other way around. `injectApiKeys()` loads: (1) PandoCode's `.env` file, (2) local env vars, (3) CredentialStore fallback (EC2 only). It does NOT pull keys over P2P.
 
 12. **Two kinds of "contribute."** `/contribute openai sk-xxx` donates a key to the network (encrypted on EC2, used server-side for Path A). Running PandoCode on your node contributes your COMPUTE (your local keys, your machine, you earn Lux for builds).
+
+13. **Builder targeting ≠ Deploy targeting.** `findBestBuilder()` looks for `shareCompute + compute_cpu` (PandoCode contributor nodes). `stepFindDeployTarget()` looks for `credentialAccess + storageBackend='mongodb'` (EC2 secure nodes). These are DIFFERENT node types. If you mix them up, deploys silently fail because PandoCode nodes can't decrypt S3 credentials.
+
+14. **Deploy pipeline errors are silent.** `triggerDeployPipeline()` is fire-and-forget (`.catch(() => {})`). If it fails, the project still has its GitHub repo but `deploymentStatus` stays `none`. Check node logs for `[deploy-pipeline]` prefixed messages.
+
+15. **Marketplace filters test artifacts.** `getMarketplaceAsync()` uses a regex to strip projects named "hello world", "test app", "demo", "example", etc. If your test project doesn't show up in the marketplace, that's why. Use a real project name.
+
+16. **Project workspaces are `~/.pando/projects/{projectId}/`.** Engine adapter creates the directory and passes it as `projectPath` to PandoCode. The engine writes files there. The deploy pipeline reads `workspaceDir` from the project record to know where to git push from. If `workspaceDir` is missing, GitHub push fails with "workspaceDir required".
+
+17. **P2P credential proxy has a timeout chain.** GitHub repo creation requires: P2P credential decrypt (30s timeout) + GitHub API call (45s inner timeout). If EC2 nodes are slow or offline, the credential proxy times out and GitHub operations fail. The timeouts were tuned for production latency on 2026-03-06.
+
+18. **S3 uploads are fire-and-forget with a 2s wait.** The `pando/deploy-app` handler fires S3 PutObjectCommand calls then `await new Promise(r => setTimeout(r, 2000))`. For large projects with many files, some uploads may not complete. This is a known trade-off (see Section 10).
