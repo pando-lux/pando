@@ -4,6 +4,13 @@
 
 ---
 
+# CURRENT STATUS (2026-03-06)
+
+- **@pando-code/core is the ONLY AI backend in @pando/node.** ClaudeBackend and OllamaBackend have been deleted. All AI work routes through PandoCode engine instances.
+- **Integration verified:** 204 E2E tests pass with PandoCode engine as the sole backend.
+
+---
+
 # WHAT IT IS
 
 Open-source, multi-provider, multi-agent AI coding engine with persistent memory,
@@ -790,9 +797,11 @@ Terminal interface for interactive coding sessions.
 
 ---
 
-# INTEGRATION WITH @pando/identity
+# INTEGRATION WITH @pando/identity (Phase 8 COMPLETE)
 
 pando-code has **ZERO @pando/* imports**. Integration is via **structural typing**.
+Agent identity flows through PandoCode via structural typing — no adapters, no mapping code.
+LuxBudgetProvider is injected at runtime; 35 custom Pando tools are registered per engine instance.
 
 ## How It Works
 

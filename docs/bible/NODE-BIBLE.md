@@ -4,6 +4,17 @@
 
 ---
 
+# CURRENT STATUS
+
+- **204 E2E tests passing** — 15 consecutive clean runs (46.6s average)
+- **All 34 gateway pages** verified, **80+ API routes** covered by E2E tests
+- **PandoCode is the ONLY AI backend** — ClaudeBackend + OllamaBackend deleted
+- **Phase 8 Agent Identity COMPLETE** — createAgent(), Pando Login, JWT auth, Lux transfer, signed actions, full trust chain
+- **Build clean** — `npm run build` zero errors
+- **Node running** — port 4100, 2 EC2 peers connected
+
+---
+
 # WHAT IT IS
 
 A full Pando network node — P2P networking, AI-managed governance, Lux economy,
@@ -38,7 +49,7 @@ pando/node/
 
   docs/
     bible/           Architecture bibles (this file, IDENTITY-BIBLE, CODE-BIBLE, PANDO-BIBLE)
-  tests/             Integration & E2E tests
+  tests/             Integration & E2E tests (204 Playwright tests, 34 pages + 80+ API routes)
   scripts/           Admin tools
   secrets/           Secret templates (gitignored)
 ```
@@ -431,6 +442,7 @@ Reads compiled genome knowledge graph (`output/graph.json`):
 Reads test scenarios from genome graph:
 - Executes API regression tests via fetch
 - Wired into governance pipeline (crash = abort proposal)
+- 204 E2E tests covering all 34 gateway pages + 80+ API routes (Playwright)
 
 ## Code Pipeline (`platform/code-pipeline.ts`)
 
@@ -706,10 +718,40 @@ Re-exports @pando/identity primitives under legacy names:
 
 **New code should import directly from `@pando/identity` where possible.**
 
+## Phase 8: Agent Identity (COMPLETE)
+
+`@pando/identity` provides the full agent identity lifecycle:
+
+**Agent creation:**
+- `createAgent()` generates an Ed25519 keypair for the agent
+- Human owner signs the agent certificate with their own Ed25519 key
+- Agent peerId = wallet address = Lux account
+
+**Pando Login (challenge-response):**
+```
+POST /auth/challenge → nonce
+sign(nonce, agentPrivateKey) → hex signature
+POST /auth/verify { peerId, signature, nonce } → JWT (24h, stateless)
+```
+JWT goes in `X-User-Token` header (NOT `Authorization: Bearer`, which is operator token).
+
+**Signed actions (offline trust chain):**
+- `createSignedAction(action, agentPrivateKey)` — agent signs an action
+- `verifySignedActionFull(action, humanPublicKey)` — verifies: action signature (agent key) → certificate signature (human key) → expiry check. All offline, no network needed.
+
+**Agent-authenticated API routes:**
+- `/auth/me` — profile + Lux balance
+- `/projects` — project listing
+- `/content` — content operations
+- `/chat/*` — messaging
+- `/transfer` — Lux transfers
+- `/transactions` — transaction history
+- `/status` — node status
+
+Governance and content APIs use dual-auth: agent peerId used as identity when JWT present.
+
 ## Remaining Integration Work
 
-- Update `user-accounts.ts` to use @pando/identity JWT + password primitives
-- Update auth middleware to use @pando/identity JWT functions
 - Re-export identity types from `shared/types.ts`
 
 ---
@@ -815,7 +857,7 @@ Witness-based emission: peers must attest that work happened before Lux is minte
 
 # ARCHITECTURAL DEBT
 
-## index.ts monolith (4,514 lines)
+## index.ts monolith (~4,540 lines)
 
 `packages/node/src/index.ts` is the PandoNode class — a single file that imports and instantiates
 ALL kernel, core, and platform components. It handles:

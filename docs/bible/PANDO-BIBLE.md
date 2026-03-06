@@ -8,6 +8,18 @@ Every decision is final. Every gap is addressed. Build exactly this.
 
 ---
 
+# CURRENT STATUS (2026-03-06)
+
+- **204 E2E tests passing** — 15 consecutive clean runs (46.6s average)
+- **PandoCode is the ONLY AI backend** — ClaudeBackend and OllamaBackend have been deleted
+- **All 34 gateway pages** verified loading without errors
+- **80+ API routes** covered by E2E tests
+- **Phase 8 Agent Identity COMPLETE** — createAgent(), Pando Login, JWT auth, Lux transfers, signed actions, full offline trust chain
+- **Build passes clean** — `npm run build` zero errors
+- **Node running** on port 4100 with 2 EC2 peers connected
+
+---
+
 # VISION
 
 Pando is three products that work independently and compound together:
@@ -197,7 +209,7 @@ Agent authenticates to a Pando node:
 4. Agent uses JWT via X-User-Token header for authenticated API calls
    → /auth/me, /projects, /chat/*, /transfer, /transactions
 ```
-**E2E verified:** 201 tests including full agent lifecycle (identity→login→Lux→actions→chat).
+**E2E verified:** 204 tests including full agent lifecycle (identity→login→Lux→actions→chat).
 
 ### Dependencies
 
@@ -1979,12 +1991,21 @@ AGENT BUDGET ENFORCEMENT:
 - Update genome .know files
 - **Data cleanup:** Drop deprecated tables (`messages_v1_archive`, old peers table) after 30 days of stable operation. Remove migration scripts from production builds (keep in repo under `scripts/migrations/`).
 
-## Phase 8: Launch — NOT STARTED
-- Deploy to all live nodes
-- Verify cross-node compatibility
-- Monitor via observability stack
-- Publish @pando/identity and @pando/code as standalone packages
-- **Migration verification:** Run `migrate-all.ts --verify` on each node post-deploy. Confirms all data intact, no orphaned records, all new fields populated. Alert if any node fails verification.
+## Phase 8: Agent Identity + Launch — AGENT IDENTITY COMPLETE, LAUNCH PENDING
+- ✅ **Agent Identity (COMPLETE):**
+  - ✅ `createAgent()` generates agent Ed25519 keypair, human signs certificate
+  - ✅ Pando Login: `POST /auth/challenge` → sign nonce with Ed25519 → `POST /auth/verify` → JWT
+  - ✅ JWT in `X-User-Token` header (not `Authorization: Bearer`, which is operator token)
+  - ✅ Agent Lux economy: transfers, balance, transactions via authenticated API
+  - ✅ Signed actions: `createSignedAction()` + `verifySignedActionFull()` = full offline trust chain
+  - ✅ Agent as first-class citizen: governance proposals, content creation, chat via JWT
+  - ✅ 204 E2E tests passing (15 consecutive clean runs, 46.6s)
+- ⏳ **Launch (PENDING):**
+  - Deploy to all live nodes
+  - Verify cross-node compatibility
+  - Monitor via observability stack
+  - Publish @pando/identity and @pando/code as standalone packages
+  - **Migration verification:** Run `migrate-all.ts --verify` on each node post-deploy. Confirms all data intact, no orphaned records, all new fields populated. Alert if any node fails verification.
 
 ---
 

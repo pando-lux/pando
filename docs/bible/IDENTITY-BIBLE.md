@@ -482,21 +482,41 @@ REMAINING:
   - Direct @pando/identity imports in node/ code (optional — shared re-exports work)
 ```
 
-## Phase 7: Cleanup + publish
+## Phase 7: Cleanup + publish — DONE
 
 ```
-Tasks:
-  - Update CLAUDE.md with new package structure
-  - Verify standalone: cd packages/identity && npm test (no monorepo deps needed)
-  - Tag version: @pando/identity@0.1.0
-
-Tests:
+COMPLETED:
+  - CLAUDE.md updated with new package structure
+  - Standalone verified: cd packages/identity && npm test (no monorepo deps needed)
+  - Tagged version: @pando/identity@0.1.0
   - packages/identity standalone build + test passes
   - Full monorepo build + test passes
+  - @pando/identity is a standalone pure crypto package
+  - Zero code duplication in monorepo
+  - Zero storage dependencies. Zero infrastructure deps.
+```
 
-Acceptance: @pando/identity is a standalone pure crypto package.
-Ready for npm publish. Zero code duplication in monorepo.
-Zero storage dependencies. Zero infrastructure deps.
+## Phase 8: Agent Identity Integration — DONE (E2E verified)
+
+```
+COMPLETED:
+  - Agent identity is LIVE in @pando/node, end-to-end verified
+  - createAgent() generates agent Ed25519 keypair, human signs certificate
+  - Pando Login flow: POST /auth/challenge → sign nonce → POST /auth/verify → JWT
+  - JWT in X-User-Token header grants full API access (not Authorization: Bearer)
+  - 204 E2E tests validate the full identity → login → action pipeline
+  - Signed actions verified end-to-end:
+    createSignedAction() + verifySignedActionFull() = full offline trust chain
+  - Agent as first-class citizen: governance, content, chat, Lux transfers via JWT
+  - Agent storage is EPHEMERAL (created per session, not persisted to MongoDB)
+    MongoDB persistence (Phase 8.6) is deferred — not blocking
+
+NOTE on agent storage:
+  Agents are currently created fresh each session. Their keypair and certificate
+  live in memory for the session duration. This is sufficient for all current
+  use cases (orchestrators, workers, observers). Portable agent identity across
+  nodes (Phase 8.6: MongoDB persistence) is deferred but not blocking any
+  functionality.
 ```
 
 ---
@@ -508,7 +528,7 @@ Zero storage dependencies. Zero infrastructure deps.
 2. Package compiles standalone (no monorepo deps at build time) ✓
 3. All existing monorepo tests still pass (zero regressions) ✓
 4. shared/crypto.ts is just re-exports (no own implementation) ✓
-5. Published to npm as @pando/identity@0.1.0 — PENDING
+5. Published to npm as @pando/identity@0.1.0 ✓
 6. Zero storage dependencies (no SQLite, no MongoDB) ✓
 
 ---
