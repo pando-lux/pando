@@ -164,6 +164,7 @@ export class ScriptedRunner {
       // Update run record
       this.db.updateRun(runId, {
         status: runStatus,
+        total_steps: totalCount,
         passed_steps: passedCount,
         failed_steps: failedCount,
         duration_ms: duration,

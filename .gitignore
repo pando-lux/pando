@@ -14,6 +14,12 @@ nul
 # Temporary files
 tmp-*.json
 
+# @pando/tests local results (per-project, not committed)
+.pando-tests/
+.pando-code.db
+.pando-code.db-shm
+.pando-code.db-wal
+
 # Worker context files (runtime artifact, not source)
 .pando-worker-context.md
 

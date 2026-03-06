@@ -267,7 +267,7 @@ export class TestDatabase {
     );
   }
 
-  updateRun(id: string, updates: Partial<Pick<RunRecord, 'status' | 'passed_steps' | 'failed_steps' | 'duration_ms' | 'summary' | 'error' | 'finished_at'>>): void {
+  updateRun(id: string, updates: Partial<Pick<RunRecord, 'status' | 'total_steps' | 'passed_steps' | 'failed_steps' | 'duration_ms' | 'summary' | 'error' | 'finished_at'>>): void {
     const existing = this.getRun(id);
     if (!existing) throw new Error(`Run ${id} not found`);
     this.stmts.updateRun.run(
@@ -280,6 +280,10 @@ export class TestDatabase {
       updates.finished_at ?? existing.finished_at,
       id,
     );
+    // Update total_steps separately if provided (not in the main UPDATE statement)
+    if (updates.total_steps !== undefined) {
+      this.db.prepare('UPDATE runs SET total_steps = ? WHERE id = ?').run(updates.total_steps, id);
+    }
   }
 
   getRun(id: string): RunRecord | undefined {
