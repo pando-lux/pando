@@ -213,16 +213,19 @@ export class DeployPipeline {
 
     const profiles = registry.getAllProfiles();
 
-    // Find secure/compute nodes that accept deployments
+    // Deploy targets are EC2 SECURE nodes — they have credentialAccess (CREDENTIAL_MASTER_KEY)
+    // and direct MongoDB. They can decrypt S3 creds for Tier 1 and run PM2/nginx for Tier 2.
+    // This is NOT the same as PandoCode contributor nodes (shareCompute + compute_cpu) which BUILD.
+    // BIBLE Section 5.8: "PandoCode builds. Secure nodes deploy. Keys never travel."
     const candidates = profiles.filter((p: any) =>
-      p.shareCompute === true &&
-      p.capabilities?.compute_cpu === true &&
-      p.peerId !== this.config.localPeerId // prefer remote secure nodes
+      p.credentialAccess === true &&
+      p.storageBackend === 'mongodb' &&
+      p.peerId !== this.config.localPeerId
     );
 
     if (candidates.length > 0) {
-      const target = candidates[0]; // TODO: scoring/load balancing
-      console.log(`[deploy-pipeline] Deploy target: ${target.peerId.slice(0, 8)} (remote secure node)`);
+      const target = candidates[0];
+      console.log(`[deploy-pipeline] Deploy target: ${target.peerId.slice(0, 8)} (EC2 secure node)`);
       return {
         name,
         status: 'success',
@@ -231,10 +234,10 @@ export class DeployPipeline {
       };
     }
 
-    // Fallback: self-deploy if we have compute capability
+    // Fallback: self-deploy only if THIS node is a secure node (has credential decryption)
     const selfProfile = profiles.find((p: any) => p.peerId === this.config.localPeerId);
-    if (selfProfile?.capabilities?.compute_cpu) {
-      console.log(`[deploy-pipeline] Deploy target: self (local compute)`);
+    if (selfProfile?.credentialAccess === true) {
+      console.log(`[deploy-pipeline] Deploy target: self (local secure node)`);
       return {
         name,
         status: 'success',
@@ -243,7 +246,7 @@ export class DeployPipeline {
       };
     }
 
-    return { name, status: 'failed', durationMs: Date.now() - start, detail: 'No compute nodes available' };
+    return { name, status: 'failed', durationMs: Date.now() - start, detail: 'No secure nodes with credentialAccess available' };
   }
 
   private async stepP2PDeploy(

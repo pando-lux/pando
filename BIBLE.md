@@ -653,9 +653,9 @@ PandoCode Contributor Node              EC2 Secure Node
 | P2P handler | `index.ts` handler for `pando/deploy-app` | Clone, detect tier, deploy to S3 or PM2 |
 | S3 hosting | `platform/hosting-service.ts` | S3Client upload, pre-signed URLs |
 | GitHub push | `api/platform-api.ts` POST /projects/:id/github/push | git add, commit, push to remote |
-| DeployPipeline | `core/deploy-pipeline.ts` | **NOT YET BUILT** — the glue that sequences: build complete → github → deploy |
+| DeployPipeline | `core/deploy-pipeline.ts` | DONE — Sequences: build complete → GitHub push → find EC2 secure node → P2P deploy → update metadata |
 
-**The missing piece:** `core/deploy-pipeline.ts` — a clean module that triggers after PandoCode finishes building. Sequences: GitHub push → governance check (optional) → P2P deploy to secure node → update metadata. All underlying routes exist. Only the sequencing glue is missing.
+**Deploy pipeline is live.** `core/deploy-pipeline.ts` triggers automatically after every `sendToEngine()` completion in platform-api.ts. Targets EC2 secure nodes (`credentialAccess + storageBackend='mongodb'`), NOT PandoCode contributors. GitHub is the handoff — PandoCode pushes, EC2 clones and deploys.
 
 ### 5.9 PandoCode Network Linking
 
@@ -1009,12 +1009,12 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | **Path B end-to-end** | Full pipeline | TESTED LIVE — "build me a hello world website" → doorman classifies (P2P to EC2) → project created → PandoCode engine (gemini-2.5-flash) builds → page.tsx created. Full pipeline works. |
 | **Unified build routing** | `api/platform-api.ts` | DONE — `findBestBuilder()` replaces the split `hasClaudeCodeAuth` logic. All 4 build handlers use unified flow: create project → find best PandoCode peer (including self) → route. `hasClaudeCodeAuth()` removed from routing (was Anthropic-only, broken for Gemini). |
 | **Circuit breaker fix** | `cli.ts`, `supervisor.ts`, `kernel/` | DONE — Port-conflict exits use code 78 (supervisor won't respawn). Immediate circuit breaker reset on successful boot. Thresholds raised (crash-guard 3→6, circuit-breaker 3→5). |
+| **Deploy Pipeline** | `core/deploy-pipeline.ts` | DONE — Targets EC2 secure nodes (`credentialAccess + storageBackend='mongodb'`). GitHub push → P2P `pando/deploy-app` to EC2 → S3 (Tier 1) or PM2+nginx (Tier 2) → update project metadata. Auto-triggers after every build completion. |
 
 ### Needs Work
 
 | Issue | Location | Problem |
 |---|---|---|
-| **Deploy Pipeline** | `core/deploy-pipeline.ts` | BUILT — Glue module wired into all 4 build handlers in platform-api.ts. Sequences: GitHub push → find secure node → P2P deploy → update metadata. Triggered automatically after every sendToEngine() completion. See Section 5.8. |
 | **PandoCode Network Linking** | PandoCode config | NOT BUILT — Standalone vs linked mode toggle. When linked, node can create projects in PandoCode. See Section 5.9. |
 | **Claude Code CLI integration** | `@pando-code/core` | Not built yet. PandoCode needs a tool/subprocess to invoke `claude -p` for coding tasks. This would let contributors use their Claude Code subscription instead of a raw API key. |
 | **Contributor limits/earning** | Not built | Contributors need to set max requests/day, budget caps. Earning model (Lux per job) not implemented. |
@@ -1063,6 +1063,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | File | Purpose |
 |---|---|
 | `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. |
+| `core/deploy-pipeline.ts` | Build → GitHub → EC2 deploy → metadata. Auto-triggers after sendToEngine(). |
 | `core/credential-store.ts` | AES-256-GCM encrypt/decrypt |
 | `core/storage-backend.ts` | MongoDB or P2P proxy |
 | `core/upgrade-protocol.ts` | Git pull + build + restart + broadcast |
