@@ -9,6 +9,7 @@
     "packages/shared",
     "packages/identity",
     "packages/ledger",
+    "packages/tests",
     "packages/node",
     "packages/gateway",
     "packages/extension",

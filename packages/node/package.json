@@ -61,6 +61,7 @@
     "@pando-code/core": "*",
     "@pando/ledger": "*",
     "@pando/shared": "*",
+    "@pando/tests": "*",
     "fastify": "^5.7.4",
     "it-length-prefixed": "^9.0.0",
     "it-pipe": "^3.0.0",

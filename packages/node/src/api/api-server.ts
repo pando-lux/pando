@@ -29,6 +29,7 @@ import { registerKernelRoutes } from './kernel-api.js';
 import { registerCoreRoutes } from './core-api.js';
 import { registerPlatformRoutes } from './platform-api.js';
 import { registerContextRoutes } from './context-api.js';
+import { registerTestingRoutes } from './testing-api.js';
 import type { RouteHelpers } from './middleware/auth.js';
 
 // ── Phase 86: JWT-Style Self-Verifying Auth Tokens ───────────────────────
@@ -356,6 +357,15 @@ export class ApiServer {
       await registerKernelRoutes(v1, deps);
       await registerCoreRoutes(v1, deps);
       await registerPlatformRoutes(v1, deps, getMessageBus, getOrgManager, getAgentDb);
+
+      // Testing API routes (dashboard, runs, findings, scenarios, playbooks, stats)
+      const apiPort = this.node.getApiPort();
+      registerTestingRoutes(v1, {
+        rootDir: process.cwd(),
+        gatewayUrl: process.env.GATEWAY_PUBLIC_URL || `http://localhost:3222`,
+        apiUrl: `http://localhost:${apiPort}`,
+        apiPort,
+      }, deps.apiToken);
     }, { prefix: '/v1' });
   }
 

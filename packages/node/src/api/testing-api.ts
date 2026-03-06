@@ -1,0 +1,251 @@
+/**
+ * Testing API routes — registered by registerTestingRoutes().
+ *
+ * Provides HTTP endpoints for the @pando/tests framework:
+ *   GET  /testing/status           — Dashboard overview
+ *   GET  /testing/runs             — Run history
+ *   GET  /testing/runs/:id         — Single run detail
+ *   GET  /testing/findings         — Findings list
+ *   POST /testing/findings/:id/acknowledge — Acknowledge a finding
+ *   POST /testing/findings/:id/resolve     — Resolve a finding
+ *   GET  /testing/scenarios        — List scenarios
+ *   GET  /testing/playbooks        — List available playbooks
+ *   GET  /testing/stats            — Stats trend
+ */
+
+import { createRequire } from 'node:module';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import type { FastifyInstance } from 'fastify';
+import type { PandoTester } from '@pando/tests';
+import type { ProjectConfig, FindingStatus, FindingSeverity, TestMode } from '@pando/tests';
+
+// ---------------------------------------------------------------------------
+// Lazy PandoTester singleton
+// ---------------------------------------------------------------------------
+
+let _tester: PandoTester | null = null;
+
+function getTester(opts: {
+  rootDir: string;
+  gatewayUrl: string;
+  apiUrl: string;
+  apiPort: number;
+}): PandoTester {
+  if (_tester) return _tester;
+
+  // Use createRequire to load the CJS @pando/tests package from ESM context
+  const require = createRequire(import.meta.url);
+  const { PandoTester: PandoTesterClass } = require('@pando/tests');
+
+  const config: ProjectConfig = {
+    project: 'pando-node',
+    rootDir: opts.rootDir,
+    gatewayUrl: opts.gatewayUrl,
+    apiUrl: opts.apiUrl,
+    authToken: undefined,
+  };
+
+  _tester = new PandoTesterClass(config) as PandoTester;
+  return _tester;
+}
+
+// ---------------------------------------------------------------------------
+// Route registration
+// ---------------------------------------------------------------------------
+
+export function registerTestingRoutes(
+  server: FastifyInstance,
+  opts: { rootDir: string; gatewayUrl: string; apiUrl: string; apiPort: number },
+  apiToken: string,
+): void {
+
+  /**
+   * Check operator Bearer token auth.
+   * Returns true if the request has a valid operator Bearer token.
+   */
+  function verifyBearerToken(request: any): boolean {
+    const authHeader = request.headers?.authorization || '';
+    return authHeader === `Bearer ${apiToken}`;
+  }
+
+  // ── GET /testing/status — Dashboard overview ───────────────────────────
+  server.get('/testing/status', async (_request, reply) => {
+    try {
+      const tester = getTester(opts);
+      const overview = tester.dashboard.overview();
+      return reply.send(overview);
+    } catch (err: any) {
+      return reply.code(500).send({ error: 'Failed to get testing status', detail: err.message });
+    }
+  });
+
+  // ── GET /testing/runs — Run history ────────────────────────────────────
+  server.get('/testing/runs', async (request, reply) => {
+    try {
+      const query = request.query as Record<string, string>;
+      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const mode = query.mode as TestMode | undefined;
+      const scenarioId = query.scenarioId || undefined;
+
+      const tester = getTester(opts);
+      const runs = tester.history.getRuns({
+        limit: isNaN(limit) ? 20 : limit,
+        mode: mode && (mode === 'scripted' || mode === 'live') ? mode : undefined,
+        scenarioId,
+      });
+      return reply.send(runs);
+    } catch (err: any) {
+      return reply.code(500).send({ error: 'Failed to get run history', detail: err.message });
+    }
+  });
+
+  // ── GET /testing/runs/:id — Single run detail ─────────────────────────
+  server.get('/testing/runs/:id', async (request, reply) => {
+    try {
+      const { id } = request.params as { id: string };
+      const tester = getTester(opts);
+
+      // Access the underlying history to get a specific run
+      const runs = tester.history.getRuns({ limit: 1000 });
+      const run = runs.find(r => r.id === id);
+      if (!run) {
+        return reply.code(404).send({ error: `Run ${id} not found` });
+      }
+
+      // Get step results for this run via findings (steps are accessible through the DB)
+      // The PandoTester API doesn't expose getStepResults directly,
+      // so we return the run record plus any findings for this run.
+      const findings = tester.findings.getByRun(id);
+
+      return reply.send({ run, findings });
+    } catch (err: any) {
+      return reply.code(500).send({ error: 'Failed to get run detail', detail: err.message });
+    }
+  });
+
+  // ── GET /testing/findings — Findings list ──────────────────────────────
+  server.get('/testing/findings', async (request, reply) => {
+    try {
+      const query = request.query as Record<string, string>;
+      const status = query.status as FindingStatus | undefined;
+      const severity = query.severity as FindingSeverity | undefined;
+      const runId = query.runId || undefined;
+
+      const tester = getTester(opts);
+      const findings = tester.findings.list({
+        status: status && ['open', 'acknowledged', 'resolved', 'wontfix'].includes(status) ? status : undefined,
+        severity: severity && ['critical', 'high', 'medium', 'low', 'info'].includes(severity) ? severity : undefined,
+        runId,
+      });
+      return reply.send(findings);
+    } catch (err: any) {
+      return reply.code(500).send({ error: 'Failed to get findings', detail: err.message });
+    }
+  });
+
+  // ── POST /testing/findings/:id/acknowledge — Acknowledge a finding ─────
+  server.post('/testing/findings/:id/acknowledge', async (request, reply) => {
+    if (!verifyBearerToken(request)) {
+      return reply.code(401).send({ error: 'Authentication required (Bearer token)' });
+    }
+
+    try {
+      const { id } = request.params as { id: string };
+      const tester = getTester(opts);
+      tester.findings.acknowledge(id);
+      return reply.send({ success: true });
+    } catch (err: any) {
+      return reply.code(500).send({ error: 'Failed to acknowledge finding', detail: err.message });
+    }
+  });
+
+  // ── POST /testing/findings/:id/resolve — Resolve a finding ─────────────
+  server.post('/testing/findings/:id/resolve', async (request, reply) => {
+    if (!verifyBearerToken(request)) {
+      return reply.code(401).send({ error: 'Authentication required (Bearer token)' });
+    }
+
+    try {
+      const { id } = request.params as { id: string };
+      const body = request.body as { resolution?: string } | null;
+      const resolution = body?.resolution || '';
+
+      if (!resolution) {
+        return reply.code(400).send({ error: 'resolution is required in request body' });
+      }
+
+      const tester = getTester(opts);
+      tester.findings.resolve(id, resolution);
+      return reply.send({ success: true });
+    } catch (err: any) {
+      return reply.code(500).send({ error: 'Failed to resolve finding', detail: err.message });
+    }
+  });
+
+  // ── GET /testing/scenarios — List scenarios ────────────────────────────
+  server.get('/testing/scenarios', async (_request, reply) => {
+    try {
+      const tester = getTester(opts);
+      const scenarios = tester.scenarios.list();
+      return reply.send(scenarios);
+    } catch (err: any) {
+      return reply.code(500).send({ error: 'Failed to list scenarios', detail: err.message });
+    }
+  });
+
+  // ── GET /testing/playbooks — List available playbooks ──────────────────
+  server.get('/testing/playbooks', async (_request, reply) => {
+    try {
+      // Resolve the playbooks directory relative to the monorepo root
+      const playbooksDir = join(opts.rootDir, 'packages', 'tests', 'playbooks', 'pando-node');
+
+      if (!existsSync(playbooksDir)) {
+        return reply.send([]);
+      }
+
+      const files = readdirSync(playbooksDir).filter(f => f.endsWith('.json'));
+      const playbooks = files.map(file => {
+        try {
+          const content = JSON.parse(readFileSync(join(playbooksDir, file), 'utf-8'));
+          return {
+            file,
+            name: content.name || file.replace('.json', ''),
+            description: content.description || '',
+            mode: content.mode || 'scripted',
+            tags: content.tags || [],
+            steps: content.steps?.length || 0,
+          };
+        } catch {
+          return {
+            file,
+            name: file.replace('.json', ''),
+            description: '(failed to parse)',
+            mode: 'unknown',
+            tags: [],
+            steps: 0,
+          };
+        }
+      });
+
+      return reply.send(playbooks);
+    } catch (err: any) {
+      return reply.code(500).send({ error: 'Failed to list playbooks', detail: err.message });
+    }
+  });
+
+  // ── GET /testing/stats — Stats trend ───────────────────────────────────
+  server.get('/testing/stats', async (request, reply) => {
+    try {
+      const query = request.query as Record<string, string>;
+      const days = query.days ? parseInt(query.days, 10) : 14;
+
+      const tester = getTester(opts);
+      const trend = tester.history.getTrend(isNaN(days) ? 14 : days);
+      return reply.send(trend);
+    } catch (err: any) {
+      return reply.code(500).send({ error: 'Failed to get stats trend', detail: err.message });
+    }
+  });
+}
