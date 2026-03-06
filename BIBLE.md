@@ -259,13 +259,26 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 |---|---|---|
 | Kernel | `/v1/status`, `/v1/peers` | Node health, connected peers |
 | Core | `/v1/tasks`, `/v1/upgrade` | Task management, safe upgrade |
-| Chat | `/v1/chat/*` | Message → engine adapter → engine.send(). History from engine sessions. |
+| Chat | `/v1/chat/*` | Message → doorman → Path A (EC2 proxy) or Path B (PandoCode). |
 | Engines | `/v1/engines/*` | List active engines, board snapshots, memory |
 | Projects | `/v1/projects/*` | Create, deploy, undeploy |
 | Auth | `/v1/auth/*` | Challenge, verify (Pando Login), me, refresh |
 | Testing | `/v1/testing/*` | Status, runs, findings, scenarios, playbooks, specs, stats |
 | Gateways | `/v1/gateways` | All known live gateway deployments |
 | Capabilities | `/v1/capabilities` | Node capability profile |
+| Admin | `/v1/admin/shutdown` | Graceful shutdown (exit 0) |
+
+**P2P request-reply handlers** (node-to-node, not HTTP):
+| Handler | Where it runs | What it does |
+|---|---|---|
+| `pando/doorman-classify` | EC2 (secure) | Classify chat intent via contributed OpenAI key. Returns `{intent, response/description}`. |
+| `pando/doorman-chat` | EC2 (secure) | Multi-turn chat via contributed OpenAI key. Returns `{reply}`. |
+| `pando/ai-query` | EC2 (secure) | General AI query via contributed key. Returns `{answer, sources, confidence}`. |
+| `pando/get-credential` | EC2 (secure) | Decrypt a credential (code_repository only). Returns raw credential. |
+| `pando/deploy-app` | Any with hosting | Deploy project to hosting provider. |
+| `pando/storage-proxy` | EC2 (secure) | Proxy MongoDB CRUD for non-MongoDB nodes. |
+| `pando/upgrade-node` | Any | Trigger git pull + build + restart. |
+| `chat_proxy` | PandoCode nodes | Forward chat message for engine processing. |
 
 ---
 
@@ -829,15 +842,24 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 ## 10. TECHNICAL DEBT (honest status)
 
+### Done (Phase 2 progress)
+
+| Issue | Location | Status |
+|---|---|---|
+| **engine-adapter injectApiKeys** | `core/engine-adapter.ts` | DONE — reads local env vars first, CredentialStore fallback for EC2. Clear warning if no keys. |
+| **Doorman AI classification** | `api/api-server.ts` | DONE — 3-level priority: local OPENAI_API_KEY → CredentialStore → P2P proxy to EC2 peer. |
+| **Doorman P2P proxy** | `index.ts` + `api-server.ts` | DONE — `pando/doorman-classify` and `pando/doorman-chat` handlers on EC2. Windows routes to EC2 via requestReply. Tested live: "What is machine learning?" → AI answer via P2P. |
+
 ### Needs Work
 
 | Issue | Location | Problem |
 |---|---|---|
-| **engine-adapter injectApiKeys** | `core/engine-adapter.ts` | Currently tries to decrypt keys from MongoDB via ResourceRegistry. Should just read local env vars. Remove MongoDB dependency from adapter. |
-| **Doorman AI classification** | `api/api-server.ts` | Doorman tries `getActiveAiKey()` (needs CredentialStore/MongoDB). On contributor nodes, should use local OPENAI_API_KEY env var directly. Or route classification to PandoCode engine. |
+| **PandoCode provider fallback** | `@pando-code/core` | Engine configured with `claude-sonnet-4-6` but falls back to Google Generative AI when ANTHROPIC_API_KEY is missing. Should fail clearly instead of trying wrong provider. |
+| **Path B: local API key for PandoCode** | Contributor setup | PandoCode contributor needs ANTHROPIC_API_KEY in local env (or Claude Code CLI integration). Without it, build requests fail with "Google Generative AI API key is missing". |
 | **P2P build routing** | `api/platform-api.ts` | chat_proxy exists but build routing to PandoCode peers is incomplete. Need to route "build" intent to a pando-code capable peer when local PandoCode is unavailable. |
-| **Claude Code CLI integration** | `@pando-code/core` | Not built yet. PandoCode needs a tool/subprocess to invoke `claude -p` for coding tasks. |
+| **Claude Code CLI integration** | `@pando-code/core` | Not built yet. PandoCode needs a tool/subprocess to invoke `claude -p` for coding tasks. This would let contributors use their Claude Code subscription instead of a raw API key. |
 | **Contributor limits/earning** | Not built | Contributors need to set max requests/day, budget caps. Earning model (Lux per job) not implemented. |
+| **Node mode CLI flag** | `cli.ts` | Still uses old `--mode full|compute|relay`. Needs updating to `contributor|secure|lightweight|full` to match four node types. |
 
 ### Stubs
 
