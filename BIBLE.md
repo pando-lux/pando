@@ -596,7 +596,130 @@ No tick loop. No orchestrator. No message bus. The engine runs when it has somet
 | **Builder** | Builder sub-agent spawned by any engine. Full tools. Writes code, runs builds. | When work is needed |
 | **Governance** | Deterministic code in kernel/governance.ts. NOT an AI agent. Calls engine for AI review only. | On proposal arrival |
 
-### 5.8 Pando Login (Agent Identity)
+### 5.8 Deploy Pipeline (build → github → deploy → marketplace)
+
+The full lifecycle of a network-built project. PandoCode builds. Secure nodes deploy. Keys never travel.
+
+```
+PandoCode Contributor Node              EC2 Secure Node
+───────────────────────────              ─────────────────
+1. Engine builds code in workspace
+   ~/.pando-code/network/{projectId}/
+                │
+2. Build complete (stream ends)
+                │
+3. DeployPipeline triggers:
+   a. GitHub push ──────────────────────→ (GitHub API — token from CredentialStore)
+      └─ pando-lux/{projectId} repo       Creates repo if new, pushes code
+                │
+   b. Governance check (public only)
+      └─ AI review (Layer 5)
+      └─ Auto-approve in dev (≤8 peers)
+                │
+   c. P2P deploy request ──────────────→ Receives pando/deploy-app
+                                          │
+                                          ├─ git clone from GitHub
+                                          ├─ Detect tier from code
+                                          │
+                                          ├─ Tier 1 (static HTML):
+                                          │   Decrypt S3 creds (CREDENTIAL_MASTER_KEY)
+                                          │   Upload to s3://pando-deployments/
+                                          │   Return S3 URL
+                                          │
+                                          └─ Tier 2 (server app):
+                                              npm install + PM2 start
+                                              nginx reverse proxy
+                                              Return http://IP/apps/{projectId}/
+                │
+4. Update project metadata:
+   - deploymentUrl, deploymentStatus
+   - visibility → 'listed' (public) or 'private'
+   - githubRepo, deployPeerId
+                │
+5. Project appears in marketplace (if public)
+   User sees: "Your app is live at https://..."
+```
+
+**Security model:**
+- **Credentials (AWS, GitHub) ONLY exist on EC2 secure nodes** — decrypted in-memory via `CREDENTIAL_MASTER_KEY`
+- **PandoCode contributor nodes NEVER touch deployment credentials** — they only build code
+- **GitHub is the handoff point** — PandoCode pushes code to GitHub, EC2 clones from GitHub. No workspace transfer over P2P.
+- **EC2 tripwire** — any SSH/SSM/debugger detected → wipe credentials + shutdown immediately
+
+**Where deploy code lives (all existing, working):**
+| Component | File | What it does |
+|---|---|---|
+| Deploy route | `api/platform-api.ts` POST /projects/:id/deploy | Entry point — finds secure peer, sends P2P request |
+| P2P handler | `index.ts` handler for `pando/deploy-app` | Clone, detect tier, deploy to S3 or PM2 |
+| S3 hosting | `platform/hosting-service.ts` | S3Client upload, pre-signed URLs |
+| GitHub push | `api/platform-api.ts` POST /projects/:id/github/push | git add, commit, push to remote |
+| DeployPipeline | `core/deploy-pipeline.ts` | **NOT YET BUILT** — the glue that sequences: build complete → github → deploy |
+
+**The missing piece:** `core/deploy-pipeline.ts` — a clean module that triggers after PandoCode finishes building. Sequences: GitHub push → governance check (optional) → P2P deploy to secure node → update metadata. All underlying routes exist. Only the sequencing glue is missing.
+
+### 5.9 PandoCode Network Linking
+
+PandoCode works as a standalone developer tool (like Claude Code). Optionally, it links to the Pando network.
+
+```
+STANDALONE MODE (default)                LINKED MODE (network contributor)
+─────────────────────────                ─────────────────────────────────
+PandoCode is just a dev tool.            PandoCode is a network resource.
+
+- Projects saved wherever you want       - Network workspace: ~/.pando-code/network/
+- Your keys, your machine                - Node can CREATE projects here
+- No P2P, no Lux, no governance          - Each project: ~/.pando-code/network/{projectId}/
+- Works offline                          - Project metadata from node (visibility, owner)
+- No connection to any node              - You earn Lux per build job completed
+                                         - API usage limits apply (future)
+                                         - Private projects → visible only to owner
+                                         - Public projects → marketplace + GitHub
+```
+
+**How linking works:**
+1. PandoCode setting: `network.linked: true` (in PandoCode config)
+2. PandoCode setting: `network.nodeUrl: "http://localhost:4000"` (local node API)
+3. When linked, node's Engine Adapter can create project engines
+4. Network-created projects go to `~/.pando-code/network/{projectId}/`
+5. Project metadata (visibility, owner) set by node based on user request
+6. When build completes → DeployPipeline triggers (GitHub → deploy → marketplace)
+
+**NOT YET BUILT.** PandoCode currently has no linking setting. Engine Adapter creates engines but doesn't manage a dedicated network workspace. This is the next architecture milestone.
+
+### 5.10 The Council (future — design now, build later)
+
+The Council is a long-running PandoCode engine that manages the Pando ecosystem itself.
+
+```
+The Council = a PandoCode engine on a contributed node
+  │
+  ├─ Project: pando-node       ← monitors + proposes upgrades to the node
+  ├─ Project: pando-code       ← monitors + proposes upgrades to the brain
+  ├─ Project: pando-identity   ← monitors identity system integrity
+  │
+  ├─ Reviews: new public deployments (governance Layer 5 AI review)
+  ├─ Bans: malicious apps via governance vote
+  ├─ Heals: broken deployments (respawn on new EC2 if host dies)
+  ├─ Upgrades: proposes + implements system improvements
+  │   └─ Spawns builder sub-agents for implementation
+  │   └─ Spawns tester sub-agents for verification
+  │   └─ Submits through governance (voted on by all peers)
+  └─ Audits: security, content safety, resource abuse
+
+State persistence:
+  - Council memory + board state → GitHub repo (like any project)
+  - If council host node dies → governance elects new host
+  - New host clones council state from GitHub → resumes
+
+Bootstrap:
+  - First PandoCode node with linked=ON auto-starts council
+  - Council is just another project engine — nothing special in the code
+  - Its "superpower" is governance tools (propose, vote, review)
+```
+
+**NOT YET BUILT.** The council is a PandoCode engine with system prompt + Pando tools. All the building blocks exist (engines, governance, tools). The missing piece is the council's system prompt and startup logic.
+
+### 5.11 Pando Login (Agent Identity)
 
 ```
 Human (Ed25519 keypair in ~/.pando/identity.json)
@@ -610,7 +733,7 @@ Agent (own Ed25519 keypair, own peerId = wallet)
 
 **Trust chain:** `verifySignedActionFull(action, humanPublicKey)` verifies: action signature (agent key) → certificate signature (human key) → expiry check. All offline.
 
-### 5.9 Credential Security (IMMUTABLE LAW)
+### 5.12 Credential Security (IMMUTABLE LAW)
 
 **Two credential models. Both are valid. Keys NEVER travel over the network.**
 
@@ -884,12 +1007,15 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | **Async build routing** | `api/platform-api.ts` | DONE — Build requests return immediately with project+thread ID. PandoCode engine runs in background. Results arrive via SSE + thread store. No more 120s HTTP timeouts. |
 | **Dev auth bypass** | `api/api-server.ts` | DONE — `API_AUTH_DISABLED=true` now also bypasses JWT verification for chat endpoints (uses node's peerId as dev identity). |
 | **Path B end-to-end** | Full pipeline | TESTED LIVE — "build me a hello world website" → doorman classifies (P2P to EC2) → project created → PandoCode engine (gemini-2.5-flash) builds → page.tsx created. Full pipeline works. |
+| **Unified build routing** | `api/platform-api.ts` | DONE — `findBestBuilder()` replaces the split `hasClaudeCodeAuth` logic. All 4 build handlers use unified flow: create project → find best PandoCode peer (including self) → route. `hasClaudeCodeAuth()` removed from routing (was Anthropic-only, broken for Gemini). |
+| **Circuit breaker fix** | `cli.ts`, `supervisor.ts`, `kernel/` | DONE — Port-conflict exits use code 78 (supervisor won't respawn). Immediate circuit breaker reset on successful boot. Thresholds raised (crash-guard 3→6, circuit-breaker 3→5). |
 
 ### Needs Work
 
 | Issue | Location | Problem |
 |---|---|---|
-| **Unified build routing** | `api/platform-api.ts` | DONE — `findBestBuilder()` replaces the split `hasClaudeCodeAuth` logic. All 4 build handlers use unified flow: create project → find best PandoCode peer (including self) → route. `hasClaudeCodeAuth()` removed from routing (was Anthropic-only, broken for Gemini). |
+| **Deploy Pipeline** | `core/deploy-pipeline.ts` | NOT BUILT — Glue module: build complete → GitHub push → governance check → P2P deploy to secure node → update metadata. See Section 5.8. |
+| **PandoCode Network Linking** | PandoCode config | NOT BUILT — Standalone vs linked mode toggle. When linked, node can create projects in PandoCode. See Section 5.9. |
 | **Claude Code CLI integration** | `@pando-code/core` | Not built yet. PandoCode needs a tool/subprocess to invoke `claude -p` for coding tasks. This would let contributors use their Claude Code subscription instead of a raw API key. |
 | **Contributor limits/earning** | Not built | Contributors need to set max requests/day, budget caps. Earning model (Lux per job) not implemented. |
 | **Node mode CLI flag** | `cli.ts` | Still uses old `--mode full|compute|relay`. Needs updating to `contributor|secure|lightweight|full` to match four node types. |
