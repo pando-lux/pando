@@ -222,7 +222,7 @@ Reads from @pando/node HTTP API. No direct database access.
 | **SecurityMonitor** | `kernel/security-monitor.ts` | DONE | 5 detectors: DDoS, Sybil, spam, anomaly, resource abuse |
 | **ReputationManager** | `kernel/reputation.ts` | DONE | Performance tracking + weighted governance votes |
 | **EmissionWitness** | `kernel/emission-witness.ts` | DONE | Witness-based Lux emission |
-| **CrashGuard** | `kernel/crash-guard.ts` | DONE | Crash loop detection + circuit breaker |
+| **CrashGuard** | `kernel/crash-guard.ts` | DONE | Crash loop detection + circuit breaker. Port conflict exits use code 78 (supervisor won't respawn). Circuit breaker resets on successful boot. Thresholds: 6 crashes/60s (guard), 5 consecutive (breaker). |
 
 ### 4.2 Core Layer (services + engine adapter)
 
@@ -357,7 +357,7 @@ SSE streams progress back → to user
 User sees: "Your bakery website is live at https://..."
 ```
 
-**Key routing principle:** The receiving node does NOT assume it will process the build. It always finds the best PandoCode peer (which may be itself). This is critical because the public gateway connects to a random node — that node is a router, not necessarily a builder.
+**Key routing principle:** The receiving node does NOT assume it will process the build. It calls `findBestBuilder()` which queries the capability registry for all PandoCode peers (including self). If self has a local engine, it processes locally; otherwise it routes to the best remote peer via `routeChatProxyP2P()`. This is critical because the public gateway connects to a random node — that node is a router, not necessarily a builder. The legacy `hasClaudeCodeAuth()` check (Anthropic-only) has been removed — routing is now fully provider-agnostic.
 
 **PandoCode contributor's keys stay LOCAL.** They never leave the contributor's machine. The network routes work TO the compute, not keys FROM storage.
 
@@ -889,7 +889,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 | Issue | Location | Problem |
 |---|---|---|
-| **Unified build routing** | `api/platform-api.ts` | Build requests should ALWAYS find best PandoCode peer (including self). Current code has split logic: local engine vs P2P fallback. Needs unification into single "find peer → route" flow. |
+| **Unified build routing** | `api/platform-api.ts` | DONE — `findBestBuilder()` replaces the split `hasClaudeCodeAuth` logic. All 4 build handlers use unified flow: create project → find best PandoCode peer (including self) → route. `hasClaudeCodeAuth()` removed from routing (was Anthropic-only, broken for Gemini). |
 | **Claude Code CLI integration** | `@pando-code/core` | Not built yet. PandoCode needs a tool/subprocess to invoke `claude -p` for coding tasks. This would let contributors use their Claude Code subscription instead of a raw API key. |
 | **Contributor limits/earning** | Not built | Contributors need to set max requests/day, budget caps. Earning model (Lux per job) not implemented. |
 | **Node mode CLI flag** | `cli.ts` | Still uses old `--mode full|compute|relay`. Needs updating to `contributor|secure|lightweight|full` to match four node types. |
@@ -918,7 +918,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | File | Purpose |
 |---|---|
 | `index.ts` | PandoNode class. Boot sequence, P2P, governance, shutdown. |
-| `cli.ts` | Non-interactive entry. Supervisor, crash guard, port check. |
+| `cli.ts` | Non-interactive entry. Supervisor, crash guard (exit 78 for port conflict), circuit breaker auto-reset on successful boot, port check. |
 | `tui.ts` | Interactive terminal. 30+ slash commands. |
 
 ### Kernel (Layer 0)
@@ -957,7 +957,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | `api/api-server.ts` | Fastify server setup |
 | `api/kernel-api.ts` | Status, peers, capabilities, governance routes |
 | `api/core-api.ts` | Tasks, upgrade, credentials routes |
-| `api/platform-api.ts` | Projects, auth, chat, engine routes |
+| `api/platform-api.ts` | Projects, auth, chat, engine routes. `findBestBuilder()` for unified PandoCode peer routing. |
 | `api/testing-api.ts` | Testing dashboard routes (11 endpoints) |
 
 ---

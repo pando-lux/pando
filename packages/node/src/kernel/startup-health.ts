@@ -53,7 +53,7 @@ const CRASH_LOG_FILE = 'crash-log.json';
 const RESTART_REASON_FILE = 'restart-reason.json';
 const ALERTS_FILE = join('monitor', 'alerts.json');
 
-const CIRCUIT_BREAKER_THRESHOLD = 3;
+const CIRCUIT_BREAKER_THRESHOLD = 5;  // was 3 — too aggressive for dev workflows with frequent restarts
 const RECENT_CRASH_WINDOW_MS = 5 * 60 * 1000;   // 5 minutes
 const DAY_MS = 24 * 60 * 60 * 1000;
 

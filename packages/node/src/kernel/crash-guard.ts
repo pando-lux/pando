@@ -18,7 +18,7 @@ import { homedir } from 'node:os';
 
 const CRASH_LOG_FILE = 'crash-log.json';
 const CRASH_WINDOW_MS = 60_000;   // 60 seconds
-const CRASH_THRESHOLD = 3;        // 3 crashes in window = crash loop
+const CRASH_THRESHOLD = 6;        // 6 crashes in window = crash loop (was 3 — too aggressive for dev workflows)
 const STABILITY_DELAY_MS = 30_000; // 30s uptime = stable
 
 interface CrashLog {

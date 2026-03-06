@@ -339,7 +339,7 @@ async function main() {
       if (!portFreed) {
         console.error(`[cli] ERROR: Port ${apiPort} still in use after 15s. Cannot start node.`);
         console.error(`[cli] Kill the existing process manually and try again.`);
-        process.exit(1);
+        process.exit(78); // port conflict — supervisor won't respawn
       }
       console.log(`[cli] Port ${apiPort} is now free. Continuing startup...`);
     } else {
@@ -348,7 +348,7 @@ async function main() {
       if (!portFreed) {
         console.error(`[cli] ERROR: Port ${apiPort} is occupied and could not shut down the existing instance.`);
         console.error(`[cli] Kill the existing process manually or use --api-port to choose a different port.`);
-        process.exit(1);
+        process.exit(78); // port conflict — supervisor won't respawn
       }
       console.log(`[cli] Port ${apiPort} is now free. Continuing startup...`);
     }
@@ -387,6 +387,11 @@ async function main() {
     console.log('Node running. Press Ctrl+C to stop.');
     console.log('');
   }
+
+  // Node booted successfully — reset crash protection immediately
+  // (don't wait for 30s stability delay — a successful API start means the code works)
+  resetCircuitBreaker(dataDir);
+  markStable(dataDir);
 
   // Agent system, pipeline, and scheduler only run in 'full' mode.
   // 'compute' and 'relay' modes skip these (no PandoCode engine on cloud instances).

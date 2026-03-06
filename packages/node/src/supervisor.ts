@@ -47,6 +47,12 @@ function onChildExit(code: number | null, signal: string | null): void {
     process.exit(0);
   }
 
+  // Port conflict — don't respawn (user needs to kill existing process)
+  if (code === 78) {
+    console.log(`[supervisor ${ts()}] Port conflict (exit 78). Stopping supervisor — kill existing process and retry.`);
+    process.exit(78);
+  }
+
   if (code === RESTART_EXIT_CODE) {
     console.log(`[supervisor ${ts()}] Restart requested (exit 75). Respawning in ${RESTART_DELAY_MS}ms…`);
     setTimeout(() => { child = spawnNode(); }, RESTART_DELAY_MS);

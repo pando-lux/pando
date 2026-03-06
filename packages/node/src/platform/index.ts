@@ -8,7 +8,7 @@
  * @pando/shared, @pando/ledger, and external npm packages.
  */
 
-export { detectCapabilities, hasClaudeCodeAuth } from './capability-detector.js';
+export { detectCapabilities } from './capability-detector.js';
 export type { DetectionResult } from './capability-detector.js';
 
 export { CapabilityRegistry } from './capability-registry.js';

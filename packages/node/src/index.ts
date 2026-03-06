@@ -3231,8 +3231,8 @@ Be friendly and helpful. Keep answers short.`
   }
 
   /**
-   * Route a chat/build request to a peer with PandoCode via P2P chat_proxy.
-   * Triggers the full pipeline on the remote node (project creation → orchestrator → builder → deploy).
+   * Route a chat/build request to a remote PandoCode peer via P2P chat_proxy.
+   * Only routes to remote peers (self-routing is handled by the caller via findBestBuilder).
    * Returns immediately with queued status. Results come back via SSE/thread.
    */
   async routeChatProxyP2P(message: string, threadId?: string, tier?: string): Promise<{ status: string; projectId?: string; executedBy: string } | null> {
@@ -3240,7 +3240,7 @@ Be friendly and helpful. Keep answers short.`
     const candidates = this.capabilityRegistry.getAllProfiles().filter(p =>
       p.shareCompute === true &&
       p.capabilities.compute_cpu === true &&
-      p.peerId !== this.identity?.peerId
+      p.peerId !== this.identity?.peerId  // remote only — local routing handled by caller
     );
     if (candidates.length === 0) return null;
     const peer = candidates[0];

@@ -11,7 +11,6 @@
 import { toString as uint8ArrayToString, fromString as uint8ArrayFromString } from 'uint8arrays';
 import { publicKeyFromProtobuf } from '@libp2p/crypto/keys';
 import { randomBytes } from 'node:crypto';
-import { hasClaudeCodeAuth } from '../platform/capability-detector.js';
 import type { DeployFile } from '../platform/hosting-service.js';
 import type { RouteHelpers } from './middleware/auth.js';
 
@@ -45,9 +44,41 @@ export async function registerPlatformRoutes(
     }
   }
 
-  /** Check if AI engine is available. */
+  /** Check if local PandoCode engine is available (provider-agnostic). */
   function hasEngine(): boolean {
     return !!(node.getEngineAdapter()?.available);
+  }
+
+  /**
+   * Unified build routing — find the best PandoCode peer (including self).
+   * Returns { peerId, isLocal } or null if no builders available.
+   */
+  function findBestBuilder(): { peerId: string; isLocal: boolean } | null {
+    const selfPeerId = node.getIdentity()?.peerId;
+
+    // Collect all candidates from capability registry (includes self)
+    const capRegistry = node.getCapabilityRegistry();
+    const allProfiles = capRegistry?.getAllProfiles() || [];
+    const candidates = allProfiles.filter((p: any) =>
+      p.shareCompute === true &&
+      p.capabilities.compute_cpu === true
+    );
+
+    // Check if self is a candidate (has local PandoCode engine)
+    const selfHasEngine = hasEngine();
+    if (selfHasEngine && selfPeerId) {
+      // Self is the best candidate — no P2P overhead
+      return { peerId: selfPeerId, isLocal: true };
+    }
+
+    // Find best remote peer
+    const remoteCandidates = candidates.filter((p: any) => p.peerId !== selfPeerId);
+    if (remoteCandidates.length > 0) {
+      // TODO: score by latency/load — for now pick first available
+      return { peerId: remoteCandidates[0].peerId, isLocal: false };
+    }
+
+    return null;
   }
     fastify.post('/chat/message', async (request: any, reply: any) => {
       const peerId = await deps.verifyUserJwt(request);
@@ -74,35 +105,41 @@ export async function registerPlatformRoutes(
           await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
         }
 
-        if (!hasEngine() || !hasClaudeCodeAuth()) {
-          // P2P chat proxy — forward to a Claude-capable node for full pipeline
-          const p2pResult = await node.routeChatProxyP2P?.(trimmed, threadId);
-          if (p2pResult) {
-            const routingReply = 'Routing your request to an AI-capable node. Full pipeline will run — this may take a few minutes...';
-            if (threadStore && threadId) {
-              await threadStore.addMessage(threadId, { role: 'assistant', content: routingReply, timestamp: Date.now(), tier: 'simple' as any });
-            }
-            return { status: 'queued', threadId, reply: routingReply, tier: 'complex', routedTo: p2pResult.executedBy };
-          }
-          const noAgentReply = 'No AI-capable nodes available on the network right now. Run /contribute claude-code on a node with PandoCode to enable this.';
+        // Unified routing — find best PandoCode peer (including self)
+        const builder = findBestBuilder();
+        if (!builder) {
+          const noBuilderReply = 'No PandoCode-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.';
           if (threadStore && threadId) {
-            await threadStore.addMessage(threadId, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' as any });
+            await threadStore.addMessage(threadId, { role: 'assistant', content: noBuilderReply, timestamp: Date.now(), tier: 'simple' as any });
           }
-          return { status: 'ok', threadId, reply: noAgentReply, tier: 'simple' };
+          return { status: 'ok', threadId, reply: noBuilderReply, tier: 'simple' };
         }
 
-        // Send to project engine via EngineAdapter
-        const result = await sendToEngine(trimmed, projectId);
-        if (!result.sent) {
-          return reply.code(503).send({ error: 'Engine unavailable for this project' });
+        if (builder.isLocal) {
+          // Local PandoCode — async engine call
+          (async () => {
+            try {
+              const result = await sendToEngine(trimmed, projectId);
+              if (threadStore && threadId && result.response) {
+                await threadStore.addMessage(threadId, { role: 'assistant', content: result.response, timestamp: Date.now(), tier: 'complex' as any });
+              }
+              deps.pushEvent('chat_message', { threadId, projectId, role: 'assistant', content: result.response || 'Build complete.', timestamp: Date.now(), tier: 'complex' });
+            } catch (err) {
+              console.error('[chat] sendToEngine failed:', (err as Error).message);
+              if (threadStore && threadId) {
+                await threadStore.addMessage(threadId, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' as any });
+              }
+            }
+          })();
+          return { status: 'ok', threadId, projectId, reply: 'AI engine is processing — check the thread for updates.', tier: 'complex', routedTo: builder.peerId };
         }
 
-        // Store AI response in thread
-        if (threadStore && threadId && result.response) {
-          await threadStore.addMessage(threadId, { role: 'assistant', content: result.response, timestamp: Date.now(), tier: 'complex' as any });
+        // Remote PandoCode peer — route via P2P
+        const p2pResult = await node.routeChatProxyP2P?.(trimmed, threadId);
+        if (p2pResult) {
+          return { status: 'queued', threadId, reply: 'Routed to PandoCode peer. Building — check thread for updates.', tier: 'complex', routedTo: p2pResult.executedBy };
         }
-
-        return { status: 'ok', threadId, projectId, reply: result.response || 'Processing complete.' };
+        return { status: 'ok', threadId, reply: 'PandoCode peer did not respond. Try again.', tier: 'simple' };
       }
 
       // No projectId — doorman handles first contact
@@ -120,30 +157,19 @@ export async function registerPlatformRoutes(
         return { status: 'ok', threadId, reply: doormanReply, tier: 'simple' };
       }
 
-      // Intent is 'build' — create project, run preflight, route to engine
-      if (!hasEngine() || !hasClaudeCodeAuth()) {
-        // P2P chat proxy — forward to a Claude-capable node for full pipeline
+      // Intent is 'build' — unified routing: always create project, find best PandoCode peer
+      const builder = findBestBuilder();
+      if (!builder) {
         threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         if (threadStore) {
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
           await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
+          await threadStore.addMessage(threadId, { role: 'assistant', content: 'No PandoCode-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.', timestamp: Date.now(), tier: 'simple' as any });
         }
-        const p2pResult = await node.routeChatProxyP2P?.(trimmed, threadId, String(classification.tier || 1));
-        if (p2pResult) {
-          const routingReply = 'Routing your request to an AI-capable node. Full pipeline will run — this may take a few minutes...';
-          if (threadStore) {
-            await threadStore.addMessage(threadId, { role: 'assistant', content: routingReply, timestamp: Date.now(), tier: 'simple' as any });
-          }
-          return { status: 'queued', threadId, reply: routingReply, tier: 'complex', routedTo: p2pResult.executedBy };
-        }
-        const noAgentReply = 'No AI-capable nodes available on the network right now. Run /contribute claude-code on a node with PandoCode to enable this.';
-        if (threadStore) {
-          await threadStore.addMessage(threadId, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' as any });
-        }
-        return { status: 'ok', threadId, reply: noAgentReply, tier: 'simple' };
+        return { status: 'ok', threadId, reply: 'No PandoCode-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.', tier: 'simple' };
       }
 
-      // Create project automatically
+      // Always create project first (this node is the router)
       let newProjectId: string | undefined;
       const projectStore = node.getProjectStore?.();
       if (projectStore) {
@@ -154,44 +180,39 @@ export async function registerPlatformRoutes(
             name: projName,
             description: classification.description || trimmed,
             ownerId: (await deps.verifyUserJwt(request)) || node.getIdentity()?.peerId || 'anonymous',
-            visibility: 'listed', // Phase 70: public by default
-            tier: deployTier, // Phase 70: store tier at creation
+            visibility: 'listed',
+            tier: deployTier,
           });
           newProjectId = project.id;
-          console.log(`[doorman] Created project ${newProjectId}: ${projName} (tier ${deployTier})`);
+          console.log(`[router] Created project ${newProjectId}: ${projName} (tier ${deployTier}, builder: ${builder.isLocal ? 'local' : builder.peerId})`);
 
           // Run preflight (auto-generates API key, assigns MongoDB)
           try {
-            const preflightUrl = `http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/v1/projects/${newProjectId}/preflight`;
-            const pfRes = await fetch(preflightUrl, {
+            const pfRes = await fetch(`http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/v1/projects/${newProjectId}/preflight`, {
               method: 'POST',
               headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
               signal: AbortSignal.timeout(10000),
             });
-            if (pfRes.ok) {
-              console.log(`[doorman] Preflight passed for project ${newProjectId}`);
-            }
+            if (pfRes.ok) console.log(`[router] Preflight passed for project ${newProjectId}`);
           } catch (pfErr: any) {
-            console.log(`[doorman] Preflight failed: ${pfErr.message} — continuing anyway`);
+            console.log(`[router] Preflight failed: ${pfErr.message} — continuing`);
           }
         } catch (projErr: any) {
-          console.log(`[doorman] Project creation failed: ${projErr.message}`);
+          console.log(`[router] Project creation failed: ${projErr.message}`);
         }
       }
 
-      // Create thread with projectId
+      // Create thread linked to project
       if (threadStore) {
         threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         threadStore.createThread(threadId, trimmed.slice(0, 50), 'project', '', chatUserId);
-        if (newProjectId) {
-          threadStore.updateThread(threadId, { projectId: newProjectId });
-        }
+        if (newProjectId) threadStore.updateThread(threadId, { projectId: newProjectId });
         await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
       }
 
-      // Route to project engine — async (don't block HTTP response on long builds)
-      if (newProjectId) {
-        // Fire engine in background — results arrive via SSE + thread store
+      // Route to best builder
+      if (builder.isLocal && newProjectId) {
+        // Local PandoCode — async engine call (don't block HTTP response)
         (async () => {
           try {
             const result = await sendToEngine(trimmed, newProjectId);
@@ -199,24 +220,25 @@ export async function registerPlatformRoutes(
             if (threadStore && threadId) {
               await threadStore.addMessage(threadId, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' as any });
             }
-            deps.pushEvent('chat_message', {
-              threadId,
-              projectId: newProjectId,
-              role: 'assistant',
-              content: engineReply,
-              timestamp: Date.now(),
-              tier: 'complex',
-            });
+            deps.pushEvent('chat_message', { threadId, projectId: newProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
           } catch (err) {
-            console.error('[chat] sendToEngine failed:', (err as Error).message);
+            console.error('[router] Local engine failed:', (err as Error).message);
             if (threadStore && threadId) {
               await threadStore.addMessage(threadId, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' as any });
             }
           }
         })();
+      } else if (!builder.isLocal) {
+        // Remote PandoCode peer — route via P2P
+        node.routeChatProxyP2P?.(trimmed, threadId, String(classification.tier || 1)).catch((err: Error) => {
+          console.error('[router] P2P routing failed:', err.message);
+          if (threadStore && threadId) {
+            threadStore.addMessage(threadId, { role: 'assistant', content: 'P2P routing failed. Try again.', timestamp: Date.now(), tier: 'simple' as any });
+          }
+        });
       }
 
-      return { status: 'ok', threadId, projectId: newProjectId, reply: 'Project created. AI engine is building — check the thread for updates.', tier: 'complex' };
+      return { status: 'ok', threadId, projectId: newProjectId, reply: 'Project created. AI engine is building — check the thread for updates.', tier: 'complex', routedTo: builder.peerId };
     });
 
     // GET /chat/history — return messages from the most recent thread for this user
@@ -370,31 +392,33 @@ export async function registerPlatformRoutes(
       // If thread has a projectId, route directly to project manager (no doorman).
       // If no projectId, use doorman to classify intent.
       if (threadMeta?.projectId) {
-        // Existing project thread — route directly to manager
-        if (!hasEngine() || !hasClaudeCodeAuth()) {
-          // P2P chat proxy — forward build request for full pipeline on remote node
-          if (node.routeChatProxyP2P) {
-            const routingReply = 'Routing to a Claude-capable node for full build pipeline...';
-            await threadStore.addMessage(id, { role: 'assistant', content: routingReply, timestamp: Date.now(), tier: 'simple' });
-            node.routeChatProxyP2P(plaintextForProcessing, id).then(async (p2pResult) => {
-              if (!p2pResult) {
-                await threadStore.addMessage(id, { role: 'assistant', content: 'No Claude-capable nodes responded.', timestamp: Date.now(), tier: 'simple' });
+        // Existing project thread — unified routing to best PandoCode peer
+        const builder = findBestBuilder();
+        if (!builder) {
+          await threadStore.addMessage(id, { role: 'assistant', content: 'No PandoCode-capable nodes available.', timestamp: Date.now(), tier: 'simple' });
+          return { status: 'ok', threadId: id, reply: 'No PandoCode-capable nodes available.', tier: 'simple' };
+        }
+        if (builder.isLocal) {
+          // Local PandoCode — async engine
+          (async () => {
+            try {
+              const engineResult = await sendToEngine(plaintextForProcessing, threadMeta.projectId!);
+              if (engineResult.response) {
+                await threadStore.addMessage(id, { role: 'assistant', content: engineResult.response, timestamp: Date.now(), tier: 'complex' as any });
               }
-              // On success, the remote node's pipeline will deliver results via SSE/thread
-            }).catch(() => {
-              threadStore.addMessage(id, { role: 'assistant', content: 'P2P routing failed.', timestamp: Date.now(), tier: 'simple' });
-            });
-            return { status: 'queued', threadId: id, reply: routingReply, tier: 'complex' };
-          }
-          const noAgentReply = 'No AI-capable nodes available on the network right now. Run /contribute claude-code on a node with PandoCode to enable this.';
-          await threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
-          return { status: 'ok', threadId: id, reply: noAgentReply, tier: 'simple' };
+              deps.pushEvent('chat_message', { threadId: id, projectId: threadMeta.projectId, role: 'assistant', content: engineResult.response || 'Done.', timestamp: Date.now(), tier: 'complex' });
+            } catch (err) {
+              console.error('[router] Engine failed:', (err as Error).message);
+              await threadStore.addMessage(id, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' as any });
+            }
+          })();
+          return { status: 'ok', threadId: id, reply: 'Processing — check thread for updates.', tier: 'complex', routedTo: builder.peerId };
         }
-        const engineResult = await sendToEngine(plaintextForProcessing, threadMeta.projectId);
-        if (engineResult.response) {
-          await threadStore.addMessage(id, { role: 'assistant', content: engineResult.response, timestamp: Date.now(), tier: 'complex' as any });
-        }
-        return { status: 'ok', threadId: id, reply: engineResult.response || 'Processing complete.', tier: 'complex' };
+        // Remote peer — P2P proxy
+        node.routeChatProxyP2P?.(plaintextForProcessing, id).catch(() => {
+          threadStore.addMessage(id, { role: 'assistant', content: 'P2P routing failed.', timestamp: Date.now(), tier: 'simple' });
+        });
+        return { status: 'queued', threadId: id, reply: 'Routed to PandoCode peer — check thread for updates.', tier: 'complex', routedTo: builder.peerId };
       }
 
       // No projectId — use doorman
@@ -439,27 +463,14 @@ export async function registerPlatformRoutes(
         return { status: 'ok', threadId: id, reply: doormanReply, tier: 'simple' };
       }
 
-      // Build request — create project, update thread, route to manager
-      if (!hasEngine() || !hasClaudeCodeAuth()) {
-        // P2P chat proxy — forward to a Claude-capable node for full build pipeline
-        if (node.routeChatProxyP2P) {
-          const routingReply = 'Routing your build request to a Claude-capable node. Full pipeline will run — this may take a few minutes...';
-          await threadStore.addMessage(id, { role: 'assistant', content: routingReply, timestamp: Date.now(), tier: 'simple' });
-          node.routeChatProxyP2P(plaintextForProcessing, id).then(async (p2pResult) => {
-            if (!p2pResult) {
-              await threadStore.addMessage(id, { role: 'assistant', content: 'No Claude-capable nodes responded. Try again later or run /contribute claude-code on a node.', timestamp: Date.now(), tier: 'simple' });
-            }
-          }).catch(() => {
-            threadStore.addMessage(id, { role: 'assistant', content: 'P2P routing failed. Please try again.', timestamp: Date.now(), tier: 'simple' });
-          });
-          return { status: 'queued', threadId: id, reply: routingReply, tier: 'complex' };
-        }
-        const noAgentReply = 'No AI-capable nodes available on the network right now. Run /contribute claude-code on a node with PandoCode to enable this.';
-        await threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
-        return { status: 'ok', threadId: id, reply: noAgentReply, tier: 'simple' };
+      // Build request — unified routing: create project, find best PandoCode peer
+      const builder = findBestBuilder();
+      if (!builder) {
+        await threadStore.addMessage(id, { role: 'assistant', content: 'No PandoCode-capable nodes available on the network.', timestamp: Date.now(), tier: 'simple' });
+        return { status: 'ok', threadId: id, reply: 'No PandoCode-capable nodes available on the network.', tier: 'simple' };
       }
 
-      // Create project for this build request
+      // Always create project first (this node is the router)
       let newProjectId: string | undefined;
       const projectStore = node.getProjectStore?.();
       if (projectStore) {
@@ -470,12 +481,12 @@ export async function registerPlatformRoutes(
             name: projName,
             description: classification.description || plaintextForProcessing,
             ownerId: (await deps.verifyUserJwt(request)) || node.getIdentity()?.peerId || 'anonymous',
-            visibility: 'listed', // Phase 70: public by default
-            tier: deployTier, // Phase 70: store tier at creation
+            visibility: 'listed',
+            tier: deployTier,
           });
           newProjectId = project.id;
           threadStore.updateThread(id, { projectId: newProjectId });
-          console.log(`[doorman] Created project ${newProjectId} for thread ${id} (tier ${deployTier})`);
+          console.log(`[router] Created project ${newProjectId} for thread ${id} (tier ${deployTier}, builder: ${builder.isLocal ? 'local' : builder.peerId})`);
 
           // Run preflight
           try {
@@ -484,24 +495,38 @@ export async function registerPlatformRoutes(
               headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
               signal: AbortSignal.timeout(10000),
             });
-            if (pfRes.ok) console.log(`[doorman] Preflight passed for project ${newProjectId}`);
+            if (pfRes.ok) console.log(`[router] Preflight passed for project ${newProjectId}`);
           } catch (pfErr: any) {
-            console.log(`[doorman] Preflight failed: ${pfErr.message}`);
+            console.log(`[router] Preflight failed: ${pfErr.message}`);
           }
         } catch (projErr: any) {
-          console.log(`[doorman] Project creation failed: ${projErr.message}`);
+          console.log(`[router] Project creation failed: ${projErr.message}`);
         }
       }
 
       const targetProjectId = newProjectId || threadMeta?.projectId;
-      let buildReply = 'Processing your build request...';
-      if (targetProjectId) {
-        const engineResult = await sendToEngine(plaintextForProcessing, targetProjectId);
-        if (engineResult.response) buildReply = engineResult.response;
+      if (builder.isLocal && targetProjectId) {
+        // Local PandoCode — async engine (don't block HTTP response)
+        (async () => {
+          try {
+            const result = await sendToEngine(plaintextForProcessing, targetProjectId);
+            const engineReply = result.response || 'Build complete.';
+            await threadStore.addMessage(id, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' as any });
+            deps.pushEvent('chat_message', { threadId: id, projectId: targetProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
+          } catch (err) {
+            console.error('[router] Local engine failed:', (err as Error).message);
+            await threadStore.addMessage(id, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' as any });
+          }
+        })();
+      } else if (!builder.isLocal) {
+        // Remote PandoCode peer — route via P2P
+        node.routeChatProxyP2P?.(plaintextForProcessing, id, String(classification.tier || 1)).catch((err: Error) => {
+          console.error('[router] P2P routing failed:', err.message);
+          threadStore.addMessage(id, { role: 'assistant', content: 'P2P routing failed. Try again.', timestamp: Date.now(), tier: 'simple' });
+        });
       }
 
-      await threadStore.addMessage(id, { role: 'assistant', content: buildReply, timestamp: Date.now(), tier: 'complex' as any });
-      return { status: 'ok', threadId: id, reply: buildReply, tier: 'complex' };
+      return { status: 'ok', threadId: id, projectId: targetProjectId, reply: 'Project created. Building — check thread for updates.', tier: 'complex', routedTo: builder.peerId };
     });
 
     // ── Engine API ──────────────────────────────────────────────────────────
