@@ -48,6 +48,11 @@ export function detectCapabilities(manualOverrides?: string[]): DetectionResult 
     caps.push(NodeCapability.CLAUDE_CODE);
   }
 
+  // PandoCode engine (@pando-code/core)
+  if (detectPandoCode()) {
+    caps.push(NodeCapability.PANDO_CODE);
+  }
+
   // Docker
   if (detectDocker()) {
     caps.push(NodeCapability.DOCKER);
@@ -97,6 +102,15 @@ export function hasClaudeCodeAuth(): boolean {
     // ignore
   }
   return false;
+}
+
+function detectPandoCode(): boolean {
+  try {
+    const pkgPath = join(process.cwd(), 'node_modules', '@pando-code', 'core', 'package.json');
+    return existsSync(pkgPath);
+  } catch {
+    return false;
+  }
 }
 
 function detectDocker(): boolean {

@@ -415,6 +415,7 @@ export interface ReviewerCandidacy {
 /** Capabilities a node can have for task execution. */
 export enum NodeCapability {
   CLAUDE_CODE = 'claude-code',
+  PANDO_CODE = 'pando-code',
   DOCKER = 'docker',
   PYTHON = 'python',
   NODE = 'node',

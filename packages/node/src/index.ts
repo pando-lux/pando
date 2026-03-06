@@ -3359,7 +3359,7 @@ location /apps/${projectId}/ {
           await configurePandoEngine(pandoCodeBackend, {
             apiPort: this.config.apiPort,
             apiToken: token,
-            nodeId: this.node?.peerId?.toString(),
+            nodeId: this.identity?.peerId,
             useLuxBudget: true,
           });
           console.log('[ai-backend] PandoCode engine configured with Lux budget and Pando tools');

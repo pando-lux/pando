@@ -350,6 +350,12 @@ test.describe('4.7 — Agent System', () => {
     await page.waitForTimeout(3000);
     await expect(page.locator('body')).not.toBeEmpty();
   });
+
+  test('PandoCode engine detected as capability', async () => {
+    const data = await apiGet('/v1/capabilities', token);
+    expect(data.capabilities).toBeTruthy();
+    expect(data.capabilities).toContain('pando-code');
+  });
 });
 
 // ═════════════════════════════════════════════════════════════════════════
