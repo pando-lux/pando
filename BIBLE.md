@@ -323,20 +323,21 @@ Response returned to user
 User says: "Build me a bakery website"
   |
   v
-POST /v1/chat/message → any node receives it
+POST /v1/chat/message → any node receives it (via gateway or direct)
   |
   v
 Doorman classifies: intent = "build"
   → Project metadata created and saved on network
   |
   v
-Node checks: do I have PandoCode locally?
-  YES → process locally (my keys, my compute, I earn Lux)
-  NO  → find a peer with pando-code capability via P2P
-        → route job to that peer → they process, they earn
+Node finds best PandoCode peer on the network:
+  → Query capability registry for peers with pando-code: true
+  → Could be SELF (if this node has PandoCode) or a REMOTE peer
+  → Route build job to that peer
+  → If NO PandoCode peers available → degrade gracefully
   |
   v
-PandoCode node processes the build:
+PandoCode peer processes the build:
   → Engine Adapter creates Project Engine for this projectId
   → Project Engine plans on its Board: "Goal: Build bakery website"
   → Spawns builder sub-agent → writes HTML/CSS/JS
@@ -350,17 +351,32 @@ PandoCode uses contributor's configured provider:
   b) Claude Code CLI as subprocess (FUTURE — not built yet, see Section 7)
   |
   v
-SSE streams progress back through P2P → to user
+SSE streams progress back → to user
   |
   v
 User sees: "Your bakery website is live at https://..."
 ```
 
+**Key routing principle:** The receiving node does NOT assume it will process the build. It always finds the best PandoCode peer (which may be itself). This is critical because the public gateway connects to a random node — that node is a router, not necessarily a builder.
+
 **PandoCode contributor's keys stay LOCAL.** They never leave the contributor's machine. The network routes work TO the compute, not keys FROM storage.
 
 **Build resilience:** Code is committed to GitHub during build. If the PandoCode node goes offline mid-build, another node clones from GitHub and continues.
 
-**Subsequent messages** with `projectId` route directly to that project's engine on the same PandoCode node.
+**Subsequent messages** with `projectId` route directly to that project's engine on the PandoCode node that owns it.
+
+#### Standalone PandoCode (direct, not through the network)
+
+```
+Developer opens PandoCode directly on their machine
+  → Builds app locally (their keys, their machine)
+  → When ready: submits project to Pando ecosystem
+  → Governance review (live mode — all 6 layers)
+  → If approved: project published on the network
+  → Other nodes can discover, deploy, fork it
+```
+
+This is a separate entry point. Not through the gateway. Developer uses PandoCode as a product, then optionally publishes to the network.
 
 ### 5.2 Multi-Project Engine Management
 
@@ -394,8 +410,8 @@ Each engine:
 ```
 
 **Routing rule:**
-- `POST /v1/chat/message { projectId: "proj-abc" }` → `engines.get("proj-abc").send(message)`
-- `POST /v1/chat/message { no projectId }` → Doorman classifies → Path A (EC2 proxy for questions) or Path B (create project + PandoCode engine for builds)
+- `POST /v1/chat/message { projectId: "proj-abc" }` → route to the PandoCode peer that owns this project's engine
+- `POST /v1/chat/message { no projectId }` → Doorman classifies → Path A (EC2 proxy for questions) or Path B (create project + find best PandoCode peer to build)
 
 ### 5.3 Standalone pando-code vs Inside pando-node
 
@@ -428,6 +444,10 @@ STANDALONE pando-code              PANDO-NODE pando-code
 ```
 
 pando-code doesn't import @pando/node. It just has extra tools registered. That's the ENTIRE difference.
+
+**Two entry points for building:**
+- **Through the network:** User → Gateway → any node → find PandoCode peer → build. The network orchestrates.
+- **Standalone:** Developer runs PandoCode directly → builds locally → submits to Pando ecosystem via governance.
 
 ### 5.4 Governance Security Pipeline (6 layers + AI review)
 
@@ -502,7 +522,7 @@ A regular user with PandoCode installed. The backbone of network intelligence.
 - Future: Claude Code CLI as subprocess for superior coding (NOT YET BUILT)
 
 ```
-Build request arrives (local or via P2P)
+Build request arrives via P2P (routed by any node that received user's message)
   → Engine Adapter creates project engine
   → PandoCode builds using LOCAL keys (contributor's configured provider)
   → Code committed to GitHub (checkpoint)
@@ -536,9 +556,9 @@ Developer's machine. PandoCode + local MongoDB for full self-sufficiency.
 
 ```
 Routing priority for AI work:
-1. Can I handle this locally? (PandoCode for builds, API key for questions) → do it
-2. Find capable peer via capability profile → route via P2P
-3. No peers available → degrade gracefully (canned doorman response)
+1. Path A (questions): local OpenAI key → CredentialStore → EC2 proxy via P2P
+2. Path B (builds): find best PandoCode peer on network (could be self) → route via P2P
+3. No capable peers available → degrade gracefully (canned doorman response)
 ```
 
 ### 5.6 Periodic Autonomous Behavior (PandoCode contributor nodes only)
@@ -869,7 +889,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 | Issue | Location | Problem |
 |---|---|---|
-| **P2P build routing** | `api/platform-api.ts` | chat_proxy exists but build routing to PandoCode peers is incomplete. Need to route "build" intent to a pando-code capable peer when local PandoCode is unavailable. |
+| **Unified build routing** | `api/platform-api.ts` | Build requests should ALWAYS find best PandoCode peer (including self). Current code has split logic: local engine vs P2P fallback. Needs unification into single "find peer → route" flow. |
 | **Claude Code CLI integration** | `@pando-code/core` | Not built yet. PandoCode needs a tool/subprocess to invoke `claude -p` for coding tasks. This would let contributors use their Claude Code subscription instead of a raw API key. |
 | **Contributor limits/earning** | Not built | Contributors need to set max requests/day, budget caps. Earning model (Lux per job) not implemented. |
 | **Node mode CLI flag** | `cli.ts` | Still uses old `--mode full|compute|relay`. Needs updating to `contributor|secure|lightweight|full` to match four node types. |
