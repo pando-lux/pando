@@ -351,6 +351,24 @@ Witness-based emission — peers must attest that work happened before Lux is mi
 | **Gateway** | `packages/gateway/app/page.tsx`, `packages/gateway/lib/node-connection.ts` |
 | **Testing** | `packages/tests/src/index.ts` (PandoTester), `packages/tests/src/database.ts`, `packages/tests/src/scripted/runner.ts`, `packages/tests/src/live/runner.ts` |
 
+## Testing (@pando/tests — THE Official Testing System)
+
+**All testing MUST go through the @pando/tests framework.** This is the single source of truth for test state, history, findings, and scenarios.
+
+- **Gateway dashboard** at `/testing` shows everything: runs, findings, scenarios, history
+- **Two test modes:**
+  - **Scripted** — Playwright automated tests, pass/fail (fast, deterministic)
+  - **Live** — Agent-driven browser interaction, produces findings (bugs, UX issues, suggestions)
+- **Per-project:** pando-node and pando-code (switchable in dashboard sidebar)
+- **Draft Scenarios:** Brainstorm test ideas in the dashboard, mark as static/live/both, promote to AI agent via chat API
+- **API routes:** Mounted at `/v1/testing/*` via `api/testing-api.ts` — status, runs, findings, scenarios, stats, run/scripted, run/live
+- **Key files:** `packages/tests/src/index.ts` (PandoTester), `packages/tests/src/database.ts`, `packages/tests/src/scripted/runner.ts`, `packages/tests/src/live/runner.ts`
+
+**Rules:**
+- Do NOT create ad-hoc test scripts outside @pando/tests
+- Existing legacy test files (`tests/*.mjs`) are pre-@pando/tests and will be migrated
+- All test results, findings, and history are persisted in SQLite (`.pando-tests/results.db`)
+
 ## Bibles (Architecture Documents)
 
 - `docs/bible/PANDO-BIBLE.md` — Master architecture (the whole ecosystem)

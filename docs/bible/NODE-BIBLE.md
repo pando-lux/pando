@@ -444,6 +444,30 @@ Reads test scenarios from genome graph:
 - Wired into governance pipeline (crash = abort proposal)
 - 204 E2E tests covering all 34 gateway pages + 80+ API routes (Playwright)
 
+## @pando/tests Integration
+
+`@pando/tests` is THE official testing system for the Pando ecosystem. All testing is tracked through it.
+
+**Wiring:** `api/testing-api.ts` mounts `/v1/testing/*` routes that bridge @pando/node to @pando/tests. The gateway dashboard at `/testing` consumes these routes.
+
+**Key routes:**
+- `GET /v1/testing/status` — dashboard overview
+- `GET /v1/testing/runs` — run history
+- `GET /v1/testing/runs/:id` — single run detail
+- `POST /v1/testing/run/scripted` — trigger scripted (Playwright) test run
+- `POST /v1/testing/run/live` — trigger live (agent-driven) test run
+- `GET /v1/testing/scenarios` — list scenarios
+- `GET /v1/testing/findings` — findings list
+- `GET /v1/testing/stats` — daily aggregated stats
+
+**Two test modes:**
+- **Scripted** — Playwright automated tests, pass/fail results
+- **Live** — Agent-driven browser interaction, produces findings (bugs, UX issues, suggestions)
+
+**Dashboard:** Gateway page at `/testing` with sidebar navigation (Dashboard, Static Tests, Live Tests, Draft Scenarios), per-project switching (pando-node, pando-code), two-column detail views, 10s auto-refresh.
+
+**Rule:** All testing goes through @pando/tests. Do not create ad-hoc test scripts outside the framework.
+
 ## Code Pipeline (`platform/code-pipeline.ts`)
 
 Extract and apply workspace diffs (446 lines):

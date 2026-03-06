@@ -27,7 +27,7 @@ Pando is four products that work independently and compound together:
 1. **@pando/identity** — Decentralized identity and auth for AI agents. Sold standalone.
 2. **@pando/code** — AI coding engine (Claude Code alternative). Sold standalone.
 3. **@pando/node** — Self-sustaining AI-managed network. Uses both products above.
-4. **@pando/tests** — Standalone testing framework. Two modes: Scripted (Playwright automated, pass/fail) and Live (agent-driven, intelligent findings). Per-project SQLite database, playbook format, screenshot capture, findings tracking. Zero @pando/* dependencies — usable by any developer on any project. Dashboard at /testing in gateway. Bible: `docs/bible/TESTING-BIBLE.md`.
+4. **@pando/tests** — Standalone testing framework. Two modes: Scripted (Playwright automated, pass/fail) and Live (agent-driven, intelligent findings). Per-project SQLite database, playbook format, screenshot capture, findings tracking. Zero @pando/* dependencies — usable by any developer on any project. Gateway dashboard LIVE at `/testing` with full myreze-inspired UX: sidebar nav, per-project switching, History tab, Draft Scenarios with AI agent promotion, two-column detail views, 10s auto-refresh. Bible: `docs/bible/TESTING-BIBLE.md`.
 
 A developer can buy identity alone ("I want agent auth").
 A developer can buy code alone ("I want an AI coding tool").

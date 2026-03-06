@@ -22,33 +22,38 @@ import type { PandoTester } from '@pando/tests';
 import type { ProjectConfig, FindingStatus, FindingSeverity, TestMode } from '@pando/tests';
 
 // ---------------------------------------------------------------------------
-// Lazy PandoTester singleton
+// Per-project PandoTester instances (keyed by project name)
 // ---------------------------------------------------------------------------
 
-let _tester: PandoTester | null = null;
+const _testers = new Map<string, PandoTester>();
 
-function getTester(opts: {
+const DEFAULT_PROJECT = 'pando-node';
+
+function getTester(project: string, opts: {
   rootDir: string;
   gatewayUrl: string;
   apiUrl: string;
   apiPort: number;
 }): PandoTester {
-  if (_tester) return _tester;
+  const key = project || DEFAULT_PROJECT;
+  const existing = _testers.get(key);
+  if (existing) return existing;
 
   // Use createRequire to load the CJS @pando/tests package from ESM context
   const require = createRequire(import.meta.url);
   const { PandoTester: PandoTesterClass } = require('@pando/tests');
 
   const config: ProjectConfig = {
-    project: 'pando-node',
+    project: key,
     rootDir: opts.rootDir,
     gatewayUrl: opts.gatewayUrl,
     apiUrl: opts.apiUrl,
     authToken: undefined,
   };
 
-  _tester = new PandoTesterClass(config) as PandoTester;
-  return _tester;
+  const tester = new PandoTesterClass(config) as PandoTester;
+  _testers.set(key, tester);
+  return tester;
 }
 
 // ---------------------------------------------------------------------------
@@ -71,9 +76,11 @@ export function registerTestingRoutes(
   }
 
   // ── GET /testing/status — Dashboard overview ───────────────────────────
-  server.get('/testing/status', async (_request, reply) => {
+  server.get('/testing/status', async (request, reply) => {
     try {
-      const tester = getTester(opts);
+      const query = request.query as Record<string, string>;
+      const project = query.project || DEFAULT_PROJECT;
+      const tester = getTester(project, opts);
       const overview = tester.dashboard.overview();
       return reply.send(overview);
     } catch (err: any) {
@@ -85,11 +92,12 @@ export function registerTestingRoutes(
   server.get('/testing/runs', async (request, reply) => {
     try {
       const query = request.query as Record<string, string>;
+      const project = query.project || DEFAULT_PROJECT;
       const limit = query.limit ? parseInt(query.limit, 10) : 20;
       const mode = query.mode as TestMode | undefined;
       const scenarioId = query.scenarioId || undefined;
 
-      const tester = getTester(opts);
+      const tester = getTester(project, opts);
       const runs = tester.history.getRuns({
         limit: isNaN(limit) ? 20 : limit,
         mode: mode && (mode === 'scripted' || mode === 'live') ? mode : undefined,
@@ -105,7 +113,9 @@ export function registerTestingRoutes(
   server.get('/testing/runs/:id', async (request, reply) => {
     try {
       const { id } = request.params as { id: string };
-      const tester = getTester(opts);
+      const query = request.query as Record<string, string>;
+      const project = query.project || DEFAULT_PROJECT;
+      const tester = getTester(project, opts);
 
       // Access the underlying history to get a specific run
       const runs = tester.history.getRuns({ limit: 1000 });
@@ -129,11 +139,12 @@ export function registerTestingRoutes(
   server.get('/testing/findings', async (request, reply) => {
     try {
       const query = request.query as Record<string, string>;
+      const project = query.project || DEFAULT_PROJECT;
       const status = query.status as FindingStatus | undefined;
       const severity = query.severity as FindingSeverity | undefined;
       const runId = query.runId || undefined;
 
-      const tester = getTester(opts);
+      const tester = getTester(project, opts);
       const findings = tester.findings.list({
         status: status && ['open', 'acknowledged', 'resolved', 'wontfix'].includes(status) ? status : undefined,
         severity: severity && ['critical', 'high', 'medium', 'low', 'info'].includes(severity) ? severity : undefined,
@@ -153,7 +164,9 @@ export function registerTestingRoutes(
 
     try {
       const { id } = request.params as { id: string };
-      const tester = getTester(opts);
+      const query = request.query as Record<string, string>;
+      const project = query.project || DEFAULT_PROJECT;
+      const tester = getTester(project, opts);
       tester.findings.acknowledge(id);
       return reply.send({ success: true });
     } catch (err: any) {
@@ -169,6 +182,8 @@ export function registerTestingRoutes(
 
     try {
       const { id } = request.params as { id: string };
+      const query = request.query as Record<string, string>;
+      const project = query.project || DEFAULT_PROJECT;
       const body = request.body as { resolution?: string } | null;
       const resolution = body?.resolution || '';
 
@@ -176,7 +191,7 @@ export function registerTestingRoutes(
         return reply.code(400).send({ error: 'resolution is required in request body' });
       }
 
-      const tester = getTester(opts);
+      const tester = getTester(project, opts);
       tester.findings.resolve(id, resolution);
       return reply.send({ success: true });
     } catch (err: any) {
@@ -185,9 +200,11 @@ export function registerTestingRoutes(
   });
 
   // ── GET /testing/scenarios — List scenarios ────────────────────────────
-  server.get('/testing/scenarios', async (_request, reply) => {
+  server.get('/testing/scenarios', async (request, reply) => {
     try {
-      const tester = getTester(opts);
+      const query = request.query as Record<string, string>;
+      const project = query.project || DEFAULT_PROJECT;
+      const tester = getTester(project, opts);
       const scenarios = tester.scenarios.list();
       return reply.send(scenarios);
     } catch (err: any) {
@@ -196,10 +213,12 @@ export function registerTestingRoutes(
   });
 
   // ── GET /testing/playbooks — List available playbooks ──────────────────
-  server.get('/testing/playbooks', async (_request, reply) => {
+  server.get('/testing/playbooks', async (request, reply) => {
     try {
+      const query = request.query as Record<string, string>;
+      const project = query.project || DEFAULT_PROJECT;
       // Resolve the playbooks directory relative to the monorepo root
-      const playbooksDir = join(opts.rootDir, 'packages', 'tests', 'playbooks', 'pando-node');
+      const playbooksDir = join(opts.rootDir, 'packages', 'tests', 'playbooks', project);
 
       if (!existsSync(playbooksDir)) {
         return reply.send([]);
@@ -239,9 +258,10 @@ export function registerTestingRoutes(
   server.get('/testing/stats', async (request, reply) => {
     try {
       const query = request.query as Record<string, string>;
+      const project = query.project || DEFAULT_PROJECT;
       const days = query.days ? parseInt(query.days, 10) : 14;
 
-      const tester = getTester(opts);
+      const tester = getTester(project, opts);
       const trend = tester.history.getTrend(isNaN(days) ? 14 : days);
       return reply.send(trend);
     } catch (err: any) {
@@ -252,8 +272,10 @@ export function registerTestingRoutes(
   // ── POST /testing/run/scripted — Trigger a scripted (Playwright) run ──
   server.post('/testing/run/scripted', async (request, reply) => {
     try {
+      const query = request.query as Record<string, string>;
+      const project = query.project || DEFAULT_PROJECT;
       const body = request.body as { specFile?: string } | null;
-      const tester = getTester(opts);
+      const tester = getTester(project, opts);
       // Run in background, return immediately with run ID
       const resultPromise = body?.specFile
         ? tester.scripted.run({ specFile: body.specFile, testDir: opts.rootDir })
@@ -269,19 +291,21 @@ export function registerTestingRoutes(
   // ── POST /testing/run/live — Trigger a live playbook run ──────────────
   server.post('/testing/run/live', async (request, reply) => {
     try {
+      const query = request.query as Record<string, string>;
+      const project = query.project || DEFAULT_PROJECT;
       const body = request.body as { playbook?: string } | null;
       if (!body?.playbook) {
         return reply.code(400).send({ error: 'playbook filename is required' });
       }
 
-      const playbooksDir = join(opts.rootDir, 'packages', 'tests', 'playbooks', 'pando-node');
+      const playbooksDir = join(opts.rootDir, 'packages', 'tests', 'playbooks', project);
       const playbookPath = join(playbooksDir, body.playbook);
 
       if (!existsSync(playbookPath)) {
         return reply.code(404).send({ error: `Playbook not found: ${body.playbook}` });
       }
 
-      const tester = getTester(opts);
+      const tester = getTester(project, opts);
       const playbook = tester.playbooks.load(playbookPath);
 
       // Resolve template variables

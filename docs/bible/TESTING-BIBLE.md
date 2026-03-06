@@ -6,12 +6,13 @@
 
 ## CURRENT STATUS
 
-- Package: PHASES 1-3 COMPLETE — scaffold, database, runners, playbooks all built and validated
+- Package: PHASES 1-4 COMPLETE — scaffold, database, runners, playbooks, API, and gateway dashboard all built and validated
 - Self-test: 48/48 non-browser API tests pass
 - ScriptedRunner: 227/227 Playwright tests pass through pipeline
 - LiveRunner: gateway-navigation playbook runs end-to-end (13/15 steps, 15 screenshots)
 - 6 starter playbooks for pando-node
 - Zero @pando/* dependencies — standalone, usable by anyone on any project
+- Gateway dashboard LIVE at /testing — full myreze-inspired UX with sidebar nav, History tab, Draft Scenarios, per-project switching, two-column detail view
 - Next: Phase 5 (CLI), Phase 6 (polish)
 
 ---
@@ -373,19 +374,49 @@ For Pando specifically: PandoCode engine instances can serve as evaluators.
   api/testing-api.ts          # Mounts /v1/testing/* routes
     GET  /v1/testing/status    # Dashboard overview
     GET  /v1/testing/runs      # Run history
+    GET  /v1/testing/runs/:id  # Single run detail
     GET  /v1/testing/findings  # Findings list
-    POST /v1/testing/run       # Trigger a test run
+    POST /v1/testing/run       # Trigger a test run (legacy)
+    POST /v1/testing/run/scripted  # Trigger scripted test run
+    POST /v1/testing/run/live      # Trigger live test run
     GET  /v1/testing/scenarios # List scenarios
+    GET  /v1/testing/stats     # Daily aggregated stats
 ```
 
 ### With @pando/gateway (optional — only for Pando projects)
 ```
-Gateway page: /testing
-  - Overview cards (scripted pass rate, live scenarios, open findings)
-  - Run history table with expandable details
-  - Findings board (kanban: open → acknowledged → resolved)
-  - Scenario browser (view/edit playbooks)
-  - Screenshots gallery per run
+Gateway page: /testing — myreze-inspired dashboard UX
+  Sidebar navigation:
+    - Dashboard        Overview cards (scripted pass rate, live scenarios, open findings)
+    - Static Tests     Flat test list grouped by tag, search/filter, per-test Run button, Run All
+    - Live Tests       Agent-driven test scenarios, run with AI evaluation
+    - Draft Scenarios  Brainstorm test ideas, mark static/live/both, promote to AI agent via chat API
+
+  Per-project switching: pando-node, pando-code (dropdown in sidebar)
+
+  Tests sub-tab:
+    - Flat test list grouped by tag
+    - Search and filter controls
+    - Per-test Run button + Run All
+    - 10s auto-refresh
+
+  History sub-tab:
+    - Chronological run list (newest first)
+    - Two-column layout: run list (left) + detail panel (right)
+    - Search/filter by status
+    - Per-run detail: Definition tab, summary, errors, findings
+
+  Detail view:
+    - Two-column: run history list + content
+    - Definition tab shows scenario steps
+    - Per-run detail with summary/errors/findings
+    - Toast notifications on run completion
+    - Run output console
+
+  Draft Scenarios:
+    - Brainstorm test ideas in freeform
+    - Mark as static, live, or both
+    - Promote to AI agent via chat API integration
 ```
 
 ### With any project (standalone)
@@ -491,9 +522,15 @@ This package does NOT import from @pando/identity, @pando/code, @pando/node, or 
 - [x] Verified: gateway-navigation playbook runs end-to-end (13/15 steps pass, 15 screenshots captured)
 - [ ] Wire AIEvaluator to actual AI API (placeholder — falls back to BasicEvaluator)
 
-### Phase 4: API + Dashboard — DONE
-- [x] Add /v1/testing/* routes to @pando/node (9 endpoints: status, runs, runs/:id, findings, acknowledge, resolve, scenarios, playbooks, stats)
-- [x] Create /testing page in @pando/gateway (overview cards, runs table, findings board, scenarios list, auto-refresh 15s)
+### Phase 4: API + Dashboard — DONE (full redesign complete)
+- [x] Add /v1/testing/* routes to @pando/node (11 endpoints: status, runs, runs/:id, findings, acknowledge, resolve, scenarios, playbooks, stats, run/scripted, run/live)
+- [x] Create /testing page in @pando/gateway — full myreze-inspired dashboard redesign
+- [x] Sidebar navigation: Dashboard, Static Tests, Live Tests, Draft Scenarios
+- [x] Per-project switching (pando-node, pando-code)
+- [x] Two-column detail view: run history list + content panel
+- [x] History tab: chronological run list (newest first), search/filter by status
+- [x] Draft Scenarios: brainstorm ideas, mark static/live/both, promote to AI agent via chat API
+- [x] 10s auto-refresh, toast notifications, run output console
 - [x] API proxy route in gateway (/api/testing/[...path])
 - [x] @pando/tests wired as workspace dependency + TypeScript project references
 - [x] Full monorepo build passes (npm run build zero errors)
