@@ -662,7 +662,11 @@ PandoCode Contributor Node              EC2 Secure Node
    User sees: "Your app is live at https://..."
 ```
 
-**PROVEN LIVE (2026-03-06):** "build me a portfolio website" → PandoCode (Gemini 2.5 Flash) built index.html + style.css → GitHub push to pando-lux/app-b7880ae1-... → EC2 secure node cloned from GitHub → Tier 1 detected → S3 upload → live at `http://pando-deployments.s3-website-us-east-1.amazonaws.com/public/{projectId}/index.html` → marketplace shows project with `deploymentStatus: live`.
+**PROVEN LIVE (2026-03-06) — BOTH TIERS:**
+
+**Tier 1 (S3 static):** "build me a portfolio website" → PandoCode (Gemini 2.5 Flash) built index.html + style.css → GitHub push → EC2 cloned → Tier 1 detected → S3 upload with gateway vars injected → live at `http://pando-deployments.s3-website-us-east-1.amazonaws.com/public/{projectId}/index.html` → marketplace listing with `deploymentStatus: live`.
+
+**Tier 2 (PM2+nginx):** "build me a real-time chat room app with WebSockets" → PandoCode built Express+ws server → GitHub push → EC2 cloned → Tier 2 detected (express+ws deps, scripts.start) → `npm install` (66 modules) → PM2 start on port 3009 → nginx reverse proxy config written → live at `http://34.201.82.126/apps/{projectId}/` → HTTP 200, WebSocket upgrade working through nginx.
 
 **CRITICAL: Builder vs Deployer targeting (the #1 gotcha)**
 ```
@@ -1084,7 +1088,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | **Contributor limits/earning** | Not built | Contributors need to set max requests/day, budget caps. Earning model (Lux per job) not implemented. |
 | **Node mode CLI flag** | `cli.ts` | Still uses old `--mode full|compute|relay`. Needs updating to `contributor|secure|lightweight|full` to match four node types. |
 | **S3 upload awaiting** | `index.ts:1400` | S3 PutObjectCommand calls are fire-and-forget with a 2s sleep. Large projects with many files may have incomplete uploads. Need proper `await Promise.all()`. |
-| **Tier 2 deploy untested** | `index.ts:1410-1473` | PM2+nginx path is fully coded but never exercised in production. Need to test with an Express app. |
+| **Tier 2 PM2 persistence** | `index.ts:1410-1473` | PM2 starts the app but may lose track after pando-node restarts (daemon context mismatch). Port registry persists but PM2 process list doesn't auto-reconcile. Consider using `pm2 save` + `pm2 resurrect` on node boot. |
 | **Deploy pipeline logging** | `core/deploy-pipeline.ts` | Pipeline errors are fire-and-forget (`.catch(() => {})`). Should persist pipeline results to project metadata for debugging. |
 | **deployPeerId not saved** | `deploy-pipeline.ts` | Pipeline currently doesn't save `deployPeerId` on the project record (shows "NOT SET"). Need to pass it through step 4. |
 
