@@ -426,28 +426,9 @@ async function main() {
     node.startMonitor();
   }
 
-  // Issue 9: Forward startup health patterns as health_alert messages to council
+  // Startup health patterns — logged for observability (EngineAdapter handles alerts now)
   if (healthReport.patterns.length > 0) {
-    const msgBus = node.getMessageBus();
-    if (msgBus) {
-      for (const pattern of healthReport.patterns) {
-        try {
-          msgBus.send({
-            recipientId: 'council',
-            senderId: 'startup-health',
-            senderType: 'system',
-            type: 'health_alert',
-            payload: {
-              severity: pattern.startsWith('circuit_breaker') ? 'critical' : 'warning',
-              message: `Startup health: ${pattern}`,
-              alertType: 'startup_pattern',
-            },
-            priority: 0,
-          });
-        } catch { /* best-effort — orchestrator may not exist yet */ }
-      }
-      console.log(`[cli] Sent ${healthReport.patterns.length} startup health alert(s) to council`);
-    }
+    console.log(`[cli] Startup health patterns: ${healthReport.patterns.join(', ')}`);
   }
 
   // Post-deploy health check: detect restart-reason file and verify system health

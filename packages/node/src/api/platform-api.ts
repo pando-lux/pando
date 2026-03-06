@@ -12,51 +12,42 @@ import { toString as uint8ArrayToString, fromString as uint8ArrayFromString } fr
 import { publicKeyFromProtobuf } from '@libp2p/crypto/keys';
 import { randomBytes } from 'node:crypto';
 import { hasClaudeCodeAuth } from '../platform/capability-detector.js';
-import type { MessageBus } from '../core/message-bus.js';
-import type { OrgManager } from '../platform/org-manager.js';
-import type { AgentDatabase } from '../platform/agent-database.js';
 import type { DeployFile } from '../platform/hosting-service.js';
 import type { RouteHelpers } from './middleware/auth.js';
 
 export async function registerPlatformRoutes(
   fastify: any,
   deps: RouteHelpers,
-  getMessageBus: () => MessageBus | null,
-  getOrgManager: () => OrgManager | null,
-  getAgentDb: () => AgentDatabase | null,
 ): Promise<void> {
   const { node } = deps;
 
   /**
-   * Phase 104: Resolve a project ID to its orchestrator, ensuring the orchestrator
-   * is LIVE (not just a DB row), then send a user message to it.
+   * Send a message to the EngineAdapter for a project (or system engine if no projectId).
+   * Collects the streamed response and returns it.
    */
-  async function sendToOrchestrator(
-    projectId: string | undefined,
+  async function sendToEngine(
     message: string,
-    extra: Record<string, unknown> = {},
-  ): Promise<boolean> {
-    const bus = getMessageBus();
-    if (!bus || !projectId) return false;
-
-    // Phase 104: Ensure orchestrator is instantiated and running (not just a DB row)
-    const orchId = await node.ensureProjectOrchestrator(projectId);
-    if (!orchId) return false;
-
-    bus.send({
-      recipientId: orchId,
-      senderId: 'user',
-      senderType: 'user',
-      type: 'user_request',
-      payload: { message, ...extra },
-      priority: 1,
-    });
-    return true;
+    projectId?: string,
+  ): Promise<{ sent: boolean; response?: string }> {
+    const adapter = node.getEngineAdapter();
+    if (!adapter?.available) return { sent: false };
+    try {
+      const chunks: string[] = [];
+      for await (const event of adapter.send(message, projectId)) {
+        if (event.type === 'stream:chunk' && event.content) {
+          chunks.push(event.content);
+        }
+      }
+      return { sent: true, response: chunks.join('') };
+    } catch (err: any) {
+      console.error('[engine] sendToEngine failed:', err.message);
+      return { sent: false };
+    }
   }
 
-  /** Check if agent system is available. */
-  function hasAgentSystem(): boolean {
-    return !!(getMessageBus() && getOrgManager());
+  /** Check if AI engine is available. */
+  function hasEngine(): boolean {
+    return !!(node.getEngineAdapter()?.available);
   }
     fastify.post('/chat/message', async (request: any, reply: any) => {
       const peerId = await deps.verifyUserJwt(request);
@@ -83,7 +74,7 @@ export async function registerPlatformRoutes(
           await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
         }
 
-        if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
+        if (!hasEngine() || !hasClaudeCodeAuth()) {
           // P2P chat proxy — forward to a Claude-capable node for full pipeline
           const p2pResult = await node.routeChatProxyP2P?.(trimmed, threadId);
           if (p2pResult) {
@@ -100,11 +91,18 @@ export async function registerPlatformRoutes(
           return { status: 'ok', threadId, reply: noAgentReply, tier: 'simple' };
         }
 
-        const routed = await sendToOrchestrator(projectId, trimmed, { threadId, projectId });
-        if (!routed) {
-          return reply.code(404).send({ error: `Project not found or no active orchestrator for projectId: ${projectId}` });
+        // Send to project engine via EngineAdapter
+        const result = await sendToEngine(trimmed, projectId);
+        if (!result.sent) {
+          return reply.code(503).send({ error: 'Engine unavailable for this project' });
         }
-        return { status: 'queued', threadId, projectId, message: trimmed };
+
+        // Store AI response in thread
+        if (threadStore && threadId && result.response) {
+          await threadStore.addMessage(threadId, { role: 'assistant', content: result.response, timestamp: Date.now(), tier: 'complex' as any });
+        }
+
+        return { status: 'ok', threadId, projectId, reply: result.response || 'Processing complete.' };
       }
 
       // No projectId — doorman handles first contact
@@ -122,8 +120,8 @@ export async function registerPlatformRoutes(
         return { status: 'ok', threadId, reply: doormanReply, tier: 'simple' };
       }
 
-      // Intent is 'build' — create project, run preflight, spawn per-project manager
-      if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
+      // Intent is 'build' — create project, run preflight, route to engine
+      if (!hasEngine() || !hasClaudeCodeAuth()) {
         // P2P chat proxy — forward to a Claude-capable node for full pipeline
         threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         if (threadStore) {
@@ -191,36 +189,33 @@ export async function registerPlatformRoutes(
         await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
       }
 
-      // Route to project orchestrator
+      // Route to project engine
+      let engineReply = 'Project created. AI engine is processing your request.';
       if (newProjectId) {
         try {
-          await sendToOrchestrator(newProjectId, trimmed, { threadId, projectId: newProjectId });
-        } catch (orchErr) {
-          console.error('[chat] sendToOrchestrator failed:', (orchErr as Error).message);
-          return reply.code(503).send({ error: 'Orchestrator unavailable, please try again', code: 'ORCHESTRATOR_UNAVAILABLE' });
+          const result = await sendToEngine(trimmed, newProjectId);
+          if (result.response) engineReply = result.response;
+        } catch (err) {
+          console.error('[chat] sendToEngine failed:', (err as Error).message);
+          return reply.code(503).send({ error: 'Engine unavailable, please try again', code: 'ENGINE_UNAVAILABLE' });
         }
       }
 
-      // Return instant feedback — user knows something is happening
-      const instantReply = newProjectId
-        ? `Got it! I'm setting up your project and assigning an AI manager to build it. You'll see progress updates here shortly.`
-        : `Message received. Your AI manager is working on this.`;
-
       if (threadStore && threadId) {
-        await threadStore.addMessage(threadId, { role: 'assistant', content: instantReply, timestamp: Date.now(), tier: 'simple' as any });
+        await threadStore.addMessage(threadId, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' as any });
       }
 
-      // Push instant feedback via SSE so gateway shows it immediately
+      // Push response via SSE so gateway shows it immediately
       deps.pushEvent('chat_message', {
         threadId,
         projectId: newProjectId,
         role: 'assistant',
-        content: instantReply,
+        content: engineReply,
         timestamp: Date.now(),
-        tier: 'simple',
+        tier: 'complex',
       });
 
-      return { status: 'queued', threadId, projectId: newProjectId, reply: instantReply, tier: 'complex' };
+      return { status: 'ok', threadId, projectId: newProjectId, reply: engineReply, tier: 'complex' };
     });
 
     // GET /chat/history — return messages from the most recent thread for this user
@@ -375,7 +370,7 @@ export async function registerPlatformRoutes(
       // If no projectId, use doorman to classify intent.
       if (threadMeta?.projectId) {
         // Existing project thread — route directly to manager
-        if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
+        if (!hasEngine() || !hasClaudeCodeAuth()) {
           // P2P chat proxy — forward build request for full pipeline on remote node
           if (node.routeChatProxyP2P) {
             const routingReply = 'Routing to a Claude-capable node for full build pipeline...';
@@ -394,8 +389,11 @@ export async function registerPlatformRoutes(
           await threadStore.addMessage(id, { role: 'assistant', content: noAgentReply, timestamp: Date.now(), tier: 'simple' });
           return { status: 'ok', threadId: id, reply: noAgentReply, tier: 'simple' };
         }
-        await sendToOrchestrator(threadMeta.projectId, plaintextForProcessing, { threadId: id, projectId: threadMeta.projectId });
-        return { status: 'queued', threadId: id, reply: 'Message received. Processing...', tier: 'complex' };
+        const engineResult = await sendToEngine(plaintextForProcessing, threadMeta.projectId);
+        if (engineResult.response) {
+          await threadStore.addMessage(id, { role: 'assistant', content: engineResult.response, timestamp: Date.now(), tier: 'complex' as any });
+        }
+        return { status: 'ok', threadId: id, reply: engineResult.response || 'Processing complete.', tier: 'complex' };
       }
 
       // No projectId — use doorman
@@ -441,7 +439,7 @@ export async function registerPlatformRoutes(
       }
 
       // Build request — create project, update thread, route to manager
-      if (!hasAgentSystem() || !hasClaudeCodeAuth()) {
+      if (!hasEngine() || !hasClaudeCodeAuth()) {
         // P2P chat proxy — forward to a Claude-capable node for full build pipeline
         if (node.routeChatProxyP2P) {
           const routingReply = 'Routing your build request to a Claude-capable node. Full pipeline will run — this may take a few minutes...';
@@ -495,90 +493,30 @@ export async function registerPlatformRoutes(
       }
 
       const targetProjectId = newProjectId || threadMeta?.projectId;
+      let buildReply = 'Processing your build request...';
       if (targetProjectId) {
-        await sendToOrchestrator(targetProjectId, plaintextForProcessing, { threadId: id, projectId: targetProjectId });
+        const engineResult = await sendToEngine(plaintextForProcessing, targetProjectId);
+        if (engineResult.response) buildReply = engineResult.response;
       }
 
-      // Return immediate response — real response comes via SSE
-      return { status: 'queued', threadId: id, reply: `Message received. Processing...`, tier: 'complex' };
+      await threadStore.addMessage(id, { role: 'assistant', content: buildReply, timestamp: Date.now(), tier: 'complex' as any });
+      return { status: 'ok', threadId: id, reply: buildReply, tier: 'complex' };
     });
 
-    // ── Inbox API (agent message queues) ──────────────────────────────────
+    // ── Engine API ──────────────────────────────────────────────────────────
 
-    // GET /bridge — inbox summary for all orchestrators (backwards compat)
-    fastify.get('/bridge', async () => {
-      const db = getAgentDb();
-      if (!db) {
-        return { queues: {}, error: 'Agent system not started' };
-      }
-      const orchestrators = db.listAgents({ type: 'orchestrator', status: 'active' });
-      const queues: Record<string, { unread: number }> = {};
-      for (const orch of orchestrators) {
-        const messages = db.readInbox(orch.id, 100);
-        queues[orch.id] = { unread: messages.length };
-      }
-      return { queues };
+    // GET /engines — list active PandoCode engines
+    fastify.get('/engines', async () => {
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return { engines: [] };
+      return { engines: adapter.getActiveEngines() };
     });
 
-    // GET /bridge/:managerId — bridge queue status for a specific manager
-    fastify.get('/bridge/:managerId', async (request: any, reply: any) => {
-      const { managerId } = request.params || {};
-      if (!managerId) {
-        return reply.code(400).send({ error: 'Manager ID is required', code: 'BAD_REQUEST' });
-      }
-      const db = getAgentDb();
-      if (!db) {
-        return reply.code(503).send({ error: 'Agent system not started', code: 'NOT_READY' });
-      }
-      const messages = db.readInbox(managerId, 100);
-      return { managerId, unread: messages.length, messages };
-    });
-
-    // POST /tasks/:id/messages — worker mid-task message to bridge queue
-    fastify.post('/tasks/:id/messages', async (request: any, reply: any) => {
-      const { id: taskId } = request.params || {};
-      const { type: messageType, content, urgency } = request.body || {};
-
-      if (!taskId) {
-        return reply.code(400).send({ error: 'Task ID is required', code: 'BAD_REQUEST' });
-      }
-      if (!messageType || !content) {
-        return reply.code(400).send({ error: 'type and content are required', code: 'BAD_REQUEST' });
-      }
-      const bus = getMessageBus();
-      if (!bus) {
-        return reply.code(503).send({ error: 'Agent system not started', code: 'NOT_READY' });
-      }
-
-      // Find which manager owns this task
-      const taskQueue = node.getActiveTaskQueue();
-      const task = taskQueue?.getTask(taskId);
-      const org = getOrgManager();
-
-      // Route to project orchestrator
-      const orchId = task?.managerId && org
-        ? org.getOrchestratorForProject(task.managerId)
-        : null;
-      if (orchId) {
-        bus.send({
-          recipientId: orchId,
-          senderId: `worker-${taskId.slice(0, 8)}`,
-          senderType: 'system',
-          type: 'worker_message',
-          payload: { taskId, messageType, content, urgency },
-          priority: messageType === 'blocked' ? 0 : 1,
-        });
-      }
-
-      // Broadcast worker message to SSE clients for real-time gateway updates
-      deps.pushEvent('worker_message', { taskId, messageType, content, timestamp: Date.now() });
-
-      return {
-        success: true,
-        taskId,
-        messageType,
-        enqueued: true,
-      };
+    // GET /engines/schedules — list scheduler tasks
+    fastify.get('/engines/schedules', async () => {
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return { schedules: [] };
+      return { schedules: adapter.getSchedules() };
     });
 
     // ── Capability Declaration API ──────────────────────────────
@@ -3911,163 +3849,7 @@ export async function registerPlatformRoutes(
       return true;
     }
 
-    // GET /council — council orchestrator state
-    fastify.get('/council', async (_request: any, reply: any) => {
-      const db = getAgentDb();
-      const orchId = node.getCouncilOrchId();
-      if (!db || !orchId) {
-        return reply.code(503).send({ error: 'Council system not initialized' });
-      }
-      const agent = db.getAgent(orchId);
-      if (!agent) return reply.code(503).send({ error: 'Council orchestrator not found' });
-      const workers = db.getActiveWorkers(orchId);
-      return { orchestratorId: orchId, role: agent.role, status: agent.status, workers: workers.length, lastTickAt: agent.lastTickAt };
-    });
-
-    // GET /council/dashboard — aggregated dashboard data
-    fastify.get('/council/dashboard', async (_request: any, reply: any) => {
-      const db = getAgentDb();
-      const orchId = node.getCouncilOrchId();
-      if (!db || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
-
-      const agent = db.getAgent(orchId);
-      if (!agent) return reply.code(503).send({ error: 'Council orchestrator not found' });
-
-      // Workers under council
-      const allWorkers = db.listAgents({ type: 'worker' as any, parentId: orchId });
-      const workers = allWorkers.map((w: any) => ({
-        id: w.id, role: w.role, status: w.status,
-        spawnedAt: w.createdAt, lastReportAt: w.lastReportAt || w.updatedAt,
-        lastReport: w.lastReport?.slice(0, 200) || null,
-      }));
-
-      // Look up latest worker_report from messages table for each worker
-      const msgDb = db as any;
-      for (const w of workers) {
-        try {
-          const lastMsg = msgDb.db.prepare(
-            `SELECT payload FROM message_inbox WHERE sender_id = ? AND type = 'worker_report' ORDER BY created_at DESC LIMIT 1`
-          ).get(w.id);
-          if (lastMsg?.payload) {
-            try { const p = JSON.parse(lastMsg.payload); w.lastReport = p.summary?.slice(0, 200) || null; } catch { /* ignore parse errors */ }
-          }
-        } catch { /* ignore db errors */ }
-      }
-
-      // Recent Tier 2 ticks (last 15)
-      const allTicks = db.getTickLog(orchId, 50);
-      const recentTicks = allTicks
-        .filter((t: any) => t.tier === 2)
-        .slice(0, 15)
-        .map((t: any) => ({
-          tickNumber: t.tickNumber, tier: t.tier,
-          actions: t.actionsTaken, durationMs: t.durationMs, at: t.createdAt,
-        }));
-
-      // Recent commits (git log)
-      let recentCommits: Array<{hash: string; message: string}> = [];
-      try {
-        const { execSync } = await import('node:child_process');
-        const gitLog = execSync('git log --oneline -10', { encoding: 'utf-8', timeout: 5000 });
-        recentCommits = gitLog.trim().split('\n').filter(Boolean).map(line => {
-          const spaceIdx = line.indexOf(' ');
-          return { hash: line.slice(0, spaceIdx), message: line.slice(spaceIdx + 1) };
-        });
-      } catch { /* git not available */ }
-
-      // Lessons (last 10)
-      const lessons = db.getLessons({ orchestratorId: orchId, limit: 10 })
-        .map((l: any) => ({ lesson: l.lesson, source: l.source, confidence: l.confidence, createdAt: l.createdAt }));
-
-      // Network status
-      const identity = node.getIdentity();
-
-      // Include observer in dashboard
-      let observer: { orchestratorId: string; status: string; lastTickAt: string | null; createdAt: string } | null = null;
-      const observerAgent = db.listAgents({ role: 'observer', type: 'orchestrator' })
-        .find((a: any) => a.status === 'active');
-      if (observerAgent) {
-        observer = {
-          orchestratorId: observerAgent.id,
-          status: observerAgent.status,
-          lastTickAt: observerAgent.lastTickAt ? new Date(observerAgent.lastTickAt).toISOString() : null,
-          createdAt: new Date(observerAgent.createdAt).toISOString(),
-        };
-      }
-
-      return {
-        council: {
-          orchestratorId: orchId,
-          status: agent.status,
-          role: agent.role,
-          lastTickAt: agent.lastTickAt,
-          sessionId: agent.sessionId?.slice(0, 8) || null,
-          createdAt: agent.createdAt,
-          budgetSpent: agent.budgetSpent || 0,
-        },
-        workers,
-        recentTicks,
-        recentCommits,
-        network: {
-          peerId: identity?.peerId?.slice(0, 16) || null,
-          peers: node.getNetwork()?.getPeers()?.length ?? 0,
-          uptime: process.uptime(),
-        },
-        lessons,
-        observer,
-      };
-    });
-
-    // GET /council/minutes — tick log as minutes (with full data from tick_log table)
-    fastify.get('/council/minutes', async (_request: any, reply: any) => {
-      const db = getAgentDb();
-      const orchId = node.getCouncilOrchId();
-      if (!db || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
-      const logs = db.getTickLog(orchId, 20);
-      const minutes = logs.reverse().map((log: any) => ({
-        tickNumber: log.tickNumber,
-        tier: log.tier,
-        inbox: log.aiInput,
-        aiResult: log.aiOutput,
-        actions: log.actionsTaken,
-        durationMs: log.durationMs,
-        at: log.createdAt,
-      }));
-      return { minutes };
-    });
-
-    // POST /council/message — send message to council orchestrator
-    fastify.post('/council/message', async (request: any, reply: any) => {
-      if (!requireAuth(request, reply)) return;
-      const bus = getMessageBus();
-      const orchId = node.getCouncilOrchId();
-      if (!bus || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
-      const { message } = request.body || {};
-      if (!message || typeof message !== 'string') return reply.code(400).send({ error: 'message is required' });
-      bus.send({
-        recipientId: orchId,
-        senderId: 'user',
-        senderType: 'user' as any,
-        type: 'user_request',
-        payload: { message: message.trim() },
-        priority: 1,
-      });
-      return { status: 'queued', message: 'Message sent to council orchestrator' };
-    });
-
-    // POST /council/directive — add directive to council orchestrator
-    fastify.post('/council/directive', async (request: any, reply: any) => {
-      if (!requireOperator(request, reply)) return;
-      const db = getAgentDb();
-      const orchId = node.getCouncilOrchId();
-      if (!db || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
-      const { content } = request.body || {};
-      if (!content || typeof content !== 'string') return reply.code(400).send({ error: 'content is required' });
-      db.addDirective({ targetId: orchId, content: content.trim(), addedBy: 'operator' });
-      return { status: 'ok' };
-    });
-
-    // POST /council/veto/:id — veto a proposal via governance
+    // POST /council/veto/:id — veto a proposal via governance (kept — pure infrastructure)
     fastify.post('/council/veto/:id', async (request: any, reply: any) => {
       if (!requireOperator(request, reply)) return;
       const governance = node.getGovernance();
@@ -4080,51 +3862,6 @@ export async function registerPlatformRoutes(
       } catch (err: any) {
         return reply.code(400).send({ error: err.message });
       }
-    });
-
-    // POST /council/reflect — trigger immediate tick on council orchestrator
-    fastify.post('/council/reflect', async (request: any, reply: any) => {
-      if (!requireOperatorOrAgent(request, reply)) return;
-      const orch = node.getCouncilOrchestrator();
-      if (!orch) return reply.code(503).send({ error: 'Council system not initialized' });
-      await orch.tick();
-      return { status: 'ok', message: 'Manual tick executed' };
-    });
-
-    // GET /council/requests — council inbox (unread messages)
-    fastify.get('/council/requests', async (_request: any, reply: any) => {
-      const bus = getMessageBus();
-      const orchId = node.getCouncilOrchId();
-      if (!bus || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
-      const messages = bus.read(orchId, 50);
-      return { requests: messages };
-    });
-
-    // GET /council/chat — same as requests for backwards compat
-    fastify.get('/council/chat', async (_request: any, reply: any) => {
-      const bus = getMessageBus();
-      const orchId = node.getCouncilOrchId();
-      if (!bus || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
-      return { messages: bus.read(orchId, 50) };
-    });
-
-    // GET /council/directives — directives for council orchestrator
-    fastify.get('/council/directives', async (_request: any, reply: any) => {
-      const db = getAgentDb();
-      const orchId = node.getCouncilOrchId();
-      if (!db || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
-      return { directives: db.getDirectives(orchId) };
-    });
-
-    // GET /council/health — council health summary
-    fastify.get('/council/health', async (_request: any, reply: any) => {
-      const db = getAgentDb();
-      const orchId = node.getCouncilOrchId();
-      if (!db || !orchId) return reply.code(503).send({ error: 'Council system not initialized' });
-      const agent = db.getAgent(orchId);
-      if (!agent) return reply.code(503).send({ error: 'Council orchestrator not found' });
-      const workers = db.getActiveWorkers(orchId);
-      return { memberCount: 1, lastReflectionAt: agent.lastTickAt, status: workers.length > 0 ? 'active' : 'idle' };
     });
 
 
@@ -4291,67 +4028,27 @@ export async function registerPlatformRoutes(
     });
 
   // ==========================================================================
-  // Phase 105: Agent Template CRUD
+  // Phase 105: Agent Template CRUD — removed (brain now in @pando-code/core)
   // ==========================================================================
 
-  fastify.get('/templates', async (request: any, reply: any) => {
-    const registry = node.getTemplateRegistry();
-    if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
-
-    const { role, builtin, status } = request.query || {};
-    const filter: any = {};
-    if (role) filter.role = role;
-    if (builtin !== undefined) filter.builtin = builtin === 'true';
-    if (status) filter.status = status;
-
-    return reply.send(registry.listTemplates(filter));
+  fastify.get('/templates', async (_request: any, reply: any) => {
+    return reply.code(503).send({ error: 'Template registry removed — brain now in @pando-code/core' });
   });
 
-  fastify.get('/templates/:id', async (request: any, reply: any) => {
-    const registry = node.getTemplateRegistry();
-    if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
-
-    const tmpl = registry.getTemplate(request.params.id);
-    if (!tmpl) return reply.code(404).send({ error: 'Template not found' });
-    return reply.send(tmpl);
+  fastify.get('/templates/:id', async (_request: any, reply: any) => {
+    return reply.code(503).send({ error: 'Template registry removed — brain now in @pando-code/core' });
   });
 
-  fastify.post('/templates', async (request: any, reply: any) => {
-    const registry = node.getTemplateRegistry();
-    if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
-
-    const { role, name, description, rolePrompt, version, capabilities, tools, publisherPeerId } = request.body || {};
-    if (!role || !name || !rolePrompt) {
-      return reply.code(400).send({ error: 'role, name, and rolePrompt are required' });
-    }
-
-    try {
-      const tmpl = registry.createTemplate({
-        role, name, description: description || '', rolePrompt,
-        version, capabilities, tools, publisherPeerId,
-      });
-      return reply.code(201).send(tmpl);
-    } catch (err: any) {
-      return reply.code(400).send({ error: err.message });
-    }
+  fastify.post('/templates', async (_request: any, reply: any) => {
+    return reply.code(503).send({ error: 'Template registry removed — brain now in @pando-code/core' });
   });
 
-  fastify.put('/templates/:id', async (request: any, reply: any) => {
-    const registry = node.getTemplateRegistry();
-    if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
-
-    const tmpl = registry.updateTemplate(request.params.id, request.body || {});
-    if (!tmpl) return reply.code(404).send({ error: 'Template not found or is a builtin (cannot modify builtins)' });
-    return reply.send(tmpl);
+  fastify.put('/templates/:id', async (_request: any, reply: any) => {
+    return reply.code(503).send({ error: 'Template registry removed — brain now in @pando-code/core' });
   });
 
-  fastify.delete('/templates/:id', async (request: any, reply: any) => {
-    const registry = node.getTemplateRegistry();
-    if (!registry) return reply.code(503).send({ error: 'Template registry not initialized' });
-
-    const ok = registry.archiveTemplate(request.params.id);
-    if (!ok) return reply.code(404).send({ error: 'Template not found or is a builtin (cannot archive builtins)' });
-    return reply.send({ archived: true });
+  fastify.delete('/templates/:id', async (_request: any, reply: any) => {
+    return reply.code(503).send({ error: 'Template registry removed — brain now in @pando-code/core' });
   });
 
 }

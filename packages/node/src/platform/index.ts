@@ -1,14 +1,12 @@
 /**
  * platform/index.ts — Barrel exports for the Platform layer (Layer 2).
  *
- * Platform contains higher-level services: agent tools, content system,
+ * Platform contains higher-level services: content system,
  * scheduler, resources, hosting, projects, and more.
  *
  * Cross-layer import rule: platform/* may import from core/*, kernel/*,
  * @pando/shared, @pando/ledger, and external npm packages.
  */
-
-export { registerAgentRoutes } from './agent-tools.js';
 
 export { detectCapabilities, hasClaudeCodeAuth } from './capability-detector.js';
 export type { DetectionResult } from './capability-detector.js';
@@ -25,8 +23,6 @@ export type { MaintenanceConfig, MaintenanceCheck, MaintenanceIssue } from './co
 export { ContentSafetyReviewer } from './content-safety.js';
 
 export { ContributionTracker } from './contribution-tracker.js';
-
-// Council replaced by Orchestrator
 
 export { FileRegistry } from './file-registry.js';
 
@@ -56,21 +52,6 @@ export { RevenueEngine } from './revenue-engine.js';
 
 export { Scheduler } from './scheduler.js';
 export type { SchedulerConfig, SchedulerStatus, ActiveTask, TaskLifecycle } from './scheduler.js';
-
-export { AgentDatabase } from './agent-database.js';
-
-export { Orchestrator } from './orchestrator.js';
-export type { OrchestratorDeps, OrchestratorAction } from './orchestrator.js';
-
-export { TemplateRegistry } from './template-registry.js';
-
-export { OrgManager, narrowAuthority } from './org-manager.js';
-export type { OrchestratorConfig, OrgTree } from './org-manager.js';
-export type {
-  AgentIdentity, AgentType, AgentScope, AgentStatus,
-  InboxMessage, MessageType, SenderType,
-  TickLogEntry, Lesson, OrgKnowledge, Directive, Reflection, ReflectionLevel,
-} from './agent-database.js';
 
 export { TaskDatabase, openTaskDatabase } from './task-database.js';
 export { TaskQueue } from './task-queue.js';

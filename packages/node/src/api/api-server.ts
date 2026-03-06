@@ -16,19 +16,11 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
-import { registerAgentRoutes } from '../platform/agent-tools.js';
-import type { AgentRouteDeps } from '../platform/agent-tools.js';
-import { registerWorkerRoutes } from '../core/worker-mcp.js';
-import type { AgentDatabase } from '../platform/agent-database.js';
-import type { WorkerPool } from '../core/worker-pool.js';
-import type { MessageBus } from '../core/message-bus.js';
-import type { OrgManager } from '../platform/org-manager.js';
 import type { PandoNode } from '../index.js';
 import type { RequestActor } from '@pando/shared';
 import { registerKernelRoutes } from './kernel-api.js';
 import { registerCoreRoutes } from './core-api.js';
 import { registerPlatformRoutes } from './platform-api.js';
-import { registerContextRoutes } from './context-api.js';
 import { registerTestingRoutes } from './testing-api.js';
 import type { RouteHelpers } from './middleware/auth.js';
 
@@ -132,13 +124,8 @@ const PUBLIC_ENDPOINTS: string[] = [
   '/resources/rewards',
   '/resources/marketplace',
   '/capacity',
-  '/council',
-  '/council/minutes',
+  '/engines',
   '/capabilities/infrastructure',
-  '/context/identity',
-  '/context/project',
-  '/context/lessons',
-  '/context/team',
 ];
 
 /** Parametric public endpoints matched by prefix (GET only). */
@@ -190,10 +177,6 @@ export class ApiServer {
 
   private rateLimiters = new Map<string, RateLimiter>();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
-  private agentDb: AgentDatabase | null = null;
-  private workerPool: WorkerPool | null = null;
-  private messageBus: MessageBus | null = null;
-  private orgManager: OrgManager | null = null;
 
   constructor(node: PandoNode) {
     this.node = node;
@@ -347,16 +330,13 @@ export class ApiServer {
 
   private async setupRoutes(): Promise<void> {
     const deps = this.buildRouteDeps();
-    const getMessageBus = () => this.messageBus;
-    const getOrgManager = () => this.orgManager;
-    const getAgentDb = () => this.agentDb;
 
     // All routes are versioned under /v1/.
     // v2.2: No unversioned aliases — consumers must use /v1/* paths.
     await this.fastify.register(async (v1: any) => {
       await registerKernelRoutes(v1, deps);
       await registerCoreRoutes(v1, deps);
-      await registerPlatformRoutes(v1, deps, getMessageBus, getOrgManager, getAgentDb);
+      await registerPlatformRoutes(v1, deps);
 
       // Testing API routes (dashboard, runs, findings, scenarios, playbooks, stats)
       const apiPort = this.node.getApiPort();
@@ -862,24 +842,6 @@ Be friendly and helpful. Keep answers short.`
     // Register all routes before listening
     await this.setupRoutes();
 
-    // Register agent tool routes under /v1/
-    await this.fastify.register(async (v1: any) => {
-      registerAgentRoutes(v1, {
-        getDb: () => this.agentDb,
-        getWorkerPool: () => this.workerPool,
-        getMessageBus: () => this.messageBus,
-        getOrgManager: () => this.orgManager,
-        getApiToken: () => this.apiToken,
-      });
-      // Worker MCP routes (task, report, identity)
-      registerWorkerRoutes(v1, () => this.agentDb!);
-      // Context API routes (identity, project, lessons, team, discover)
-      registerContextRoutes(v1, {
-        getDb: () => this.agentDb!,
-        apiPort: this.node.getApiPort(),
-      });
-    }, { prefix: '/v1' });
-
     await this.fastify.listen({ port: config.port, host: config.host });
 
     console.log(`[api] HTTP API: http://${config.host}:${config.port}`);
@@ -892,18 +854,6 @@ Be friendly and helpful. Keep answers short.`
     // Data persists across restarts. Optional TTL cleanup can be added later.
   }
 
-  /** Set the new agent system deps. */
-  setAgentSystem(deps: { db: AgentDatabase; workerPool: WorkerPool; messageBus: MessageBus; orgManager: OrgManager }): void {
-    this.agentDb = deps.db;
-    this.workerPool = deps.workerPool;
-    this.messageBus = deps.messageBus;
-    this.orgManager = deps.orgManager;
-  }
-
-  /** Get the MessageBus for external access. */
-  getMessageBus(): MessageBus | null {
-    return this.messageBus;
-  }
 
   // ── Phase 41: Server-side E2E message crypto helpers ─────────────────────
 

@@ -2083,9 +2083,9 @@ class PandoTUI {
     // Graceful shutdown then exit(75) — launcher restarts
     (async () => {
       try {
-        // Stop agents first
-        await this.node.stopAgentSystem();
-        this.log(`${c.dim}Stopped agent system${c.reset}`);
+        // Stop engine first
+        await this.node.stopEngine();
+        this.log(`${c.dim}Stopped engine${c.reset}`);
 
         this.log(`${c.dim}Stopping node...${c.reset}`);
         await this.node.stop();

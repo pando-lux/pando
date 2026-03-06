@@ -27,17 +27,12 @@ import { HealthMonitor } from './kernel/monitor.js';
 import { Guardrails } from './kernel/guardrails.js';
 import { RequestReplyManager } from './core/request-reply.js';
 import { ReputationManager } from './kernel/reputation.js';
-import { AgentDatabase } from './platform/agent-database.js';
-import { MessageBus } from './core/message-bus.js';
-import { WorkerPool } from './core/worker-pool.js';
-import { OrgManager } from './platform/org-manager.js';
-import { Orchestrator } from './platform/orchestrator.js';
+import { EngineAdapter } from './core/engine-adapter.js';
 import { EmissionWitness, TOPIC_EMISSIONS } from './kernel/emission-witness.js';
 import { SecurityMonitor } from './kernel/security-monitor.js';
 import { ResourceProofChallenger } from './platform/resource-proof.js';
 import { ReputationWeightedGovernance } from './platform/reputation-governance.js';
 import { ContentSafetyReviewer } from './platform/content-safety.js';
-import { TemplateRegistry } from './platform/template-registry.js';
 import { ContentRegistry } from './platform/content-registry.js';
 import { ContentPublisher } from './platform/content-publish.js';
 import { ContentMaintenance } from './platform/content-maintenance.js';
@@ -74,10 +69,6 @@ import { HostingService } from './platform/hosting-service.js';
 import { CloudInstanceManager } from './core/cloud-instance-manager.js';
 import { GatewayDeployPool } from './core/gateway-deploy-pool.js';
 import type { StorageBackend } from './core/storage-backend.js';
-import { AIBackendRegistry } from './core/ai-backend-registry.js';
-import { PandoCodeBackend } from './core/ai-backend-pandocode.js';
-import { configurePandoEngine } from './core/engine-bridge.js';
-import { OrchestratorProcessManager } from './platform/orchestrator-manager.js';
 import { LocalEnvironment } from './kernel/local-environment.js';
 import { toString as uint8ArrayToString } from 'uint8arrays';
 import { join, resolve as pathResolve } from 'node:path';
@@ -131,25 +122,15 @@ export class PandoNode {
   private guardrails: Guardrails | null = null;
   private requestReply: RequestReplyManager | null = null;
   private reputation: ReputationManager | null = null;
-  private agentDb: AgentDatabase | null = null;
-  private messageBus: MessageBus | null = null;
-  private workerPool: WorkerPool | null = null;
-  private orgManager: OrgManager | null = null;
-  private councilOrchestrator: Orchestrator | null = null;
-  private councilOrchId: string | null = null;
-  private observerOrchId: string | null = null;
-  private qaUserOrchId: string | null = null;
-  private orchestratorManager: OrchestratorProcessManager | null = null;
+  private engineAdapter: EngineAdapter | null = null;
   private emissionWitness: EmissionWitness | null = null;
   private securityMonitor: SecurityMonitor | null = null;
   private resourceProofChallenger: ResourceProofChallenger | null = null;
   private reputationGovernance: ReputationWeightedGovernance | null = null;
   private contentSafetyReviewer: ContentSafetyReviewer | null = null;
-  private templateRegistry: TemplateRegistry | null = null;
   private pipelineRunner: PipelineRunner | null = null;
   private pipelineEnabled = false;
   private schedulerEnabled = false;
-  private agentSystemStarted = false;
   private monitorEnabled = false;
   private taskQueue: TaskQueue | null = null; // passive task queue — always available for API + P2P sync
   private fileRegistry: FileRegistry;
@@ -205,9 +186,6 @@ export class PandoNode {
   private hostingService: HostingService | null = null;
   // Phase 50: Network State Aggregator
   private networkState: NetworkState | null = null;
-  // Council orchestrator (replaced Council class)
-  // v2.1: AI Backend Registry (exposed for council + subsystems)
-  private aiBackendRegistry: AIBackendRegistry | null = null;
   // Phase 64: Cloud Instance Manager (EC2 compute nodes)
   private cloudInstanceManager: CloudInstanceManager | null = null;
   // Phase 42: Pluggable StorageBackend
@@ -219,9 +197,6 @@ export class PandoNode {
 
   // v2.5: Local Environment — Envelope 1 file indexing + user memory
   private localEnv: LocalEnvironment | null = null;
-
-  // Phase 104: Live orchestrator instances (council + project orchestrators)
-  private liveOrchestrators: Map<string, Orchestrator> = new Map();
 
   // v2.3: Boot health tracking
   private nodeHealth: NodeHealth = {
@@ -499,13 +474,7 @@ export class PandoNode {
     this.cleanupTimer = setInterval(() => {
       this.sync?.cleanup();
       this.governance?.cleanup();
-      this.messageBus?.cleanup(7);
-      this.agentDb?.deleteExpiredDiscoveries();
-      // Prune old agent data every 10 minutes (every 10th cycle)
       cleanupCycle++;
-      if (cleanupCycle % 10 === 0) {
-        this.agentDb?.pruneOldData();
-      }
     }, 60_000);
 
     // Create passive TaskQueue — always available for API + P2P task sync
@@ -525,8 +494,8 @@ export class PandoNode {
       repoDir: process.cwd(),
       localPeerId: this.identity.peerId,
       networkProvider: () => this.network,
-      workersActiveFn: () => this.workerPool?.getActiveWorkerCount() ?? 0,
-      messagesPendingFn: () => this.messageBus?.hasPendingMessages() ?? false,
+      workersActiveFn: () => this.engineAdapter?.getActiveEngines()?.length ?? 0,
+      messagesPendingFn: () => false,
     });
 
     // Subscribe to GossipSub task events so all nodes see task changes
@@ -664,7 +633,7 @@ export class PandoNode {
     this.requestReply.registerHandler('health_check', async () => {
       const monitor = this.getMonitor();
       // Include worker process memory (claude.exe / node.exe children)
-      const workerStats = this.workerPool?.getWorkerMemoryStats() ?? [];
+      const workerStats: any[] = [];
       const workerMemory = {
         totalWorkerRssBytes: workerStats.reduce((sum, s) => sum + s.rssBytes, 0),
         freeMemBytes: freemem(),
@@ -691,8 +660,8 @@ export class PandoNode {
       if (!this.localCapStore?.isShareCompute()) {
         return { error: 'This node is not sharing compute.' };
       }
-      if (!this.messageBus || !this.orgManager || !this.agentDb) {
-        return { error: 'Agent system not available on this node.' };
+      if (!this.engineAdapter?.available) {
+        return { error: 'Engine not available on this node.' };
       }
 
       const { message, threadId, tier } = req.payload || {};
@@ -705,12 +674,6 @@ export class PandoNode {
       const projectId = randomUUID();
       console.log(`[chat_proxy] Generated local projectId ${projectId} for P2P request from ${req.from}`);
 
-      // Ensure orchestrator is running and route the message
-      const orchId = await this.ensureProjectOrchestrator(projectId);
-      if (!orchId) {
-        return { error: 'Failed to create orchestrator' };
-      }
-
       // Update thread if provided
       if (threadId) {
         const ts = this.getThreadStore();
@@ -719,14 +682,25 @@ export class PandoNode {
         }
       }
 
-      this.messageBus.send({
-        recipientId: orchId,
-        senderId: 'user',
-        senderType: 'user',
-        type: 'user_request',
-        payload: { message, threadId: threadId || undefined, projectId, originPeerId: req.from },
-        priority: 1,
-      });
+      // Route to EngineAdapter
+      if (!this.engineAdapter?.available) {
+        return { error: 'EngineAdapter not available' };
+      }
+      // Fire-and-forget: stream response back via chat_result P2P handler
+      (async () => {
+        try {
+          const chunks: string[] = [];
+          for await (const event of this.engineAdapter!.send(message, projectId)) {
+            if (event.type === 'stream:chunk' && event.content) chunks.push(event.content);
+          }
+          const content = chunks.join('');
+          if (threadId && req.from && this.requestReply) {
+            await this.requestReply.request(req.from, 'chat_result', { threadId, message: content }, 10_000);
+          }
+        } catch (err: any) {
+          console.warn(`[chat_proxy] Engine send failed: ${err.message?.slice(0, 100)}`);
+        }
+      })();
 
       return { status: 'queued', projectId, threadId };
     });
@@ -1942,7 +1916,7 @@ location /apps/${projectId}/ {
     this.networkState.start();
     console.log('[network-state] Aggregator started (hourly snapshots)');
 
-    // Council is now the Orchestrator — initialized in startAgentSystem()
+    // Council replaced by EngineAdapter — initialized in startEngine()
 
     // v2.5: Local Environment — Envelope 1 file index + user memory (always on, no network)
     try {
@@ -2030,32 +2004,7 @@ location /apps/${projectId}/ {
           }
         }
 
-        // Send governance decision to council orchestrator via MessageBus
-        if (this.messageBus && this.councilOrchId) {
-          try {
-            const proposal = this.governance?.getProposal(decision.proposalId);
-            this.messageBus.send({
-              recipientId: this.councilOrchId,
-              senderId: 'governance',
-              senderType: 'system',
-              type: 'governance_decision',
-              payload: {
-                proposalId: decision.proposalId,
-                title: proposalTitle,
-                description: proposal?.description || '',
-                outcome: decision.outcome,
-                category: proposal?.category || 'unknown',
-                votesFor: decision.votesFor,
-                votesAgainst: decision.votesAgainst,
-                taskId: createdTaskId,
-              },
-              priority: 0, // critical
-            });
-            console.log(`[governance→agents] Proposal "${proposalTitle}" → council orchestrator`);
-          } catch (err: any) {
-            console.error(`[governance→agents] Failed to send governance decision: ${err.message}`);
-          }
-        }
+        // Governance decisions are now handled by EngineAdapter — no MessageBus routing needed.
       }
     });
     // Wire activity sync — push remote activity events to SSE
@@ -2100,12 +2049,12 @@ location /apps/${projectId}/ {
 
     });
 
-    // Start agent system (Orchestrator + WorkerPool) — only in 'full' mode (needs PandoCode engine).
-    // 'compute' and 'relay' modes skip agents (cloud instances don't have PandoCode).
+    // Start EngineAdapter — connects to @pando-code/core brain.
+    // 'compute' and 'relay' modes skip engines (cloud instances don't have PandoCode).
     if (this.config.nodeMode !== 'compute' && this.config.nodeMode !== 'relay') {
-      this.startAgentSystem();
+      await this.startEngine();
     } else {
-      console.log(`[node] Mode '${this.config.nodeMode}' — agent system skipped.`);
+      console.log(`[node] Mode '${this.config.nodeMode}' — engine skipped.`);
     }
 
     // Handle messages and reward work
@@ -2258,9 +2207,9 @@ location /apps/${projectId}/ {
             if (currentCommit === builtCommit) {
               // Build matches HEAD, but did the build change since this process started?
               if (builtCommit !== initialCommit) {
-                const activeWorkers = this.workerPool?.getActiveWorkerCount() ?? 0;
-                if (activeWorkers > 0) {
-                  console.log(`[self-restart] Build updated since startup (was=${initialCommit.slice(0, 8)}, now=${builtCommit.slice(0, 8)}) but ${activeWorkers} worker(s) active — deferring`);
+                const activeEngines = this.engineAdapter?.getActiveEngines()?.length ?? 0;
+                if (activeEngines > 0) {
+                  console.log(`[self-restart] Build updated since startup (was=${initialCommit.slice(0, 8)}, now=${builtCommit.slice(0, 8)}) but ${activeEngines} engine(s) active — deferring`);
                   return;
                 }
                 console.log(`[self-restart] Build updated since startup (was=${initialCommit.slice(0, 8)}, now=${builtCommit.slice(0, 8)}) — restarting`);
@@ -2269,12 +2218,12 @@ location /apps/${projectId}/ {
               }
               return;
             }
-            const activeWorkers = this.workerPool?.getActiveWorkerCount() ?? 0;
-            if (activeWorkers > 0) {
-              console.log(`[self-restart] Stale build detected (built=${builtCommit.slice(0, 8)}, head=${currentCommit.slice(0, 8)}) but ${activeWorkers} worker(s) active — deferring restart`);
+            const activeEngines = this.engineAdapter?.getActiveEngines()?.length ?? 0;
+            if (activeEngines > 0) {
+              console.log(`[self-restart] Stale build detected (built=${builtCommit.slice(0, 8)}, head=${currentCommit.slice(0, 8)}) but ${activeEngines} engine(s) active — deferring restart`);
               return;
             }
-            console.log(`[self-restart] Stale build detected and no active workers — restarting`);
+            console.log(`[self-restart] Stale build detected and no active engines — restarting`);
             clearInterval(selfRestartInterval);
             this.selfRestart();
           } catch { /* git unavailable or cwd mismatch — skip silently */ }
@@ -2551,7 +2500,7 @@ location /apps/${projectId}/ {
     s['api-server']   = this.apiServer     ? 'ok' : 'failed';
     s['scheduler']    = this.schedulerEnabled ? 'ok' : 'skipped';
     s['monitor']      = this.monitorEnabled  ? 'ok' : 'skipped';
-    s['agents']       = this.agentSystemStarted ? 'ok' : 'skipped';
+    s['agents']       = this.engineAdapter?.available ? 'ok' : 'skipped';
     s['thread-store'] = this.threadStore   ? 'ok' : 'degraded';
     s['content']      = this.contentRegistry ? 'ok' : 'skipped';
     s['local-env']    = this.localEnv      ? 'ok' : 'degraded';
@@ -2851,64 +2800,7 @@ location /apps/${projectId}/ {
       writeFileSync(claudeMdPath, content);
     }
 
-    // Import team-state.json if it exists (from a previous clone)
-    const teamStatePath = join(wsDir, 'team-state.json');
-    if (existsSync(teamStatePath) && this.agentDb) {
-      try {
-        const state = JSON.parse(readFileSync(teamStatePath, 'utf-8'));
-        const isV2 = state.version === 2;
-
-        // Import lessons (v1 and v2)
-        if (state.lessons?.length) {
-          for (const l of state.lessons) {
-            this.agentDb.addLesson({
-              orchestratorId: 'imported',
-              projectId,
-              lesson: l.lesson,
-              source: l.source || 'imported-team-state',
-              relevanceTags: l.relevanceTags ? (typeof l.relevanceTags === 'string' ? JSON.parse(l.relevanceTags) : l.relevanceTags) : [],
-              confidence: (l.confidence || 0.5) * 0.8, // Phase 105: slight decay for cross-node transfer
-            });
-          }
-          console.log(`[project-workspace] Imported ${state.lessons.length} lessons from team-state.json`);
-        }
-
-        // Phase 105: Import reflections (v2 only)
-        if (isV2 && state.reflections?.length) {
-          for (const r of state.reflections) {
-            this.agentDb.addReflection({
-              orchestratorId: 'imported',
-              level: r.level || 'project',
-              trigger: r.trigger || 'imported',
-              inputSummary: undefined,
-              output: r.output,
-              lessonsCreated: r.lessonsCreated || 0,
-            });
-          }
-          console.log(`[project-workspace] Imported ${state.reflections.length} reflections from team-state.json`);
-        }
-
-        // Phase 105: Import directives (v2 only)
-        if (isV2 && state.directives?.length) {
-          for (const d of state.directives) {
-            if (d.active) {
-              this.agentDb.addDirective({
-                targetId: undefined, // will be bound when orchestrator is created
-                content: d.content,
-                addedBy: d.addedBy || 'imported',
-              });
-            }
-          }
-          console.log(`[project-workspace] Imported ${state.directives.length} directives from team-state.json`);
-        }
-
-        // Phase 105: Log team stats (v2 only)
-        if (isV2 && state.team?.stats) {
-          const s = state.team.stats;
-          console.log(`[project-workspace] Previous team: ${s.totalWorkersSpawned || 0} workers spawned, $${(s.totalBudgetSpent || 0).toFixed(2)} budget spent`);
-        }
-      } catch { /* non-fatal */ }
-    }
+    // Team-state.json import removed — brain state now managed by @pando-code/core EngineAdapter.
 
     // Update project record with workspace path
     await this.projectStore.updateProject(projectId, { workspaceDir: wsDir });
@@ -2931,101 +2823,7 @@ location /apps/${projectId}/ {
     } catch { return null; }
   }
 
-  /**
-   * Phase 104: Export team state to JSON in the project workspace.
-   * Called before each project commit.
-   */
-  private exportTeamState(projectId: string, workspaceDir: string): void {
-    if (!this.agentDb) return;
-    try {
-      const agents = this.agentDb.listAgents({ projectId });
-      const lessons = this.agentDb.getLessons({ projectId, limit: 50 });
-
-      // Phase 105: v2 format — includes reflections, directives, team blueprint
-      // Find the orchestrator for team blueprint
-      const orch = agents.find((a: any) => a.type === 'orchestrator');
-      const workers = agents.filter((a: any) => a.type === 'worker');
-
-      // Build team blueprint
-      const blueprint = orch ? [{
-        role: orch.role,
-        type: 'orchestrator' as const,
-        templateId: orch.templateId || null,
-        children: workers.map((w: any) => ({
-          role: w.role,
-          type: 'worker' as const,
-          templateId: w.templateId || null,
-        })),
-      }] : [];
-
-      // Calculate stats
-      const stats = {
-        totalWorkersSpawned: workers.length,
-        totalBudgetSpent: agents.reduce((sum: number, a: any) => sum + (a.budgetSpent || 0), 0),
-        firstCreated: agents.length > 0 ? agents.reduce((min: string, a: any) => a.createdAt < min ? a.createdAt : min, agents[0].createdAt) : null,
-        lastActive: agents.length > 0 ? agents.reduce((max: string, a: any) => (a.updatedAt || a.createdAt) > max ? (a.updatedAt || a.createdAt) : max, agents[0].updatedAt || agents[0].createdAt) : null,
-      };
-
-      // Get reflections (project-level, last 20)
-      let reflections: any[] = [];
-      if (orch) {
-        try {
-          reflections = this.agentDb.getReflections(orch.id, 20).map((r: any) => ({
-            level: r.level,
-            trigger: r.trigger,
-            output: r.output,
-            lessonsCreated: r.lessonsCreated,
-            createdAt: r.createdAt,
-          }));
-        } catch { /* reflections table may not have data */ }
-      }
-
-      // Get directives (active only)
-      let directives: any[] = [];
-      if (orch) {
-        try {
-          directives = this.agentDb.getDirectives(orch.id).map((d: any) => ({
-            content: d.content,
-            addedBy: d.addedBy,
-            active: d.active,
-          }));
-        } catch { /* non-fatal */ }
-      }
-
-      const teamState = {
-        version: 2,
-        projectId,
-        exportedAt: Date.now(),
-        team: { blueprint, stats },
-        agents: agents.map((a: any) => ({
-          id: a.id,
-          role: a.role,
-          type: a.type,
-          status: a.status,
-          templateId: a.templateId || null,
-          sessionId: a.sessionId || null,
-          parentId: a.parentId || null,
-          lastReportAt: a.lastReportAt || null,
-          budgetSpent: a.budgetSpent || 0,
-          createdAt: a.createdAt,
-          updatedAt: a.updatedAt,
-        })),
-        lessons: lessons.map((l: any) => ({
-          lesson: l.lesson,
-          source: l.source,
-          confidence: l.confidence,
-          timesUsed: l.timesUsed,
-          relevanceTags: l.relevanceTags || null,
-        })),
-        reflections,
-        directives,
-      };
-
-      writeFileSync(join(workspaceDir, 'team-state.json'), JSON.stringify(teamState, null, 2));
-    } catch (err: any) {
-      console.warn(`[project-orch] Failed to export team state: ${err.message?.slice(0, 100)}`);
-    }
-  }
+  // exportTeamState removed — brain state now managed by @pando-code/core.
 
   /**
    * Phase 104: Create project-scoped onCommit callback.
@@ -3041,9 +2839,6 @@ location /apps/${projectId}/ {
       }
 
       try {
-        // Export team state before committing
-        this.exportTeamState(projectId, wsDir);
-
         // Git add, check, commit (exclude CLAUDE.md — it's a worker context file, not project code)
         execSync('git add -A -- ":(exclude)CLAUDE.md"', { cwd: wsDir, timeout: 10000 });
         const status = execSync('git status --porcelain', { cwd: wsDir, encoding: 'utf-8', timeout: 5000 });
@@ -3085,512 +2880,52 @@ location /apps/${projectId}/ {
   // Phase 105: makeProjectDeployCallback removed — deployment is now agent-driven.
   // The devops agent calls POST /v1/projects/:id/deploy directly via HTTP.
 
-  /**
-   * Phase 104: Instantiate a live Orchestrator from its DB record.
-   * Determines callbacks based on role (council vs project), starts tick loop.
-   */
-  instantiateOrchestrator(orchId: string): Orchestrator | null {
-    if (this.liveOrchestrators.has(orchId)) {
-      return this.liveOrchestrators.get(orchId)!;
-    }
+  // instantiateOrchestrator removed — orchestrators replaced by EngineAdapter.
 
-    if (!this.agentDb || !this.messageBus || !this.workerPool || !this.orgManager || !this.aiBackendRegistry) {
-      console.error(`[orchestrator] Cannot instantiate ${orchId} — agent system not ready`);
-      return null;
-    }
-
-    const agent = this.agentDb.getAgent(orchId);
-    if (!agent || agent.type !== 'orchestrator') {
-      console.error(`[orchestrator] Cannot instantiate ${orchId} — not found or not an orchestrator`);
-      return null;
-    }
-
-    const isCouncil = agent.role === 'council';
-    const projectId = agent.projectId;
-
-    let onCommit: ((message: string) => Promise<boolean>) | undefined;
-    let onPropose: ((title: string, description: string, diff?: string) => Promise<void>) | undefined;
-
-    if (isCouncil) {
-      // Council callbacks — operate on Pando repo root
-      onCommit = async (message) => {
-        try {
-          const cwd = process.cwd();
-          execSync('git add -A', { cwd, timeout: 10000 });
-          const status = execSync('git status --porcelain', { cwd, encoding: 'utf-8', timeout: 5000 });
-          if (!status.trim()) {
-            console.log('[orchestrator] Nothing to commit');
-            // Still push — flush any orphaned commits from builders that committed directly
-            try {
-              execSync('git push origin master', { cwd, timeout: 30000 });
-              console.log('[orchestrator] Pushed orphaned commits to origin');
-            } catch (pushErr: any) {
-              console.warn('[orchestrator] Push failed (non-fatal):', pushErr.message?.slice(0, 100));
-            }
-            return false;
-          }
-          execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, { cwd, timeout: 30000 });
-          console.log(`[orchestrator] Committed: ${message}`);
-          try {
-            execSync('git push origin master', { cwd, timeout: 30000 });
-            console.log('[orchestrator] Pushed to origin');
-          } catch (pushErr: any) {
-            console.warn('[orchestrator] Push failed (non-fatal):', pushErr.message?.slice(0, 100));
-          }
-          // Post-commit: rebuild so dist matches the new HEAD
-          try {
-            console.log('[orchestrator] Post-commit build starting...');
-            execSync('npm run build', { cwd, timeout: 120000, stdio: 'pipe' });
-            console.log('[orchestrator] Post-commit build succeeded');
-          } catch (buildErr: any) {
-            // Build failed — revert the commit so broken code never reaches governance
-            console.error('[orchestrator] Post-commit build FAILED — reverting commit');
-            try {
-              execSync('git revert --no-edit HEAD', { cwd, timeout: 15000 });
-              console.log('[orchestrator] Reverted broken commit');
-            } catch (revertErr: any) {
-              console.error('[orchestrator] Revert failed:', revertErr.message?.slice(0, 100));
-            }
-            return false;
-          }
-
-          return true;
-        } catch (err: any) {
-          console.error('[orchestrator] Commit failed:', err.message?.slice(0, 200));
-          return false;
-        }
-      };
-      onPropose = this.upgradeProtocol ? async (title, description) => {
-        await this.upgradeProtocol!.createUpgradeProposal(`${title}: ${description}`);
-      } : (this.governance ? async (title, description) => {
-        await this.governance!.createProposal(title, description);
-      } : undefined);
-    } else if (projectId) {
-      // Project callbacks — operate on project workspace
-      onCommit = this.makeProjectCommitCallback(projectId);
-    }
-
-    const orch = new Orchestrator(orchId, {
-      db: this.agentDb,
-      messageBus: this.messageBus,
-      workerPool: this.workerPool,
-      orgManager: this.orgManager,
-      aiRegistry: this.aiBackendRegistry,
-      templateRegistry: this.templateRegistry || undefined,
-      threadStore: this.threadStore || undefined,
-      pushEvent: (event: string, data: any) => this.apiServer?.pushEvent(event, data),
-      sendChatResult: async (peerId: string, threadId: string, message: string) => {
-        if (this.requestReply) {
-          try {
-            await this.requestReply.request(peerId, 'chat_result', { threadId, message }, 10_000);
-          } catch (err: any) {
-            console.warn(`[chat_result] Failed to send result to ${peerId.slice(0, 12)}: ${err.message?.slice(0, 100)}`);
-          }
-        }
-      },
-      getPeerCount: () => this.network?.getPeers()?.length ?? 0,
-      apiPort: this.config.apiPort,
-      dataDir: this.config.dataDir || join(homedir(), '.pando'),
-      repoDir: process.cwd(),
-      onCommit,
-      onPropose,
-    });
-
-    orch.start();
-    this.liveOrchestrators.set(orchId, orch);
-    console.log(`[orchestrator] Instantiated ${agent.role} orchestrator: ${orchId}` + (projectId ? ` (project ${projectId})` : ''));
-
-    return orch;
-  }
-
-  /**
-   * Phase 104: Ensure a project orchestrator is instantiated and running.
-   * Called from platform-api.ts when routing messages to project orchestrators.
-   */
-  async ensureProjectOrchestrator(projectId: string): Promise<string | null> {
-    if (!this.orgManager || !this.agentDb) return null;
-
-    // 1. Ensure workspace exists
-    await this.ensureProjectWorkspace(projectId);
-
-    // 2. Get or create the orchestrator DB record
-    const orchId = this.orgManager.getOrchestratorForProject(projectId);
-
-    // 3. Set workspace on orchestrator DB record
-    const project = this.projectStore?.getProject(projectId);
-    if (project?.workspaceDir) {
-      this.agentDb.updateAgent(orchId, { workspaceDir: project.workspaceDir });
-    }
-
-    // 4. Ensure live instance is running
-    if (!this.liveOrchestrators.has(orchId)) {
-      this.instantiateOrchestrator(orchId);
-    }
-
-    return orchId;
-  }
+  // ensureProjectOrchestrator removed — project routing handled by EngineAdapter.
 
   // ----------------------------------------------------------
-  // Agent System (Phase 27 — always runs, provides chat routing + project managers)
+  // Engine System — EngineAdapter connects to @pando-code/core brain
   // ----------------------------------------------------------
 
   /**
-   * Start the new agent system: AgentDatabase, MessageBus, WorkerPool,
-   * OrgManager, and the council Orchestrator.
+   * Start the EngineAdapter — connects pando-node to @pando-code/core.
+   * Replaces the old agent system (Orchestrator/MessageBus/WorkerPool/OrgManager).
    */
-  startAgentSystem(): void {
-    if (this.agentSystemStarted) return;
-    this.agentSystemStarted = true;
+  async startEngine(): Promise<void> {
+    if (this.engineAdapter?.available) return;
 
-    const dataDir = this.config.dataDir;
+    this.engineAdapter = new EngineAdapter();
 
-    // Initialize AI Backend Registry — PandoCode is the only backend.
-    this.aiBackendRegistry = new AIBackendRegistry();
-    const pandoCodeBackend = new PandoCodeBackend();
-    this.aiBackendRegistry.register(pandoCodeBackend);
-    // Store the config promise so WorkerPool.spawn() can await it before first use
-    this.aiBackendRegistry.configReady = this.aiBackendRegistry.detectAll().then(async () => {
-      // Configure PandoCode with Pando-specific integrations (Lux budget, custom tools)
-      if (pandoCodeBackend.available) {
-        try {
-          let token: string | undefined;
-          try {
-            const tokenPath = join(dataDir, 'api-token');
-            if (existsSync(tokenPath)) token = readFileSync(tokenPath, 'utf-8').trim();
-          } catch { /* no token */ }
-          await configurePandoEngine(pandoCodeBackend, {
-            apiPort: this.config.apiPort,
-            apiToken: token,
-            nodeId: this.identity?.peerId,
-            useLuxBudget: true,
-            resourceRegistry: this.resourceRegistry,
-          });
-          console.log('[ai-backend] PandoCode engine configured with Lux budget and Pando tools');
-        } catch (err: any) {
-          console.warn('[ai-backend] PandoCode configuration failed:', err.message);
-        }
-      }
-    }).catch(err =>
-      console.warn('[ai-backend] Detection error:', err)
-    );
-
-    // Initialize unified agent database
-    this.agentDb = new AgentDatabase(dataDir);
-    const { cleaned, interruptedWorkers } = this.agentDb.cleanupStaleAgents();
-    if (cleaned > 0) console.log(`[agents] Cleaned ${cleaned} stale agents from previous run`);
-    if (interruptedWorkers.length > 0) console.log(`[agents] ${interruptedWorkers.length} worker(s) were interrupted during restart`);
-    console.log('[agents] AgentDatabase initialized');
-
-    // Initialize MessageBus
-    this.messageBus = new MessageBus(this.agentDb);
-    console.log('[agents] MessageBus initialized');
-
-    // Send worker_interrupted messages for workers interrupted during node restart.
-    // Orchestrator (orchestrator.ts) filters for 'worker_interrupted' type and surfaces
-    // these in the dedicated interrupted-workers board section.
-    for (const worker of interruptedWorkers) {
-      try {
-        this.messageBus.send({
-          recipientId: worker.parentId,
-          senderId: worker.id,
-          senderType: 'worker',
-          type: 'worker_interrupted',
-          payload: {
-            status: 'interrupted',
-            summary: `Worker was interrupted during node restart while working on: ${(worker.rolePrompt || '').slice(0, 200)}`,
-            taskId: worker.currentTaskId,
-            sessionId: worker.sessionId,
-            auto: true,
-          },
-          priority: 0,
-        });
-        // Clear currentTaskId so this notification isn't sent again on subsequent restarts
-        this.agentDb.updateAgent(worker.id, { currentTaskId: null });
-        console.log(`[agents] Sent recovery report for interrupted worker ${worker.id} (${worker.role}) → ${worker.parentId}`);
-      } catch (err) {
-        console.warn(`[agents] Failed to send recovery report for ${worker.id}:`, err);
-      }
-    }
-    if (interruptedWorkers.length > 0) {
-      console.log(`[agents] Notified orchestrator(s) about ${interruptedWorkers.length} interrupted worker(s)`);
-    }
-
-    // Phase 105: Initialize TemplateRegistry (shares agents.db)
-    this.templateRegistry = new TemplateRegistry(this.agentDb.getRawDb());
-    const tmplCount = this.templateRegistry.listTemplates().length;
-    console.log(`[agents] TemplateRegistry initialized (${tmplCount} templates)`);
-    console.log('[agents] Context API ready: /v1/context/{project,lessons,team,identity,discover}');
-
-    // Initialize WorkerPool
-    this.workerPool = new WorkerPool(
-      this.agentDb,
-      this.aiBackendRegistry,
-      this.messageBus,
-      { dataDir, apiPort: this.config.apiPort, templateRegistry: this.templateRegistry, isRestartPending: () => this.restartPending },
-    );
-    console.log('[agents] WorkerPool initialized');
-
-    // Initialize OrgManager
-    this.orgManager = new OrgManager(this.agentDb, this.workerPool, this.messageBus);
-    console.log('[agents] OrgManager initialized');
-
-    // Find existing council orchestrator (survives restarts) or create new
-    const existingCouncil = this.agentDb.listAgents({ role: 'council', type: 'orchestrator' })
-      .find(a => a.status === 'pending' || a.status === 'active');
-    if (existingCouncil) {
-      this.councilOrchId = existingCouncil.id;
-      this.agentDb.updateAgent(existingCouncil.id, { status: 'active' });
-      console.log(`[agents] Council orchestrator rehydrated: ${this.councilOrchId}`);
-    } else {
-      this.councilOrchId = this.orgManager.createOrchestrator({
-        role: 'council',
-        level: 0,
-        scope: 'public',
-        tickIntervalMs: 60000,
-        maxWorkers: 10,
-        maxChildren: 5,
-        persistent: true,
-        nodeId: this.identity?.peerId || undefined,
-        rolePrompt: `You are the council orchestrator for a Pando node.
-Your job: monitor the network, handle user requests (routed from project orchestrators),
-respond to health alerts, and manage the self-sustaining loop (build → QA → governance → upgrade).
-In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for tasks.`,
-      });
-      console.log(`[agents] Council orchestrator created: ${this.councilOrchId}`);
-    }
-
-    // ---------------------------------------------------------------------------
-    // Phase 200: Process-isolated orchestrators
-    // System orchestrators (council, observer, qa-user) run in their own child
-    // processes. The main process stays responsive for API, P2P, and networking.
-    // ---------------------------------------------------------------------------
-
-    // Read API token for scenario runner in child processes
-    let apiToken = '';
+    let token: string | undefined;
     try {
-      const tokenPath = join(dataDir, 'api-token');
-      if (existsSync(tokenPath)) apiToken = readFileSync(tokenPath, 'utf-8').trim();
+      const tokenPath = join(this.config.dataDir, 'api-token');
+      if (existsSync(tokenPath)) token = readFileSync(tokenPath, 'utf-8').trim();
     } catch { /* no token */ }
 
-    // Async onCommit for process manager (non-blocking git/build)
-    const asyncOnCommit = async (message: string): Promise<boolean> => {
-      try {
-        const cwd = process.cwd();
-        await execAsync('git add -A', { cwd, timeout: 10000 });
-        const { stdout: status } = await execAsync('git status --porcelain', { cwd, timeout: 5000 });
-        if (!status.trim()) {
-          console.log('[orchestrator] Nothing to commit');
-          try {
-            await execAsync('git push origin master', { cwd, timeout: 30000 });
-            console.log('[orchestrator] Pushed orphaned commits to origin');
-          } catch (pushErr: any) {
-            console.warn('[orchestrator] Push failed (non-fatal):', pushErr.message?.slice(0, 100));
-          }
-          return false;
-        }
-        await execAsync(`git commit -m "${message.replace(/"/g, '\\"')}"`, { cwd, timeout: 30000 });
-        console.log(`[orchestrator] Committed: ${message}`);
-        try {
-          await execAsync('git push origin master', { cwd, timeout: 30000 });
-          console.log('[orchestrator] Pushed to origin');
-        } catch (pushErr: any) {
-          console.warn('[orchestrator] Push failed (non-fatal):', pushErr.message?.slice(0, 100));
-        }
-        // Post-commit: rebuild (async — doesn't block main event loop)
-        try {
-          console.log('[orchestrator] Post-commit build starting...');
-          await execAsync('npm run build', { cwd, timeout: 120000 });
-          console.log('[orchestrator] Post-commit build succeeded');
-        } catch (buildErr: any) {
-          console.error('[orchestrator] Post-commit build FAILED — reverting commit');
-          try {
-            await execAsync('git revert --no-edit HEAD', { cwd, timeout: 15000 });
-            console.log('[orchestrator] Reverted broken commit');
-          } catch (revertErr: any) {
-            console.error('[orchestrator] Revert failed:', revertErr.message?.slice(0, 100));
-          }
-          return false;
-        }
-        return true;
-      } catch (err: any) {
-        console.error('[orchestrator] Commit failed:', err.message?.slice(0, 200));
-        return false;
-      }
-    };
-
-    // Async onPropose
-    const asyncOnPropose = this.upgradeProtocol
-      ? async (title: string, description: string) => {
-          await this.upgradeProtocol!.createUpgradeProposal(`${title}: ${description}`);
-        }
-      : (this.governance
-          ? async (title: string, description: string) => {
-              await this.governance!.createProposal(title, description);
-            }
-          : undefined);
-
-    // Create the process manager
-    this.orchestratorManager = new OrchestratorProcessManager({
-      workerPool: this.workerPool,
-      messageBus: this.messageBus,
-      orgManager: this.orgManager,
-      onCommit: asyncOnCommit,
-      onPropose: asyncOnPropose,
-      pushEvent: (event: string, data: any) => this.apiServer?.pushEvent(event, data),
-      sendChatResult: async (peerId: string, threadId: string, message: string) => {
-        if (this.requestReply) {
-          try {
-            await this.requestReply.request(peerId, 'chat_result', { threadId, message }, 10_000);
-          } catch (err: any) {
-            console.warn(`[chat_result] Failed to send to ${peerId.slice(0, 12)}: ${err.message?.slice(0, 100)}`);
-          }
-        }
-      },
-      threadStore: this.threadStore || undefined,
-      getPeerCount: () => this.network?.getPeers()?.length ?? 0,
-      apiPort: this.config.apiPort,
-      dataDir,
-      repoDir: process.cwd(),
-      graphPath: join(process.cwd(), 'output', 'graph.json'),
-      apiToken,
-      startOrchestrator: async (orchId: string, isCouncil: boolean) => {
-        this.orchestratorManager!.startOrchestrator(orchId, isCouncil);
-      },
-    });
-    console.log('[agents] OrchestratorProcessManager initialized');
-
-    // Start council in its own process
-    this.orchestratorManager.startOrchestrator(this.councilOrchId, true);
-    console.log('[agents] Council orchestrator forked to child process');
-
-    // Find existing observer orchestrator or create new
-    const existingObserver = this.agentDb.listAgents({ role: 'observer', type: 'orchestrator' })
-      .find(a => a.status === 'pending' || a.status === 'active');
-    if (existingObserver) {
-      this.observerOrchId = existingObserver.id;
-      this.agentDb.updateAgent(existingObserver.id, { status: 'active' });
-      this.agentDb.updateAgent(existingObserver.id, { tickIntervalMs: 1800000 });
-      console.log(`[agents] Observer orchestrator rehydrated: ${this.observerOrchId}`);
-    } else {
-      this.observerOrchId = this.orgManager.createOrchestrator({
-        role: 'observer',
-        level: 0,
-        scope: 'public',
-        tickIntervalMs: 1800000, // 30 minutes
-        maxWorkers: 0,
-        maxChildren: 0,
-        persistent: true,
-        nodeId: this.identity?.peerId || undefined,
-        rolePrompt: 'You are the Observer — Pando\'s Chief Architect Agent. You independently audit the system and send findings as directives to the CEO. You CANNOT write code, commit, spawn workers, or propose upgrades. You observe and suggest.',
+    try {
+      await this.engineAdapter.start({
+        apiPort: this.config.apiPort,
+        apiToken: token,
+        nodeId: this.identity?.peerId,
+        dataDir: this.config.dataDir,
+        resourceRegistry: this.resourceRegistry,
       });
-      console.log(`[agents] Observer orchestrator created: ${this.observerOrchId}`);
-    }
-    this.orchestratorManager.startOrchestrator(this.observerOrchId!);
-    console.log('[agents] Observer orchestrator forked to child process (30min interval)');
-
-    // Find existing QA User Agent orchestrator or create new
-    const existingQaUser = this.agentDb.listAgents({ role: 'qa-user', type: 'orchestrator' })
-      .find(a => a.status === 'pending' || a.status === 'active');
-    if (existingQaUser) {
-      this.qaUserOrchId = existingQaUser.id;
-      this.agentDb.updateAgent(existingQaUser.id, { status: 'active' });
-      this.agentDb.updateAgent(existingQaUser.id, { tickIntervalMs: 1800000 });
-      console.log(`[agents] QA User Agent rehydrated: ${this.qaUserOrchId}`);
-    } else {
-      this.qaUserOrchId = this.orgManager.createOrchestrator({
-        role: 'qa-user',
-        level: 0,
-        scope: 'public',
-        tickIntervalMs: 1800000, // 30 minutes
-        maxWorkers: 2,
-        maxChildren: 0,
-        persistent: true,
-        nodeId: this.identity?.peerId || undefined,
-        rolePrompt: 'QA User Agent — tests from human perspective using Playwright',
-      });
-      console.log(`[agents] QA User Agent created: ${this.qaUserOrchId}`);
-    }
-    this.orchestratorManager.startOrchestrator(this.qaUserOrchId!);
-    console.log('[agents] QA User Agent forked to child process (30min interval)');
-
-    // Phase 104: Rehydrate persistent project orchestrators from DB
-    // Check both 'active' and 'pending' (pending = survived restart, needs reactivation)
-    const activeOrchs = this.agentDb.listAgents({ type: 'orchestrator' })
-      .filter(o => o.status === 'active' || o.status === 'pending');
-    for (const orch of activeOrchs) {
-      if (orch.id === this.councilOrchId) continue;
-      if (!orch.projectId) continue;
-      try {
-        this.ensureProjectOrchestrator(orch.projectId).catch(err =>
-          console.warn(`[agents] Rehydration failed for project ${orch.projectId}: ${err.message}`)
-        );
-      } catch { /* non-fatal */ }
-    }
-    console.log(`[agents] Checked ${activeOrchs.filter(o => o.id !== this.councilOrchId && o.projectId).length} project orchestrator(s) for rehydration`);
-
-    // Wire to API server
-    if (this.apiServer) {
-      this.apiServer.setAgentSystem({
-        db: this.agentDb,
-        workerPool: this.workerPool,
-        messageBus: this.messageBus,
-        orgManager: this.orgManager,
-      });
+      console.log('[engine] EngineAdapter started — PandoCode brain connected.');
+    } catch (err: any) {
+      console.warn('[engine] EngineAdapter failed to start:', err.message);
+      this.engineAdapter = null;
     }
 
-    // Phase 30: Wire PaymentGate to Governance for proposal staking
+    // Wire PaymentGate to Governance for proposal staking
     if (this.paymentGate && this.governance) {
       this.governance.setPaymentGate(this.paymentGate);
-    }
-
-    // Wire AgentDatabase to Governance for audit logging
-    if (this.agentDb && this.governance) {
-      this.governance.setAgentDb(this.agentDb);
     }
 
     // Governance hardening: wire Ed25519 private key for proposal signing
     if (this.governance && this.identity?.privateKey) {
       this.governance.setIdentityPrivateKey(this.identity.privateKey);
     }
-
-    // Phase 30.2: Wire WorkerPool to Governance for reviewer agent spawning
-    if (this.governance && this.workerPool && this.councilOrchId) {
-      const pool = this.workerPool;
-      const orchId = this.councilOrchId;
-      this.governance.setAgentManager({
-        async spawnAgent(opts: any) {
-          return pool.spawn({
-            role: opts.role || 'reviewer',
-            orchestratorId: orchId,
-            projectId: opts.projectId,
-            rolePrompt: `${opts.description || ''}\n\n${opts.taskContext || ''}`,
-          });
-        },
-      });
-    }
-
-    // Wire health monitor alerts to council orchestrator
-    if (this.monitor && this.messageBus && this.councilOrchId) {
-      const bus = this.messageBus;
-      const councilId = this.councilOrchId;
-      this.monitor.onAlert((alert) => {
-        bus.send({
-          recipientId: councilId,
-          senderId: 'health-monitor',
-          senderType: 'system',
-          type: 'health_alert',
-          payload: {
-            severity: alert.severity || 'medium',
-            message: alert.message || alert.type,
-            type: alert.type,
-          },
-          priority: alert.severity === 'critical' ? 0 : 1,
-        });
-      });
-      console.log('[agents] Health monitor wired to council orchestrator');
-    }
-
-    console.log('[agents] Agent system started.');
   }
 
   // ----------------------------------------------------------
@@ -3609,8 +2944,8 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     }
     this.schedulerEnabled = true;
 
-    // Ensure agent system is running (no-op if already started)
-    this.startAgentSystem();
+    // Ensure engine is running (no-op if already started)
+    this.startEngine().catch(err => console.warn('[scheduler] Engine start failed:', err.message));
 
     const dataDir = this.config.dataDir || join(homedir(), '.pando');
 
@@ -3677,103 +3012,25 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       this.monitor.attachScheduler(this.scheduler);
     }
 
-    // Task completion/failure → notify council orchestrator via MessageBus
-    this.scheduler.on('task:completed', (data: any) => {
-      if (this.messageBus && this.councilOrchId && data?.taskId) {
-        const task = this.taskQueue?.getTask(data.taskId);
-        this.messageBus.send({
-          recipientId: this.councilOrchId,
-          senderId: 'scheduler',
-          senderType: 'system',
-          type: 'task_result',
-          payload: { taskId: data.taskId, success: true, title: task?.title || data.taskId },
-          priority: 1,
-        });
-      }
-    });
-    this.scheduler.on('task:failed', (data: any) => {
-      if (this.messageBus && this.councilOrchId && data?.taskId) {
-        const task = this.taskQueue?.getTask(data.taskId);
-        this.messageBus.send({
-          recipientId: this.councilOrchId,
-          senderId: 'scheduler',
-          senderType: 'system',
-          type: 'task_result',
-          payload: { taskId: data.taskId, success: false, title: task?.title || data.taskId, error: data?.error },
-          priority: 0,
-        });
-      }
-    });
-
-    // When a task is approved, send to council orchestrator
-    this.scheduler.on('task:approved', (data: any) => {
-      if (!this.messageBus || !this.councilOrchId || !this.taskQueue) return;
-      const task = this.taskQueue.getTask(data.taskId);
-      if (!task) return;
-
-      // Capability check
-      if (this.capabilityRegistry) {
-        const resourceReqs = task.requiredResources;
-        if (resourceReqs && resourceReqs.length > 0 && !this.capabilityRegistry.canExecuteLocally(resourceReqs)) {
-          console.log(`[scheduler→agents] Skipping task ${data.taskId.slice(0, 8)}: missing resource capabilities`);
-          return;
-        }
-      }
-      const requiredCaps = (task.requiredCapabilities && task.requiredCapabilities.length > 0)
-        ? task.requiredCapabilities
-        : [NodeCapability.CLAUDE_CODE];
-      const missingCaps = requiredCaps.filter((c: string) => !this.detectedCapabilities.includes(c));
-      if (missingCaps.length > 0) {
-        console.log(`[scheduler→agents] Skipping task ${data.taskId.slice(0, 8)}: missing capabilities`);
-        return;
-      }
-
-      this.messageBus.send({
-        recipientId: this.councilOrchId,
-        senderId: 'scheduler',
-        senderType: 'system',
-        type: 'task_assignment',
-        payload: {
-          message: `[APPROVED TASK] Execute this task:\n\nTitle: ${task.title}\nDescription: ${task.description || 'No description'}\nPriority: ${task.priority}\nTask ID: ${data.taskId}`,
-          taskId: data.taskId,
-        },
-        priority: task.priority === 'critical' ? 0 : 1,
-      });
-      console.log(`[scheduler→agents] Approved task ${data.taskId.slice(0, 8)} → council orchestrator`);
-    });
+    // Task events are now handled by EngineAdapter — no MessageBus routing needed.
+    // The scheduler still tracks task lifecycle; engine handles execution.
 
     return this.scheduler;
   }
 
   /**
-   * Stop the Agent System and release resources.
+   * Stop the EngineAdapter and release resources.
    */
-  stopAgentSystem(): void {
-    // Phase 104: Stop ALL live orchestrators (council + project)
-    for (const [, orch] of this.liveOrchestrators) {
-      orch.stop();
-    }
-    this.liveOrchestrators.clear();
-    this.councilOrchestrator = null;
-    if (this.workerPool) {
-      this.workerPool.cleanup();
-    }
-    if (this.agentDb) {
-      this.agentDb.close();
-      this.agentDb = null;
-    }
-    this.messageBus = null;
-    this.workerPool = null;
-    this.orgManager = null;
-    this.councilOrchId = null;
-    this.agentSystemStarted = false;
+  async stopEngine(): Promise<void> {
+    await this.engineAdapter?.shutdown();
+    this.engineAdapter = null;
   }
 
   /**
-   * Stop the Scheduler and Agent System, release resources.
+   * Stop the Scheduler and Engine, release resources.
    */
   stopScheduler(): void {
-    this.stopAgentSystem();
+    this.stopEngine().catch(() => {});
     if (this.scheduler) {
       this.scheduler.stop();
       this.scheduler = null;
@@ -3785,28 +3042,8 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     return this.scheduler;
   }
 
-  getAgentDb(): AgentDatabase | null {
-    return this.agentDb;
-  }
-
-  getMessageBus(): MessageBus | null {
-    return this.messageBus;
-  }
-
-  getWorkerPool(): WorkerPool | null {
-    return this.workerPool;
-  }
-
-  getOrgManager(): OrgManager | null {
-    return this.orgManager;
-  }
-
-  getTemplateRegistry(): TemplateRegistry | null {
-    return this.templateRegistry;
-  }
-
-  getCouncilOrchId(): string | null {
-    return this.councilOrchId;
+  getEngineAdapter(): EngineAdapter | null {
+    return this.engineAdapter;
   }
 
   getThreadStore(): ThreadStore | null {
@@ -4138,13 +3375,6 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     return this.networkState;
   }
 
-  getCouncilOrchestrator(): Orchestrator | null {
-    return this.councilOrchestrator;
-  }
-
-  getAIBackendRegistry(): AIBackendRegistry | null {
-    return this.aiBackendRegistry;
-  }
 
   getContentRegistry(): ContentRegistry | null {
     return this.contentRegistry;
@@ -4216,17 +3446,9 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
       this.networkState.stop();
       this.networkState = null;
     }
-    // Phase 200: Stop process-isolated orchestrators
-    if (this.orchestratorManager) {
-      await this.orchestratorManager.stopAll();
-      this.orchestratorManager = null;
-    }
-    // Phase 104: Stop ALL live orchestrators (project orchestrators still in-process)
-    for (const [, orch] of this.liveOrchestrators) {
-      orch.stop();
-    }
-    this.liveOrchestrators.clear();
-    this.councilOrchestrator = null;
+    // Shutdown EngineAdapter
+    await this.engineAdapter?.shutdown();
+    this.engineAdapter = null;
     this.stopMonitor();
     this.stopScheduler();
     if (this.upgradeProtocol) {
@@ -4308,7 +3530,7 @@ In dev mode, you are the ONLY top-level orchestrator. Spawn workers directly for
     this.taskQueue = null;
     this.requestReply = null;
     this.reputation = null;
-    // Agent system cleanup handled by stopAgentSystem() via stopScheduler()
+    // Engine cleanup handled by stopEngine() via stopScheduler()
     if (this.apiServer) {
       await this.apiServer.stop();
     }
@@ -4334,14 +3556,9 @@ export { LedgerSync } from './kernel/sync.js';
 export { GovernanceSync } from './kernel/governance.js';
 export { FileRegistry } from './platform/file-registry.js';
 export { getDefaultConfig } from './config.js';
-// New agent system exports
-export { AgentDatabase } from './platform/agent-database.js';
-export { MessageBus } from './core/message-bus.js';
-export { WorkerPool } from './core/worker-pool.js';
-export { OrgManager } from './platform/org-manager.js';
-export { Orchestrator } from './platform/orchestrator.js';
-export { TemplateRegistry } from './platform/template-registry.js';
-export { registerAgentRoutes } from './platform/agent-tools.js';
+// Engine adapter — the nervous system between pando-node (body) and pando-code (brain)
+export { EngineAdapter } from './core/engine-adapter.js';
+export type { AdapterConfig, ReviewResult } from './core/engine-adapter.js';
 export { Scheduler } from './platform/scheduler.js';
 export type { SchedulerConfig, SchedulerStatus, ActiveTask, TaskLifecycle } from './platform/scheduler.js';
 export { TaskQueue } from './platform/task-queue.js';

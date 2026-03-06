@@ -87,9 +87,9 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       // Run shutdown sequence asynchronously so the HTTP response can be sent
       setImmediate(async () => {
         try {
-          // 1. Stop the agent system (orchestrator + workers)
-          node.stopAgentSystem();
-          console.log(`[api] Shutdown: agent system stopped`);
+          // 1. Stop the engine adapter
+          await node.stopEngine();
+          console.log(`[api] Shutdown: engine stopped`);
 
           // 2. Stop the node (closes Fastify, libp2p, SQLite, scheduler, etc.)
           await node.stop();
@@ -1103,9 +1103,9 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
                 }
 
                 // Fallback: direct shutdown + exit (headless/PM2 mode)
-                console.log('[pipeline] Graceful shutdown: stopping agents...');
-                node.stopAgentSystem();
-                console.log(`[pipeline] Agent system stopped`);
+                console.log('[pipeline] Graceful shutdown: stopping engine...');
+                await node.stopEngine();
+                console.log(`[pipeline] Engine stopped`);
 
                 console.log('[pipeline] Graceful shutdown: stopping node...');
                 await node.stop();
