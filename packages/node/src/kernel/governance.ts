@@ -34,6 +34,9 @@ interface AgentManagerLike {
 interface AgentDbLike {
   logGovernanceCheck(proposalId: string, checkName: string, result: string, reason?: string, changedFiles?: number, linesChanged?: number): void;
 }
+interface EngineAdapterLike {
+  reviewDiff(diff: string, description: string): Promise<{ safe: boolean; risks: string[]; recommendation: string }>;
+}
 
 export const TOPIC_GOVERNANCE = 'pando/governance';
 export const TOPIC_AGENT = 'pando/agents';
@@ -201,6 +204,9 @@ export class GovernanceSync {
   // Governance audit logging (optional — set via setAgentDb)
   private agentDb: AgentDbLike | null = null;
 
+  // AI review via EngineAdapter (Layer 5 — optional)
+  private engineAdapter: EngineAdapterLike | null = null;
+
   // Governance hardening: Ed25519 private key for signing proposals
   private identityPrivateKey: Uint8Array | null = null;
 
@@ -267,6 +273,12 @@ export class GovernanceSync {
   /** Set the AgentDatabase for governance audit logging. */
   setAgentDb(db: AgentDbLike): void {
     this.agentDb = db;
+  }
+
+  /** Set the EngineAdapter for AI-powered governance review (Layer 5). */
+  setEngineAdapter(adapter: EngineAdapterLike): void {
+    this.engineAdapter = adapter;
+    console.log('[governance] EngineAdapter connected — AI review enabled (Layer 5)');
   }
 
   /** Set the node's Ed25519 private key for signing governance proposals. */
@@ -1843,7 +1855,7 @@ export class GovernanceSync {
     // Phase 73: Auto-approve upgrade proposals when active peers < threshold
     if (category === 'upgrade' && proposal.upgradePayload) {
       // Security validation before auto-approve
-      const validation = this.validateUpgradeProposal(proposal);
+      const validation = await this.validateUpgradeProposal(proposal);
       if (!validation.approved) {
         console.log(`[governance] Upgrade proposal "${safeTitle}" REJECTED: ${validation.reason}`);
         proposal.status = 'rejected';
@@ -1942,7 +1954,7 @@ export class GovernanceSync {
    * Deterministic security checks for upgrade proposals.
    * Runs BEFORE auto-approve to catch security-sensitive changes, large unreviewed diffs, and build failures.
    */
-  private validateUpgradeProposal(proposal: GovernanceProposal): { approved: boolean; reason: string; kernelDelay: boolean } {
+  private async validateUpgradeProposal(proposal: GovernanceProposal): Promise<{ approved: boolean; reason: string; kernelDelay: boolean }> {
     const SECURITY_FILES = [
       'credential-store.ts', 'credential-vault.ts', 'request-reply.ts',
       'guardrails.ts', 'security-monitor.ts', 'governance.ts',
@@ -1998,7 +2010,30 @@ export class GovernanceSync {
       return { approved: false, reason, kernelDelay: false };
     }
 
-    // CHECK 3: Kernel protection — delay if kernel files modified
+    // CHECK 3: AI review — ask the engine adapter for a security analysis (non-blocking, fail-open)
+    if (this.engineAdapter) {
+      try {
+        let diff = '';
+        try {
+          diff = execSync('git diff HEAD~1', { encoding: 'utf-8', timeout: 15000 });
+        } catch { /* git unavailable — skip AI review */ }
+        if (diff) {
+          const review = await this.engineAdapter.reviewDiff(diff, proposal.description || '');
+          if (!review.safe) {
+            const reason = `AI review flagged risks: ${review.risks.join(', ')} — ${review.recommendation}`;
+            this.agentDb?.logGovernanceCheck(proposalId, 'ai_review', 'fail', reason.slice(0, 500), changedFiles.length, totalLinesChanged);
+            return { approved: false, reason, kernelDelay: false };
+          }
+          this.agentDb?.logGovernanceCheck(proposalId, 'ai_review', 'pass', review.recommendation);
+        }
+      } catch (err) {
+        // Fail-open: if AI review errors, continue with deterministic checks
+        console.warn('[governance] AI review failed (non-fatal):', (err as Error).message?.slice(0, 100));
+        this.agentDb?.logGovernanceCheck(proposalId, 'ai_review', 'skip', 'AI review error — fail-open');
+      }
+    }
+
+    // CHECK 4: Kernel protection — delay if kernel files modified
     const kernelFilesChanged = changedFiles.some(f => f.includes('kernel/'));
     if (kernelFilesChanged) {
       console.log('[governance] WARNING: Kernel file modified — applying 60s delay before approval');

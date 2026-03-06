@@ -2922,6 +2922,11 @@ location /apps/${projectId}/ {
       this.governance.setPaymentGate(this.paymentGate);
     }
 
+    // Wire EngineAdapter to Governance for AI review (Layer 5)
+    if (this.engineAdapter?.available && this.governance) {
+      this.governance.setEngineAdapter(this.engineAdapter);
+    }
+
     // Governance hardening: wire Ed25519 private key for proposal signing
     if (this.governance && this.identity?.privateKey) {
       this.governance.setIdentityPrivateKey(this.identity.privateKey);
