@@ -1,0 +1,73 @@
+{
+  "name": "governance-flow",
+  "description": "End-to-end governance cycle: view proposals, create a proposal, vote, and verify the result on the gateway.",
+  "version": "1.0.0",
+  "mode": "scripted",
+  "tags": ["governance", "api", "gateway", "voting"],
+  "prerequisites": [],
+  "steps": [
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/governance",
+      "prompt": "Navigate to the governance page"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the proposals list loads without errors",
+      "expected": "governance page content visible"
+    },
+    {
+      "action": "api_call",
+      "target": "{{API_URL}}/v1/governance/proposals",
+      "method": "GET",
+      "prompt": "Fetch all governance proposals via API",
+      "verify": "response is an array"
+    },
+    {
+      "action": "api_call",
+      "target": "{{API_URL}}/v1/governance/propose",
+      "method": "POST",
+      "body": "{\"title\":\"E2E test proposal {{TIMESTAMP}}\",\"description\":\"Automated governance flow test\",\"type\":\"general\"}",
+      "auth": "operator",
+      "prompt": "Create a new governance proposal with a timestamped title"
+    },
+    {
+      "action": "assert_status",
+      "target": "{{API_URL}}/v1/governance/proposals",
+      "method": "GET",
+      "expected": "200",
+      "prompt": "Verify proposals endpoint returns 200 after creation"
+    },
+    {
+      "action": "api_call",
+      "target": "{{API_URL}}/v1/governance/vote",
+      "method": "POST",
+      "body": "{\"proposalId\":\"latest\",\"vote\":\"approve\"}",
+      "auth": "operator",
+      "prompt": "Vote to approve the most recent proposal"
+    },
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/governance",
+      "prompt": "Return to the governance page to verify the proposal is visible"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the newly created proposal appears in the list",
+      "expected": "proposal visible on page"
+    },
+    {
+      "action": "evaluate",
+      "target": "{{GATEWAY_URL}}/governance",
+      "prompt": "Review the governance page UX: Is the proposal list clear? Are vote counts visible? Is the create-proposal flow discoverable?",
+      "live_only": true
+    },
+    {
+      "action": "screenshot",
+      "target": "governance-final-state",
+      "prompt": "Capture the final governance page state"
+    }
+  ]
+}

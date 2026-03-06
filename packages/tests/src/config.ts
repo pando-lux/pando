@@ -74,12 +74,16 @@ export function saveConfig(rootDir: string, config: StoredConfig): void {
 export function initProject(rootDir: string, config?: Partial<StoredConfig>): StoredConfig {
   const dir = testsDir(rootDir);
   const screenshotsPath = path.join(dir, SCREENSHOTS_DIR);
+  const playbooksPath = path.join(dir, 'playbooks');
 
   if (!fs.existsSync(dir)) {
     fs.mkdirSync(dir, { recursive: true });
   }
   if (!fs.existsSync(screenshotsPath)) {
     fs.mkdirSync(screenshotsPath, { recursive: true });
+  }
+  if (!fs.existsSync(playbooksPath)) {
+    fs.mkdirSync(playbooksPath, { recursive: true });
   }
 
   const merged: StoredConfig = {

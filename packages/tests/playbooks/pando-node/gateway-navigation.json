@@ -1,0 +1,93 @@
+{
+  "name": "gateway-navigation",
+  "description": "Full gateway walkthrough: visit every major page and verify they load without errors.",
+  "version": "1.0.0",
+  "mode": "scripted",
+  "tags": ["gateway", "navigation", "smoke-test", "ux"],
+  "prerequisites": [],
+  "steps": [
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}",
+      "prompt": "Navigate to the gateway home page"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the hero section or main landing content is visible",
+      "expected": "home page hero section visible"
+    },
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/status",
+      "prompt": "Navigate to the status page"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify status data is displayed (uptime, peers, version)",
+      "expected": "status information visible"
+    },
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/peers",
+      "prompt": "Navigate to the peers page"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the peers page renders",
+      "expected": "peers list or network view visible"
+    },
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/wallet",
+      "prompt": "Navigate to the wallet page"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the wallet page renders",
+      "expected": "wallet or balance information visible"
+    },
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/chat",
+      "prompt": "Navigate to the chat page"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the chat interface renders",
+      "expected": "chat interface visible"
+    },
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/governance",
+      "prompt": "Navigate to the governance page"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the governance page renders",
+      "expected": "governance proposals or voting UI visible"
+    },
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/resources",
+      "prompt": "Navigate to the resources page"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the resources page renders",
+      "expected": "resource listings visible"
+    },
+    {
+      "action": "evaluate",
+      "target": "{{GATEWAY_URL}}",
+      "prompt": "Evaluate overall navigation: Are all pages reachable? Is the nav bar consistent? Are there any broken pages, missing content, or layout issues across the site?",
+      "live_only": true
+    }
+  ]
+}

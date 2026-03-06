@@ -1,0 +1,60 @@
+{
+  "name": "chat-experience",
+  "description": "Chat flow verification: load chat page, interact with threads API, create a thread, and evaluate the chat UX.",
+  "version": "1.0.0",
+  "mode": "scripted",
+  "tags": ["chat", "threads", "gateway", "ux"],
+  "prerequisites": [],
+  "steps": [
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/chat",
+      "prompt": "Navigate to the chat page on the gateway"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the chat page loads and the chat interface is visible",
+      "expected": "chat interface visible"
+    },
+    {
+      "action": "api_call",
+      "target": "{{API_URL}}/v1/chat/threads",
+      "method": "GET",
+      "prompt": "Fetch existing chat threads from the API",
+      "verify": "response is an array"
+    },
+    {
+      "action": "api_call",
+      "target": "{{API_URL}}/v1/chat/threads",
+      "method": "POST",
+      "body": "{\"title\":\"E2E Test Thread\",\"message\":\"Hello from the chat-experience playbook\"}",
+      "auth": "operator",
+      "prompt": "Create a new chat thread with an initial message"
+    },
+    {
+      "action": "assert_status",
+      "target": "{{API_URL}}/v1/chat/threads",
+      "method": "GET",
+      "expected": "200",
+      "prompt": "Verify the threads endpoint returns 200 after thread creation"
+    },
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/chat",
+      "prompt": "Reload the chat page to verify the new thread appears"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the newly created thread is visible in the thread list",
+      "expected": "thread list with new thread visible"
+    },
+    {
+      "action": "evaluate",
+      "target": "{{GATEWAY_URL}}/chat",
+      "prompt": "Evaluate the chat UX: Is the conversation flow intuitive? Are threads easy to find and switch between? Is message composition straightforward? Does the real-time feel work?",
+      "live_only": true
+    }
+  ]
+}

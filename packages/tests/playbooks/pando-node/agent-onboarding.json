@@ -1,0 +1,58 @@
+{
+  "name": "agent-onboarding",
+  "description": "Agent identity and authentication flow: challenge-response auth, node status verification, and gateway agent pages.",
+  "version": "1.0.0",
+  "mode": "scripted",
+  "tags": ["auth", "agents", "identity", "login", "gateway"],
+  "prerequisites": [],
+  "steps": [
+    {
+      "action": "api_call",
+      "target": "{{API_URL}}/v1/auth/challenge",
+      "method": "POST",
+      "prompt": "Request an authentication challenge nonce from the node"
+    },
+    {
+      "action": "assert_status",
+      "target": "{{API_URL}}/v1/auth/challenge",
+      "method": "POST",
+      "expected": "200",
+      "prompt": "Verify the challenge endpoint returns a 200 with a nonce token"
+    },
+    {
+      "action": "api_call",
+      "target": "{{API_URL}}/v1/status",
+      "method": "GET",
+      "prompt": "Verify the node is running and responsive",
+      "verify": "response contains peerId and uptime"
+    },
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/login",
+      "prompt": "Navigate to the login page on the gateway"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the login page renders correctly",
+      "expected": "login form or authentication UI visible"
+    },
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/agents",
+      "prompt": "Navigate to the agents overview page"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the agents page shows the agent hierarchy or a list of agents",
+      "expected": "agent hierarchy or agent list visible"
+    },
+    {
+      "action": "evaluate",
+      "target": "{{GATEWAY_URL}}/agents",
+      "prompt": "Evaluate the agent onboarding experience: Is it clear how a new agent authenticates? Is the hierarchy understandable? Would a first-time user know what to do?",
+      "live_only": true
+    }
+  ]
+}

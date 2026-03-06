@@ -1,6 +1,10 @@
 import { v4 as uuidv4 } from 'uuid';
 import { TestDatabase } from './database';
 import { initProject, loadConfig } from './config';
+import { ScriptedRunner, ScriptedRunOptions, ScriptedRunResult } from './scripted/runner';
+import { LiveRunner, LiveRunOptions, LiveRunResult } from './live/runner';
+import { BasicEvaluator } from './live/evaluator';
+import { loadPlaybook, loadPlaybooksFromDir, validatePlaybook } from './playbooks/loader';
 import type {
   ProjectConfig,
   Playbook,
@@ -12,6 +16,7 @@ import type {
   FindingStatus,
   FindingSeverity,
   TestMode,
+  TestEvaluator,
 } from './types';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -19,6 +24,8 @@ import * as fs from 'fs';
 export class PandoTester {
   public readonly config: ProjectConfig;
   private db: TestDatabase;
+  private scriptedRunner: ScriptedRunner;
+  private liveRunner: LiveRunner;
 
   constructor(config: ProjectConfig) {
     this.config = config;
@@ -36,27 +43,39 @@ export class PandoTester {
 
     const dbPath = path.join(testsDir, 'results.db');
     this.db = new TestDatabase(dbPath);
+    this.scriptedRunner = new ScriptedRunner(this.db);
+    this.liveRunner = new LiveRunner(this.db, new BasicEvaluator());
   }
 
-  // ── Scripted Runner (stub) ────────────────────────────────────
+  // ── Scripted Runner ───────────────────────────────────────────
 
-  /**
-   * Run a playbook in scripted mode (Playwright automation).
-   * Phase 2 implementation.
-   */
-  async scripted(_playbook: Playbook): Promise<RunRecord> {
-    throw new Error('Not yet implemented: scripted runner (Phase 2)');
-  }
+  scripted = {
+    run: (options?: ScriptedRunOptions): Promise<ScriptedRunResult> => {
+      return this.scriptedRunner.run(options);
+    },
+    runAll: (options?: Omit<ScriptedRunOptions, 'specFile' | 'tags'>): Promise<ScriptedRunResult> => {
+      return this.scriptedRunner.runAll(options);
+    },
+  };
 
-  // ── Live Runner (stub) ────────────────────────────────────────
+  // ── Live Runner ───────────────────────────────────────────────
 
-  /**
-   * Run a playbook in live/agent mode (AI-driven exploration).
-   * Phase 3 implementation.
-   */
-  async live(_playbook: Playbook): Promise<RunRecord> {
-    throw new Error('Not yet implemented: live runner (Phase 3)');
-  }
+  live = {
+    run: (playbook: Playbook, options?: LiveRunOptions): Promise<LiveRunResult> => {
+      return this.liveRunner.run(playbook, options);
+    },
+    setEvaluator: (evaluator: TestEvaluator): void => {
+      this.liveRunner.setEvaluator(evaluator);
+    },
+  };
+
+  // ── Playbooks ─────────────────────────────────────────────────
+
+  playbooks = {
+    load: (filePath: string): Playbook => loadPlaybook(filePath),
+    loadDir: (dirPath: string): Playbook[] => loadPlaybooksFromDir(dirPath),
+    validate: (data: unknown): Playbook => validatePlaybook(data),
+  };
 
   // ── Scenarios ─────────────────────────────────────────────────
 
@@ -211,6 +230,13 @@ export class PandoTester {
 
 export { TestDatabase } from './database';
 export { loadConfig, saveConfig, initProject, resolveVariables } from './config';
+export { ScriptedRunner } from './scripted/runner';
+export type { ScriptedRunOptions, ScriptedRunResult } from './scripted/runner';
+export { LiveRunner } from './live/runner';
+export type { LiveRunOptions, LiveRunResult } from './live/runner';
+export { BasicEvaluator, AIEvaluator } from './live/evaluator';
+export { loadPlaybook, loadPlaybooksFromDir, validatePlaybook, resolvePlaybookVariables } from './playbooks/loader';
+export { fetchWithRetry, loadApiToken, apiGet, apiPost, apiRaw } from './scripted/helpers';
 export type {
   ProjectConfig,
   PlaybookStep,

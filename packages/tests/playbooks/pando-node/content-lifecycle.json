@@ -1,0 +1,66 @@
+{
+  "name": "content-lifecycle",
+  "description": "Content and project lifecycle: create a project, register content, verify marketplace listings, and evaluate UX.",
+  "version": "1.0.0",
+  "mode": "scripted",
+  "tags": ["content", "projects", "marketplace", "gateway"],
+  "prerequisites": [],
+  "steps": [
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/projects",
+      "prompt": "Navigate to the projects page on the gateway"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the projects page loads and displays content",
+      "expected": "projects page content visible"
+    },
+    {
+      "action": "api_call",
+      "target": "{{API_URL}}/v1/projects",
+      "method": "POST",
+      "body": "{\"name\":\"e2e-test-project\",\"description\":\"Automated content lifecycle test project\"}",
+      "auth": "operator",
+      "prompt": "Create a new test project via the API"
+    },
+    {
+      "action": "assert_status",
+      "target": "{{API_URL}}/v1/projects",
+      "method": "GET",
+      "expected": "200",
+      "prompt": "Verify the projects endpoint returns 200 after project creation"
+    },
+    {
+      "action": "api_call",
+      "target": "{{API_URL}}/v1/content",
+      "method": "POST",
+      "body": "{\"title\":\"E2E Test Content\",\"type\":\"document\",\"description\":\"Test content registered during lifecycle playbook\"}",
+      "auth": "operator",
+      "prompt": "Register new content in the content registry"
+    },
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/marketplace",
+      "prompt": "Navigate to the marketplace page"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the marketplace page loads and shows content listings",
+      "expected": "marketplace content visible"
+    },
+    {
+      "action": "evaluate",
+      "target": "{{GATEWAY_URL}}/marketplace",
+      "prompt": "Evaluate the marketplace UX: Are content listings clear? Is pricing visible? Can a user easily find and access content?",
+      "live_only": true
+    },
+    {
+      "action": "screenshot",
+      "target": "marketplace-final-state",
+      "prompt": "Capture the marketplace page state after content registration"
+    }
+  ]
+}

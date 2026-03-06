@@ -1,0 +1,65 @@
+{
+  "name": "wallet-economy",
+  "description": "Lux economy verification: check balance, view accounts and transactions via API, and verify the wallet gateway page.",
+  "version": "1.0.0",
+  "mode": "scripted",
+  "tags": ["wallet", "economy", "lux", "ledger", "gateway"],
+  "prerequisites": [],
+  "steps": [
+    {
+      "action": "api_call",
+      "target": "{{API_URL}}/v1/status",
+      "method": "GET",
+      "prompt": "Fetch node status to read the current Lux balance",
+      "verify": "response contains balance field"
+    },
+    {
+      "action": "assert_status",
+      "target": "{{API_URL}}/v1/status",
+      "expected": "200",
+      "prompt": "Verify the status endpoint returns 200 with a balance"
+    },
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/wallet",
+      "prompt": "Navigate to the wallet page on the gateway"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the wallet page displays the current Lux balance",
+      "expected": "balance amount visible on wallet page"
+    },
+    {
+      "action": "api_call",
+      "target": "{{API_URL}}/v1/ledger/accounts",
+      "method": "GET",
+      "prompt": "Fetch all ledger accounts to verify the accounts API works",
+      "verify": "response is an array of account objects"
+    },
+    {
+      "action": "api_call",
+      "target": "{{API_URL}}/v1/ledger/transactions",
+      "method": "GET",
+      "prompt": "Fetch recent transactions from the ledger",
+      "verify": "response is an array of transaction objects"
+    },
+    {
+      "action": "navigate",
+      "target": "{{GATEWAY_URL}}/wallet",
+      "prompt": "Return to the wallet page to check the transaction history section"
+    },
+    {
+      "action": "assert_visible",
+      "target": "body",
+      "prompt": "Verify the transaction history section is rendered on the wallet page",
+      "expected": "transaction history or recent activity visible"
+    },
+    {
+      "action": "evaluate",
+      "target": "{{GATEWAY_URL}}/wallet",
+      "prompt": "Evaluate the wallet and economy experience: Is the balance prominently displayed? Is transaction history understandable? Are send/receive flows discoverable? Does the Lux economy feel tangible?",
+      "live_only": true
+    }
+  ]
+}
