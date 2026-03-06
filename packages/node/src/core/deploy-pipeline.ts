@@ -289,7 +289,22 @@ export class DeployPipeline {
           return { name, status: 'failed', durationMs: Date.now() - start, detail: payload.error || 'Deploy returned failed status' };
         }
 
-        const url = payload.url || payload.s3Url || payload.publicAddress || '';
+        // Construct the best URL based on deploy type:
+        // Tier 1 (S3): use s3Url or url (already a public URL)
+        // Tier 2 (PM2): use publicAddress + nginx path (not localhost)
+        let url = '';
+        if (payload.s3Url) {
+          url = payload.s3Url;
+        } else if (payload.publicAddress && payload.port) {
+          // Tier 2: prefer nginx route if available, otherwise direct port
+          url = `http://${payload.publicAddress}/apps/${projectId}/`;
+        } else if (payload.url && !payload.url.includes('localhost')) {
+          url = payload.url;
+        } else if (payload.publicAddress) {
+          url = `http://${payload.publicAddress}/`;
+        } else {
+          url = payload.url || '';
+        }
         console.log(`[deploy-pipeline] Deployed to ${isLocal ? 'local' : targetPeerId.slice(0, 8)}: ${url}`);
         return { name, status: 'success', durationMs: Date.now() - start, detail: url };
       }
