@@ -326,6 +326,9 @@ export class EngineAdapter {
   /** Whether the adapter is ready (pando-code loaded + pool started). */
   get available(): boolean { return this.started; }
 
+  /** Network linking: always linked when adapter is started (node IS the network). */
+  get linked(): boolean { return this.started; }
+
   /**
    * Start the adapter: load pando-code, create pool, boot system engine.
    */
@@ -409,12 +412,23 @@ export class EngineAdapter {
     const id = projectId || 'system';
 
     if (id !== 'system' && !this.pool.has(id)) {
-      // Create project workspace directory
-      const { mkdirSync } = await import('node:fs');
+      // Create project workspace + network linking metadata
+      const { mkdirSync, writeFileSync, existsSync } = await import('node:fs');
       const { join } = await import('node:path');
       const baseDir = this.config?.dataDir || join((await import('node:os')).homedir(), '.pando');
       const projectDir = join(baseDir, 'projects', id);
       mkdirSync(projectDir, { recursive: true });
+      // Write PANDO_PROJECT.json — tells PandoCode this is a network-linked project
+      const metaPath = join(projectDir, 'PANDO_PROJECT.json');
+      if (!existsSync(metaPath)) {
+        writeFileSync(metaPath, JSON.stringify({
+          projectId: id,
+          nodeUrl: `http://127.0.0.1:${this.config?.apiPort || 4000}`,
+          nodeId: this.config?.nodeId || null,
+          linked: true,
+          createdAt: new Date().toISOString(),
+        }, null, 2));
+      }
       await this.pool.getOrCreate(id, { projectPath: projectDir });
     }
 
