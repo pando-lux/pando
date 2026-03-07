@@ -81,7 +81,7 @@ class RateLimiter {
 }
 
 /** Rate limit configuration per endpoint (env var overridable). */
-const RATE_LIMITS: Record<string, { max: number; envVar: string }> = {
+const RATE_LIMITS: Record<string, { max: number; envVar: string; windowMs?: number }> = {
   'POST /search':              { max: 10, envVar: 'PANDO_RATE_SEARCH' },
   'POST /transfer':            { max: 30, envVar: 'PANDO_RATE_TRANSFER' },
   'POST /tasks/:id/thread':    { max: 30, envVar: 'PANDO_RATE_THREAD' },
@@ -91,6 +91,8 @@ const RATE_LIMITS: Record<string, { max: number; envVar: string }> = {
   'POST /chat/message':              { max: 20, envVar: 'PANDO_RATE_CHAT' },
   'POST /chat/threads/:id/message':  { max: 30, envVar: 'PANDO_RATE_CHAT_THREAD' },
   'POST /auth/guest':                { max: 5,  envVar: 'PANDO_RATE_AUTH_GUEST' },
+  'POST /council/request':           { max: 3,  envVar: 'PANDO_RATE_REPORT', windowMs: 3600_000 },
+  'POST /projects/:id/request':      { max: 3,  envVar: 'PANDO_RATE_REPORT', windowMs: 3600_000 },
 };
 
 function getEnvLimit(envVar: string, fallback: number): number {
@@ -293,7 +295,7 @@ export class ApiServer {
     // Create a rate limiter for each configured endpoint
     for (const [route, config] of Object.entries(RATE_LIMITS)) {
       const max = getEnvLimit(config.envVar, config.max);
-      this.rateLimiters.set(route, new RateLimiter(max));
+      this.rateLimiters.set(route, new RateLimiter(max, config.windowMs));
     }
 
     // Add a preHandler that checks rate limits for configured routes
@@ -309,6 +311,10 @@ export class ApiServer {
       // Check parametric chat thread message route: POST /chat/threads/<id>/message
       if (!limiter && request.method === 'POST' && /^\/chat\/threads\/[^/]+\/message$/.test(urlPath)) {
         limiter = this.rateLimiters.get('POST /chat/threads/:id/message');
+      }
+      // Check parametric project request route: POST /projects/<id>/request
+      if (!limiter && request.method === 'POST' && /^\/projects\/[^/]+\/request$/.test(urlPath)) {
+        limiter = this.rateLimiters.get('POST /projects/:id/request');
       }
       if (!limiter) return; // No rate limit for this route
       const ip = request.ip || request.raw?.socket?.remoteAddress || 'unknown';

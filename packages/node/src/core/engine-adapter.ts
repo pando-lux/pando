@@ -16,6 +16,9 @@
  *   - Injects contributed AI API keys from ResourceRegistry
  */
 
+import { join as pathJoin } from 'node:path';
+import { existsSync } from 'node:fs';
+import { homedir } from 'node:os';
 import type { ResourceRegistry } from '../platform/resource-registry.js';
 import { OBSERVER_PROMPT, QA_PROMPT, COUNCIL_PROMPT } from './council-prompts.js';
 
@@ -493,9 +496,51 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
    * Get pending/in_progress tasks from the council board.
    */
   getCouncilBoard(): any[] {
-    if (!this.councilDbPath || !this.Database) return [];
+    return this.getBoardTasks(this.councilDbPath);
+  }
+
+  /**
+   * Get pending/in_progress tasks from a project's board.
+   */
+  getProjectBoard(projectId: string): any[] {
+    const dbPath = this.resolveProjectDbPath(projectId);
+    return this.getBoardTasks(dbPath);
+  }
+
+  /**
+   * Add a task to the council board. Used by doorman to route user reports.
+   * Returns the task ID on success, null on failure. Dedup by exact title match.
+   */
+  addBoardTask(title: string, description?: string): string | null {
+    return this.insertBoardTask(this.councilDbPath, title, description);
+  }
+
+  /**
+   * Add a task to a project's board. Used for per-project bug reports.
+   * Returns the task ID on success, null on failure. Dedup by exact title match.
+   */
+  addProjectBoardTask(projectId: string, title: string, description?: string): string | null {
+    const dbPath = this.resolveProjectDbPath(projectId);
+    return this.insertBoardTask(dbPath, title, description);
+  }
+
+  /** Resolve the .pando-code.db path for a project. */
+  private resolveProjectDbPath(projectId: string): string | null {
+    if (!this.config) return null;
     try {
-      const db = new this.Database(this.councilDbPath, { readonly: true });
+      const baseDir = this.config.dataDir || pathJoin(homedir(), '.pando');
+      const dbPath = pathJoin(baseDir, 'projects', projectId, '.pando-code.db');
+      return existsSync(dbPath) ? dbPath : null;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Read board tasks from any PandoCode SQLite DB. */
+  private getBoardTasks(dbPath: string | null): any[] {
+    if (!dbPath || !this.Database) return [];
+    try {
+      const db = new this.Database(dbPath, { readonly: true });
       const tasks = db.prepare(
         `SELECT id, title, status, created_at, progress FROM board_tasks
          WHERE status IN ('pending', 'in_progress')
@@ -508,14 +553,11 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     }
   }
 
-  /**
-   * Add a task to the council (or project) board. Used by doorman to route user reports.
-   * Returns the task ID on success, null on failure.
-   */
-  addBoardTask(title: string, description?: string): string | null {
-    if (!this.councilDbPath || !this.Database) return null;
+  /** Insert a board task into any PandoCode SQLite DB. Dedup by exact title match. */
+  private insertBoardTask(dbPath: string | null, title: string, description?: string): string | null {
+    if (!dbPath || !this.Database) return null;
     try {
-      const db = new this.Database(this.councilDbPath);
+      const db = new this.Database(dbPath);
 
       // Dedup: if a pending task with the same title already exists, return it
       const existing = db.prepare(
@@ -527,11 +569,11 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       }
 
       const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
-      // Get council session_id for the FK constraint and next order value
-      const councilSession = db.prepare(
+      // Get latest session_id for the FK constraint and next order value
+      const session = db.prepare(
         `SELECT id FROM sessions ORDER BY created_at DESC LIMIT 1`
       ).get() as { id: string } | undefined;
-      const sessionId = councilSession?.id || 'system';
+      const sessionId = session?.id || 'system';
       const maxOrder = db.prepare(
         `SELECT COALESCE(MAX("order"), 0) + 1 as next_order FROM board_tasks`
       ).get() as { next_order: number };
@@ -542,7 +584,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       db.close();
       return id;
     } catch (err: any) {
-      console.warn(`[EngineAdapter] addBoardTask failed: ${err.message}`);
+      console.warn(`[EngineAdapter] insertBoardTask failed: ${err.message}`);
       return null;
     }
   }

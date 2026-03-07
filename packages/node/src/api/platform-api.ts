@@ -3924,6 +3924,40 @@ export async function registerPlatformRoutes(
       return { healthy, url, checks, errors };
     });
 
+    // ── Per-Project Board API ─────────────────────────────────────────────
+
+    // GET /projects/:id/board — Public view of a project's board (pending/in_progress tasks)
+    fastify.get('/projects/:id/board', async (request: any) => {
+      const { id } = request.params as { id: string };
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return { tasks: [], error: 'Engine not available' };
+      return { tasks: adapter.getProjectBoard(id) };
+    });
+
+    // POST /projects/:id/request — Submit a bug report or feature request to a project's board
+    fastify.post('/projects/:id/request', async (request: any, reply: any) => {
+      const { id } = request.params as { id: string };
+      const body = request.body as any;
+      const message = body?.message?.trim();
+      if (!message || message.length < 5) {
+        return reply.code(400).send({ error: 'Message required (min 5 chars)' });
+      }
+      if (message.length > 500) {
+        return reply.code(400).send({ error: 'Message too long (max 500 chars)' });
+      }
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) {
+        return reply.code(503).send({ error: 'Engine not available' });
+      }
+      const severity = /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(message) ? 'BUG' : 'FEATURE';
+      const taskTitle = `[${severity}:user] ${message.slice(0, 120)}`;
+      const taskId = adapter.addProjectBoardTask(id, taskTitle, message.slice(0, 500));
+      if (!taskId) {
+        return reply.code(404).send({ error: 'Project board not found (project may not have been built yet)' });
+      }
+      return { status: 'ok', taskId, projectId: id, message: 'Report submitted to project board.' };
+    });
+
     // ── Phase 50: Council Endpoints ──────────────────────────────────────────
 
     // ── Auth guard helpers for council routes ──────────────────────────────

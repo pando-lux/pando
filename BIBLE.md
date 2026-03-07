@@ -335,7 +335,7 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 | Core | `/v1/tasks`, `/v1/upgrade` | Task management, safe upgrade |
 | Chat | `/v1/chat/*` | Message → doorman → Path A (question) or Path B (build) or report (board task). |
 | Engines | `/v1/engines/*` | List active engines, board snapshots, memory |
-| Projects | `/v1/projects/*` | Create, deploy, undeploy |
+| Projects | `/v1/projects/*` | Create, deploy, undeploy, `board` (per-project tasks), `request` (submit bug/feature) |
 | Auth | `/v1/auth/*` | Challenge, verify (Pando Login), me, refresh |
 | Testing | `/v1/testing/*` | Status, runs, findings, scenarios, playbooks, specs, stats |
 | Council | `/v1/council/*` | `status`, `trigger/:agent`, `board` (public task view), `request` (user reports → board task). |
@@ -907,12 +907,15 @@ Severity classification (automatic, regex with word variants):
 Validation (at doorman + API level):
   1. Min 5 chars, max 500 chars
   2. Board task dedup: exact title match on pending/in_progress tasks returns existing task ID
-  3. TODO: Rate limit (3/user/hour), Two Laws filter
+  3. Rate limit: 3 requests/hour per IP (RateLimiter with 1-hour window on council/request + projects/:id/request)
+  4. TODO: Two Laws filter (content safety check before board insertion)
 ```
 
 **API endpoints (BUILT):**
 - `GET /v1/council/board` — public board view (pending/in_progress tasks)
-- `POST /v1/council/request` — submit report/feature request to council board
+- `POST /v1/council/request` — submit report/feature request to council board (rate limited: 3/hour)
+- `GET /v1/projects/:id/board` — per-project board view (empty array if no engine DB)
+- `POST /v1/projects/:id/request` — submit bug/feature to specific project board (rate limited: 3/hour)
 
 **Gateway integration (TODO):**
 - `/council` page: live board, submit form, ticket status
@@ -1110,8 +1113,8 @@ GOTCHAS:
 | `addBoardTask()` on EngineAdapter | DONE — inserts task with proper schema (session_id, order FK). Dedup: exact title match on pending/in_progress returns existing ID. |
 | `getCouncilBoard()` on EngineAdapter | DONE — reads pending/in_progress tasks |
 | Project scheduler ticks | **TODO** — public projects get periodic wake-ups on creation |
-| Per-project board endpoints | **TODO** — `POST /v1/projects/:id/request`, `GET /v1/projects/:id/board` |
-| Rate limiting on reports | **TODO** — max 3 requests per user per hour at doorman level |
+| Per-project board endpoints | DONE — `GET /v1/projects/:id/board` (read), `POST /v1/projects/:id/request` (submit). Returns 404 if project has no engine DB yet. |
+| Rate limiting on reports | DONE — 3 requests/hour per IP on `POST /council/request` and `POST /projects/:id/request`. RateLimiter with 1-hour window. |
 | Gateway `/council` page | **TODO** — live board, submit form, ticket status |
 
 #### 5.10.10 Failure Modes & Recovery
@@ -1119,8 +1122,8 @@ GOTCHAS:
 | Failure | Recovery |
 |---|---|
 | Council host node dies | Another contributor node's council takes over. Board + memory persist in SQLite. |
-| Too many user requests | Board is the buffer. Rate limit at doorman (3/user/hour). Council batches similar. |
-| Bad/spam requests | Board task dedup (exact title match). Council deprioritizes low-value tasks. TODO: Two Laws filter, rate limit. |
+| Too many user requests | Board is the buffer. Rate limited: 3/hour per IP on report endpoints. Council batches similar. |
+| Bad/spam requests | Board task dedup (exact title match). Rate limit: 3/hour per IP. Council deprioritizes low-value tasks. TODO: Two Laws filter. |
 | Observer creates too many tasks | Council batches similar issues, prioritizes CRITICAL. |
 | Council proposes bad code | Governance Layer 5 (AI review) catches it. QA catches post-deploy regressions. |
 | Project board grows too large | Lead closes stale tasks (>24h). Spawns parallel builders if backlog >10. |
