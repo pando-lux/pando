@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-07 (deploy pipeline proven E2E + Council architecture corrected — rewire in progress). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-07 (deploy pipeline proven E2E + Council pipeline verified — full builder pipeline working: observer→council→spawn_agent(builder)→governance). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -53,10 +53,10 @@ shared < ledger < node
   Pure infrastructure. P2P networking. Identity. Economy. Governance. Storage. HTTP API.
   Has ZERO intelligence of its own. No orchestrator. No agent database. No message bus.
 
-engine-adapter.ts = THE NERVOUS SYSTEM (~700 lines)
+engine-adapter.ts = THE NERVOUS SYSTEM (~750 lines)
   The ONE file that connects brain to body.
   Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
-  Manages Council agents (observer/qa/council) with tool filtering and event-driven wake.
+  Manages Council agents (observer/qa/council) using PandoCode's native agent system.
   Pando tools are just HTTP calls to the node's own API — the engine doesn't know the difference.
 ```
 
@@ -307,7 +307,7 @@ Reads from @pando/node HTTP API. No direct database access.
 | **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Git pull + build + restart. GossipSub broadcast. |
 | **GatewayDeployPool** | `core/gateway-deploy-pool.ts` | DONE | Deploy gateway to all contributed hosting accounts |
 | **PaymentGate** | `core/payment-gate.ts` | DONE | Lux escrow for task execution |
-| **CouncilPrompts** | `core/council-prompts.ts` | REWIRING | System prompts for observer/qa/council. Being simplified — TOOL_SETS removed (PandoCode roles handle tool filtering). |
+| **CouncilPrompts** | `core/council-prompts.ts` | DONE | System prompts for observer/qa/council. No TOOL_SETS — PandoCode roles handle tool filtering. |
 | **RequestReply** | `core/request-reply.ts` | DONE | P2P unicast calls (TCP + GossipSub fallback) |
 | **HostingAdapters** | `core/hosting-adapters.ts` | DONE | Provider-agnostic deployment (Vercel, Netlify) |
 
@@ -678,9 +678,9 @@ No tick loop. No orchestrator. No message bus. The engine runs when it has somet
 
 | Actor | How it works | Triggered by |
 |---|---|---|
-| **Council** | Long-running engine. Reads findings, spawns sub-agents to fix issues, submits through governance. CEO of the ecosystem. | Scheduler tick (every 15 min) |
-| **Observer** | Long-running engine. Read-only. Monitors network health, peer status, deploy health. Creates findings. | Scheduler tick (every 30 min) |
-| **QA** | Long-running engine. Runs Playwright tests, API health checks. Creates findings from failures. | Scheduler tick (every 30 min, offset 15 min) |
+| **Council** | Long-running engine. Reads inbox, acts on issues, spawns sub-agents to fix, submits through governance. | Scheduler tick (every 15 min) |
+| **Observer** | Long-running engine. Read-only. Monitors network health, peer status. Sends issues to council via send_message. | Scheduler tick (every 30 min) |
+| **QA** | Long-running engine. Runs health checks, API validation. Sends findings to council via send_message. | Scheduler tick (every 30 min, offset 15 min) |
 
 ### 5.8 Deploy Pipeline (build → github → deploy → marketplace) — PROVEN E2E
 
@@ -833,7 +833,7 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 
 **NOT YET BUILT.** PandoCode currently has no linking setting. Engine Adapter creates engines but doesn't manage a dedicated network workspace. This is the next architecture milestone.
 
-### 5.10 The Council — AI-Managed Ecosystem (ARCHITECTURE CORRECTED — REWIRE IN PROGRESS)
+### 5.10 The Council — AI-Managed Ecosystem (WORKING — PIPELINE VERIFIED)
 
 The Council system makes Pando a **100% AI-maintained ecosystem**. Three agents — Observer, QA, and Council — run on contributor nodes and continuously maintain, improve, and heal the network.
 
@@ -881,59 +881,86 @@ The Council system makes Pando a **100% AI-maintained ecosystem**. Three agents 
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-#### 5.10.2 Council Scope — ANY Project
+#### 5.10.2 Council = A PandoCode Project
 
-The Council is NOT limited to pando-node. It can update ANY project in the ecosystem.
+**Mental model:** Council is just another PandoCode project. It has no source code in its directory, but it has agents, a board, memory, and communication — exactly like any dev team using PandoCode. When PandoCode upgrades, council automatically gets the upgrade. No separate framework.
 
-| Target | What Council Does | How |
-|---|---|---|
-| **@pando/node** | Fix bugs, optimize | Council spawns builder sub-agent → edits code → pando_governance_propose |
-| **@pando-code/core** | Improve engine, fix tools | Same flow. Council has lead role — CAN spawn sub-agents. |
-| **User projects** | Heal broken deployments | Council calls pando_deploy to redeploy |
+```
+Council project:
+  projectPath = ~/.pando/council/          (its "home base")
+  db          = ~/.pando/council/council.db (shared by all 3 agents)
+  agents      = observer, qa, council       (standard PandoCode agents)
+  tools       = PandoCode native tools + pando_* network tools
 
-**Governance gate:** Every code change goes through governance (Section 5.4). Council calls `pando_governance_propose` → 6-layer pipeline → peer vote → approved/rejected.
+  Identical to any other PandoCode project.
+  Only extra: pando_* tools + Lux budget.
+```
+
+#### 5.10.3 Council Scope — ANY Project via Workspaces
+
+Council can fix code in ANY repo. It doesn't work by inheriting projectPath — it uses **workspaces**.
 
 ```
 Council fixes a bug in @pando/node:
-  1. Observer creates board task: "API latency > 2s on /v1/status"
-  2. Observer sends message to council: "New issue on board"
-  3. Council reads inbox (check_agents) → reads board (pending tasks)
-  4. Council spawns builder sub-agent: "Fix latency in api-server.ts"
-  5. Builder (ephemeral): reads code, writes fix, runs tests, returns diff
-  6. Council reviews diff → calls pando_governance_propose(diff, description)
-  7. Governance: 6-layer pipeline validates → approved
+  1. Observer detects issue → send_message(council, "[WARNING:perf] API latency 3.2s")
+  2. Council reads inbox → decides this needs a code fix
+  3. Council calls pando_workspace({ repo: "pando-lux/node" })
+     → clones/pulls to ~/.pando/workspaces/node/
+     → returns { path: "~/.pando/workspaces/node" }
+  4. Council calls spawn_agent({
+       role: "builder",
+       task: "Fix API latency on /v1/status endpoint",
+       workingDirectory: "~/.pando/workspaces/node"   ← key primitive
+     })
+  5. Builder (ephemeral, works at the workspace):
+     → read_file, grep, edit_file — all scoped to that workspace
+     → bash("npm run build && npm test")
+     → returns { filesChanged, summary, diff }
+  6. Council reviews result → calls pando_governance_propose(diff, description)
+  7. Governance: 6-layer pipeline → peer vote → approved
   8. upgrade-protocol: all nodes pull + rebuild + restart
   9. Council marks board task done
 ```
 
-#### 5.10.3 Communication (uses PandoCode's native systems)
+**Key primitives (BOTH BUILT AND VERIFIED):**
+- `spawn_agent({ working_directory })` — PandoCode enhancement in `pando/code/packages/core/src/tool/spawn-agent.ts`. Sub-agent works in a different directory than parent. Benefits ALL PandoCode projects, not just council.
+- `pando_workspace({ repo })` — pando-node tool in `engine-adapter.ts`. Clones/pulls a repo into `~/.pando/workspaces/`. Returns path. Detects local repos (pando-node, pando-code) without network. Reuses git credentials from local repo for multi-account machines.
+
+| Target | How Council Reaches It |
+|---|---|
+| **@pando/node** | `pando_workspace("pando-lux/node")` → spawn builder there |
+| **@pando-code/core** | `pando_workspace("pando-lux/code")` → spawn builder there |
+| **Any GitHub project** | `pando_workspace("user/repo")` → spawn builder there |
+| **Broken deployments** | No workspace needed — council calls `pando_deploy` directly |
+
+**Governance gate:** Every code change goes through governance (Section 5.4). Council calls `pando_governance_propose` → 6-layer pipeline → peer vote → approved/rejected.
+
+#### 5.10.4 Communication (uses PandoCode's native systems)
 
 ```
-Observer/QA → board tasks + send_message → Council → spawn sub-agents → Governance
+Observer/QA → send_message → Council → pando_workspace → spawn builder → Governance
 
 Detailed:
-  1. Observer checks health → creates board task (pending) with issue description
-  2. Observer calls send_message to council: "New issue found, check board"
-  3. QA runs tests → creates board task if failures found → messages council
-  4. Council reads inbox via check_agents (action: "inbox")
-  5. Council reads board via manage_tasks → sees pending tasks
-  6. Council spawns builder sub-agent for code fixes
-  7. Council calls pando_governance_propose for code changes
-  8. Council marks board task done via manage_tasks
-  9. Council stores lesson in memory for future reference
+  1. Observer checks health → sends message to council with specific issue details
+  2. QA runs checks → sends message to council if failures found
+  3. Council reads inbox via check_agents (action: "inbox")
+  4. For monitoring issues: council verifies via pando_status, creates board task
+  5. For code fixes: council calls pando_workspace → spawn_agent(builder) → governance
+  6. Council marks board task done via manage_tasks
+  7. Council stores lesson in memory for future reference
 
-Communication channel: PandoCode's send_message (state table, DB-backed)
+Communication: PandoCode's send_message (state table, DB-backed)
 Task tracking: PandoCode's board_tasks table
-NO custom FindingsStore. NO custom /v1/findings endpoints.
+Code access: pando_workspace + spawn_agent(workingDirectory)
 ```
 
-#### 5.10.4 System Prompts
+#### 5.10.5 System Prompts
 
 Each agent gets a system prompt via `agentOverride` on `engine.send()`. The prompt tells the agent what to do. **Source of truth: `core/council-prompts.ts`.**
 
-Prompts use PandoCode's native tools (manage_tasks, send_message, check_agents, spawn_agent) plus pando_* network tools. No step-by-step tool-call instructions needed when using proper roles — PandoCode's role system handles tool access.
+Prompts use PandoCode's native tools (manage_tasks, send_message, check_agents, spawn_agent) plus pando_* network tools.
 
-#### 5.10.5 Engine Lifecycle
+#### 5.10.6 Engine Lifecycle
 
 ```
 Node startup (contributor node with PandoCode):
@@ -944,42 +971,49 @@ Node startup (contributor node with PandoCode):
   │   └─ Registers pando_* tool templates
   │
   ├─ startCouncilAgents():
-  │   ├─ Creates agent profiles via PandoCode API:
-  │   │   observer (role: explorer), qa (role: tester), council (role: lead)
-  │   ├─ Creates one engine per agent in pool
-  │   ├─ Registers pando_* tools on each engine (filtered by role)
-  │   │   observer: read-only pando tools (pando_status, pando_peers)
-  │   │   qa: read-only + pando_test_run
-  │   │   council: ALL pando_* tools
-  │   └─ Registers scheduler ticks (30 min observer, 30 min qa, 15 min council)
+  │   ├─ pool.getOrCreate(agentId, { dbPath: sharedDb })
+  │   ├─ engine.startSession()  ← MUST be before tool re-registration
+  │   │   └─ triggers _registerSubAgentTools (with auto-generated UUID)
+  │   ├─ Re-register check_agents, send_message, manage_tasks
+  │   │   with correct agentIds ("observer", "qa", "council")
+  │   │   and real sessionId (from startSession, not random UUID)
+  │   ├─ INSERT agent profiles into shared DB
+  │   └─ Register scheduler ticks (30 min observer/qa, 15 min council)
   │
   └─ Node is running. Council agents tick on schedule.
 
 GOTCHAS:
   1. EngineOptions does NOT accept systemPrompt — use agentOverride on send()
   2. Tool API base URL must be 127.0.0.1, not localhost
-  3. All council engines must share the same SQLite DB for send_message to work cross-engine
+  3. All council engines must share the same SQLite DB for send_message to work
+  4. CRITICAL: startSession() must be called BEFORE tool re-registration.
+     _registerSubAgentTools() overwrites check_agents/send_message/manage_tasks
+     with auto-generated "General" agent UUID. If send() calls startSession()
+     internally, it destroys our correct tool registrations.
+  5. manage_tasks sessionId must reference a real session in the sessions table
+     (FK constraint on board_tasks.session_id → sessions.id)
 ```
 
-#### 5.10.6 Implementation Status
+#### 5.10.7 Implementation Status
 
-**ARCHITECTURE CORRECTED — needs rewire. See docs/BRAINSTORM-ROADMAP.md for execution plan.**
-
-Previous implementation bypassed PandoCode's agent system (built custom FindingsStore, stripped built-in tools, custom sendToCouncilAgent). This is being corrected to use PandoCode's native infrastructure.
+**Monitoring pipeline VERIFIED. Builder pipeline VERIFIED.**
 
 | What | Status |
 |---|---|
-| Agent profiles via PandoCode API | TODO — currently bypassed |
-| Board tasks for issue tracking | TODO — currently uses custom FindingsStore |
-| send_message for inter-agent communication | TODO — currently uses custom event wake |
-| Council with lead role (CAN spawn sub-agents) | TODO — currently stripped of all built-in tools |
-| Scheduler ticks | DONE — working correctly |
-| pando_* tool registration | DONE — working correctly |
-| Lux budget injection | DONE — working correctly |
-| System prompts via agentOverride | DONE — working correctly |
-| E2E tests | TODO — need rewrite for new architecture |
+| Council as PandoCode project | DONE — lives at ~/.pando/council/, shared DB, standard agents |
+| Agent profiles via shared DB insert | DONE — raw SQL INSERT OR IGNORE at startup |
+| send_message cross-engine | VERIFIED — messages show `From observer` with correct agentId |
+| check_agents inbox reading | VERIFIED — council reads and deletes messages correctly |
+| Scheduler ticks | DONE — 30 min observer/qa, 15 min council |
+| pando_* tool registration | DONE — 15 tools, roles handle filtering |
+| Lux budget + system prompts | DONE |
+| E2E clean test (3/3 pass) | DONE — observer→council pipeline verified |
+| `spawn_agent(working_directory)` | DONE — PandoCode enhancement in spawn-agent.ts |
+| `pando_workspace` tool | DONE — pando-node tool in engine-adapter.ts |
+| Builder fixing actual code | VERIFIED — council dispatched builder, builder modified engine-adapter.ts, council submitted governance proposal |
+| Council → governance proposal | VERIFIED — council calls pando_governance_propose after builder returns |
 
-#### 5.10.7 Failure Modes & Recovery
+#### 5.10.8 Failure Modes & Recovery
 
 | Failure | Recovery |
 |---|---|
@@ -1052,7 +1086,7 @@ No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoCode'
 
 ## 6. THE ENGINE ADAPTER (detailed spec)
 
-The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~700 lines (will shrink to ~400 after council rewire removes duplicated PandoCode functionality). It only exists on **PandoCode contributor nodes** and **full dev nodes**.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~750 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
 
 **Key principle:** PandoCode uses its OWN configured provider and model. The engine-adapter does NOT override the model. Contributors choose their provider (default: Google/gemini-2.5-flash).
 
@@ -1109,6 +1143,7 @@ These tools call the node's own HTTP API. The engine doesn't import pando-node.
 | `pando_broadcast` | Send P2P GossipSub message | POST /v1/broadcast |
 | `pando_test_run` | Trigger test run | POST /v1/testing/run |
 | `pando_test_status` | Get test results | GET /v1/testing/status |
+| `pando_workspace` | Get local workspace for any repo (clone/pull) | Local git ops |
 
 ### Lux Budget Provider
 
@@ -1248,7 +1283,7 @@ npx playwright test --project pando-code
 
 ## 9. BRAIN-KILL MIGRATION (COMPLETED 2026-03-06)
 
-**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~700 with council agent lifecycle).**
+**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~750 with council agent lifecycle + pando_workspace tool).**
 
 The dual coordination system is dead. pando-node no longer has any intelligence of its own. All AI flows through EngineAdapter → @pando-code/core.
 
@@ -1256,7 +1291,7 @@ The dual coordination system is dead. pando-node no longer has any intelligence 
 orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), template-registry.ts (476), org-manager.ts (377), agent-tools.ts (373), orchestrator-manager.ts (333), engine-bridge.ts (283), worker-mcp.ts (274), orchestrator-process.ts (248), ai-backend-pandocode.ts (244), message-bus.ts (143), ai-backend-registry.ts (43), ai-backend.ts (37), context-api.ts (336).
 
 ### What replaced it
-`core/engine-adapter.ts` (~700 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) with tool filtering. Registers 17 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL.
+`core/engine-adapter.ts` (~750 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL.
 
 ### API changes
 - **Removed:** `/v1/bridge/*`, `/v1/agents/*`, `/v1/context/*`

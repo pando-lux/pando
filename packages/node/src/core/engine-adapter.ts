@@ -200,6 +200,80 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
       parameters: z.object({}),
       execute: async () => ok(await api('GET', '/v1/testing/status')),
     },
+    {
+      name: 'pando_workspace',
+      description:
+        'Get a local workspace for a git repo. Clones if not present, pulls if already cloned. ' +
+        'Returns the local path. Use with spawn_agent(working_directory) to dispatch builders to any repo.',
+      parameters: z.object({
+        repo: z.string().describe('GitHub repo (e.g. "pando-lux/node") or known alias ("node", "code").'),
+        branch: z.string().optional().default('main').describe('Branch to checkout (default: main).'),
+      }),
+      execute: async (args: any): Promise<any> => {
+        const { execSync } = await import('node:child_process');
+        const { join, resolve, dirname } = await import('node:path');
+        const { existsSync, mkdirSync } = await import('node:fs');
+        const os = await import('node:os');
+
+        const repo: string = args.repo;
+        const branch: string = args.branch || 'main';
+
+        // 1. Check for known local repos first (no network needed).
+        //    Detect pando-node repo from package.json location (works on any OS).
+        const { fileURLToPath } = await import('node:url');
+        const thisDir = dirname(fileURLToPath(import.meta.url));
+        const nodeRepoRoot = resolve(thisDir, '..', '..', '..', '..');
+        const codeRepoRoot = resolve(nodeRepoRoot, '..', 'code');
+        const localAliases: Record<string, string> = {
+          'node': nodeRepoRoot,
+          'pando-lux/node': nodeRepoRoot,
+          'code': codeRepoRoot,
+          'pando-lux/code': codeRepoRoot,
+        };
+
+        const localPath = localAliases[repo];
+        if (localPath && existsSync(join(localPath, '.git'))) {
+          return { success: true, output: JSON.stringify({ path: localPath, status: 'local', repo, branch }) };
+        }
+
+        // 2. Check ~/.pando/workspaces/ for already-cloned repos.
+        const baseDir = join(os.homedir(), '.pando', 'workspaces');
+        mkdirSync(baseDir, { recursive: true });
+        const repoName = repo.includes('/') ? repo.split('/').pop()! : repo;
+        const workDir = join(baseDir, repoName);
+
+        try {
+          if (existsSync(join(workDir, '.git'))) {
+            // Already cloned — pull latest
+            execSync(`git -C "${workDir}" fetch origin ${branch} && git -C "${workDir}" checkout ${branch} && git -C "${workDir}" pull origin ${branch}`, {
+              timeout: 60000,
+              stdio: 'pipe',
+            });
+            return { success: true, output: JSON.stringify({ path: workDir, status: 'updated', repo, branch }) };
+          } else {
+            // 3. Clone fresh from GitHub.
+            // Extract git credentials from the local node repo's origin remote
+            // so multi-account machines don't get prompted for auth.
+            let cloneUrl = repo.includes('/') ? `https://github.com/${repo}.git` : `https://github.com/pando-lux/${repo}.git`;
+            try {
+              const originUrl = execSync(`git -C "${nodeRepoRoot}" remote get-url origin`, { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' }).trim();
+              const match = originUrl.match(/https:\/\/([^@]+)@github\.com\//);
+              if (match) {
+                // Reuse the same user:token credentials for GitHub clones
+                cloneUrl = cloneUrl.replace('https://github.com/', `https://${match[1]}@github.com/`);
+              }
+            } catch { /* no credentials found — use plain URL */ }
+            execSync(`git clone --branch ${branch} "${cloneUrl}" "${workDir}"`, {
+              timeout: 120000,
+              stdio: 'pipe',
+            });
+            return { success: true, output: JSON.stringify({ path: workDir, status: 'cloned', repo, branch }) };
+          }
+        } catch (err: any) {
+          return { success: false, output: `pando_workspace failed: ${err.message}` };
+        }
+      },
+    },
   ];
 }
 
@@ -438,14 +512,57 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     mkdirSync(councilDir, { recursive: true });
     const councilDbPath = join(councilDir, 'council.db');
 
+    // Import PandoCode tool creators for re-registration with correct agent IDs
+    const { createCheckAgentsTool, createSendMessageTool, createManageTasksTool } =
+      await import('@pando-code/core');
+
     // Create one engine per council agent with shared DB
     for (const agent of COUNCIL_AGENTS) {
-      await this.pool.getOrCreate(agent.id, {
+      const engine = await this.pool.getOrCreate(agent.id, {
         projectPath: councilDir,
         dbPath: councilDbPath,
         role: agent.role,
       });
-      console.log(`[EngineAdapter] Council agent "${agent.id}" (${agent.role}) started.`);
+
+      // CRITICAL: Start session BEFORE re-registering tools.
+      // startSession() calls _registerSubAgentTools() which registers check_agents,
+      // send_message, manage_tasks with the auto-generated "General" agent UUID.
+      // We must let that happen first, THEN overwrite with our correct agent IDs.
+      // Without this, send() would call startSession() internally and overwrite
+      // our registrations.
+      if (!engine.getSessionId()) {
+        await engine.startSession(`Council: ${agent.id}`);
+      }
+
+      // Now re-register tools with correct council agent IDs.
+      // PandoCode's startSession() used auto-generated UUIDs, but council agents
+      // need stable string IDs ("observer", "qa", "council") for message routing.
+      // manage_tasks uses the engine's real sessionId (from startSession above)
+      // so board_tasks FK constraint to sessions table is satisfied.
+      if (engine?.db) {
+        engine.tools.unregister('check_agents');
+        engine.tools.unregister('send_message');
+        engine.tools.unregister('manage_tasks');
+
+        const engineSessionId = engine.getSessionId()!;
+        engine.tools.register(createCheckAgentsTool({
+          db: engine.db,
+          agentId: agent.id,
+        }));
+        engine.tools.register(createSendMessageTool({
+          db: engine.db,
+          agentId: agent.id,
+          senderRole: agent.role,
+        }));
+        engine.tools.register(createManageTasksTool({
+          db: engine.db,
+          sessionId: engineSessionId,
+        }));
+
+        console.log(`[EngineAdapter] Council "${agent.id}": tools re-registered with agentId="${agent.id}", session=${engineSessionId}`);
+      } else {
+        console.warn(`[EngineAdapter] No db on engine "${agent.id}" — cannot re-register tools`);
+      }
     }
 
     // Insert agent profiles into shared DB so send_message and check_agents work

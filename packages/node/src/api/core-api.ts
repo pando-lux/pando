@@ -413,16 +413,17 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         return reply.code(503).send({ error: 'Council agents not running' });
       }
 
-      const prompts: Record<string, string> = {
+      const defaults: Record<string, string> = {
         observer: 'Run your periodic checks now.',
         qa: 'Run your health checks now.',
         council: 'Check your inbox and review board tasks now.',
       };
+      const message = (request.body as any)?.message || defaults[agentId];
 
       const toolCalls: any[] = [];
       const textChunks: string[] = [];
       try {
-        for await (const event of adapter.sendToCouncilAgent(agentId as any, prompts[agentId])) {
+        for await (const event of adapter.sendToCouncilAgent(agentId as any, message)) {
           if (event.type === 'tool:start') {
             toolCalls.push({ tool: event.toolName, args: event.args });
           } else if (event.type === 'tool:result') {
