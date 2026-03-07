@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-07 (Phase 6 complete + production E2E verified. Full pipeline: build app → deploy → user reports bug → council processes → builder clones from GitHub → fixes code → governance proposal. Board task dedup. Per-project boards. Rate limiting. Project scheduler ticks. 9/9 Playwright E2E pass). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-07 (index.ts monolith extraction: 3,772→1,670 lines. Init files: init-kernel.ts, init-core.ts, init-platform.ts. Contributor earning built. 12/12 E2E pass). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -53,7 +53,7 @@ shared < ledger < node
   Pure infrastructure. P2P networking. Identity. Economy. Governance. Storage. HTTP API.
   Has ZERO intelligence of its own. No orchestrator. No agent database. No message bus.
 
-engine-adapter.ts = THE NERVOUS SYSTEM (~955 lines)
+engine-adapter.ts = THE NERVOUS SYSTEM (~968 lines)
   The ONE file that connects brain to body.
   Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
   Manages Council agents (observer/qa/council) using PandoCode's native agent system.
@@ -259,6 +259,7 @@ core/      Layer 1: Storage, deploy, credentials, upgrade, payment, engine-adapt
 platform/  Layer 2: Resources, content, threads, capabilities
 api/       HTTP API (kernel-api, core-api, platform-api, testing-api, server, middleware/)
 (root)     Entry points: index.ts, cli.ts, tui.ts, logger.ts, config.ts
+           Init files: init-kernel.ts, init-core.ts, init-platform.ts (extracted from index.ts _start())
 ```
 
 **Import boundary rule (enforced):** kernel → only kernel + @pando/*. core → kernel + @pando/*. platform → core + kernel + @pando/*. Never upward.
@@ -602,7 +603,7 @@ A regular user with PandoCode installed. The backbone of network intelligence.
 - Advertises capability: `pando-code: true` in capability profile
 - Network routes build jobs to them via P2P
 - Can set limits: max requests/day, budget caps, model preferences (NOT YET BUILT)
-- Earns Lux per job completed (EARNING MODEL NOT YET BUILT)
+- Earns Lux per job completed (BUILT — `WorkType.COMPUTE_CONTRIBUTED`, daily cap: 50 jobs/day via `PANDO_DAILY_COMPUTE_CAP`)
 - Future: Claude Code CLI as subprocess for superior coding (NOT YET BUILT)
 
 ```
@@ -796,14 +797,14 @@ These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse 
 |---|---|---|
 | **DeployPipeline** | `core/deploy-pipeline.ts` | Orchestrator — 4 steps: GitHub push → find EC2 → P2P deploy → update metadata |
 | **Trigger** | `api/platform-api.ts` `triggerDeployPipeline()` | Fire-and-forget after every `sendToEngine()` completion (4 call sites) |
-| **P2P handler** | `index.ts:1216` handler for `pando/deploy-app` | Clone from GitHub, detect tier, deploy to S3 or PM2+nginx |
-| **Tier 1 (S3)** | `index.ts:1303-1408` | S3Client + PutObjectCommand, HTML injection, MIME types |
-| **Tier 2 (PM2)** | `index.ts:1410-1473` | npm install, PM2, port registry, nginx config |
+| **P2P handler** | `init-platform.ts` handler for `pando/deploy-app` | Clone from GitHub, detect tier, deploy to S3 or PM2+nginx |
+| **Tier 1 (S3)** | `init-platform.ts` (inside deploy-app handler) | S3Client + PutObjectCommand, HTML injection, MIME types |
+| **Tier 2 (PM2)** | `init-platform.ts` (inside deploy-app handler) | npm install, PM2, port registry, nginx config |
 | **Port registry** | `{dataDir}/app-ports.json` | Persistent port allocation — survives node restarts |
 | **S3 hosting service** | `platform/hosting-service.ts` | Standalone S3 service (pre-signed URLs for private projects) |
 | **GitHub push** | `api/platform-api.ts:3417-3499` | git add -A, commit, force push to origin/main |
 | **GitHub repo create** | `api/platform-api.ts:3326-3414` | GitHub API — create repo in pando-lux org |
-| **Undeploy** | `index.ts:1498-1550` handler for `pando/undeploy-app` | PM2 delete, nginx cleanup, port registry removal |
+| **Undeploy** | `init-platform.ts:368` handler for `pando/undeploy-app` | PM2 delete, nginx cleanup, port registry removal |
 | **Deploy route** | `api/platform-api.ts` POST /projects/:id/deploy | Manual trigger endpoint |
 
 **S3 bucket:** `pando-deployments` (us-east-1). URL pattern: `http://pando-deployments.s3-website-us-east-1.amazonaws.com/public/{projectId}/index.html`
@@ -1192,7 +1193,7 @@ No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoCode'
 
 ## 6. THE ENGINE ADAPTER (detailed spec)
 
-The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~955 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~968 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
 
 **Key principle:** PandoCode uses its OWN configured provider and model. The engine-adapter does NOT override the model. Contributors choose their provider (default: Google/gemini-2.5-flash).
 
@@ -1401,7 +1402,7 @@ npx playwright test --project pando-code
 
 ## 9. BRAIN-KILL MIGRATION (COMPLETED 2026-03-06)
 
-**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~955 with council agents + board operations + dedup + per-project boards + project ticks + pando_workspace tool).**
+**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~968 with council agents + board operations + dedup + per-project boards + project ticks + pando_workspace tool).**
 
 The dual coordination system is dead. pando-node no longer has any intelligence of its own. All AI flows through EngineAdapter → @pando-code/core.
 
@@ -1409,7 +1410,7 @@ The dual coordination system is dead. pando-node no longer has any intelligence 
 orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), template-registry.ts (476), org-manager.ts (377), agent-tools.ts (373), orchestrator-manager.ts (333), engine-bridge.ts (283), worker-mcp.ts (274), orchestrator-process.ts (248), ai-backend-pandocode.ts (244), message-bus.ts (143), ai-backend-registry.ts (43), ai-backend.ts (37), context-api.ts (336).
 
 ### What replaced it
-`core/engine-adapter.ts` (~955 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL. Board operations (read/write/dedup) for user reports.
+`core/engine-adapter.ts` (~968 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL. Board operations (read/write/dedup) for user reports.
 
 ### API changes
 - **Removed:** `/v1/bridge/*`, `/v1/agents/*`, `/v1/context/*`
@@ -1443,10 +1444,10 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 |---|---|---|
 | **PandoCode Network Linking** | PandoCode config + engine-adapter | PARTIAL — Node creates PANDO_PROJECT.json in project workspaces. PandoCode config-side settings (network.linked) not yet in pando-code repo. See Section 5.9. |
 | **Claude Code CLI integration** | `@pando-code/core` | Not built yet. PandoCode needs a tool/subprocess to invoke `claude -p` for coding tasks. This would let contributors use their Claude Code subscription instead of a raw API key. |
-| **Contributor limits/earning** | Not built | Contributors need to set max requests/day, budget caps. Earning model (Lux per job) not implemented. |
+| **Contributor limits** | Partially built | Contributors need to set max requests/day, budget caps. Daily compute cap (50 jobs/day) is built. Per-user API limits not yet implemented. |
 | ~~**Node mode CLI flag**~~ | `cli.ts` | **FIXED.** Modes: `contributor|secure|lightweight|full`. Legacy `compute|relay` kept as aliases. |
 | ~~**S3 upload awaiting**~~ | `index.ts` | **FIXED.** Uses `Promise.all(uploadPromises)` instead of 2s sleep. Upload errors surfaced in console. |
-| ~~**Tier 2 PM2 persistence**~~ | `index.ts:1441` | **ALREADY HANDLED.** `pm2 save` is called after every deploy. Port registry also persists. |
+| ~~**Tier 2 PM2 persistence**~~ | `init-platform.ts` | **ALREADY HANDLED.** `pm2 save` is called after every deploy. Port registry also persists. |
 | **Deploy pipeline logging** | `core/deploy-pipeline.ts` | Pipeline step errors captured in step.detail but not persisted to project metadata. Low priority. |
 | ~~**deployPeerId not persisting**~~ | `platform-api.ts:3685` | **ALREADY HANDLED.** Saved to both ProjectStore (MongoDB) and ProjectRegistry (local). |
 
@@ -1462,7 +1463,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 | Issue | Why it's OK |
 |---|---|
-| index.ts is a monolith (~3,700 lines) | Shrunk by 783 lines after brain removal. Further decomposition possible but not urgent. |
+| ~~index.ts is a monolith~~ | **RESOLVED.** Extracted `_start()` into `init-kernel.ts` (793 lines), `init-core.ts` (154 lines), `init-platform.ts` (1,213 lines). index.ts is now 1,670 lines (class definition, lifecycle, getters, utilities). |
 | Agent identity is ephemeral | Ephemeral agents are sufficient for dev mode. |
 | Governance auto-approves (<=8 peers) | Dev mode only. Real voting kicks in with more peers. |
 
@@ -1473,7 +1474,10 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 ### Entry Points
 | File | Purpose |
 |---|---|
-| `index.ts` | PandoNode class. Boot sequence, P2P, governance, shutdown. |
+| `index.ts` | PandoNode class definition (1,670 lines). Lifecycle, getters, utilities. `_start()` delegates to init files. |
+| `init-kernel.ts` | Kernel init (793 lines): P2P, ledger, sync, governance, security, emission, upgrade, request-reply handlers. |
+| `init-core.ts` | Core init (154 lines): storage backends, credentials, deploy pool. |
+| `init-platform.ts` | Platform init (1,213 lines): API server, deploy handlers, resources, content, SSE, message handling. |
 | `cli.ts` | Non-interactive entry. Supervisor, crash guard (exit 78 for port conflict), circuit breaker auto-reset on successful boot, port check. |
 | `tui.ts` | Interactive terminal. 30+ slash commands. |
 
@@ -1530,10 +1534,10 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 ### Import Boundaries (enforced)
 - kernel → only kernel + @pando/*
-- core → kernel + @pando/*
+- core → kernel + @pando/* (exception: 2 type-only imports from platform — `ResourceRegistry` in engine-adapter.ts and gateway-deploy-pool.ts)
 - platform → core + kernel + @pando/*
 - api → platform + core + kernel + @pando/*
-- Never upward.
+- Never upward (runtime imports). Type-only exceptions acceptable.
 
 ### Token Economics
 | Parameter | Value |
@@ -1596,7 +1600,11 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 10. **No process isolation needed.** The old orchestrator needed child processes because the tick loop blocked the event loop. `engine.send()` is async and non-blocking. All engines run in the main process (or a single worker thread if memory is a concern).
 
-11. **Keys don't travel. Work travels.** Contributed API keys stay on EC2 (Path A — simple AI). PandoCode contributor keys stay on their machine (Path B — builds). The network routes WORK to where the keys are, never the other way around. `injectApiKeys()` loads: (1) PandoCode's `.env` file, (2) local env vars, (3) CredentialStore fallback (EC2 only). It does NOT pull keys over P2P.
+11. **Init files use `node: any` parameter.** `init-kernel.ts`, `init-core.ts`, `init-platform.ts` receive the PandoNode instance typed as `any`. This is intentional — avoids circular imports (init files can't import PandoNode from index.ts). All callback parameters also use `: any` for the same reason.
+
+12. **`_start()` is a thin coordinator.** It calls `initKernel(this)`, `initCore(this)`, `initPlatform(this)` via dynamic `await import()`. Each init file is a standalone function that sets up its layer. This pattern was chosen to break the 3,772-line monolith while keeping the PandoNode class interface unchanged.
+
+13. **Keys don't travel. Work travels.** Contributed API keys stay on EC2 (Path A — simple AI). PandoCode contributor keys stay on their machine (Path B — builds). The network routes WORK to where the keys are, never the other way around. `injectApiKeys()` loads: (1) PandoCode's `.env` file, (2) local env vars, (3) CredentialStore fallback (EC2 only). It does NOT pull keys over P2P.
 
 12. **Two kinds of "contribute."** `/contribute openai sk-xxx` donates a key to the network (encrypted on EC2, used server-side for Path A). Running PandoCode on your node contributes your COMPUTE (your local keys, your machine, you earn Lux for builds).
 
