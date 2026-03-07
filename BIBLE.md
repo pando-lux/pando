@@ -840,7 +840,7 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 5. Project metadata (visibility, owner) set by node based on user request
 6. When build completes → DeployPipeline triggers (GitHub → deploy → marketplace)
 
-**NOT YET BUILT.** PandoCode currently has no linking setting. Engine Adapter creates engines but doesn't manage a dedicated network workspace. This is the next architecture milestone.
+**PARTIALLY BUILT.** Engine Adapter creates `~/.pando/projects/{id}/` directories with `PANDO_PROJECT.json` metadata (nodeUrl, nodeId, projectId, linked flag). PandoCode config-side linking settings (network.linked, network.nodeUrl) not yet in PandoCode itself — requires pando-code repo changes.
 
 ### 5.10 The Universal Project Pattern — Board as Work Queue
 
@@ -1441,14 +1441,14 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 | Issue | Location | Problem |
 |---|---|---|
-| **PandoCode Network Linking** | PandoCode config | NOT BUILT — Standalone vs linked mode toggle. When linked, node can create projects in PandoCode. See Section 5.9. |
+| **PandoCode Network Linking** | PandoCode config + engine-adapter | PARTIAL — Node creates PANDO_PROJECT.json in project workspaces. PandoCode config-side settings (network.linked) not yet in pando-code repo. See Section 5.9. |
 | **Claude Code CLI integration** | `@pando-code/core` | Not built yet. PandoCode needs a tool/subprocess to invoke `claude -p` for coding tasks. This would let contributors use their Claude Code subscription instead of a raw API key. |
 | **Contributor limits/earning** | Not built | Contributors need to set max requests/day, budget caps. Earning model (Lux per job) not implemented. |
-| **Node mode CLI flag** | `cli.ts` | Still uses old `--mode full|compute|relay`. Needs updating to `contributor|secure|lightweight|full` to match four node types. |
-| **S3 upload awaiting** | `index.ts:1400` | S3 PutObjectCommand calls are fire-and-forget with a 2s sleep. Large projects with many files may have incomplete uploads. Need proper `await Promise.all()`. |
-| **Tier 2 PM2 persistence** | `index.ts:1410-1473` | PM2 starts the app but may lose track after pando-node restarts (daemon context mismatch). Port registry persists but PM2 process list doesn't auto-reconcile. Consider using `pm2 save` + `pm2 resurrect` on node boot. |
-| **Deploy pipeline logging** | `core/deploy-pipeline.ts` | Pipeline errors are fire-and-forget (`.catch(() => {})`). Should persist pipeline results to project metadata for debugging. |
-| **deployPeerId not persisting** | `deploy-pipeline.ts` + `project-store.ts` | Code passes `deployPeerId` in step 4 but MongoDB record shows "NOT SET". Likely `updateProject()` filters unknown fields. Need to add `deployPeerId` to the project schema/whitelist. |
+| ~~**Node mode CLI flag**~~ | `cli.ts` | **FIXED.** Modes: `contributor|secure|lightweight|full`. Legacy `compute|relay` kept as aliases. |
+| ~~**S3 upload awaiting**~~ | `index.ts` | **FIXED.** Uses `Promise.all(uploadPromises)` instead of 2s sleep. Upload errors surfaced in console. |
+| ~~**Tier 2 PM2 persistence**~~ | `index.ts:1441` | **ALREADY HANDLED.** `pm2 save` is called after every deploy. Port registry also persists. |
+| **Deploy pipeline logging** | `core/deploy-pipeline.ts` | Pipeline step errors captured in step.detail but not persisted to project metadata. Low priority. |
+| ~~**deployPeerId not persisting**~~ | `platform-api.ts:3685` | **ALREADY HANDLED.** Saved to both ProjectStore (MongoDB) and ProjectRegistry (local). |
 
 ### Stubs
 
@@ -1614,4 +1614,4 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 19. **P2P credential proxy has a timeout chain.** GitHub repo creation requires: P2P credential decrypt (30s timeout) + GitHub API call (45s inner timeout). If EC2 nodes are slow or offline, the credential proxy times out and GitHub operations fail. The timeouts were tuned for production latency on 2026-03-06.
 
-20. **S3 uploads are fire-and-forget with a 2s wait.** The `pando/deploy-app` handler fires S3 PutObjectCommand calls then `await new Promise(r => setTimeout(r, 2000))`. For large projects with many files, some uploads may not complete. This is a known trade-off (see Section 10).
+20. ~~**S3 uploads are fire-and-forget with a 2s wait.**~~ **FIXED.** S3 uploads now use `Promise.all(uploadPromises)` and surface errors. No more 2s sleep.
