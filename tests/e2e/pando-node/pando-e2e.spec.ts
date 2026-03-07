@@ -313,3 +313,39 @@ test('Council tools: findings available as Pando tools in engine', async () => {
     console.log('[e2e] PASS: Engine tools not exposed in /engines response, but CRUD API works.');
   }
 });
+
+test('Council status API', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/council/status`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+
+  // Council may or may not be active depending on environment
+  expect(typeof data.active).toBe('boolean');
+  expect(data.findings).toBeDefined();
+  expect(typeof data.findings.total).toBe('number');
+  expect(typeof data.findings.open).toBe('number');
+
+  if (data.active) {
+    expect(data.engines.length).toBe(3);
+    const ids = data.engines.map((e: any) => e.id);
+    expect(ids).toContain('observer');
+    expect(ids).toContain('qa');
+    expect(ids).toContain('council');
+    console.log(`[e2e] PASS: Council active with ${data.engines.length} agents.`);
+  } else {
+    console.log('[e2e] PASS: Council status API works (council not enabled in this environment).');
+  }
+});
+
+test('Council trigger rejects invalid agent', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/council/trigger/invalid`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.status).toBe(400);
+  const data = await res.json() as any;
+  expect(data.error).toContain('Invalid agent');
+  console.log('[e2e] PASS: Council trigger validation works.');
+});
