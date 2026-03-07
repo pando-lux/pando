@@ -16,6 +16,7 @@
 
 import type { ResourceRegistry } from '../platform/resource-registry.js';
 import { OBSERVER_PROMPT, QA_PROMPT, COUNCIL_PROMPT, TOOL_SETS } from './council-prompts.js';
+import { getFindingsStore } from './findings-store.js';
 
 // ─── Dynamic imports (pando-code is ESM, loaded at runtime) ─────────────
 
@@ -74,7 +75,7 @@ function createLuxBudgetProvider(luxPerUsd = 100) {
 // ─── Pando Tools ────────────────────────────────────────────────────────
 
 async function createPandoTools(apiPort: number, apiToken?: string) {
-  const baseUrl = `http://localhost:${apiPort}`;
+  const baseUrl = `http://127.0.0.1:${apiPort}`;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiToken) headers['Authorization'] = `Bearer ${apiToken}`;
 
@@ -214,7 +215,7 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
     },
     {
       name: 'pando_list_findings',
-      description: 'List findings. Filter by status, severity, or source.',
+      description: 'List findings. After reading findings, you MUST call pando_update_finding for each one to change its status.',
       parameters: z.object({
         status: z.enum(['open', 'in_progress', 'resolved', 'wont_fix']).optional().describe('Filter by status'),
         severity: z.enum(['info', 'warning', 'critical']).optional().describe('Filter by severity'),
@@ -226,17 +227,22 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
         if (args.severity) params.set('severity', args.severity);
         if (args.source) params.set('source', args.source);
         const qs = params.toString();
-        return ok(await api('GET', `/v1/findings${qs ? '?' + qs : ''}`));
+        const data = await api('GET', `/v1/findings${qs ? '?' + qs : ''}`);
+        // Append instruction to help models act on results
+        if (data?.findings?.length > 0) {
+          data._action = `You have ${data.findings.length} finding(s). For EACH finding, call pando_update_finding with the finding id and a new status (resolved, wont_fix, or in_progress).`;
+        }
+        return ok(data);
       },
     },
     {
       name: 'pando_update_finding',
-      description: 'Update a finding status. Used by Council to resolve findings.',
+      description: 'REQUIRED: Update a finding status. Call this for EVERY finding after reviewing it. Pass id, status (resolved/wont_fix/in_progress), resolvedBy ("council"), and actionTaken (what you did).',
       parameters: z.object({
-        id: z.string().describe('Finding ID'),
-        status: z.enum(['open', 'in_progress', 'resolved', 'wont_fix']).optional().describe('New status'),
-        resolvedBy: z.string().optional().describe('Who resolved it'),
-        actionTaken: z.string().optional().describe('What was done to resolve'),
+        id: z.string().describe('Finding ID to update'),
+        status: z.enum(['open', 'in_progress', 'resolved', 'wont_fix']).describe('New status: resolved (fixed), wont_fix (false positive), in_progress (working on it)'),
+        resolvedBy: z.string().optional().describe('Who resolved it (usually "council")'),
+        actionTaken: z.string().optional().describe('What was done to resolve it'),
       }),
       execute: async (args: any) => {
         const { id, ...body } = args;
@@ -273,6 +279,17 @@ export interface ReviewResult {
   risks: string[];
   recommendation: string;
 }
+
+// Council agent IDs
+const COUNCIL_AGENTS = ['observer', 'qa', 'council'] as const;
+type CouncilAgentId = typeof COUNCIL_AGENTS[number];
+
+// Map agent ID → system prompt for agentOverride
+const COUNCIL_SYSTEM_PROMPTS: Record<CouncilAgentId, string> = {
+  observer: OBSERVER_PROMPT,
+  qa: QA_PROMPT,
+  council: COUNCIL_PROMPT,
+};
 
 export class EngineAdapter {
   private pool: any = null;         // EnginePool
@@ -313,12 +330,27 @@ export class EngineAdapter {
       onAfterCreate: async (id: string, engine: any) => {
         // Inject Lux budget
         engine.setBudgetProvider(this.luxProvider);
+
+        // For council agents: strip built-in PandoCode tools (file ops, code tools, agents)
+        // Council agents should ONLY use pando_* tools, not filesystem/coding tools
+        const isCouncilAgent = ['observer', 'qa', 'council'].includes(id);
+        if (isCouncilAgent) {
+          const builtinToRemove = engine.tools.list().filter((name: string) => !name.startsWith('pando_'));
+          for (const name of builtinToRemove) {
+            engine.tools.unregister(name);
+          }
+        }
+
         // Register Pando tools (filtered for council agents)
         const allowedSet = (TOOL_SETS as any)[id] as string[] | null | undefined;
         for (const tool of this.pandoTools) {
           if (!allowedSet || allowedSet.includes(tool.name)) {
             engine.tools.register(tool);
           }
+        }
+
+        if (isCouncilAgent) {
+          console.log(`[EngineAdapter] ${id} tools: ${engine.tools.list().join(', ')}`);
         }
       },
     });
@@ -488,39 +520,132 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       console.log(`[EngineAdapter] Council agent "${agent.id}" started.`);
     }
 
-    // Register scheduler ticks for each agent
+    // Register scheduler ticks for each agent — with event logging
     if (this.scheduler) {
       const observerInterval = this.config.observerIntervalMs ?? 30 * 60_000;
       const qaInterval = this.config.qaIntervalMs ?? 30 * 60_000;
       const councilInterval = this.config.councilIntervalMs ?? 15 * 60_000;
 
+      const logEvent = (agentId: string) => (event: any) => {
+        if (event.type === 'tool:start') {
+          console.log(`[${agentId}] TOOL CALL: ${event.toolName}(${JSON.stringify(event.args)})`);
+        } else if (event.type === 'tool:result') {
+          const out = event.result?.output || '';
+          const preview = out.length > 200 ? out.slice(0, 200) + '...' : out;
+          console.log(`[${agentId}] TOOL RESULT: ${event.toolName} → ${event.result?.success ? 'OK' : 'FAIL'}: ${preview}`);
+        } else if (event.type === 'stream:chunk' && event.content) {
+          process.stdout.write(`[${agentId}] ${event.content}`);
+        }
+      };
+
+      // Scheduler uses pool.send() which doesn't forward agentOverride,
+      // so we prepend the system prompt into the scheduler message itself.
       this.scheduler.register({
         name: 'observer-tick',
         engineId: 'observer',
         intervalMs: observerInterval,
-        prompt: 'Run your periodic checks. Monitor network health, peer connectivity, deployment status. Report anomalies as findings.',
+        prompt: `${OBSERVER_PROMPT}\n\n---\n\nRun your periodic checks now. Monitor network health, peer connectivity, deployment status. Report anomalies as findings.`,
         active: true,
+        onEvent: logEvent('observer'),
+        onComplete: () => console.log(`\n[observer] Tick complete.`),
+        onError: (err: Error) => console.warn(`[observer] Tick error: ${err.message}`),
       });
 
       this.scheduler.register({
         name: 'qa-tick',
         engineId: 'qa',
         intervalMs: qaInterval,
-        prompt: 'Run your test suite. Check API health, peer connectivity, project system integrity. Report failures as findings.',
+        prompt: `${QA_PROMPT}\n\n---\n\nRun your health checks now. Check API health, peer connectivity, project system integrity. Report failures as findings.`,
         active: true,
-        delayMs: Math.floor(observerInterval / 2), // offset by half to stagger
+        onEvent: logEvent('qa'),
+        onComplete: () => console.log(`\n[qa] Tick complete.`),
+        onError: (err: Error) => console.warn(`[qa] Tick error: ${err.message}`),
       });
 
       this.scheduler.register({
         name: 'council-tick',
         engineId: 'council',
         intervalMs: councilInterval,
-        prompt: 'Check findings. Read open findings, prioritize by severity, and act on actionable items. Resolve what you can.',
+        prompt: `${COUNCIL_PROMPT}\n\n---\n\nCheck findings now. Read all open findings, prioritize by severity, and resolve each one. You MUST call pando_update_finding for every open finding.`,
         active: true,
+        onEvent: logEvent('council'),
+        onComplete: () => console.log(`\n[council] Tick complete.`),
+        onError: (err: Error) => console.warn(`[council] Tick error: ${err.message}`),
       });
 
       console.log('[EngineAdapter] Council scheduler ticks registered.');
     }
+
+    // Event-driven: wake council immediately when a new finding is created
+    const findings = getFindingsStore();
+    let councilWakeDebounce: ReturnType<typeof setTimeout> | null = null;
+    findings.onCreated((finding) => {
+      if (!this.pool?.has('council')) return;
+      // Debounce: wait 3s in case observer/QA create multiple findings at once
+      if (councilWakeDebounce) clearTimeout(councilWakeDebounce);
+      councilWakeDebounce = setTimeout(() => {
+        councilWakeDebounce = null;
+        console.log(`[council] Waking council — new ${finding.severity} finding: "${finding.title}"`);
+        // Fire-and-forget: send message to council engine with system prompt, LOG all events
+        (async () => {
+          try {
+            for await (const event of this.sendToCouncilAgent('council',
+              `URGENT: New ${finding.severity} finding created (id: ${finding.id}).
+
+Do these steps IN ORDER:
+1. Call pando_list_findings with status "open" to see all open findings
+2. Call pando_status to check current system health
+3. For the finding with id "${finding.id}", call pando_update_finding with:
+   - id: "${finding.id}"
+   - status: "resolved" or "wont_fix"
+   - resolvedBy: "council"
+   - actionTaken: your assessment of the issue
+
+You MUST call pando_update_finding before responding.`
+            )) {
+              // Log all council events for visibility
+              if (event.type === 'tool:start') {
+                console.log(`[council] TOOL CALL: ${event.toolName}(${JSON.stringify(event.args)})`);
+              } else if (event.type === 'tool:result') {
+                const out = event.result?.output || '';
+                const preview = out.length > 200 ? out.slice(0, 200) + '...' : out;
+                console.log(`[council] TOOL RESULT: ${event.toolName} → ${event.result?.success ? 'OK' : 'FAIL'}: ${preview}`);
+              } else if (event.type === 'stream:chunk') {
+                // Accumulate text for a final summary
+                process.stdout.write(`[council] ${event.content}`);
+              }
+            }
+            console.log(''); // newline after streamed text
+          } catch (err: any) {
+            console.warn(`[council] Wake failed: ${err.message}`);
+          }
+        })();
+      }, 3000);
+    });
+  }
+
+  /**
+   * Send a message to a council agent with the correct system prompt override.
+   * PandoCode's pool.send() doesn't forward systemPrompt, so we call engine.send()
+   * directly with agentOverride to inject the council-specific system prompt.
+   */
+  async *sendToCouncilAgent(agentId: CouncilAgentId, message: string): AsyncGenerator<any> {
+    if (!this.pool) throw new Error('EngineAdapter not started');
+    const engine = this.pool.get(agentId);
+    if (!engine) throw new Error(`Council agent "${agentId}" not found`);
+
+    // Start session if needed
+    if (!engine.getSessionId()) {
+      await engine.startSession(`Council: ${agentId}`);
+    }
+
+    yield* engine.send(message, {
+      agentOverride: {
+        agentId,
+        role: agentId,
+        systemPrompt: COUNCIL_SYSTEM_PROMPTS[agentId],
+      },
+    });
   }
 
   /** Check if council agents are running. */

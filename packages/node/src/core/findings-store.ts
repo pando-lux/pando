@@ -62,6 +62,12 @@ export function getFindingsStore(): FindingsStore {
 
 export class FindingsStore {
   private findings = new Map<string, Finding>();
+  private _onCreated: ((finding: Finding) => void) | null = null;
+
+  /** Register a callback fired when a new finding is created (used to wake council). */
+  onCreated(fn: (finding: Finding) => void): void {
+    this._onCreated = fn;
+  }
 
   create(input: CreateFindingInput): Finding {
     const id = randomBytes(8).toString('hex');
@@ -77,6 +83,7 @@ export class FindingsStore {
       createdAt: Date.now(),
     };
     this.findings.set(id, finding);
+    try { this._onCreated?.(finding); } catch { /* best-effort */ }
     return finding;
   }
 
