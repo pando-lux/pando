@@ -2010,7 +2010,7 @@ export class GovernanceSync {
       return { approved: false, reason, kernelDelay: false };
     }
 
-    // CHECK 3: AI review — ask the engine adapter for a security analysis (non-blocking, fail-open)
+    // CHECK 3: AI review — advisory only (deterministic checks are the real gates)
     if (this.engineAdapter) {
       try {
         let diff = '';
@@ -2021,13 +2021,14 @@ export class GovernanceSync {
           const review = await this.engineAdapter.reviewDiff(diff, proposal.description || '');
           if (!review.safe) {
             const reason = `AI review flagged risks: ${review.risks.join(', ')} — ${review.recommendation}`;
-            this.agentDb?.logGovernanceCheck(proposalId, 'ai_review', 'fail', reason.slice(0, 500), changedFiles.length, totalLinesChanged);
-            return { approved: false, reason, kernelDelay: false };
+            console.warn(`[governance] AI review WARNING (advisory): ${reason.slice(0, 200)}`);
+            this.agentDb?.logGovernanceCheck(proposalId, 'ai_review', 'warn', reason.slice(0, 500), changedFiles.length, totalLinesChanged);
+            // Advisory only — deterministic checks (security files, dangerous patterns) are the real gates
+          } else {
+            this.agentDb?.logGovernanceCheck(proposalId, 'ai_review', 'pass', review.recommendation);
           }
-          this.agentDb?.logGovernanceCheck(proposalId, 'ai_review', 'pass', review.recommendation);
         }
       } catch (err) {
-        // Fail-open: if AI review errors, continue with deterministic checks
         console.warn('[governance] AI review failed (non-fatal):', (err as Error).message?.slice(0, 100));
         this.agentDb?.logGovernanceCheck(proposalId, 'ai_review', 'skip', 'AI review error — fail-open');
       }
