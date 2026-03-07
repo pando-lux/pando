@@ -62,7 +62,7 @@ engine-adapter.ts = THE NERVOUS SYSTEM (~955 lines)
 
 **How the brain sees the body:**
 ```
-The engine has 35+ built-in tools (read_file, write_file, bash, grep, spawn_agent, manage_tasks, MCP tools, etc.)
+The engine has 20+ built-in tools (read_file, write_file, bash, grep, spawn_agent, manage_tasks, etc.) plus MCP tools at runtime
 When inside a pando-node, it gets EXTRA tools:
   pando_deploy       → POST /v1/projects/:id/deploy
   pando_transfer     → POST /v1/ledger/transfer
@@ -83,7 +83,7 @@ That's the ENTIRE integration.
 ### 3.1 @pando/identity (COMPLETE)
 
 **Location:** `packages/identity/` in pando/node monorepo
-**Lines:** ~1,349 | **Tests:** 89 across 11 files | **Status:** DONE
+**Lines:** ~1,349 | **Tests:** 90 across 11 files | **Status:** DONE
 
 Pure cryptographic primitives. No storage, no SQLite, no MongoDB, no network.
 
@@ -116,7 +116,7 @@ The AI coding engine. Multi-provider (Anthropic, OpenAI, Google, Ollama). Multi-
 
 - `PandoCode` class — the engine. Create, send messages, get streaming responses.
 - 9-layer frame system (L0 identity → L8 project context). `FrameBuilder.build()` is the ONLY prompt assembly path.
-- 35+ built-in tools — read_file, write_file, edit_file, bash, glob, grep, spawn_agent, manage_tasks, send_message, save_memory, query_memory, MCP tools, etc.
+- 20+ built-in tools (+ MCP tools at runtime) — read_file, write_file, edit_file, bash, glob, grep, spawn_agent, manage_tasks, send_message, save_memory, query_memory, check_agents, list_files, undo, multiedit, genome, test, run_tests, etc.
 - Guardrails — hard (enforced), role permissions matrix, risk tiers, git checkpoints.
 - Knowledge graph — AST-based, 1000+ symbols, 13K+ cross-references.
 - MCP client — connects to external MCP servers (Playwright built-in).
@@ -132,7 +132,7 @@ PandoCode has a **full persistent agent system**. Do NOT build a parallel one in
 
 | Role | Tools | Pando-node equivalent |
 |---|---|---|
-| `explorer` | read-only | Observer (health monitoring) |
+| `explorer` (role string: `explore`) | read-only | Observer (health monitoring) |
 | `tester` | read + bash + test | QA (test execution) |
 | `lead` | delegation: spawn_agent, manage_tasks, check_agents, send_message | Council (orchestration) |
 | `builder` | full code access (read, write, edit, bash) | Workers (coding) |
@@ -149,7 +149,7 @@ PandoCode has a **full persistent agent system**. Do NOT build a parallel one in
 #### 3.2.3 Board (Task Tracking — ALREADY BUILT)
 
 - **Board tasks** — SQLite `board_tasks` table: id, sessionId, title, status, order, parentId, assignedAgent, dependsOn (JSON), progress, createdAt, completedAt
-- **Status lifecycle:** `pending → in_progress → done / failed / cancelled / rolled_back`
+- **Status lifecycle:** `pending → in_progress → done / rolled_back`
 - **Task assignment** to specific agents
 - **Dependencies** between tasks (dependsOn array)
 - **Board UI** — Board tab: unified task list, filter by agent/status, sort, cancel/retry actions
@@ -187,7 +187,7 @@ PandoCode has a **full persistent agent system**. Do NOT build a parallel one in
 - **One engine = one session = one active agent at a time**
 - **Shared database** — all engines sharing same SQLite DB can communicate via send_message
 
-**Key files:** `engine/engine.ts` (~1400 lines, main loop), `board/board.ts`, `agent/sub-agent.ts`, `agent/frame-builder.ts`, `memory/store.ts`, `tool/registry.ts`, `tool/send-message-tool.ts`, `tool/check-agents.ts`, `provider/provider.ts`
+**Key files:** `engine/engine.ts` (~2400 lines, main loop), `board/board.ts`, `agent/sub-agent.ts`, `agent/frame-builder.ts`, `memory/memory-store.ts`, `tool/registry.ts`, `tool/send-message-tool.ts`, `tool/check-agents.ts`, `provider/provider.ts`
 
 #### 3.2.7 Web UI
 
@@ -503,7 +503,7 @@ Each engine:
 STANDALONE pando-code              PANDO-NODE pando-code
 (any dev, any project)             (inside the network)
 
-  35+ built-in tools                 35+ built-in tools       IDENTICAL
+  20+ built-in tools                 20+ built-in tools       IDENTICAL
   Board                              Board                    IDENTICAL
   Memory                             Memory                   IDENTICAL
   Sub-agents                         Sub-agents               IDENTICAL

@@ -143,7 +143,7 @@ Windows (this machine)          EC2-1 / EC2-2
 ## What's Done
 - **204 E2E tests passing** (15 clean runs: 44→70→71→71→71→71→75→75→122→141→175→187→195→201→204)
 - **@pando/code integrated**: PandoCodeBackend is the ONLY AI backend (ClaudeBackend + OllamaBackend deleted)
-- **PandoCode engine creates successfully**: 35 tools connected, LuxBudgetProvider injected, custom Pando tools registered
+- **PandoCode engine creates successfully**: 20+ tools connected, LuxBudgetProvider injected, custom Pando tools registered
 - **API key wiring**: `configurePandoEngine()` queries ResourceRegistry for contributed AI keys, sets env vars before engine creation
 - **NodeCapability.PANDO_CODE**: Added to shared types, detected at startup, verified in E2E
 - **Security documentation hardened**: CLAUDE.md, NODE-BIBLE, PANDO-BIBLE all have explicit NEVER/ALWAYS credential rules
@@ -249,7 +249,7 @@ The bridge creates PandoCode engine instances configured for Pando.
 ## 1.7 — Verify integration
 - [x] Monorepo builds clean (npm run build zero errors)
 - [x] PandoCodeBackend registered as PRIMARY in AIBackendRegistry
-- [x] Node starts and PandoCode engine creates successfully (verified: PandoCode.create() works, 35 tools connected)
+- [x] Node starts and PandoCode engine creates successfully (verified: PandoCode.create() works, 20+ tools connected)
 - [x] setBudgetProvider works (Lux budget injection verified)
 - [x] Custom tool registration works (engine.tools.register + engine.tools.has verified)
 - [x] pando-code detected as NodeCapability at startup
