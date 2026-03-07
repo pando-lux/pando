@@ -1112,7 +1112,7 @@ GOTCHAS:
 | Council prompt: task lifecycle | DONE — priority ordering, stale cleanup (>24h), user request processing |
 | `addBoardTask()` on EngineAdapter | DONE — inserts task with proper schema (session_id, order FK). Dedup: exact title match on pending/in_progress returns existing ID. |
 | `getCouncilBoard()` on EngineAdapter | DONE — reads pending/in_progress tasks |
-| Project scheduler ticks | **TODO** — public projects get periodic wake-ups on creation |
+| Project scheduler ticks | DONE — registered on first user report via `ensureProjectTick()`. Every 6h, injects board snapshot and prompts engine to process pending tasks. Cleanup on shutdown. |
 | Per-project board endpoints | DONE — `GET /v1/projects/:id/board` (read), `POST /v1/projects/:id/request` (submit). Returns 404 if project has no engine DB yet. |
 | Rate limiting on reports | DONE — 3 requests/hour per IP on `POST /council/request` and `POST /projects/:id/request`. RateLimiter with 1-hour window. |
 | Gateway `/council` page | **TODO** — live board, submit form, ticket status |

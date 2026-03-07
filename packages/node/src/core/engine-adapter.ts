@@ -321,6 +321,7 @@ export class EngineAdapter {
   private started = false;
   private councilDbPath: string | null = null;
   private Database: any = null;  // better-sqlite3 constructor (cached at startup)
+  private projectTicks = new Set<string>();  // Track which projects have scheduler ticks
 
   /** Whether the adapter is ready (pando-code loaded + pool started). */
   get available(): boolean { return this.started; }
@@ -518,10 +519,15 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   /**
    * Add a task to a project's board. Used for per-project bug reports.
    * Returns the task ID on success, null on failure. Dedup by exact title match.
+   * Registers a project scheduler tick if one doesn't exist yet.
    */
   addProjectBoardTask(projectId: string, title: string, description?: string): string | null {
     const dbPath = this.resolveProjectDbPath(projectId);
-    return this.insertBoardTask(dbPath, title, description);
+    const taskId = this.insertBoardTask(dbPath, title, description);
+    if (taskId && dbPath) {
+      this.ensureProjectTick(projectId, dbPath);
+    }
+    return taskId;
   }
 
   /** Resolve the .pando-code.db path for a project. */
@@ -590,10 +596,47 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   }
 
   /**
-   * Read the council board and format a snapshot for injection into the tick message.
-   * Returns a human-readable summary of pending/in_progress tasks.
+   * Register a periodic scheduler tick for a project engine.
+   * Only registers once per projectId. Tick reads the project board and prompts the engine
+   * to process pending tasks (same pattern as the council tick).
    */
-  private getCouncilBoardSnapshot(dbPath: string): string {
+  private ensureProjectTick(projectId: string, dbPath: string): void {
+    if (this.projectTicks.has(projectId) || !this.pool || !this.scheduler) return;
+    if (!this.pool.has(projectId)) return; // Engine must exist
+
+    this.projectTicks.add(projectId);
+
+    // Project ticks run every 6 hours (less urgent than council's 15 min)
+    const projectTickMs = 6 * 60 * 60_000;
+    const tickInterval = setInterval(async () => {
+      try {
+        const snapshot = this.getBoardSnapshot(dbPath);
+        if (snapshot.includes('No pending tasks')) return; // Nothing to do
+
+        const message = `You are the lead for this project. Check your board and process pending tasks.\n\n${snapshot}\n\nPrioritize BUG reports. Close stale tasks (>24h). For code fixes, use spawn_agent with a builder role.`;
+        for await (const event of this.pool.send(projectId, message)) {
+          if (event.type === 'tool:start') {
+            console.log(`[project:${projectId}] TOOL: ${event.toolName}`);
+          }
+        }
+        console.log(`[project:${projectId}] Tick complete.`);
+      } catch (err: any) {
+        console.warn(`[project:${projectId}] Tick error: ${err.message}`);
+      }
+    }, projectTickMs);
+
+    // Store for cleanup
+    if (!(this as any)._projectIntervals) (this as any)._projectIntervals = [];
+    (this as any)._projectIntervals.push(tickInterval);
+
+    console.log(`[EngineAdapter] Project "${projectId}" scheduler tick registered (every 6h).`);
+  }
+
+  /**
+   * Read a board and format a snapshot for injection into tick messages.
+   * Works for council board or any project board. Returns a human-readable summary.
+   */
+  private getBoardSnapshot(dbPath: string): string {
     if (!this.Database) return 'BOARD STATE: Database not available.';
     try {
       const db = new this.Database(dbPath, { readonly: true });
@@ -629,6 +672,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   /** Shutdown everything gracefully. */
   async shutdown(): Promise<void> {
     if ((this as any)._councilInterval) clearInterval((this as any)._councilInterval);
+    for (const interval of ((this as any)._projectIntervals || [])) clearInterval(interval);
     this.scheduler?.stop();
     await this.pool?.shutdown();
     this.started = false;
@@ -784,7 +828,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       const councilTickMs = 15 * 60_000;
       const councilInterval = setInterval(async () => {
         try {
-          const boardSnapshot = this.getCouncilBoardSnapshot(councilDbPath);
+          const boardSnapshot = this.getBoardSnapshot(councilDbPath);
           const message = `${COUNCIL_PROMPT}\n\n---\n\nCheck your inbox and review board tasks now.\n\n${boardSnapshot}`;
           for await (const event of this.sendToCouncilAgent('council', message)) {
             logEvent('council')(event);
