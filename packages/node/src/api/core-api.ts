@@ -79,13 +79,24 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
 
         console.log(`[upgrade] Pull result: ${pullOutput.split('\n')[0]}`);
 
-        // Step 2: npm run build
+        // Step 2a: Install dependencies (new packages may have been added)
+        console.log('[upgrade] Installing dependencies...');
+        try {
+          execSync('npm install', {
+            cwd: repoDir, encoding: 'utf-8', timeout: 180_000,
+            stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+          });
+        } catch (installErr: any) {
+          console.warn(`[upgrade] npm install warning: ${(installErr.stderr?.toString() || installErr.message)?.slice(0, 200)}`);
+        }
+
+        // Step 2b: npm run build
         console.log('[upgrade] Building...');
         try {
           execSync('npm run build', {
             cwd: repoDir,
             encoding: 'utf-8',
-            timeout: 180_000, // 3 minutes
+            timeout: 300_000, // 5 minutes
             stdio: ['pipe', 'pipe', 'pipe'],
             windowsHide: true,
           });

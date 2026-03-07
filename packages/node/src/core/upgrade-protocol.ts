@@ -323,11 +323,22 @@ export class UpgradeProtocol {
       return { success: true, message: 'Already incorporated (local ahead of origin).' };
     }
 
-    // Step 6: Build
+    // Step 6a: Install dependencies (new packages may have been added)
+    console.log('[upgrade] Installing dependencies...');
+    try {
+      execSync('npm install', {
+        cwd: repoDir, timeout: 180_000, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+      });
+    } catch (err: any) {
+      console.warn(`[upgrade] npm install warning: ${(err.stderr?.toString() || err.message)?.slice(0, 200)}`);
+      // Non-fatal — build might still succeed if deps didn't change
+    }
+
+    // Step 6b: Build
     console.log('[upgrade] Building...');
     try {
       execSync('npm run build', {
-        cwd: repoDir, timeout: 180_000, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+        cwd: repoDir, timeout: 300_000, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
       });
     } catch (err: any) {
       const stderr = err.stderr?.toString()?.slice(-500) || err.message;
