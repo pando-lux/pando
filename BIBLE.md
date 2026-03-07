@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-07 (Phase 6 complete + production E2E verified. Full pipeline: build app → deploy → user reports bug → council processes → builder clones from GitHub → fixes code → governance proposal. Board task dedup added. Severity classification covers word variants. 8/8 production E2E pass, 6/6 Playwright pass). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-07 (Phase 6 complete + production E2E verified. Full pipeline: build app → deploy → user reports bug → council processes → builder clones from GitHub → fixes code → governance proposal. Board task dedup. Per-project boards. Rate limiting. Project scheduler ticks. 9/9 Playwright E2E pass). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -53,7 +53,7 @@ shared < ledger < node
   Pure infrastructure. P2P networking. Identity. Economy. Governance. Storage. HTTP API.
   Has ZERO intelligence of its own. No orchestrator. No agent database. No message bus.
 
-engine-adapter.ts = THE NERVOUS SYSTEM (~870 lines)
+engine-adapter.ts = THE NERVOUS SYSTEM (~955 lines)
   The ONE file that connects brain to body.
   Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
   Manages Council agents (observer/qa/council) using PandoCode's native agent system.
@@ -126,7 +126,7 @@ The AI coding engine. Multi-provider (Anthropic, OpenAI, Google, Ollama). Multi-
 
 PandoCode has a **full persistent agent system**. Do NOT build a parallel one in pando-node.
 
-- **Persistent agent profiles** in SQLite `agents` table (id, role, model, status, displayName, description)
+- **Persistent agent profiles** in SQLite `agents` table (id, role, model, systemPrompt, tools, scope, status, sessionId, displayName, description, createdAt + optional identity: parentId, publicKey, certificate)
 - **NOT per-engine** — agent profiles are global in the database, not scoped to a single engine
 - **Agent roles with built-in tool filtering:**
 
@@ -148,7 +148,7 @@ PandoCode has a **full persistent agent system**. Do NOT build a parallel one in
 
 #### 3.2.3 Board (Task Tracking — ALREADY BUILT)
 
-- **Board tasks** — SQLite `board_tasks` table: id, sessionId, title, status, assignedAgent, dependsOn (JSON), progress, timestamps
+- **Board tasks** — SQLite `board_tasks` table: id, sessionId, title, status, order, parentId, assignedAgent, dependsOn (JSON), progress, createdAt, completedAt
 - **Status lifecycle:** `pending → in_progress → done / failed / cancelled / rolled_back`
 - **Task assignment** to specific agents
 - **Dependencies** between tasks (dependsOn array)
@@ -181,7 +181,7 @@ PandoCode has a **full persistent agent system**. Do NOT build a parallel one in
 
 #### 3.2.6 Infrastructure (ALREADY BUILT)
 
-- **EnginePool** (`pool/engine-pool.ts`) — Multi-engine management. `Map<id, PandoCode>` with lazy creation, TTL eviction, lifecycle hooks (`onAfterCreate`), max limits, concurrent-safe. ~230 lines.
+- **EnginePool** (`pool/engine-pool.ts`) — Multi-engine management. `Map<id, PandoCode>` with lazy creation, TTL eviction, lifecycle hooks (`onAfterCreate`), max limits, concurrent-safe. ~290 lines.
 - **Scheduler** (`pool/scheduler.ts`) — Periodic task execution. Named tasks with interval + prompt + callbacks (onEvent, onComplete, onError). Sends to engines via pool. Pause/resume/trigger. ~200 lines.
 - **PandoServer** (`server/server.ts`) — HTTP API with SSE streaming. Engine/schedule/health endpoints. ~200 lines.
 - **One engine = one session = one active agent at a time**
@@ -331,8 +331,8 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 **Key route groups:**
 | Group | Prefix | Examples |
 |---|---|---|
-| Kernel | `/v1/status`, `/v1/peers` | Node health, connected peers |
-| Core | `/v1/tasks`, `/v1/upgrade` | Task management, safe upgrade |
+| Kernel | `/v1/status`, `/v1/peers`, `/v1/tasks/*`, `/v1/governance/*`, `/v1/admin/*` | Node health, peers, tasks, governance, scheduler, admin |
+| Core | `/v1/upgrade/*`, `/v1/emissions/*`, `/v1/security/*` | Upgrade, emissions, security monitoring |
 | Chat | `/v1/chat/*` | Message → doorman → Path A (question) or Path B (build) or report (board task). |
 | Engines | `/v1/engines/*` | List active engines, board snapshots, memory |
 | Projects | `/v1/projects/*` | Create, deploy, undeploy, `board` (per-project tasks), `request` (submit bug/feature) |
@@ -1105,7 +1105,7 @@ GOTCHAS:
 | `spawn_agent(working_directory)` | DONE — PandoCode enhancement in spawn-agent.ts |
 | `pando_workspace` tool | DONE — pando-node tool in engine-adapter.ts, git credential reuse from local repo |
 | Builder fixing actual code | VERIFIED — council dispatched builder, builder modified code, submitted governance proposal |
-| Board snapshot in tick message | DONE — `getCouncilBoardSnapshot()` reads board from SQLite, priority-sorted, injected in council tick |
+| Board snapshot in tick message | DONE — `getBoardSnapshot()` reads board from SQLite, priority-sorted, injected in council tick |
 | Doorman "report" intent | DONE — fast-path regex + OpenAI classification. Creates `[BUG:user]` or `[FEATURE:user]` board task |
 | `POST /v1/council/request` | DONE — direct API for user reports (5-500 char validation) |
 | `GET /v1/council/board` | DONE — public board view (pending/in_progress tasks) |
@@ -1192,7 +1192,7 @@ No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoCode'
 
 ## 6. THE ENGINE ADAPTER (detailed spec)
 
-The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~870 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~955 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
 
 **Key principle:** PandoCode uses its OWN configured provider and model. The engine-adapter does NOT override the model. Contributors choose their provider (default: Google/gemini-2.5-flash).
 
@@ -1225,6 +1225,13 @@ class EngineAdapter {
   // Council board operations
   getCouncilBoard(): any[]                               // Read pending/in_progress tasks
   addBoardTask(title: string, description?: string): string | null  // Insert or dedup board task (returns existing ID if title matches pending task)
+
+  // Per-project board operations
+  getProjectBoard(projectId: string): any[]              // Read pending/in_progress tasks from project DB
+  addProjectBoardTask(projectId: string, title: string, description?: string): string | null  // Insert or dedup on project board (registers scheduler tick on first report)
+
+  // Council status
+  isCouncilActive(): boolean                             // True if observer + qa + council engines all exist
 
   // Management
   get available(): boolean
@@ -1276,7 +1283,7 @@ These are additions to @pando-code/core (the separate repo). No refactoring — 
 
 | Feature | File | Lines | Description |
 |---|---|---|---|
-| **EnginePool** | `pool/engine-pool.ts` | ~230 | Multi-engine management. Lazy creation, TTL eviction, lifecycle hooks (`onAfterCreate`), max limits, concurrent-safe locks. |
+| **EnginePool** | `pool/engine-pool.ts` | ~290 | Multi-engine management. Lazy creation, TTL eviction, lifecycle hooks (`onAfterCreate`), max limits, concurrent-safe locks. |
 | **Scheduler** | `pool/scheduler.ts` | ~200 | Periodic tasks. Named schedules with interval + prompt. Pause/resume/trigger. Sends to engines via pool. |
 | **PandoServer** | `server/server.ts` | ~200 | HTTP API + SSE streaming. `POST /api/send`, engine/schedule/health endpoints. Standalone server mode. |
 
@@ -1394,7 +1401,7 @@ npx playwright test --project pando-code
 
 ## 9. BRAIN-KILL MIGRATION (COMPLETED 2026-03-06)
 
-**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~870 with council agents + board operations + dedup + pando_workspace tool).**
+**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~955 with council agents + board operations + dedup + per-project boards + project ticks + pando_workspace tool).**
 
 The dual coordination system is dead. pando-node no longer has any intelligence of its own. All AI flows through EngineAdapter → @pando-code/core.
 
@@ -1402,7 +1409,7 @@ The dual coordination system is dead. pando-node no longer has any intelligence 
 orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), template-registry.ts (476), org-manager.ts (377), agent-tools.ts (373), orchestrator-manager.ts (333), engine-bridge.ts (283), worker-mcp.ts (274), orchestrator-process.ts (248), ai-backend-pandocode.ts (244), message-bus.ts (143), ai-backend-registry.ts (43), ai-backend.ts (37), context-api.ts (336).
 
 ### What replaced it
-`core/engine-adapter.ts` (~870 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL. Board operations (read/write/dedup) for user reports.
+`core/engine-adapter.ts` (~955 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL. Board operations (read/write/dedup) for user reports.
 
 ### API changes
 - **Removed:** `/v1/bridge/*`, `/v1/agents/*`, `/v1/context/*`
@@ -1506,9 +1513,9 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | File | Purpose |
 |---|---|
 | `api/api-server.ts` | Fastify server setup, doorman classification (simple/question/build/report intents) |
-| `api/kernel-api.ts` | Status, peers, capabilities, governance routes |
-| `api/core-api.ts` | Upgrade, emissions, security, council routes (status, trigger, board, request) |
-| `api/platform-api.ts` | Projects, auth, chat, engine routes. `findBestBuilder()` for unified PandoCode peer routing. |
+| `api/kernel-api.ts` | Status, peers, tasks, governance, guardrails, monitoring, scheduler, reputation, admin, wallet, activity, search (~2,400 lines) |
+| `api/core-api.ts` | Upgrade, emissions, security, council routes (status, trigger, board, request) (~485 lines) |
+| `api/platform-api.ts` | Projects, auth, chat, engines, content, marketplace, resources, testing, templates, per-project board/request, `findBestBuilder()` (~4,200 lines) |
 | `api/testing-api.ts` | Testing dashboard routes (11 endpoints) |
 
 ---
@@ -1605,6 +1612,6 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 18. **Doorman severity classification uses word-variant regex.** `crash(es|ed|ing)`, `bug`, `error`, `fail(s|ed|ing)` all match as BUG. Without the variant suffixes, "crashes" would be classified as FEATURE (word boundary `\bcrash\b` doesn't match "crashes"). This was a real production bug found in E2E testing.
 
-17. **P2P credential proxy has a timeout chain.** GitHub repo creation requires: P2P credential decrypt (30s timeout) + GitHub API call (45s inner timeout). If EC2 nodes are slow or offline, the credential proxy times out and GitHub operations fail. The timeouts were tuned for production latency on 2026-03-06.
+19. **P2P credential proxy has a timeout chain.** GitHub repo creation requires: P2P credential decrypt (30s timeout) + GitHub API call (45s inner timeout). If EC2 nodes are slow or offline, the credential proxy times out and GitHub operations fail. The timeouts were tuned for production latency on 2026-03-06.
 
-18. **S3 uploads are fire-and-forget with a 2s wait.** The `pando/deploy-app` handler fires S3 PutObjectCommand calls then `await new Promise(r => setTimeout(r, 2000))`. For large projects with many files, some uploads may not complete. This is a known trade-off (see Section 10).
+20. **S3 uploads are fire-and-forget with a 2s wait.** The `pando/deploy-app` handler fires S3 PutObjectCommand calls then `await new Promise(r => setTimeout(r, 2000))`. For large projects with many files, some uploads may not complete. This is a known trade-off (see Section 10).
