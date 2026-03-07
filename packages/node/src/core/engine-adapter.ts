@@ -516,6 +516,16 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     if (!this.councilDbPath || !this.Database) return null;
     try {
       const db = new this.Database(this.councilDbPath);
+
+      // Dedup: if a pending task with the same title already exists, return it
+      const existing = db.prepare(
+        `SELECT id FROM board_tasks WHERE title = ? AND status IN ('pending', 'in_progress') LIMIT 1`
+      ).get(title) as { id: string } | undefined;
+      if (existing) {
+        db.close();
+        return existing.id;
+      }
+
       const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       // Get council session_id for the FK constraint and next order value
       const councilSession = db.prepare(
