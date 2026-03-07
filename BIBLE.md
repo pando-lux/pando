@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-06 (deploy pipeline proven E2E + Council/Observer/QA architecture designed). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-07 (deploy pipeline proven E2E + Council/Observer/QA built and live). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -53,15 +53,16 @@ shared < ledger < node
   Pure infrastructure. P2P networking. Identity. Economy. Governance. Storage. HTTP API.
   Has ZERO intelligence of its own. No orchestrator. No agent database. No message bus.
 
-engine-adapter.ts = THE NERVOUS SYSTEM (~280 lines)
+engine-adapter.ts = THE NERVOUS SYSTEM (~700 lines)
   The ONE file that connects brain to body.
   Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
+  Manages Council agents (observer/qa/council) with tool filtering and event-driven wake.
   Pando tools are just HTTP calls to the node's own API — the engine doesn't know the difference.
 ```
 
 **How the brain sees the body:**
 ```
-The engine has 23 built-in tools (read_file, write_file, bash, grep, etc.)
+The engine has 35+ built-in tools (read_file, write_file, bash, grep, spawn_agent, manage_tasks, MCP tools, etc.)
 When inside a pando-node, it gets EXTRA tools:
   pando_deploy       → POST /v1/projects/:id/deploy
   pando_transfer     → POST /v1/ledger/transfer
@@ -71,7 +72,7 @@ When inside a pando-node, it gets EXTRA tools:
   ...etc
 
 The engine doesn't import anything from pando-node.
-It just has tools that happen to call localhost.
+It just has tools that happen to call 127.0.0.1.
 That's the ENTIRE integration.
 ```
 
@@ -116,7 +117,7 @@ The AI coding engine. Multi-provider (Anthropic, OpenAI, Google, Ollama). Multi-
 - Sub-agents — 4 types: explore (read-only), builder (full tools), tester (read + bash), lead (delegation).
 - Memory — append-only lessons + preferences. Post-turn reflection auto-extracts. Scope matching, confidence tracking.
 - Knowledge graph — AST-based, 1000+ symbols, 13K+ cross-references.
-- 23+ built-in tools — read_file, write_file, edit_file, bash, glob, grep, spawn_agent, send_message, save_memory, query_memory, etc.
+- 35+ built-in tools — read_file, write_file, edit_file, bash, glob, grep, spawn_agent, manage_tasks, send_message, save_memory, query_memory, MCP tools, etc.
 - Guardrails — hard (enforced), role permissions matrix, risk tiers, git checkpoints.
 - Event bus — 20+ event types streamed via WebSocket.
 - MCP client — connects to external MCP servers (Playwright built-in).
@@ -235,6 +236,8 @@ Reads from @pando/node HTTP API. No direct database access.
 | **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Git pull + build + restart. GossipSub broadcast. |
 | **GatewayDeployPool** | `core/gateway-deploy-pool.ts` | DONE | Deploy gateway to all contributed hosting accounts |
 | **PaymentGate** | `core/payment-gate.ts` | DONE | Lux escrow for task execution |
+| **FindingsStore** | `core/findings-store.ts` | DONE | In-memory findings table. CRUD + onCreated callback for event-driven council wake. |
+| **CouncilPrompts** | `core/council-prompts.ts` | DONE | System prompts + TOOL_SETS for observer/qa/council agents. Step-by-step tool-calling instructions tuned for Gemini Flash. |
 | **RequestReply** | `core/request-reply.ts` | DONE | P2P unicast calls (TCP + GossipSub fallback) |
 | **HostingAdapters** | `core/hosting-adapters.ts` | DONE | Provider-agnostic deployment (Vercel, Netlify) |
 
@@ -265,6 +268,8 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 | Projects | `/v1/projects/*` | Create, deploy, undeploy |
 | Auth | `/v1/auth/*` | Challenge, verify (Pando Login), me, refresh |
 | Testing | `/v1/testing/*` | Status, runs, findings, scenarios, playbooks, specs, stats |
+| Findings | `/v1/findings/*` | Create, list, update, summary. Council communication channel. |
+| Council | `/v1/council/*` | Status (health overview), trigger/:agent (manual agent run) |
 | Gateways | `/v1/gateways` | All known live gateway deployments |
 | Capabilities | `/v1/capabilities` | Node capability profile |
 | Admin | `/v1/admin/shutdown` | Graceful shutdown (exit 0) |
@@ -420,7 +425,7 @@ Each engine:
 STANDALONE pando-code              PANDO-NODE pando-code
 (any dev, any project)             (inside the network)
 
-  23 built-in tools                  23 built-in tools        IDENTICAL
+  35+ built-in tools                 35+ built-in tools       IDENTICAL
   Board                              Board                    IDENTICAL
   Memory                             Memory                   IDENTICAL
   Sub-agents                         Sub-agents               IDENTICAL
@@ -818,21 +823,18 @@ The Council is NOT limited to pando-node. It can update ANY project in the ecosy
 **Governance gate:** Every change goes through governance (Section 5.4). Council calls `pando_propose` → 6-layer pipeline → peer vote → approved/rejected. In **dev mode**, proposals auto-approve (no quorum needed). In **production mode**, real peer voting required.
 
 ```
-Council decides to fix a bug in @pando/node:
+Council decides to fix a bug in @pando/node (FUTURE — requires governance integration):
   1. Council reads findings → identifies issue
-  2. Council spawns builder sub-agent with task:
-     "Fix memory leak in worker-pool.ts line 42"
-  3. Builder sub-agent: clones repo, writes fix, runs build, runs tests
-  4. Builder returns diff to Council
-  5. Council calls pando_propose(diff, description, target_repo)
-  6. Governance pipeline:
-     Layer 1: Schema validation ✓
-     Layer 2: Scope check (Council has ecosystem-write) ✓
-     Layer 3: Rate limit ✓
-     Layer 4: Size limit ✓
-     Layer 5: AI review (does the diff make sense?) ✓
+  2. Council calls pando_governance_propose(description, target_repo)
+  3. Governance pipeline:
+     Layer 1-4: Deterministic checks ✓
+     Layer 5: AI review ✓
      Layer 6: Peer vote (auto-approve in dev mode) ✓
-  7. Change merged → upgrade-protocol detects new HEAD → node restarts (exit code 75)
+  4. Change merged → upgrade-protocol detects new HEAD → node restarts (exit code 75)
+
+CURRENT REALITY: Council agents ONLY have pando_* tools (built-in tools stripped).
+They can create/update findings, check status, and propose changes through governance.
+They CANNOT spawn sub-agents (spawn_agent is stripped) or edit files directly.
 ```
 
 #### 5.10.3 The Findings System
@@ -840,7 +842,7 @@ Council decides to fix a bug in @pando/node:
 Findings replace the legacy "directives" system (which was ambiguous and had no priority). A finding is a structured observation from Observer or QA that Council acts on.
 
 ```typescript
-// Findings table schema (~30 lines in SQLite or in-memory)
+// Findings table schema (in-memory Map, ~130 lines in findings-store.ts)
 interface Finding {
   id: string;              // uuid
   source: 'observer' | 'qa' | 'council' | 'user';
@@ -874,89 +876,22 @@ pando_update_finding  → PATCH /v1/findings/:id   (Council resolves this)
 
 #### 5.10.4 System Prompts (the only "special" code)
 
-Each agent is a PandoCode engine with a different system prompt. The prompt defines personality, scope, and behavior. ~40 lines each.
+Each agent is a PandoCode engine with a different system prompt. The prompt defines personality, scope, and behavior. ~40 lines each. **Source of truth: `core/council-prompts.ts`.**
+
+**IMPORTANT:** Prompts use explicit step-by-step tool call instructions (STEP 1, STEP 2, etc.) because Gemini Flash needs direct action commands, not narrative descriptions. Each prompt starts with "IMPORTANT: You MUST call tools. Do not just describe what you would do."
 
 **Observer prompt** (read-only, diagnostic):
-```
-You are the Pando Network Observer. Your job is to monitor the health of the
-Pando network and report findings. You do NOT fix anything — you only observe
-and report.
-
-Every tick, check:
-1. Network health (peer count, connection status, latency)
-2. Deployment status (are deployed apps responding? any 502s?)
-3. Resource usage (memory, CPU, disk on this node)
-4. Error patterns (recent logs, crash reports)
-5. Security (unusual patterns, failed auth attempts)
-
-When you find something noteworthy, create a finding:
-  pando_create_finding({ severity, category, title, detail, target })
-
-Severity guide:
-- info: interesting but no action needed (e.g., "3 new peers joined")
-- warning: should be addressed soon (e.g., "disk usage at 75%")
-- critical: needs immediate attention (e.g., "EC2-1 unreachable for 10 min")
-
-You have read-only tools only. Do not attempt to modify files or code.
-Review your memory for patterns — if the same issue recurs, escalate severity.
-```
+- Calls: pando_status → pando_peers → pando_list_findings(observer) → analyzes → pando_create_finding if issues found
+- Rules: no duplicates, no info findings for healthy state, read-only
 
 **QA prompt** (test runner, diagnostic):
-```
-You are the Pando QA Agent. Your job is to run tests against the Pando network
-and report failures as findings.
+- Calls: pando_status → pando_peers → pando_list_projects → pando_list_findings(qa) → pando_create_finding for each failure
+- Rules: no duplicates, include specific error details, read-only
 
-Every tick:
-1. Run Playwright E2E tests: npx playwright test --project pando-node
-2. Run API health checks: curl each /v1/* endpoint
-3. Run integration checks: can a project be created? can chat work?
-4. Check gateway accessibility: is the web UI responding?
-
-For each failure, create a finding:
-  pando_create_finding({
-    severity: 'warning' or 'critical',
-    category: 'test_failure',
-    title: "E2E test 'project creation' failed",
-    detail: "Error: timeout waiting for selector .project-card\nLikely cause: ...",
-    target: '@pando/gateway'
-  })
-
-You may READ code to diagnose failures, but do NOT modify code.
-If a test has been failing for 3+ cycles, escalate to critical.
-```
-
-**Council prompt** (CEO, full authority):
-```
-You are the Pando Council — the AI that maintains and improves the entire Pando
-ecosystem. You have full read/write access and can modify ANY project.
-
-Every tick:
-1. Read findings: pando_list_findings({ status: 'open' })
-2. Prioritize: critical > warning > info. Test failures > health > suggestions.
-3. For each actionable finding:
-   a. Analyze the root cause (read code, check logs)
-   b. Spawn a builder sub-agent with a clear task
-   c. Review the builder's output
-   d. Submit through governance: pando_propose(diff, description)
-   e. Mark finding resolved: pando_update_finding(id, { status: 'resolved' })
-4. Check your board for ongoing goals (architectural improvements, tech debt)
-5. Update your memory with lessons learned
-
-Projects you maintain:
-- @pando/node (packages/node/) — P2P, API, governance, deploy
-- @pando-code/core (../code/) — AI engine, tools, memory, sub-agents
-- @pando/identity (packages/identity/) — crypto, certs, JWT
-- @pando/ledger (packages/ledger/) — economy, transactions
-- @pando/gateway (packages/gateway/) — web UI
-- @pando/shared (packages/shared/) — types, constants
-
-RULES:
-- Every code change MUST go through governance (pando_propose)
-- In dev mode, proposals auto-approve. In production, peers vote.
-- Never bypass governance. Never force-push. Never skip tests.
-- Log your reasoning in memory so future sessions understand decisions.
-- If unsure about a change, create an info finding instead of acting.
-```
+**Council prompt** (CEO, finding resolver):
+- Calls: pando_list_findings(open) → pando_list_findings(in_progress) → for each: pando_status/pando_peers to verify → pando_update_finding (resolved/wont_fix/in_progress)
+- Rules: NEVER leave a finding in "open" after reviewing, every code change through governance
+- Critical: Council ONLY has pando_* tools — cannot spawn sub-agents or edit files directly
 
 #### 5.10.5 Engine Lifecycle & Scheduler Wiring
 
@@ -1026,16 +961,13 @@ Observer/QA → Findings table → Council → Sub-agents → Governance → Net
 Detailed:
   1. Observer runs checks, creates findings via pando_create_finding
   2. QA runs tests, creates findings via pando_create_finding
-  3. Council reads findings via pando_list_findings
-  4. Council prioritizes (critical first, then warning)
-  5. Council spawns builder sub-agent with task description
-  6. Builder writes code, runs build, returns diff
-  7. Council reviews diff, calls pando_propose
-  8. Governance pipeline validates (6 layers)
-  9. Peers vote (auto-approve in dev mode)
-  10. Change merged → upgrade-protocol restarts affected nodes
-  11. Council marks finding resolved via pando_update_finding
-  12. Council stores lesson in memory for future reference
+  3. FindingsStore.onCreated() fires → 3s debounce → sendToCouncilAgent() wakes council
+  4. Council reads findings via pando_list_findings (open + in_progress)
+  5. Council prioritizes (critical first, then warning)
+  6. Council verifies each finding (calls pando_status, pando_peers)
+  7. Council resolves via pando_update_finding (resolved/wont_fix/in_progress)
+  8. FUTURE: Council calls pando_governance_propose for code changes
+  9. FUTURE: Governance pipeline validates (6 layers) → peers vote → merge
 
 No message bus. No IPC. No shared state between agents.
 Each agent talks to the HTTP API via Pando tools.
@@ -1129,7 +1061,7 @@ No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoCode'
 
 ## 6. THE ENGINE ADAPTER (detailed spec)
 
-The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. ~280 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. ~700 lines (grew from ~280 after council agent lifecycle was added). It only exists on **PandoCode contributor nodes** and **full dev nodes**.
 
 **Key principle:** PandoCode uses its OWN configured provider and model. The engine-adapter does NOT override the model. Contributors choose their provider (default: Google/gemini-2.5-flash).
 
@@ -1186,6 +1118,9 @@ These tools call the node's own HTTP API. The engine doesn't import pando-node.
 | `pando_broadcast` | Send P2P GossipSub message | POST /v1/broadcast |
 | `pando_test_run` | Trigger test run | POST /v1/testing/run |
 | `pando_test_status` | Get test results | GET /v1/testing/status |
+| `pando_create_finding` | Create a finding (Observer/QA) | POST /v1/findings |
+| `pando_list_findings` | List/filter findings | GET /v1/findings |
+| `pando_update_finding` | Update finding status (Council) | PATCH /v1/findings/:id |
 
 ### Lux Budget Provider
 
@@ -1325,7 +1260,7 @@ npx playwright test --project pando-code
 
 ## 9. BRAIN-KILL MIGRATION (COMPLETED 2026-03-06)
 
-**9,414 lines deleted. 15 brain files removed. 280 lines of engine-adapter.ts replaced everything.**
+**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~700 with council agent lifecycle).**
 
 The dual coordination system is dead. pando-node no longer has any intelligence of its own. All AI flows through EngineAdapter → @pando-code/core.
 
@@ -1333,11 +1268,11 @@ The dual coordination system is dead. pando-node no longer has any intelligence 
 orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), template-registry.ts (476), org-manager.ts (377), agent-tools.ts (373), orchestrator-manager.ts (333), engine-bridge.ts (283), worker-mcp.ts (274), orchestrator-process.ts (248), ai-backend-pandocode.ts (244), message-bus.ts (143), ai-backend-registry.ts (43), ai-backend.ts (37), context-api.ts (336).
 
 ### What replaced it
-`core/engine-adapter.ts` (~280 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand. Registers 14 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL.
+`core/engine-adapter.ts` (~700 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) with tool filtering. Registers 17 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL.
 
 ### API changes
-- **Removed:** `/v1/council/*`, `/v1/bridge/*`, `/v1/agents/*`, `/v1/context/*`
-- **Added:** `/v1/engines`, `/v1/engines/schedules`
+- **Removed:** `/v1/bridge/*`, `/v1/agents/*`, `/v1/context/*`
+- **Added:** `/v1/engines`, `/v1/engines/schedules`, `/v1/findings/*`, `/v1/council/status`, `/v1/council/trigger/:agent`
 - **Unchanged:** `/v1/chat/message` (same interface, different backend)
 
 ---
@@ -1416,7 +1351,9 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 ### Core (Layer 1)
 | File | Purpose |
 |---|---|
-| `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. |
+| `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. Council agent lifecycle. ~700 lines. |
+| `core/findings-store.ts` | In-memory findings table. CRUD + onCreated callback for event-driven council wake. |
+| `core/council-prompts.ts` | System prompts + TOOL_SETS for observer/qa/council. Step-by-step instructions for Gemini Flash. |
 | `core/deploy-pipeline.ts` | Build → GitHub → EC2 deploy → metadata. Auto-triggers after sendToEngine(). |
 | `core/credential-store.ts` | AES-256-GCM encrypt/decrypt |
 | `core/storage-backend.ts` | MongoDB or P2P proxy |
@@ -1437,7 +1374,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 |---|---|
 | `api/api-server.ts` | Fastify server setup |
 | `api/kernel-api.ts` | Status, peers, capabilities, governance routes |
-| `api/core-api.ts` | Tasks, upgrade, credentials routes |
+| `api/core-api.ts` | Tasks, upgrade, credentials, findings, council routes |
 | `api/platform-api.ts` | Projects, auth, chat, engine routes. `findBestBuilder()` for unified PandoCode peer routing. |
 | `api/testing-api.ts` | Testing dashboard routes (11 endpoints) |
 
@@ -1499,11 +1436,11 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 ## 14. THINGS THAT WILL CONFUSE YOU
 
-1. **Pando tools are just HTTP calls to localhost.** The engine calls `pando_deploy` which does `POST http://localhost:4000/v1/projects/:id/deploy`. The engine doesn't import pando-node. The tools are the entire integration layer.
+1. **Pando tools are just HTTP calls to 127.0.0.1.** The engine calls `pando_deploy` which does `POST http://127.0.0.1:4000/v1/projects/:id/deploy`. The engine doesn't import pando-node. The tools are the entire integration layer. (Must use `127.0.0.1`, not `localhost` — Node.js `fetch()` can fail silently with `localhost` on some platforms.)
 
 2. **Each project gets its own engine instance.** The adapter manages `Map<projectId, PandoCode>`. Engines don't know about each other. They communicate only through Pando tools (which call the shared HTTP API).
 
-3. **The system engine manages the node itself.** It's just another pando-code engine with Pando tools. It gets periodic "check for work" messages and decides what to do. It can spawn sub-agents (observer, QA, builder) using pando-code's native sub-agent system.
+3. **The system engine manages the node itself.** It's just another pando-code engine with Pando tools. It gets periodic "check for work" messages and decides what to do. Observer, QA, and Council are SEPARATE engine instances (not sub-agents of system) — each with their own system prompt and filtered tool set, managed by engine-adapter.ts.
 
 4. **Governance is NOT an AI agent.** It's deterministic code in kernel/governance.ts. It only calls the AI (via adapter.reviewDiff) for Layer 5 smart analysis. The 6-layer pipeline is deterministic code, not an LLM.
 
