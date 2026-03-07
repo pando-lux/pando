@@ -205,6 +205,7 @@ export enum WorkType {
   TASK_COMPLETED = 'task_completed',     // Scheduler task completed
   UPTIME_EPOCH = 'uptime_epoch',         // 10-min uptime epoch
   GUEST_WELCOME = 'guest_welcome',       // Welcome grant for new guest accounts
+  COMPUTE_CONTRIBUTED = 'compute_contributed', // Contributor processed a compute job for the network
 }
 
 export interface Emission {
@@ -260,6 +261,7 @@ export const EMISSION_REWARDS: Record<WorkType, number> = {
   [WorkType.TASK_COMPLETED]: 5.0,       // Task completed by Scheduler (base, varies by tier)
   [WorkType.UPTIME_EPOCH]: 0.05,        // 10-min uptime epoch (max 7.2/day)
   [WorkType.GUEST_WELCOME]: 25.0,       // Welcome grant for guests (25 base × early multiplier)
+  [WorkType.COMPUTE_CONTRIBUTED]: 10.0, // Contributor processed compute job (build/question) for peer
 };
 
 export const DAILY_EMISSION_CAP = 500;  // Max Lux any single node can earn per day

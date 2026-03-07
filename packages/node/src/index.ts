@@ -139,6 +139,8 @@ export class PandoNode {
   private uptimeEpochs: number = 0;
   private dailyEmissions: number = 0;
   private dailyEmissionResetDate: string = '';
+  private dailyComputeJobs: number = 0;
+  private dailyComputeResetDate: string = '';
   private uptimeTimer: ReturnType<typeof setInterval> | null = null;
   private errorHandlersRegistered = false;
   private lastSnapshotTxCount: number = 0;
@@ -661,6 +663,8 @@ export class PandoNode {
     });
 
     // P2P chat proxy — remote nodes forward full build requests here.
+    // Contributor daily cap: max 50 compute jobs/day (configurable via PANDO_DAILY_COMPUTE_CAP)
+    const DAILY_COMPUTE_CAP = parseInt(process.env.PANDO_DAILY_COMPUTE_CAP || '50', 10);
     this.requestReply.registerHandler('chat_proxy', async (req) => {
       if (!this.localCapStore?.isShareCompute()) {
         return { error: 'This node is not sharing compute.' };
@@ -668,6 +672,17 @@ export class PandoNode {
       if (!this.engineAdapter?.available) {
         return { error: 'Engine not available on this node.' };
       }
+
+      // Daily compute cap — reset counter at midnight UTC
+      const today = new Date().toISOString().slice(0, 10);
+      if (this.dailyComputeResetDate !== today) {
+        this.dailyComputeJobs = 0;
+        this.dailyComputeResetDate = today;
+      }
+      if (this.dailyComputeJobs >= DAILY_COMPUTE_CAP) {
+        return { error: `Daily compute cap reached (${DAILY_COMPUTE_CAP} jobs/day). Try again tomorrow.` };
+      }
+      this.dailyComputeJobs++;
 
       const { message, threadId, tier } = req.payload || {};
       if (!message) return { error: 'message required' };
@@ -701,6 +716,16 @@ export class PandoNode {
           const content = chunks.join('');
           if (threadId && req.from && this.requestReply) {
             await this.requestReply.request(req.from, 'chat_result', { threadId, message: content }, 10_000);
+          }
+          // Reward contributor with Lux for processing this compute job
+          if (content.length > 0 && this.identity && this.ledger) {
+            try {
+              this.ledger.rewardWork(
+                this.identity.peerId, WorkType.COMPUTE_CONTRIBUTED,
+                `compute:${projectId}:${content.length}chars:from:${req.from?.slice(0, 12)}`
+              );
+              console.log(`[chat_proxy] Earned Lux for compute job (project ${projectId})`);
+            } catch { /* best-effort reward */ }
           }
         } catch (err: any) {
           console.warn(`[chat_proxy] Engine send failed: ${err.message?.slice(0, 100)}`);
@@ -1671,6 +1696,10 @@ location /apps/${projectId}/ {
         this.resourceMeter?.recordUsage(aiKey.resourceId, 'api_keys', {
           resourceType: 'api_keys', quantity: 1, unit: 'calls', timestamp: Date.now(),
         });
+        // Reward contributor for API compute
+        if (this.identity && this.ledger) {
+          try { this.ledger.rewardWork(this.identity.peerId, WorkType.API_CONTRIBUTED, `ai-query:${req.from?.slice(0, 12)}`); } catch {}
+        }
         return { answer: result.answer, sources: result.sources, confidence: result.confidence };
       }
       return { error: 'AI query failed' };
