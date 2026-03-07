@@ -6,7 +6,6 @@
  * the DB directly.
  *
  * Phase 27+: Uses Orchestrator/MessageBus for agent/chat routing.
- * Agent tool endpoints registered via registerAgentRoutes().
  */
 
 import Fastify from 'fastify';

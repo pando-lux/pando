@@ -4,8 +4,8 @@
  * Routes: /upgrade (remaining), /emissions/*, /security/*,
  *         /admin/shutdown, /admin/migrate-apps, /admin/cleanup-projects
  *
- * Note: /agents/* and /auth/* are registered via agent-tools.ts and
- *       platform-api.ts respectively. /instances/* is in platform-api.ts.
+ * Note: /agents/* and /auth/* are in platform-api.ts.
+ *       /instances/* is in platform-api.ts.
  */
 
 import { execSync } from 'node:child_process';

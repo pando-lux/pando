@@ -1442,7 +1442,7 @@ npx playwright test --project pando-code
 | `--api-port <n>` | 4000 | HTTP API port |
 | `--bootstrap <multiaddr>` | Lightsail | Known peer to connect to |
 | `--data-dir <path>` | `~/.pando` | Data directory |
-| `--mode <full\|compute\|relay>` | full | Node type (LEGACY — needs updating to `contributor\|secure\|lightweight\|full`, see Section 10) |
+| `--mode <contributor\|secure\|lightweight\|full>` | full | Node type. Legacy aliases: `compute` → `secure`, `relay` → `lightweight`. |
 
 **Environment variables:**
 - `PANDO_STORAGE_URL` — MongoDB connection URL (secure compute nodes only)
@@ -1663,24 +1663,24 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 13. **Keys don't travel. Work travels.** Contributed API keys stay on EC2 (Path A — simple AI). PandoCode contributor keys stay on their machine (Path B — builds). The network routes WORK to where the keys are, never the other way around. `injectApiKeys()` loads: (1) PandoCode's `.env` file, (2) local env vars, (3) CredentialStore fallback (EC2 only). It does NOT pull keys over P2P.
 
-12. **Two kinds of "contribute."** `/contribute openai sk-xxx` donates a key to the network (encrypted on EC2, used server-side for Path A). Running PandoCode on your node contributes your COMPUTE (your local keys, your machine, you earn Lux for builds).
+14. **Two kinds of "contribute."** `/contribute openai sk-xxx` donates a key to the network (encrypted on EC2, used server-side for Path A). Running PandoCode on your node contributes your COMPUTE (your local keys, your machine, you earn Lux for builds).
 
-13. **Builder targeting ≠ Deploy targeting.** `findBestBuilder()` looks for `shareCompute + compute_cpu` (PandoCode contributor nodes). `stepFindDeployTarget()` looks for `credentialAccess + storageBackend='mongodb'` (EC2 secure nodes). These are DIFFERENT node types. If you mix them up, deploys silently fail because PandoCode nodes can't decrypt S3 credentials.
+15. **Builder targeting ≠ Deploy targeting.** `findBestBuilder()` looks for `shareCompute + compute_cpu` (PandoCode contributor nodes). `stepFindDeployTarget()` looks for `credentialAccess + storageBackend='mongodb'` (EC2 secure nodes). These are DIFFERENT node types. If you mix them up, deploys silently fail because PandoCode nodes can't decrypt S3 credentials.
 
-14. **Deploy pipeline errors are silent.** `triggerDeployPipeline()` is fire-and-forget (`.catch(() => {})`). If it fails, the project still has its GitHub repo but `deploymentStatus` stays `none`. Check node logs for `[deploy-pipeline]` prefixed messages.
+16. **Deploy pipeline errors are silent.** `triggerDeployPipeline()` is fire-and-forget (`.catch(() => {})`). If it fails, the project still has its GitHub repo but `deploymentStatus` stays `none`. Check node logs for `[deploy-pipeline]` prefixed messages.
 
-15. **Marketplace filters test artifacts.** `getMarketplaceAsync()` uses a regex to strip projects named "hello world", "test app", "demo", "example", etc. If your test project doesn't show up in the marketplace, that's why. Use a real project name.
+17. **Marketplace filters test artifacts.** `getMarketplaceAsync()` uses a regex to strip projects named "hello world", "test app", "demo", "example", etc. If your test project doesn't show up in the marketplace, that's why. Use a real project name.
 
-16. **Project workspaces are `~/.pando/projects/{projectId}/`.** Engine adapter creates the directory and passes it as `projectPath` to PandoCode. The engine writes files there. The deploy pipeline reads `workspaceDir` from the project record to know where to git push from. If `workspaceDir` is missing, GitHub push fails with "workspaceDir required".
+18. **Project workspaces are `~/.pando/projects/{projectId}/`.** Engine adapter creates the directory and passes it as `projectPath` to PandoCode. The engine writes files there. The deploy pipeline reads `workspaceDir` from the project record to know where to git push from. If `workspaceDir` is missing, GitHub push fails with "workspaceDir required".
 
-17. **Board task dedup is by exact title match.** `addBoardTask()` checks if a pending/in_progress task with the identical title exists and returns its ID instead of creating a duplicate. This prevents user spam but doesn't catch semantically similar reports (e.g., "login broken" vs "login page crashes"). The council handles semantic dedup by batching similar issues during tick processing.
+19. **Board task dedup is by exact title match.** `addBoardTask()` checks if a pending/in_progress task with the identical title exists and returns its ID instead of creating a duplicate. This prevents user spam but doesn't catch semantically similar reports (e.g., "login broken" vs "login page crashes"). The council handles semantic dedup by batching similar issues during tick processing.
 
-18. **Claude Code is a PandoCode provider, NOT a pando-node feature.** Model/provider selection lives in `@pando-code/core`. pando-node calls `engine.send()` and doesn't know what model is running. NEVER put model-routing logic in engine-adapter.ts or platform-api.ts. This mistake was made once (ClaudeCodeSession in engine-adapter) and reverted. The brain/body boundary is inviolable.
+20. **Claude Code is a PandoCode provider, NOT a pando-node feature.** Model/provider selection lives in `@pando-code/core`. pando-node calls `engine.send()` and doesn't know what model is running. NEVER put model-routing logic in engine-adapter.ts or platform-api.ts. This mistake was made once (ClaudeCodeSession in engine-adapter) and reverted. The brain/body boundary is inviolable.
 
-19. **Claude Code nested session prevention.** The claude-code provider in PandoCode deletes the `CLAUDECODE` env var from the subprocess environment. Without this, spawning Claude Code from within a Claude Code session fails. This is handled in `@pando-code/core`, not pando-node.
+21. **Claude Code nested session prevention.** The claude-code provider in PandoCode deletes the `CLAUDECODE` env var from the subprocess environment. Without this, spawning Claude Code from within a Claude Code session fails. This is handled in `@pando-code/core`, not pando-node.
 
-20. **Doorman severity classification uses word-variant regex.** `crash(es|ed|ing)`, `bug`, `error`, `fail(s|ed|ing)` all match as BUG. Without the variant suffixes, "crashes" would be classified as FEATURE (word boundary `\bcrash\b` doesn't match "crashes"). This was a real production bug found in E2E testing.
+22. **Doorman severity classification uses word-variant regex.** `crash(es|ed|ing)`, `bug`, `error`, `fail(s|ed|ing)` all match as BUG. Without the variant suffixes, "crashes" would be classified as FEATURE (word boundary `\bcrash\b` doesn't match "crashes"). This was a real production bug found in E2E testing.
 
-19. **P2P credential proxy has a timeout chain.** GitHub repo creation requires: P2P credential decrypt (30s timeout) + GitHub API call (45s inner timeout). If EC2 nodes are slow or offline, the credential proxy times out and GitHub operations fail. The timeouts were tuned for production latency on 2026-03-06.
+23. **P2P credential proxy has a timeout chain.** GitHub repo creation requires: P2P credential decrypt (30s timeout) + GitHub API call (45s inner timeout). If EC2 nodes are slow or offline, the credential proxy times out and GitHub operations fail. The timeouts were tuned for production latency on 2026-03-06.
 
-20. ~~**S3 uploads are fire-and-forget with a 2s wait.**~~ **FIXED.** S3 uploads now use `Promise.all(uploadPromises)` and surface errors. No more 2s sleep.
+24. ~~**S3 uploads are fire-and-forget with a 2s wait.**~~ **FIXED.** S3 uploads now use `Promise.all(uploadPromises)` and surface errors. No more 2s sleep.
