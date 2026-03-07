@@ -19,9 +19,10 @@ export default function WalletPage() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [copied, setCopied] = useState(false);
   const [nodeStatus, setNodeStatus] = useState<{ identity: string; balance: number; publicKey: string } | null>(null);
+  const [walletBalance, setWalletBalance] = useState<number | null>(null);
 
-  // Derive balance and peerId from authenticated user context, with node fallback
-  const balance = user?.balance ?? nodeStatus?.balance ?? null;
+  // Prefer fresh wallet balance (re-fetched every cycle) over stale auth context balance
+  const balance = walletBalance ?? user?.balance ?? nodeStatus?.balance ?? null;
   const peerId = user?.peerId ?? nodeStatus?.identity ?? "";
   const pubKey = user?.publicKey ?? nodeStatus?.publicKey ?? "";
 
@@ -40,6 +41,12 @@ export default function WalletPage() {
     if (t) {
       // Node already filters transactions for the authenticated user's peerId
       setTxns(t.transactions || []);
+    }
+    // Refresh user's actual balance from auth endpoint (not cached in auth context)
+    if (token) {
+      const me = await fetch("/api/auth/me", { headers: { Authorization: `Bearer ${token}` } })
+        .then(r => r.json()).catch(() => null);
+      if (me?.user?.balance !== undefined) setWalletBalance(me.user.balance);
     }
   }, [token]);
 
