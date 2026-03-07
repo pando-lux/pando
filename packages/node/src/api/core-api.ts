@@ -11,6 +11,7 @@
 import { execSync } from 'node:child_process';
 import { safeGitReset } from '../core/upgrade-protocol.js';
 import type { RouteHelpers } from './middleware/auth.js';
+import { violatesTwoLaws } from './api-server.js';
 
 export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Promise<void> {
   const { node } = deps;
@@ -463,6 +464,10 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       }
       if (message.length > 500) {
         return reply.code(400).send({ error: 'Message too long (max 500 chars)' });
+      }
+      const lawViolation = violatesTwoLaws(message);
+      if (lawViolation) {
+        return reply.code(400).send({ error: lawViolation });
       }
       const adapter = node.getEngineAdapter();
       if (!adapter?.available) {

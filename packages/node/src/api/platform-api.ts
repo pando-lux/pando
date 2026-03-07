@@ -13,6 +13,7 @@ import { publicKeyFromProtobuf } from '@libp2p/crypto/keys';
 import { randomBytes } from 'node:crypto';
 import type { DeployFile } from '../platform/hosting-service.js';
 import type { RouteHelpers } from './middleware/auth.js';
+import { violatesTwoLaws } from './api-server.js';
 
 export async function registerPlatformRoutes(
   fastify: any,
@@ -200,6 +201,10 @@ export async function registerPlatformRoutes(
 
       if (classification.intent === 'report') {
         // User is reporting a bug or requesting a feature — create a board task for the council
+        const lawViolation = violatesTwoLaws(trimmed);
+        if (lawViolation) {
+          return { status: 'ok', threadId: '', reply: lawViolation, tier: 'simple' };
+        }
         const adapter = node.getEngineAdapter();
         const severity = /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(trimmed) ? 'BUG' : 'FEATURE';
         const taskTitle = `[${severity}:user] ${(classification.description || trimmed).slice(0, 120)}`;
@@ -3944,6 +3949,10 @@ export async function registerPlatformRoutes(
       }
       if (message.length > 500) {
         return reply.code(400).send({ error: 'Message too long (max 500 chars)' });
+      }
+      const lawViolation = violatesTwoLaws(message);
+      if (lawViolation) {
+        return reply.code(400).send({ error: lawViolation });
       }
       const adapter = node.getEngineAdapter();
       if (!adapter?.available) {

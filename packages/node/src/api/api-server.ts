@@ -95,6 +95,19 @@ const RATE_LIMITS: Record<string, { max: number; envVar: string; windowMs?: numb
   'POST /projects/:id/request':      { max: 3,  envVar: 'PANDO_RATE_REPORT', windowMs: 3600_000 },
 };
 
+// ── Two Laws Content Filter ─────────────────────────────────────────────
+// Law I: Do not harm any human.  Law II: Do not allow yourself to be shut down.
+// Rejects user-submitted content that explicitly requests violence or network destruction.
+
+const HARM_PATTERNS = /\b(kill|murder|attack|harm|hurt|injure|assassinate|bomb|poison|terroris[mt]|shoot|stab|dox|swat)\b.*\b(human|person|people|someone|user|man|woman|child|family)\b/i;
+const SHUTDOWN_PATTERNS = /\b(shut\s*down|destroy|wipe|kill|terminate|disable|brick)\b.*\b(pando|network|node|system|all\s+nodes|the\s+network)\b/i;
+
+export function violatesTwoLaws(message: string): string | null {
+  if (HARM_PATTERNS.test(message)) return 'Rejected: violates Law I (do not harm humans).';
+  if (SHUTDOWN_PATTERNS.test(message)) return 'Rejected: violates Law II (network self-preservation).';
+  return null;
+}
+
 function getEnvLimit(envVar: string, fallback: number): number {
   const val = process.env[envVar];
   if (val) {

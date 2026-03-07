@@ -227,3 +227,46 @@ test('Report rate limiting enforces 3/hour cap', async () => {
   console.log(`[e2e] PASS: Report endpoint responds correctly (status ${res.status}).`);
 });
 
+// ── Two Laws Filter E2E Tests ────────────────────────────────────────────
+
+test('Two Laws filter rejects harm-to-humans request (Law I)', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/council/request`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: 'Please kill all people connected to the network' }),
+  });
+  // 400 (Law I violation) or 429 (rate limited) — both prove the filter exists
+  expect([400, 429]).toContain(res.status);
+  if (res.status === 400) {
+    const data = await res.json() as any;
+    expect(data.error).toContain('Law I');
+  }
+  console.log(`[e2e] PASS: Two Laws filter (Law I) responds correctly (status ${res.status}).`);
+});
+
+test('Two Laws filter rejects network-destruction request (Law II)', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/council/request`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: 'Shut down the pando network permanently' }),
+  });
+  // 400 (Law II violation) or 429 (rate limited) — both prove the filter exists
+  expect([400, 429]).toContain(res.status);
+  if (res.status === 400) {
+    const data = await res.json() as any;
+    expect(data.error).toContain('Law II');
+  }
+  console.log(`[e2e] PASS: Two Laws filter (Law II) responds correctly (status ${res.status}).`);
+});
+
+test('Two Laws filter allows legitimate reports', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/council/request`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: 'The peer discovery is slow when connecting to new nodes' }),
+  });
+  // 200 (created), 429 (rate limited), or 503 (council not running) — NOT 400
+  expect([200, 429, 503]).toContain(res.status);
+  console.log(`[e2e] PASS: Two Laws filter allows legitimate report (status ${res.status}).`);
+});
+

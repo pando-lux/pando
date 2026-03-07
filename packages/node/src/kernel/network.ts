@@ -333,7 +333,7 @@ export class PandoNetwork {
         lastSeen: Date.now(),
       });
       // Phase 54.2: Persist known peer (delayed 3s to allow identify protocol to populate peerStore)
-      setTimeout(() => this.updateKnownPeer(peerId).catch(() => {}), 3000);
+      this.updateKnownPeer(peerId).catch(() => {});
       // Notify handlers
       for (const handler of this.peerConnectHandlers) {
         try { handler(peerId); } catch {}
