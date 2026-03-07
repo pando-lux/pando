@@ -274,6 +274,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         cloudInstances: node.getCloudInstanceManager()?.getInstances().length || 0,
         health: node.getNodeHealth(),
         commitHash: node.getUpgradeProtocol()?.getUpgradeStatus()?.currentVersion || 'unknown',
+        teams: node.getTeamRegistry()?.listTeams()?.length ?? 0,
       };
     });
 
