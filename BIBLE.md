@@ -333,7 +333,7 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 |---|---|---|
 | Kernel | `/v1/status`, `/v1/peers` | Node health, connected peers |
 | Core | `/v1/tasks`, `/v1/upgrade` | Task management, safe upgrade |
-| Chat | `/v1/chat/*` | Message → doorman → Path A (EC2 proxy) or Path B (PandoCode). |
+| Chat | `/v1/chat/*` | Message → doorman → Path A (question) or Path B (build) or report (board task). |
 | Engines | `/v1/engines/*` | List active engines, board snapshots, memory |
 | Projects | `/v1/projects/*` | Create, deploy, undeploy |
 | Auth | `/v1/auth/*` | Challenge, verify (Pando Login), me, refresh |
@@ -475,18 +475,27 @@ Engine Adapter manages: Map<string, PandoCode>
                   Created on demand, evicted when idle.
 
 Each engine:
-  - Has its own Board (tasks, goals, status)
+  - Has its own Board (tasks, goals, status, user bug reports)
   - Has its own MemoryStore (lessons, reflections)
   - Has its own sub-agents (builder, tester, explorer)
   - Has Pando tools registered (calls node HTTP API)
   - Is a STANDARD pando-code engine instance
   - Doesn't know about other engines
   - Doesn't know it's inside pando-node
+
+  "observer"   → Council Observer (network health, read-only)
+  "qa"         → Council QA (health checks, testing)
+  "council"    → Council Lead (triage, delegation, governance)
+                  These three share a DB for cross-engine messaging.
+                  See Section 5.10 for full council architecture.
 ```
 
 **Routing rule:**
 - `POST /v1/chat/message { projectId: "proj-abc" }` → route to the PandoCode peer that owns this project's engine
-- `POST /v1/chat/message { no projectId }` → Doorman classifies → Path A (EC2 proxy for questions) or Path B (create project + find best PandoCode peer to build)
+- `POST /v1/chat/message { no projectId }` → Doorman classifies → Path A (question) or Path B (build) or report (board task on target project)
+- `POST /v1/projects/:id/request` → create board task on that project's board (bug report, feature request)
+
+**See Section 5.10 for the universal project pattern** — every project (including council) uses the same board-as-queue, scheduler tick, agent team architecture.
 
 ### 5.3 Standalone pando-code vs Inside pando-node
 
@@ -666,21 +675,21 @@ No tick loop. No orchestrator. No message bus. The engine runs when it has somet
 
 ### 5.7 The Actors (PandoCode contributor nodes only)
 
-**Per-project actors** (user projects):
+**Per-project actors** (user projects — see Section 5.10 for the universal pattern):
 
 | Actor | How it works | Triggered by |
 |---|---|---|
-| **Project Engine** | Per-project engine instance. Handles chat, builds, deploys. | Chat messages, events |
+| **Project Engine** | Per-project engine instance. Handles chat, builds, deploys. Board receives user bug reports and feature requests. | Chat messages, scheduler tick, user requests |
 | **Builder** | Builder sub-agent spawned by project engine. Full tools. Writes code, runs builds. | When work is needed |
 | **Governance** | Deterministic code in kernel/governance.ts. NOT an AI agent. Calls engine for AI review only. | On proposal arrival |
 
-**System actors** (ecosystem maintenance — see Section 5.10 for full design):
+**System actors** (ecosystem maintenance — council is just Project Zero, see Section 5.10):
 
 | Actor | How it works | Triggered by |
 |---|---|---|
-| **Council** | Long-running engine. Reads inbox, acts on issues, spawns sub-agents to fix, submits through governance. | Scheduler tick (every 15 min) |
+| **Council Lead** | Long-running engine. Reads inbox + board snapshot, acts on issues + user requests, spawns builders, submits through governance. | Scheduler tick (every 15 min) |
 | **Observer** | Long-running engine. Read-only. Monitors network health, peer status. Sends issues to council via send_message. | Scheduler tick (every 30 min) |
-| **QA** | Long-running engine. Runs health checks, API validation. Sends findings to council via send_message. | Scheduler tick (every 30 min, offset 15 min) |
+| **QA** | Long-running engine. Runs health checks, API validation. Sends findings to council via send_message. | Scheduler tick (every 30 min) |
 
 ### 5.8 Deploy Pipeline (build → github → deploy → marketplace) — PROVEN E2E
 
@@ -833,134 +842,211 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 
 **NOT YET BUILT.** PandoCode currently has no linking setting. Engine Adapter creates engines but doesn't manage a dedicated network workspace. This is the next architecture milestone.
 
-### 5.10 The Council — AI-Managed Ecosystem (WORKING — PIPELINE VERIFIED)
+### 5.10 The Universal Project Pattern — Board as Work Queue
 
-The Council system makes Pando a **100% AI-maintained ecosystem**. Three agents — Observer, QA, and Council — run on contributor nodes and continuously maintain, improve, and heal the network.
-
-**Core insight:** Council agents are standard PandoCode agents using PandoCode's native systems: agent profiles, board tasks, send_message, memory, sub-agents. pando-node ONLY adds network-specific tools (pando_*) and Lux budget. It does NOT rebuild PandoCode's agent infrastructure.
+**Every project on Pando — including the council — uses the same pattern.** There is no special council framework. Council is just the first project to use it, with extra pando_* tools for network operations.
 
 **CRITICAL RULE: Never build agent/communication/task systems in pando-node. PandoCode already has them. See Section 3.2.**
 
-#### 5.10.1 The Three Agents
+#### 5.10.1 The Pattern
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│             EVERY PROJECT USES THIS PATTERN                         │
+│                                                                     │
+│  PandoCode Engine (one per project)                                │
+│  ├─ Board ← THE work queue (user requests, bugs, system issues)    │
+│  ├─ Agents ← the team (lead + builders spawned on demand)          │
+│  ├─ Memory ← learns across sessions (persistent)                  │
+│  ├─ Scheduler tick ← periodic wake-up                              │
+│  └─ pando_* tools ← network operations                            │
+│                                                                     │
+│  The board is the central nervous system:                           │
+│    - Observer/QA findings → board tasks                             │
+│    - User bug reports → board tasks                                │
+│    - User feature requests → board tasks                           │
+│    - Engine ticks → reads board → processes top items               │
+│                                                                     │
+│  COUNCIL = this pattern + observer + QA + pando_* tools            │
+│  PROJECT = this pattern + project source code + pando_deploy       │
+│  Same board. Same agents. Same scheduler. Same code path.          │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+#### 5.10.2 User Requests Flow Through the Board
+
+Users interact with projects and the council through a single mechanism: **board tasks created via the doorman.**
+
+```
+User message arrives at POST /v1/chat/message
+  │
+  ├─ Doorman classifies intent:
+  │   "simple"   → instant answer (status, balance, help)
+  │   "question" → AI answer (existing)
+  │   "build"    → create new project (existing)
+  │   "report"   → bug/feature/suggestion → board task on target project
+  │
+  ├─ "report" intent routing:
+  │   "Exchange app login is broken"  → board task on proj-exchange
+  │   "Network seems slow"           → board task on council
+  │   "Add dark mode to the gateway" → board task on gateway project
+  │
+  ├─ Doorman response to user:
+  │   "Got it! Submitted to the team. Ticket #abc123.
+  │    The team reviews requests periodically. Check /council for status."
+  │
+  └─ Board task created:
+      [BUG:user:{peerId}] Exchange app login crashes on mobile
+      [FEATURE:user:{peerId}] Add dark mode to gateway
+      [REPORT:user:{peerId}] Network seems slow
+
+Filtering (at doorman level, before board task creation):
+  1. Rate limit: max 3 requests per user per hour
+  2. Two Laws: reject anything harmful
+  3. Scope: council = network/ecosystem, projects = that project only
+  4. Dedup: if similar pending task exists, merge instead of creating new
+```
+
+**Gateway integration:**
+- Each project page has "Report Bug" / "Suggest Feature" (projectId is known)
+- `/council` page shows council board, recent actions, submit form
+- `POST /v1/projects/:id/request` — generic endpoint for any project
+- `GET /v1/projects/:id/board` — public board view (filtered)
+
+#### 5.10.3 Project Teams Wake Up on Schedule
+
+```
+Wake-up frequency (project-dependent):
+
+  Council         │ Every 15 min  │ Network health is time-sensitive
+  Active public   │ Every 6-12h   │ Check for user reports, run QA
+  Inactive public │ Daily          │ Low priority, save compute
+  Private         │ No auto-wake  │ Creator manages manually
+
+On wake-up, the scheduler tick includes the current board snapshot:
+
+  "Your board has 5 pending tasks:
+   [BUG:user] Login crashes on mobile — 2h ago
+   [FEATURE:user] Add dark mode — 6h ago
+   [SYSTEM:qa] Test failure on /api/auth — 1h ago
+   ...
+   Prioritize bugs. Close stale tasks (>24h). Process user requests."
+
+This costs zero extra tool calls — the board state is IN the message.
+The engine sees its full queue immediately and acts on it.
+```
+
+**Board snapshot injection:** pando-node reads the board from the project's DB and includes it in the scheduler tick message. This is pando-node's responsibility (engine-adapter.ts), not PandoCode's. PandoCode's frame builder does NOT inject board snapshots (Option B), so we do it at the message level.
+
+#### 5.10.4 Public vs Private Projects
+
+```
+PUBLIC projects (visibility: 'listed'):
+  - Anyone can submit bugs/features → board task created
+  - Project team processes the queue on wake-up
+  - Governance required for ecosystem repos (@pando/*)
+  - Direct deploy for user-created public apps
+  - Visible on marketplace
+
+PRIVATE projects:
+  - Only creator interacts with the engine
+  - Others CAN suggest → board task tagged [SUGGESTION]
+  - Creator's team decides whether to act on it
+  - No governance needed — their code, their risk
+  - Not visible on marketplace
+```
+
+#### 5.10.5 The Council (Network-Level Project)
+
+Council is just the first project using this pattern. Its board handles network/infrastructure issues instead of app-specific bugs.
 
 ```
 ┌──────────────────────────────────────────────────────────────────────┐
-│                    HOW THE THREE AGENTS WORK                        │
+│                    COUNCIL = PROJECT ZERO                            │
 │                                                                     │
 │  Observer (PandoCode role: explorer)                                │
 │  ├─ Runs every 30 min (scheduler tick)                             │
 │  ├─ Built-in tools: read-only (explorer role)                      │
 │  ├─ Extra tools: pando_status, pando_peers (read-only network ops) │
 │  ├─ Checks: network health, peer count, deploy status              │
-│  ├─ Reports: creates board tasks + sends message to council        │
+│  ├─ Reports: sends message to council via send_message             │
 │  └─ Never modifies code. Read-only role enforced by PandoCode.     │
 │                                                                     │
 │  QA (PandoCode role: tester)                                        │
-│  ├─ Runs every 30 min (scheduler tick, offset 15 min)              │
+│  ├─ Runs every 30 min (scheduler tick)                              │
 │  ├─ Built-in tools: read + bash + test (tester role)               │
 │  ├─ Extra tools: pando_status, pando_peers, pando_test_run         │
 │  ├─ Checks: API health, peer connectivity, project system          │
-│  ├─ Reports: creates board tasks + sends message to council        │
-│  └─ Reports what failed, expected vs actual, probable cause.       │
+│  └─ Reports: sends message to council via send_message             │
 │                                                                     │
-│  Council (PandoCode role: lead)                                     │
-│  ├─ Runs every 15 min (scheduler tick)                             │
+│  Council Lead (PandoCode role: lead)                                │
+│  ├─ Runs every 15 min (scheduler tick with board snapshot)          │
 │  ├─ Built-in tools: spawn_agent, manage_tasks, check_agents,      │
 │  │   send_message (lead role — full delegation power)              │
 │  ├─ Extra tools: ALL pando_* tools (deploy, governance, etc.)      │
-│  ├─ Reads inbox (check_agents) for messages from observer/qa       │
-│  ├─ Reads board tasks for pending issues                           │
+│  ├─ Reads inbox for messages from observer/qa                      │
+│  ├─ Reads board snapshot for pending issues + user requests        │
 │  ├─ Spawns builder sub-agents to write code fixes                  │
 │  ├─ Calls pando_governance_propose for code changes                │
+│  ├─ Closes stale tasks, prioritizes CRITICAL first                 │
 │  └─ Resolves board tasks when done                                 │
+│                                                                     │
+│  Board task sources:                                                │
+│    - Observer/QA: [CRITICAL:health], [WARNING:test], etc.           │
+│    - Users via doorman: [BUG:user], [FEATURE:user], [REPORT:user]  │
 │                                                                     │
 │  Communication: PandoCode's send_message (DB-backed queue)          │
 │  Task tracking: PandoCode's board (board_tasks table)               │
 │  Memory: PandoCode's memory store (per-engine, persistent)          │
-│  NO custom FindingsStore. NO tool stripping. NO sendToCouncilAgent. │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
-#### 5.10.2 Council = A PandoCode Project
+**What makes council special (vs a regular project):**
+- Has observer + QA agents (extra eyes on the network)
+- Has ALL pando_* tools (governance, deploy, broadcast)
+- Handles network/ecosystem issues, not app code
+- Uses `pando_workspace` + `spawn_agent(working_directory)` to fix code in ANY repo
 
-**Mental model:** Council is just another PandoCode project. It has no source code in its directory, but it has agents, a board, memory, and communication — exactly like any dev team using PandoCode. When PandoCode upgrades, council automatically gets the upgrade. No separate framework.
+#### 5.10.6 Code Fixes via Workspaces
 
-```
-Council project:
-  projectPath = ~/.pando/council/          (its "home base")
-  db          = ~/.pando/council/council.db (shared by all 3 agents)
-  agents      = observer, qa, council       (standard PandoCode agents)
-  tools       = PandoCode native tools + pando_* network tools
-
-  Identical to any other PandoCode project.
-  Only extra: pando_* tools + Lux budget.
-```
-
-#### 5.10.3 Council Scope — ANY Project via Workspaces
-
-Council can fix code in ANY repo. It doesn't work by inheriting projectPath — it uses **workspaces**.
+Any project lead (council or app team) can fix code via workspaces:
 
 ```
-Council fixes a bug in @pando/node:
-  1. Observer detects issue → send_message(council, "[WARNING:perf] API latency 3.2s")
-  2. Council reads inbox → decides this needs a code fix
-  3. Council calls pando_workspace({ repo: "pando-lux/node" })
-     → clones/pulls to ~/.pando/workspaces/node/
-     → returns { path: "~/.pando/workspaces/node" }
-  4. Council calls spawn_agent({
+Lead detects issue → needs a code fix:
+  1. Call pando_workspace({ repo: "pando-lux/node" })
+     → returns { path: "~/.pando/workspaces/node" } (local or cloned)
+  2. Call spawn_agent({
        role: "builder",
-       task: "Fix API latency on /v1/status endpoint",
-       workingDirectory: "~/.pando/workspaces/node"   ← key primitive
+       task: "Fix the bug...",
+       working_directory: path from step 1
      })
-  5. Builder (ephemeral, works at the workspace):
-     → read_file, grep, edit_file — all scoped to that workspace
-     → bash("npm run build && npm test")
-     → returns { filesChanged, summary, diff }
-  6. Council reviews result → calls pando_governance_propose(diff, description)
-  7. Governance: 6-layer pipeline → peer vote → approved
-  8. upgrade-protocol: all nodes pull + rebuild + restart
-  9. Council marks board task done
+  3. Builder works in that directory (read, edit, bash, test)
+  4. Builder returns summary + files changed
+  5. Lead reviews → pando_governance_propose (ecosystem repos)
+                   → pando_deploy (user projects)
+  6. Lead marks board task done
 ```
 
 **Key primitives (BOTH BUILT AND VERIFIED):**
-- `spawn_agent({ working_directory })` — PandoCode enhancement in `pando/code/packages/core/src/tool/spawn-agent.ts`. Sub-agent works in a different directory than parent. Benefits ALL PandoCode projects, not just council.
-- `pando_workspace({ repo })` — pando-node tool in `engine-adapter.ts`. Clones/pulls a repo into `~/.pando/workspaces/`. Returns path. Detects local repos (pando-node, pando-code) without network. Reuses git credentials from local repo for multi-account machines.
+- `spawn_agent({ working_directory })` — PandoCode enhancement. Sub-agent works in a different directory than parent.
+- `pando_workspace({ repo })` — pando-node tool. Clones/pulls any repo. Detects local repos without network.
 
-| Target | How Council Reaches It |
+| Target | How to reach it |
 |---|---|
 | **@pando/node** | `pando_workspace("pando-lux/node")` → spawn builder there |
 | **@pando-code/core** | `pando_workspace("pando-lux/code")` → spawn builder there |
 | **Any GitHub project** | `pando_workspace("user/repo")` → spawn builder there |
-| **Broken deployments** | No workspace needed — council calls `pando_deploy` directly |
+| **Broken deployments** | No workspace needed — call `pando_deploy` directly |
 
-**Governance gate:** Every code change goes through governance (Section 5.4). Council calls `pando_governance_propose` → 6-layer pipeline → peer vote → approved/rejected.
+**Governance gate:** Ecosystem repo changes go through governance (Section 5.4). User project changes deploy directly.
 
-#### 5.10.4 Communication (uses PandoCode's native systems)
+#### 5.10.7 System Prompts
 
-```
-Observer/QA → send_message → Council → pando_workspace → spawn builder → Governance
+Each agent gets a system prompt via `agentOverride` on `engine.send()`. **Source of truth: `core/council-prompts.ts`.**
 
-Detailed:
-  1. Observer checks health → sends message to council with specific issue details
-  2. QA runs checks → sends message to council if failures found
-  3. Council reads inbox via check_agents (action: "inbox")
-  4. For monitoring issues: council verifies via pando_status, creates board task
-  5. For code fixes: council calls pando_workspace → spawn_agent(builder) → governance
-  6. Council marks board task done via manage_tasks
-  7. Council stores lesson in memory for future reference
+**Frame behavior with agentOverride:** The override replaces only the stable layer (L0-2). All dynamic layers still flow: knowledge (L3 — memories), situation (L5b — team awareness, budget), goals (L5), conversation history. Board is NOT in the frame (PandoCode Option B) — pando-node injects it in the tick message instead.
 
-Communication: PandoCode's send_message (state table, DB-backed)
-Task tracking: PandoCode's board_tasks table
-Code access: pando_workspace + spawn_agent(workingDirectory)
-```
-
-#### 5.10.5 System Prompts
-
-Each agent gets a system prompt via `agentOverride` on `engine.send()`. The prompt tells the agent what to do. **Source of truth: `core/council-prompts.ts`.**
-
-Prompts use PandoCode's native tools (manage_tasks, send_message, check_agents, spawn_agent) plus pando_* network tools.
-
-#### 5.10.6 Engine Lifecycle
+#### 5.10.8 Engine Lifecycle
 
 ```
 Node startup (contributor node with PandoCode):
@@ -980,23 +1066,25 @@ Node startup (contributor node with PandoCode):
   │   ├─ INSERT agent profiles into shared DB
   │   └─ Register scheduler ticks (30 min observer/qa, 15 min council)
   │
-  └─ Node is running. Council agents tick on schedule.
+  ├─ Project engines created on demand:
+  │   ├─ pool.getOrCreate(projectId, { projectPath })
+  │   ├─ Public projects get scheduler ticks (daily or per-activity)
+  │   └─ Evicted after 30 min idle (re-created on next request)
+  │
+  └─ Node is running. Council ticks every 15 min. Projects tick per schedule.
 
 GOTCHAS:
   1. EngineOptions does NOT accept systemPrompt — use agentOverride on send()
   2. Tool API base URL must be 127.0.0.1, not localhost
   3. All council engines must share the same SQLite DB for send_message to work
-  4. CRITICAL: startSession() must be called BEFORE tool re-registration.
-     _registerSubAgentTools() overwrites check_agents/send_message/manage_tasks
-     with auto-generated "General" agent UUID. If send() calls startSession()
-     internally, it destroys our correct tool registrations.
-  5. manage_tasks sessionId must reference a real session in the sessions table
-     (FK constraint on board_tasks.session_id → sessions.id)
+  4. CRITICAL: startSession() must be called BEFORE tool re-registration
+  5. manage_tasks sessionId must reference a real session (FK constraint)
+  6. Board is NOT in the frame (PandoCode Option B) — inject in tick message
 ```
 
-#### 5.10.7 Implementation Status
+#### 5.10.9 Implementation Status
 
-**Monitoring pipeline VERIFIED. Builder pipeline VERIFIED.**
+**Monitoring pipeline VERIFIED. Builder pipeline VERIFIED. User request flow TODO.**
 
 | What | Status |
 |---|---|
@@ -1006,22 +1094,28 @@ GOTCHAS:
 | check_agents inbox reading | VERIFIED — council reads and deletes messages correctly |
 | Scheduler ticks | DONE — 30 min observer/qa, 15 min council |
 | pando_* tool registration | DONE — 15 tools, roles handle filtering |
-| Lux budget + system prompts | DONE |
-| E2E clean test (3/3 pass) | DONE — observer→council pipeline verified |
 | `spawn_agent(working_directory)` | DONE — PandoCode enhancement in spawn-agent.ts |
 | `pando_workspace` tool | DONE — pando-node tool in engine-adapter.ts |
-| Builder fixing actual code | VERIFIED — council dispatched builder, builder modified engine-adapter.ts, council submitted governance proposal |
-| Council → governance proposal | VERIFIED — council calls pando_governance_propose after builder returns |
+| Builder fixing actual code | VERIFIED — council dispatched builder, builder modified code, submitted governance proposal |
+| Board snapshot in tick message | **TODO** — read board from DB, inject into scheduler tick prompt |
+| Doorman "report" intent | **TODO** — classify user reports, create board task on target project |
+| `POST /v1/projects/:id/request` | **TODO** — generic endpoint for user requests on any project |
+| `GET /v1/projects/:id/board` | **TODO** — public board view |
+| Project scheduler ticks | **TODO** — public projects get periodic wake-ups |
+| Council prompt: task lifecycle | **TODO** — stale cleanup, user request processing, priority rules |
+| Gateway `/council` page | **TODO** — live board, submit form, ticket status |
 
-#### 5.10.8 Failure Modes & Recovery
+#### 5.10.10 Failure Modes & Recovery
 
 | Failure | Recovery |
 |---|---|
-| Council host node dies | Another contributor node's council takes over. Board + memory persist in PandoCode's SQLite. |
-| Observer creates too many tasks | Council has rate awareness — batches similar issues, prioritizes critical. |
+| Council host node dies | Another contributor node's council takes over. Board + memory persist in SQLite. |
+| Too many user requests | Board is the buffer. Rate limit at doorman (3/user/hour). Council batches similar. |
+| Bad/spam requests | Doorman filters: Two Laws, scope check, dedup. Council deprioritizes low-value tasks. |
+| Observer creates too many tasks | Council batches similar issues, prioritizes CRITICAL. |
 | Council proposes bad code | Governance Layer 5 (AI review) catches it. QA catches post-deploy regressions. |
-| Council and Observer disagree | Can't — Observer only reports, Council decides. No conflict possible. |
-| All agents on same node, overloaded | Stagger ticks (Observer at :00, QA at :15, Council at :30). |
+| Project board grows too large | Lead closes stale tasks (>24h). Spawns parallel builders if backlog >10. |
+| All agents on same node, overloaded | Stagger ticks. Scale via EnginePool (add more engines). |
 
 ### 5.11 Pando Login (Agent Identity)
 
