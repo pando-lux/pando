@@ -316,6 +316,8 @@ export class EngineAdapter {
   private luxProvider: any = null;
   private config: AdapterConfig | null = null;
   private started = false;
+  private councilDbPath: string | null = null;
+  private Database: any = null;  // better-sqlite3 constructor (cached at startup)
 
   /** Whether the adapter is ready (pando-code loaded + pool started). */
   get available(): boolean { return this.started; }
@@ -328,6 +330,13 @@ export class EngineAdapter {
 
     // Load pando-code dynamically
     await loadPandoCode();
+
+    // Cache better-sqlite3 for board operations (ESM-safe)
+    try {
+      const { createRequire } = await import('module');
+      const esmRequire = createRequire(import.meta.url);
+      this.Database = esmRequire('better-sqlite3');
+    } catch { /* better-sqlite3 not available */ }
 
     // Inject contributed AI API keys
     await this.injectApiKeys(config.resourceRegistry);
@@ -480,8 +489,94 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     return this.scheduler?.getAll() ?? [];
   }
 
+  /**
+   * Get pending/in_progress tasks from the council board.
+   */
+  getCouncilBoard(): any[] {
+    if (!this.councilDbPath || !this.Database) return [];
+    try {
+      const db = new this.Database(this.councilDbPath, { readonly: true });
+      const tasks = db.prepare(
+        `SELECT id, title, status, created_at, progress FROM board_tasks
+         WHERE status IN ('pending', 'in_progress')
+         ORDER BY created_at DESC LIMIT 50`
+      ).all();
+      db.close();
+      return tasks;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Add a task to the council (or project) board. Used by doorman to route user reports.
+   * Returns the task ID on success, null on failure.
+   */
+  addBoardTask(title: string, description?: string): string | null {
+    if (!this.councilDbPath || !this.Database) return null;
+    try {
+      const db = new this.Database(this.councilDbPath);
+      const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      // Get council session_id for the FK constraint and next order value
+      const councilSession = db.prepare(
+        `SELECT id FROM sessions ORDER BY created_at DESC LIMIT 1`
+      ).get() as { id: string } | undefined;
+      const sessionId = councilSession?.id || 'system';
+      const maxOrder = db.prepare(
+        `SELECT COALESCE(MAX("order"), 0) + 1 as next_order FROM board_tasks`
+      ).get() as { next_order: number };
+      db.prepare(
+        `INSERT INTO board_tasks (id, session_id, title, status, "order", created_at, progress, description)
+         VALUES (?, ?, ?, 'pending', ?, datetime('now'), '', ?)`
+      ).run(id, sessionId, title, maxOrder.next_order, description || '');
+      db.close();
+      return id;
+    } catch (err: any) {
+      console.warn(`[EngineAdapter] addBoardTask failed: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Read the council board and format a snapshot for injection into the tick message.
+   * Returns a human-readable summary of pending/in_progress tasks.
+   */
+  private getCouncilBoardSnapshot(dbPath: string): string {
+    if (!this.Database) return 'BOARD STATE: Database not available.';
+    try {
+      const db = new this.Database(dbPath, { readonly: true });
+      const tasks = db.prepare(
+        `SELECT title, status, created_at FROM board_tasks
+         WHERE status IN ('pending', 'in_progress')
+         ORDER BY
+           CASE WHEN title LIKE '%CRITICAL%' THEN 0
+                WHEN title LIKE '%BUG:user%' THEN 1
+                WHEN title LIKE '%WARNING%' THEN 2
+                WHEN title LIKE '%FEATURE:user%' THEN 3
+                ELSE 4 END,
+           created_at ASC
+         LIMIT 20`
+      ).all() as { title: string; status: string; created_at: string }[];
+      db.close();
+
+      if (tasks.length === 0) return 'BOARD STATE: No pending tasks.';
+
+      const lines = tasks.map((t) => {
+        const age = Date.now() - new Date(t.created_at).getTime();
+        const ageStr = age > 86400000 ? `${Math.floor(age / 86400000)}d ago`
+          : age > 3600000 ? `${Math.floor(age / 3600000)}h ago`
+          : `${Math.floor(age / 60000)}m ago`;
+        return `  [${t.status}] ${t.title.slice(0, 100)} — ${ageStr}`;
+      });
+      return `BOARD STATE (${tasks.length} active tasks):\n${lines.join('\n')}`;
+    } catch {
+      return 'BOARD STATE: Could not read board.';
+    }
+  }
+
   /** Shutdown everything gracefully. */
   async shutdown(): Promise<void> {
+    if ((this as any)._councilInterval) clearInterval((this as any)._councilInterval);
     this.scheduler?.stop();
     await this.pool?.shutdown();
     this.started = false;
@@ -511,6 +606,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     const councilDir = join(baseDir, 'council');
     mkdirSync(councilDir, { recursive: true });
     const councilDbPath = join(councilDir, 'council.db');
+    this.councilDbPath = councilDbPath;
 
     // Import PandoCode tool creators for re-registration with correct agent IDs
     const { createCheckAgentsTool, createSendMessageTool, createManageTasksTool } =
@@ -630,16 +726,24 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         onError: (err: Error) => console.warn(`[qa] Tick error: ${err.message}`),
       });
 
-      this.scheduler.register({
-        name: 'council-tick',
-        engineId: 'council',
-        intervalMs: 15 * 60_000,
-        prompt: `${COUNCIL_PROMPT}\n\n---\n\nCheck your inbox and review board tasks now.`,
-        active: true,
-        onEvent: logEvent('council'),
-        onComplete: () => console.log(`\n[council] Tick complete.`),
-        onError: (err: Error) => console.warn(`[council] Tick error: ${err.message}`),
-      });
+      // Council tick uses a custom interval to inject dynamic board snapshot.
+      // The scheduler doesn't support dynamic prompts, so we manage council's
+      // periodic tick ourselves. Observer and QA use the scheduler (static prompts).
+      const councilTickMs = 15 * 60_000;
+      const councilInterval = setInterval(async () => {
+        try {
+          const boardSnapshot = this.getCouncilBoardSnapshot(councilDbPath);
+          const message = `${COUNCIL_PROMPT}\n\n---\n\nCheck your inbox and review board tasks now.\n\n${boardSnapshot}`;
+          for await (const event of this.sendToCouncilAgent('council', message)) {
+            logEvent('council')(event);
+          }
+          console.log(`\n[council] Tick complete.`);
+        } catch (err: any) {
+          console.warn(`[council] Tick error: ${err.message}`);
+        }
+      }, councilTickMs);
+      // Store interval for cleanup on shutdown
+      (this as any)._councilInterval = councilInterval;
 
       console.log('[EngineAdapter] Council scheduler ticks registered.');
     }

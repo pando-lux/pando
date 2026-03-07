@@ -46,55 +46,67 @@ export class ProjectRegistry {
 
   async start(): Promise<void> {
     // Create table
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS project_registry (
-        project_id TEXT PRIMARY KEY,
-        name TEXT NOT NULL,
-        owner_peer_id TEXT NOT NULL,
-        owner_username TEXT,
-        api_key_hash TEXT NOT NULL,
-        visibility TEXT NOT NULL DEFAULT 'owner_only',
-        resource_ids TEXT DEFAULT '[]',
-        deployment_url TEXT,
-        deployment_type TEXT,
-        description TEXT,
-        status TEXT NOT NULL DEFAULT 'active',
-        registered_at INTEGER NOT NULL,
-        updated_at INTEGER NOT NULL
-      )
-    `);
-
-    // Indexes
     try {
-      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_pr_api_key_hash ON project_registry(api_key_hash)`);
-      this.db.exec(`CREATE INDEX IF NOT EXISTS idx_pr_owner ON project_registry(owner_peer_id)`);
-    } catch { /* indexes may exist */ }
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS project_registry (
+          project_id TEXT PRIMARY KEY,
+          name TEXT NOT NULL,
+          owner_peer_id TEXT NOT NULL,
+          owner_username TEXT,
+          api_key_hash TEXT NOT NULL,
+          visibility TEXT NOT NULL DEFAULT 'owner_only',
+          resource_ids TEXT DEFAULT '[]',
+          deployment_url TEXT,
+          deployment_type TEXT,
+          description TEXT,
+          status TEXT NOT NULL DEFAULT 'active',
+          registered_at INTEGER NOT NULL,
+          updated_at INTEGER NOT NULL
+        )
+      `);
+      console.log('[project-registry] project_registry table ensured.');
 
-    // Prepared statements
-    this.stmtInsert = this.db.prepare(`
-      INSERT OR REPLACE INTO project_registry
-        (project_id, name, owner_peer_id, owner_username, api_key_hash, visibility, resource_ids, deployment_url, deployment_type, description, status, registered_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    this.stmtUpdate = this.db.prepare(`
-      UPDATE project_registry SET name = ?, visibility = ?, resource_ids = ?, deployment_url = ?, deployment_type = ?, description = ?, status = ?, updated_at = ?
-      WHERE project_id = ?
-    `);
-    this.stmtUpdateStatus = this.db.prepare(`UPDATE project_registry SET status = ?, updated_at = ? WHERE project_id = ?`);
+      // Indexes
+      try {
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_pr_api_key_hash ON project_registry(api_key_hash)`);
+        this.db.exec(`CREATE INDEX IF NOT EXISTS idx_pr_owner ON project_registry(owner_peer_id)`);
+        console.log('[project-registry] Indexes ensured.');
+      } catch (e) {
+        console.warn(`[project-registry] Index creation failed (may exist): ${(e as Error).message}`);
+      }
 
-    // Load from SQLite
-    const rows = this.db.prepare('SELECT * FROM project_registry').all() as any[];
-    for (const row of rows) {
-      const record = this.rowToRecord(row);
-      this.projects.set(record.projectId, record);
+      // Prepared statements
+      this.stmtInsert = this.db.prepare(`
+        INSERT OR REPLACE INTO project_registry
+          (project_id, name, owner_peer_id, owner_username, api_key_hash, visibility, resource_ids, deployment_url, deployment_type, description, status, registered_at, updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+      this.stmtUpdate = this.db.prepare(`
+        UPDATE project_registry SET name = ?, visibility = ?, resource_ids = ?, deployment_url = ?, deployment_type = ?, description = ?, status = ?, updated_at = ?
+        WHERE project_id = ?
+      `);
+      this.stmtUpdateStatus = this.db.prepare(`UPDATE project_registry SET status = ?, updated_at = ? WHERE project_id = ?`);
+      console.log('[project-registry] Prepared statements.');
+
+      // Load from SQLite
+      const rows = this.db.prepare('SELECT * FROM project_registry').all() as any[];
+      for (const row of rows) {
+        const record = this.rowToRecord(row);
+        this.projects.set(record.projectId, record);
+      }
+      console.log(`[project-registry] Loaded ${this.projects.size} projects from SQLite.`);
+
+      // Subscribe to GossipSub
+      await this.network.subscribeTopic(TOPIC_PROJECTS, (message: PandoMessage) => {
+        this.handleMessage(message);
+      });
+      console.log(`[project-registry] Subscribed to ${TOPIC_PROJECTS}.`);
+
+      console.log(`[project-registry] Started — ${this.projects.size} projects loaded, subscribed to ${TOPIC_PROJECTS}`);
+    } catch (e: any) {
+      console.error(`[project-registry] Startup failed: ${e.message}`);
+      throw e; // Re-throw to propagate the error
     }
-
-    // Subscribe to GossipSub
-    await this.network.subscribeTopic(TOPIC_PROJECTS, (message: PandoMessage) => {
-      this.handleMessage(message);
-    });
-
-    console.log(`[project-registry] Started — ${this.projects.size} projects loaded, subscribed to ${TOPIC_PROJECTS}`);
   }
 
   stop(): void {
@@ -205,12 +217,16 @@ export class ProjectRegistry {
     return Array.from(this.projects.values());
   }
 
-  getProjectsByOwner(ownerPeerId: string): ProjectRegistryRecord[] {
-    return Array.from(this.projects.values()).filter(p => p.ownerPeerId === ownerPeerId);
-  }
-
-  getActiveProjects(): ProjectRegistryRecord[] {
-    return Array.from(this.projects.values()).filter(p => p.status === 'active');
+  listProjects(ownerPeerId?: string): ProjectRegistryRecord[] {
+    try {
+      if (ownerPeerId) {
+        return Array.from(this.projects.values()).filter(p => p.ownerPeerId === ownerPeerId && p.status !== 'archived');
+      }
+      return Array.from(this.projects.values()).filter(p => p.status !== 'archived');
+    } catch (e: any) {
+      console.error(`[project-registry] Failed to list projects: ${e.message}`);
+      return []; // Return empty array on failure
+    }
   }
 
   getListedProjects(): ProjectRegistryRecord[] {

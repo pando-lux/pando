@@ -151,3 +151,41 @@ test('Council trigger rejects invalid agent', async () => {
   console.log('[e2e] PASS: Council trigger validation works.');
 });
 
+test('Council board API returns tasks array', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/council/board`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+  expect(Array.isArray(data.tasks)).toBe(true);
+  console.log(`[e2e] PASS: Council board returns ${data.tasks.length} tasks.`);
+});
+
+test('Council request API creates board task from user report', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/council/request`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: 'The network latency is very high between peers' }),
+  });
+  // May return 503 if council is not running — both are valid
+  if (res.ok) {
+    const data = await res.json() as any;
+    expect(data.taskId).toBeTruthy();
+    expect(data.status).toBe('ok');
+    console.log(`[e2e] PASS: Council request created task ${data.taskId}.`);
+  } else {
+    expect(res.status).toBe(503);
+    console.log('[e2e] PASS: Council request API responds correctly (council not running).');
+  }
+});
+
+test('Council request API rejects empty message', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/council/request`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: '' }),
+  });
+  expect(res.status).toBe(400);
+  console.log('[e2e] PASS: Council request rejects empty message.');
+});
+

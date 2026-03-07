@@ -198,6 +198,24 @@ export async function registerPlatformRoutes(
         return { status: 'ok', threadId, reply: doormanReply, tier: 'simple' };
       }
 
+      if (classification.intent === 'report') {
+        // User is reporting a bug or requesting a feature — create a board task for the council
+        const adapter = node.getEngineAdapter();
+        const severity = /\b(crash|critical|down|outage|broken)\b/i.test(trimmed) ? 'BUG' : 'FEATURE';
+        const taskTitle = `[${severity}:user] ${(classification.description || trimmed).slice(0, 120)}`;
+        const taskId = adapter?.addBoardTask(taskTitle, trimmed.slice(0, 500));
+        const reply = taskId
+          ? `Thanks for the report! I've added it to the council's board. Task: ${taskId}`
+          : `Thanks for the report. The council will review it on the next tick.`;
+        threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        if (threadStore) {
+          threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
+          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
+          await threadStore.addMessage(threadId, { role: 'assistant', content: reply, timestamp: Date.now(), tier: 'simple' as any });
+        }
+        return { status: 'ok', threadId, reply, tier: 'simple' };
+      }
+
       // Intent is 'build' — unified routing: always create project, find best PandoCode peer
       const builder = findBestBuilder();
       if (!builder) {

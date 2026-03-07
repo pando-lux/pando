@@ -445,6 +445,38 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       };
     });
 
+    // ── Board API ─────────────────────────────────────────────────────────
+
+    // GET /council/board — Public view of the council board (pending/in_progress tasks)
+    fastify.get('/council/board', async () => {
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return { tasks: [], error: 'Council not running' };
+      return { tasks: adapter.getCouncilBoard() };
+    });
+
+    // POST /council/request — Submit a user report/feature request to the council board
+    fastify.post('/council/request', async (request: any, reply: any) => {
+      const body = request.body as any;
+      const message = body?.message?.trim();
+      if (!message || message.length < 5) {
+        return reply.code(400).send({ error: 'Message required (min 5 chars)' });
+      }
+      if (message.length > 500) {
+        return reply.code(400).send({ error: 'Message too long (max 500 chars)' });
+      }
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) {
+        return reply.code(503).send({ error: 'Council not running' });
+      }
+      const severity = /\b(crash|critical|down|outage|broken)\b/i.test(message) ? 'BUG' : 'FEATURE';
+      const taskTitle = `[${severity}:user] ${message.slice(0, 120)}`;
+      const taskId = adapter.addBoardTask(taskTitle, message.slice(0, 500));
+      if (!taskId) {
+        return reply.code(500).send({ error: 'Could not create board task' });
+      }
+      return { status: 'ok', taskId, message: 'Report submitted to council board.' };
+    });
+
     // ── Chat API (Phase 27: AgentManager) ──────────────────────────────────
 
     // POST /chat/message — Phase 68.3: Doorman-routed chat

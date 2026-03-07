@@ -24,10 +24,11 @@ export interface RouteHelpers {
   addSSEClient(reply: any): void;
   removeSSEClient(reply: any): void;
   doormanClassify(message: string): Promise<{
-    intent: 'simple' | 'question' | 'build' | 'project';
+    intent: 'simple' | 'question' | 'build' | 'project' | 'report';
     response?: string;
     tier?: number;
     description?: string;
+    targetProject?: string;
   }>;
   doormanChat(message: string, history: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<string>;
   decryptIncomingMessage(ciphertext: string, nonce: string, threadMeta: any, encryptedThreadKey?: string): Promise<string>;

@@ -503,12 +503,23 @@ export class ApiServer {
    * - 'project' — existing project message → route to project manager
    */
   private async doormanClassify(message: string): Promise<{
-    intent: 'simple' | 'question' | 'build' | 'project';
+    intent: 'simple' | 'question' | 'build' | 'project' | 'report';
     response?: string;
     tier?: number;
     description?: string;
+    targetProject?: string;
   }> {
     const lower = message.toLowerCase().replace(/[?!.,]/g, '').trim();
+
+    // ── Report fast-path: bug reports, feature requests, network issues ──
+    // These go to the council or a specific project's board as tasks.
+    const reportPatterns = /\b(report|bug|broken|not working|crashes?|error|issue|problem|fix|slow|down|outage|regression|investigate)\b/i;
+    const networkPatterns = /\b(network|node|peer|p2p|latency|connectivity|health)\b/i;
+    const featurePatterns = /\b(suggest|feature|request|idea|add|could you|wish|would be nice|improvement)\b/i;
+    if ((reportPatterns.test(message) && networkPatterns.test(message)) ||
+        (featurePatterns.test(message) && networkPatterns.test(message))) {
+      return { intent: 'report', description: message.slice(0, 200), targetProject: 'council' };
+    }
 
     // ── Deterministic fast-path (zero cost, instant) ──────────────────────
     // Slash commands and obvious keyword matches
@@ -560,15 +571,22 @@ export class ApiServer {
 Classify the user's message into ONE of these categories and respond with ONLY valid JSON:
 
 1. "question" — general question, small talk, greeting, asking about Pando. You answer it directly.
-2. "build" — user wants to BUILD something (app, website, tool, game, etc). Extract a short description.
+2. "build" — user wants to BUILD something new (app, website, tool, game, etc). Extract a short description.
+3. "report" — user is reporting a bug, requesting a feature, or flagging a problem with the network or an existing app. NOT building something new — reporting/suggesting about something that exists.
 
 JSON format:
 For questions: {"intent":"question","response":"<your friendly answer, 1-3 sentences>"}
 For builds: {"intent":"build","description":"<what they want built, 1 sentence>","tier":<1 or 2>}
+For reports: {"intent":"report","description":"<what the issue/suggestion is, 1 sentence>","targetProject":"council"}
 
 Tier rules:
 - Tier 1: Pure static apps (portfolio, landing page, simple form with no backend). HTML/CSS/JS only, no server.
 - Tier 2: Anything that needs a server. This includes: chat, messaging, real-time, polls, voting, multiplayer, games with scores, dashboards with live data, APIs, WebSocket, Express, Node.js backend, database queries, user accounts, login systems. When in doubt, choose Tier 2 — it's safer than deploying a server app to static hosting.
+
+Report rules:
+- targetProject is "council" for network/infrastructure issues.
+- targetProject is the project name if the user mentions a specific app (e.g. "the exchange app is broken" → "exchange").
+- If unsure which project, use "council".
 
 Be friendly and helpful. Keep answers short.`
               },
@@ -592,6 +610,9 @@ Be friendly and helpful. Keep answers short.`
               }
               if (parsed.intent === 'build' && parsed.description) {
                 return { intent: 'build', description: parsed.description, tier: parsed.tier || 1 };
+              }
+              if (parsed.intent === 'report' && parsed.description) {
+                return { intent: 'report', description: parsed.description, targetProject: parsed.targetProject || 'council' };
               }
             } catch {
               return { intent: 'question', response: content };
@@ -624,6 +645,12 @@ Be friendly and helpful. Keep answers short.`
     const buildKeywords = /\b(build|create|make|develop|implement|deploy|set up|launch)\b.*\b(app|application|website|site|tool|game|page|project|platform|service|api|server|board|dashboard|blog|shop|store|portfolio|chat|bot|canvas|widget|interface)\b/i;
     if (buildKeywords.test(message)) {
       return { intent: 'build', description: message.slice(0, 200), tier: tier2Keywords.test(message) ? 2 : 1 };
+    }
+
+    // Report fallback: bug/issue/broken + optional context → report to council
+    const reportFallback = /\b(bug|broken|not working|crashes?|error|outage|regression|report)\b/i;
+    if (reportFallback.test(message)) {
+      return { intent: 'report', description: message.slice(0, 200), targetProject: 'council' };
     }
 
     // Default: treat as a build request if it contains action words, otherwise question

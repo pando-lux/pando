@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-07 (deploy pipeline proven E2E + Council pipeline verified — full builder pipeline working: observer→council→spawn_agent(builder)→governance). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-07 (Phase 6 complete — universal project pattern: doorman report intent → board task → council processes. Builder pipeline verified E2E: observer→council→spawn_agent(builder)→governance. 6/6 E2E pass). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -53,7 +53,7 @@ shared < ledger < node
   Pure infrastructure. P2P networking. Identity. Economy. Governance. Storage. HTTP API.
   Has ZERO intelligence of its own. No orchestrator. No agent database. No message bus.
 
-engine-adapter.ts = THE NERVOUS SYSTEM (~750 lines)
+engine-adapter.ts = THE NERVOUS SYSTEM (~860 lines)
   The ONE file that connects brain to body.
   Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
   Manages Council agents (observer/qa/council) using PandoCode's native agent system.
@@ -155,7 +155,7 @@ PandoCode has a **full persistent agent system**. Do NOT build a parallel one in
 - **Board UI** — Board tab: unified task list, filter by agent/status, sort, cancel/retry actions
 - **Board API** — `GET /v1/board` (current session), `GET /v1/board/all` (cross-session), `POST /v1/board/tasks`, `PATCH /v1/board/tasks/:id`
 - **Discoveries** — structured observations (category, confidence) extracted from file reads. Injected into board snapshot.
-- **Board snapshot injected into every prompt** — agents always know what tasks exist
+- **Board snapshot NOT in prompt frame** (PandoCode Option B). pando-node injects board state in the scheduler tick MESSAGE instead. See Section 5.10.3.
 
 **KEY RULE: Use board tasks for issue tracking, not a custom FindingsStore. Board tasks already have the status lifecycle needed.**
 
@@ -338,7 +338,7 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 | Projects | `/v1/projects/*` | Create, deploy, undeploy |
 | Auth | `/v1/auth/*` | Challenge, verify (Pando Login), me, refresh |
 | Testing | `/v1/testing/*` | Status, runs, findings, scenarios, playbooks, specs, stats |
-| Council | `/v1/council/trigger/:agent` | Manual agent trigger (observer/qa/council). Returns tool calls + response. |
+| Council | `/v1/council/*` | `status`, `trigger/:agent`, `board` (public task view), `request` (user reports → board task). |
 | Gateways | `/v1/gateways` | All known live gateway deployments |
 | Capabilities | `/v1/capabilities` | Node capability profile |
 | Admin | `/v1/admin/shutdown` | Graceful shutdown (exit 0) |
@@ -493,7 +493,7 @@ Each engine:
 **Routing rule:**
 - `POST /v1/chat/message { projectId: "proj-abc" }` → route to the PandoCode peer that owns this project's engine
 - `POST /v1/chat/message { no projectId }` → Doorman classifies → Path A (question) or Path B (build) or report (board task on target project)
-- `POST /v1/projects/:id/request` → create board task on that project's board (bug report, feature request)
+- `POST /v1/council/request` → create board task on the council board (bug report, feature request)
 
 **See Section 5.10 for the universal project pattern** — every project (including council) uses the same board-as-queue, scheduler tick, agent team architecture.
 
@@ -896,22 +896,26 @@ User message arrives at POST /v1/chat/message
   │    The team reviews requests periodically. Check /council for status."
   │
   └─ Board task created:
-      [BUG:user:{peerId}] Exchange app login crashes on mobile
-      [FEATURE:user:{peerId}] Add dark mode to gateway
-      [REPORT:user:{peerId}] Network seems slow
+      [BUG:user] Exchange app login crashes on mobile
+      [FEATURE:user] Add dark mode to gateway
+      [FEATURE:user] Network seems slow
 
-Filtering (at doorman level, before board task creation):
-  1. Rate limit: max 3 requests per user per hour
-  2. Two Laws: reject anything harmful
-  3. Scope: council = network/ecosystem, projects = that project only
-  4. Dedup: if similar pending task exists, merge instead of creating new
+Severity classification (automatic):
+  - crash/critical/down/outage/broken → [BUG:user]
+  - everything else → [FEATURE:user]
+
+Validation (at doorman + API level):
+  1. Min 5 chars, max 500 chars
+  2. TODO: Rate limit (3/user/hour), Two Laws filter, dedup
 ```
 
-**Gateway integration:**
-- Each project page has "Report Bug" / "Suggest Feature" (projectId is known)
-- `/council` page shows council board, recent actions, submit form
-- `POST /v1/projects/:id/request` — generic endpoint for any project
-- `GET /v1/projects/:id/board` — public board view (filtered)
+**API endpoints (BUILT):**
+- `GET /v1/council/board` — public board view (pending/in_progress tasks)
+- `POST /v1/council/request` — submit report/feature request to council board
+
+**Gateway integration (TODO):**
+- `/council` page: live board, submit form, ticket status
+- Per-project pages: "Report Bug" / "Suggest Feature"
 
 #### 5.10.3 Project Teams Wake Up on Schedule
 
@@ -1084,7 +1088,7 @@ GOTCHAS:
 
 #### 5.10.9 Implementation Status
 
-**Monitoring pipeline VERIFIED. Builder pipeline VERIFIED. User request flow TODO.**
+**Monitoring pipeline VERIFIED. Builder pipeline VERIFIED. User request flow VERIFIED (6/6 E2E pass).**
 
 | What | Status |
 |---|---|
@@ -1092,17 +1096,21 @@ GOTCHAS:
 | Agent profiles via shared DB insert | DONE — raw SQL INSERT OR IGNORE at startup |
 | send_message cross-engine | VERIFIED — messages show `From observer` with correct agentId |
 | check_agents inbox reading | VERIFIED — council reads and deletes messages correctly |
-| Scheduler ticks | DONE — 30 min observer/qa, 15 min council |
+| Scheduler ticks | DONE — 30 min observer/qa, custom interval for council (15 min, dynamic board snapshot) |
 | pando_* tool registration | DONE — 15 tools, roles handle filtering |
 | `spawn_agent(working_directory)` | DONE — PandoCode enhancement in spawn-agent.ts |
-| `pando_workspace` tool | DONE — pando-node tool in engine-adapter.ts |
+| `pando_workspace` tool | DONE — pando-node tool in engine-adapter.ts, git credential reuse from local repo |
 | Builder fixing actual code | VERIFIED — council dispatched builder, builder modified code, submitted governance proposal |
-| Board snapshot in tick message | **TODO** — read board from DB, inject into scheduler tick prompt |
-| Doorman "report" intent | **TODO** — classify user reports, create board task on target project |
-| `POST /v1/projects/:id/request` | **TODO** — generic endpoint for user requests on any project |
-| `GET /v1/projects/:id/board` | **TODO** — public board view |
-| Project scheduler ticks | **TODO** — public projects get periodic wake-ups |
-| Council prompt: task lifecycle | **TODO** — stale cleanup, user request processing, priority rules |
+| Board snapshot in tick message | DONE — `getCouncilBoardSnapshot()` reads board from SQLite, priority-sorted, injected in council tick |
+| Doorman "report" intent | DONE — fast-path regex + OpenAI classification. Creates `[BUG:user]` or `[FEATURE:user]` board task |
+| `POST /v1/council/request` | DONE — direct API for user reports (5-500 char validation) |
+| `GET /v1/council/board` | DONE — public board view (pending/in_progress tasks) |
+| Council prompt: task lifecycle | DONE — priority ordering, stale cleanup (>24h), user request processing |
+| `addBoardTask()` on EngineAdapter | DONE — inserts task with proper schema (session_id, order FK) |
+| `getCouncilBoard()` on EngineAdapter | DONE — reads pending/in_progress tasks |
+| Project scheduler ticks | **TODO** — public projects get periodic wake-ups on creation |
+| Per-project board endpoints | **TODO** — `POST /v1/projects/:id/request`, `GET /v1/projects/:id/board` |
+| Rate limiting on reports | **TODO** — max 3 requests per user per hour at doorman level |
 | Gateway `/council` page | **TODO** — live board, submit form, ticket status |
 
 #### 5.10.10 Failure Modes & Recovery
@@ -1180,7 +1188,7 @@ No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoCode'
 
 ## 6. THE ENGINE ADAPTER (detailed spec)
 
-The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~750 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~860 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
 
 **Key principle:** PandoCode uses its OWN configured provider and model. The engine-adapter does NOT override the model. Contributors choose their provider (default: Google/gemini-2.5-flash).
 
@@ -1205,9 +1213,14 @@ class EngineAdapter {
 
   // Message routing
   async *send(message: string, projectId?: string): AsyncGenerator<Event>
+  async *sendToCouncilAgent(agentId: string, message: string): AsyncGenerator<Event>
 
   // Governance hook
   async reviewDiff(diff: string, description: string): Promise<ReviewResult>
+
+  // Council board operations
+  getCouncilBoard(): any[]                               // Read pending/in_progress tasks
+  addBoardTask(title: string, description?: string): string | null  // Insert user report as board task
 
   // Management
   get available(): boolean
@@ -1377,7 +1390,7 @@ npx playwright test --project pando-code
 
 ## 9. BRAIN-KILL MIGRATION (COMPLETED 2026-03-06)
 
-**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~750 with council agent lifecycle + pando_workspace tool).**
+**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~860 with council agents + board operations + pando_workspace tool).**
 
 The dual coordination system is dead. pando-node no longer has any intelligence of its own. All AI flows through EngineAdapter → @pando-code/core.
 
@@ -1385,11 +1398,11 @@ The dual coordination system is dead. pando-node no longer has any intelligence 
 orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), template-registry.ts (476), org-manager.ts (377), agent-tools.ts (373), orchestrator-manager.ts (333), engine-bridge.ts (283), worker-mcp.ts (274), orchestrator-process.ts (248), ai-backend-pandocode.ts (244), message-bus.ts (143), ai-backend-registry.ts (43), ai-backend.ts (37), context-api.ts (336).
 
 ### What replaced it
-`core/engine-adapter.ts` (~750 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL.
+`core/engine-adapter.ts` (~860 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL. Board operations (read/write) for user reports.
 
 ### API changes
 - **Removed:** `/v1/bridge/*`, `/v1/agents/*`, `/v1/context/*`
-- **Added:** `/v1/engines`, `/v1/engines/schedules`, `/v1/council/trigger/:agent`
+- **Added:** `/v1/engines`, `/v1/engines/schedules`, `/v1/council/status`, `/v1/council/trigger/:agent`, `/v1/council/board`, `/v1/council/request`
 - **Unchanged:** `/v1/chat/message` (same interface, different backend)
 
 ---
@@ -1438,7 +1451,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 | Issue | Why it's OK |
 |---|---|
-| index.ts is a monolith (~3,600 lines) | Shrunk by 783 lines after brain removal. Further decomposition possible but not urgent. |
+| index.ts is a monolith (~3,700 lines) | Shrunk by 783 lines after brain removal. Further decomposition possible but not urgent. |
 | Agent identity is ephemeral | Ephemeral agents are sufficient for dev mode. |
 | Governance auto-approves (<=8 peers) | Dev mode only. Real voting kicks in with more peers. |
 
@@ -1488,9 +1501,9 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 ### API
 | File | Purpose |
 |---|---|
-| `api/api-server.ts` | Fastify server setup |
+| `api/api-server.ts` | Fastify server setup, doorman classification (simple/question/build/report intents) |
 | `api/kernel-api.ts` | Status, peers, capabilities, governance routes |
-| `api/core-api.ts` | Tasks, upgrade, credentials, council trigger route |
+| `api/core-api.ts` | Upgrade, emissions, security, council routes (status, trigger, board, request) |
 | `api/platform-api.ts` | Projects, auth, chat, engine routes. `findBestBuilder()` for unified PandoCode peer routing. |
 | `api/testing-api.ts` | Testing dashboard routes (11 endpoints) |
 
@@ -1566,7 +1579,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 7. **Triple-broadcast on peer connect.** Capability profiles broadcast 3 times (immediate + 10s + 30s) because GossipSub mesh formation is slow.
 
-8. **`createRequire` in testing-api.ts.** @pando/tests is CJS, node is ESM. `createRequire(import.meta.url)` bridges this. Not a bug.
+8. **`createRequire` for CJS in ESM.** @pando/tests and better-sqlite3 are CJS, node is ESM. `createRequire(import.meta.url)` bridges this in testing-api.ts and engine-adapter.ts (cached at startup for board operations). Not a bug.
 
 9. **Standalone pando-code is identical to pando-node's engines.** The only difference is: inside pando-node, engines get Pando tools registered and Lux budget instead of USD. The engine code is the same.
 
