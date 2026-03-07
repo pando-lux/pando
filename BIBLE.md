@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-07 (Phase 6 complete — universal project pattern: doorman report intent → board task → council processes. Builder pipeline verified E2E: observer→council→spawn_agent(builder)→governance. 6/6 E2E pass). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-07 (Phase 6 complete + production E2E verified. Full pipeline: build app → deploy → user reports bug → council processes → builder clones from GitHub → fixes code → governance proposal. Board task dedup added. Severity classification covers word variants. 8/8 production E2E pass, 6/6 Playwright pass). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -53,7 +53,7 @@ shared < ledger < node
   Pure infrastructure. P2P networking. Identity. Economy. Governance. Storage. HTTP API.
   Has ZERO intelligence of its own. No orchestrator. No agent database. No message bus.
 
-engine-adapter.ts = THE NERVOUS SYSTEM (~860 lines)
+engine-adapter.ts = THE NERVOUS SYSTEM (~870 lines)
   The ONE file that connects brain to body.
   Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
   Manages Council agents (observer/qa/council) using PandoCode's native agent system.
@@ -900,13 +900,14 @@ User message arrives at POST /v1/chat/message
       [FEATURE:user] Add dark mode to gateway
       [FEATURE:user] Network seems slow
 
-Severity classification (automatic):
-  - crash/critical/down/outage/broken → [BUG:user]
+Severity classification (automatic, regex with word variants):
+  - crash(es|ed|ing), critical, down, outage, broken, bug, error, fail(s|ed|ing) → [BUG:user]
   - everything else → [FEATURE:user]
 
 Validation (at doorman + API level):
   1. Min 5 chars, max 500 chars
-  2. TODO: Rate limit (3/user/hour), Two Laws filter, dedup
+  2. Board task dedup: exact title match on pending/in_progress tasks returns existing task ID
+  3. TODO: Rate limit (3/user/hour), Two Laws filter
 ```
 
 **API endpoints (BUILT):**
@@ -1088,7 +1089,7 @@ GOTCHAS:
 
 #### 5.10.9 Implementation Status
 
-**Monitoring pipeline VERIFIED. Builder pipeline VERIFIED. User request flow VERIFIED (6/6 E2E pass).**
+**Full pipeline VERIFIED: build → deploy → user bug report → council processes → builder clones from GitHub → fixes code → governance proposal. 8/8 production E2E pass. 6/6 Playwright pass.**
 
 | What | Status |
 |---|---|
@@ -1106,7 +1107,7 @@ GOTCHAS:
 | `POST /v1/council/request` | DONE — direct API for user reports (5-500 char validation) |
 | `GET /v1/council/board` | DONE — public board view (pending/in_progress tasks) |
 | Council prompt: task lifecycle | DONE — priority ordering, stale cleanup (>24h), user request processing |
-| `addBoardTask()` on EngineAdapter | DONE — inserts task with proper schema (session_id, order FK) |
+| `addBoardTask()` on EngineAdapter | DONE — inserts task with proper schema (session_id, order FK). Dedup: exact title match on pending/in_progress returns existing ID. |
 | `getCouncilBoard()` on EngineAdapter | DONE — reads pending/in_progress tasks |
 | Project scheduler ticks | **TODO** — public projects get periodic wake-ups on creation |
 | Per-project board endpoints | **TODO** — `POST /v1/projects/:id/request`, `GET /v1/projects/:id/board` |
@@ -1119,7 +1120,7 @@ GOTCHAS:
 |---|---|
 | Council host node dies | Another contributor node's council takes over. Board + memory persist in SQLite. |
 | Too many user requests | Board is the buffer. Rate limit at doorman (3/user/hour). Council batches similar. |
-| Bad/spam requests | Doorman filters: Two Laws, scope check, dedup. Council deprioritizes low-value tasks. |
+| Bad/spam requests | Board task dedup (exact title match). Council deprioritizes low-value tasks. TODO: Two Laws filter, rate limit. |
 | Observer creates too many tasks | Council batches similar issues, prioritizes CRITICAL. |
 | Council proposes bad code | Governance Layer 5 (AI review) catches it. QA catches post-deploy regressions. |
 | Project board grows too large | Lead closes stale tasks (>24h). Spawns parallel builders if backlog >10. |
@@ -1188,7 +1189,7 @@ No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoCode'
 
 ## 6. THE ENGINE ADAPTER (detailed spec)
 
-The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~860 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~870 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
 
 **Key principle:** PandoCode uses its OWN configured provider and model. The engine-adapter does NOT override the model. Contributors choose their provider (default: Google/gemini-2.5-flash).
 
@@ -1220,7 +1221,7 @@ class EngineAdapter {
 
   // Council board operations
   getCouncilBoard(): any[]                               // Read pending/in_progress tasks
-  addBoardTask(title: string, description?: string): string | null  // Insert user report as board task
+  addBoardTask(title: string, description?: string): string | null  // Insert or dedup board task (returns existing ID if title matches pending task)
 
   // Management
   get available(): boolean
@@ -1390,7 +1391,7 @@ npx playwright test --project pando-code
 
 ## 9. BRAIN-KILL MIGRATION (COMPLETED 2026-03-06)
 
-**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~860 with council agents + board operations + pando_workspace tool).**
+**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~870 with council agents + board operations + dedup + pando_workspace tool).**
 
 The dual coordination system is dead. pando-node no longer has any intelligence of its own. All AI flows through EngineAdapter → @pando-code/core.
 
@@ -1398,7 +1399,7 @@ The dual coordination system is dead. pando-node no longer has any intelligence 
 orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), template-registry.ts (476), org-manager.ts (377), agent-tools.ts (373), orchestrator-manager.ts (333), engine-bridge.ts (283), worker-mcp.ts (274), orchestrator-process.ts (248), ai-backend-pandocode.ts (244), message-bus.ts (143), ai-backend-registry.ts (43), ai-backend.ts (37), context-api.ts (336).
 
 ### What replaced it
-`core/engine-adapter.ts` (~860 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL. Board operations (read/write) for user reports.
+`core/engine-adapter.ts` (~870 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL. Board operations (read/write/dedup) for user reports.
 
 ### API changes
 - **Removed:** `/v1/bridge/*`, `/v1/agents/*`, `/v1/context/*`
@@ -1596,6 +1597,10 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 15. **Marketplace filters test artifacts.** `getMarketplaceAsync()` uses a regex to strip projects named "hello world", "test app", "demo", "example", etc. If your test project doesn't show up in the marketplace, that's why. Use a real project name.
 
 16. **Project workspaces are `~/.pando/projects/{projectId}/`.** Engine adapter creates the directory and passes it as `projectPath` to PandoCode. The engine writes files there. The deploy pipeline reads `workspaceDir` from the project record to know where to git push from. If `workspaceDir` is missing, GitHub push fails with "workspaceDir required".
+
+17. **Board task dedup is by exact title match.** `addBoardTask()` checks if a pending/in_progress task with the identical title exists and returns its ID instead of creating a duplicate. This prevents user spam but doesn't catch semantically similar reports (e.g., "login broken" vs "login page crashes"). The council handles semantic dedup by batching similar issues during tick processing.
+
+18. **Doorman severity classification uses word-variant regex.** `crash(es|ed|ing)`, `bug`, `error`, `fail(s|ed|ing)` all match as BUG. Without the variant suffixes, "crashes" would be classified as FEATURE (word boundary `\bcrash\b` doesn't match "crashes"). This was a real production bug found in E2E testing.
 
 17. **P2P credential proxy has a timeout chain.** GitHub repo creation requires: P2P credential decrypt (30s timeout) + GitHub API call (45s inner timeout). If EC2 nodes are slow or offline, the credential proxy times out and GitHub operations fail. The timeouts were tuned for production latency on 2026-03-06.
 
