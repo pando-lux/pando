@@ -110,30 +110,101 @@ Pure cryptographic primitives. No storage, no SQLite, no MongoDB, no network.
 
 The AI coding engine. Multi-provider (Anthropic, OpenAI, Google, Ollama). Multi-agent orchestration. Persistent memory. AST-based code intelligence.
 
-**What it provides TODAY:**
+**CRITICAL: PandoCode is a COMPLETE agent platform. Before building ANY agent/team/communication/task system in pando-node, check if PandoCode already provides it. It almost certainly does. See the capability reference below.**
+
+#### 3.2.1 Engine & Tools
+
 - `PandoCode` class — the engine. Create, send messages, get streaming responses.
-- 8-layer frame system (L0 identity → L6 conversation). `FrameBuilder.build()` is the ONLY prompt assembly path.
-- Board — SQLite-backed task/discovery tracking. Snapshot injected into every prompt.
-- Sub-agents — 4 types: explore (read-only), builder (full tools), tester (read + bash), lead (delegation).
-- Memory — append-only lessons + preferences. Post-turn reflection auto-extracts. Scope matching, confidence tracking.
-- Knowledge graph — AST-based, 1000+ symbols, 13K+ cross-references.
+- 9-layer frame system (L0 identity → L8 project context). `FrameBuilder.build()` is the ONLY prompt assembly path.
 - 35+ built-in tools — read_file, write_file, edit_file, bash, glob, grep, spawn_agent, manage_tasks, send_message, save_memory, query_memory, MCP tools, etc.
 - Guardrails — hard (enforced), role permissions matrix, risk tiers, git checkpoints.
-- Event bus — 20+ event types streamed via WebSocket.
+- Knowledge graph — AST-based, 1000+ symbols, 13K+ cross-references.
 - MCP client — connects to external MCP servers (Playwright built-in).
-- **API mode** — `PandoCode.create()` + `engine.send()` works programmatically today. No CLI required.
+- **API mode** — `PandoCode.create()` + `engine.send()` works programmatically. No CLI required.
 
-**Infrastructure for network integration (DONE):**
-- **EnginePool** (`pool/engine-pool.ts`) — Multi-engine management. `Map<id, PandoCode>` with lazy creation, TTL eviction, lifecycle hooks (`onAfterCreate` for tool/budget injection), max engine limits, concurrent-safe creation locks. ~230 lines.
-- **Scheduler** (`pool/scheduler.ts`) — Periodic task execution. Register named tasks with interval + prompt. Sends to engines via pool. Pause/resume/trigger. ~200 lines.
-- **PandoServer** (`server/server.ts`) — HTTP API with SSE streaming. `POST /api/send` streams EngineEvents. Engine/schedule/health endpoints. Standalone: run `PandoServer.start()`. ~200 lines.
+#### 3.2.2 Agent System (ALREADY BUILT — do NOT recreate)
 
-**Key files:** `engine/engine.ts` (~1400 lines, main loop), `board/board.ts`, `agent/sub-agent.ts`, `agent/frame-builder.ts`, `memory/store.ts`, `tool/registry.ts`, `provider/provider.ts`
+PandoCode has a **full persistent agent system**. Do NOT build a parallel one in pando-node.
 
-**Integration with @pando/node:**
-- Zero @pando/* imports. Structural typing for integration (AgentProfile superset of EngineAgentConfig).
+- **Persistent agent profiles** in SQLite `agents` table (id, role, model, status, displayName, description)
+- **NOT per-engine** — agent profiles are global in the database, not scoped to a single engine
+- **Agent roles with built-in tool filtering:**
+
+| Role | Tools | Pando-node equivalent |
+|---|---|---|
+| `explorer` | read-only | Observer (health monitoring) |
+| `tester` | read + bash + test | QA (test execution) |
+| `lead` | delegation: spawn_agent, manage_tasks, check_agents, send_message | Council (orchestration) |
+| `builder` | full code access (read, write, edit, bash) | Workers (coding) |
+| `reviewer` | read + analysis | Code review |
+| `coordinator` | planning + delegation | Team coordination |
+| `planner` | planning | Architecture planning |
+
+- **Agent UI** — Agents tab in PandoCode web UI: create, delete, rename, view sessions, status badges
+- **Agent API** — `POST /v1/agents` (create), `GET /v1/agents` (list), `PATCH /v1/agents/:id`, `DELETE /v1/agents/:id`
+- **Sub-agents** — ephemeral workers spawned by `spawn_agent` tool. Temporary, no DB record. Used by lead agents to delegate work.
+
+**KEY RULE: pando-node should create agent profiles via PandoCode's API, not maintain its own agent registry.**
+
+#### 3.2.3 Board (Task Tracking — ALREADY BUILT)
+
+- **Board tasks** — SQLite `board_tasks` table: id, sessionId, title, status, assignedAgent, dependsOn (JSON), progress, timestamps
+- **Status lifecycle:** `pending → in_progress → done / failed / cancelled / rolled_back`
+- **Task assignment** to specific agents
+- **Dependencies** between tasks (dependsOn array)
+- **Board UI** — Board tab: unified task list, filter by agent/status, sort, cancel/retry actions
+- **Board API** — `GET /v1/board` (current session), `GET /v1/board/all` (cross-session), `POST /v1/board/tasks`, `PATCH /v1/board/tasks/:id`
+- **Discoveries** — structured observations (category, confidence) extracted from file reads. Injected into board snapshot.
+- **Board snapshot injected into every prompt** — agents always know what tasks exist
+
+**KEY RULE: Use board tasks for issue tracking, not a custom FindingsStore. Board tasks already have the status lifecycle needed.**
+
+#### 3.2.4 Communication (ALREADY BUILT — do NOT recreate)
+
+- **send_message tool** — database-backed message queue in `state` table
+  - Key format: `msg:{toAgentId}:{uuid}` with 1-hour TTL
+  - **Cross-engine capable** — agents in different engines can message each other IF they share the SQLite database
+  - Supports broadcast to all agents
+- **check_agents tool** — read inbox (`action: "inbox"`), list agents, check agent status
+  - Messages deleted after reading (acknowledged)
+- **Event bus** — 20+ event types streamed via WebSocket for real-time UI updates
+
+**KEY RULE: Use send_message for inter-agent communication, not a custom event system.**
+
+#### 3.2.5 Memory (ALREADY BUILT)
+
+- **Per-engine memory store** — append-only lessons, discoveries, entity knowledge, flows
+- **Ranked recall** — scope precision x confidence x recency x impact
+- **Entity knowledge** — multi-dimensional: identity, behavior, connections, rules, risks, history
+- **Post-turn reflection** — auto-extracts lessons after each agent turn
+- **Never deleted** — only marked stale. Agents learn permanently across sessions.
+
+#### 3.2.6 Infrastructure (ALREADY BUILT)
+
+- **EnginePool** (`pool/engine-pool.ts`) — Multi-engine management. `Map<id, PandoCode>` with lazy creation, TTL eviction, lifecycle hooks (`onAfterCreate`), max limits, concurrent-safe. ~230 lines.
+- **Scheduler** (`pool/scheduler.ts`) — Periodic task execution. Named tasks with interval + prompt + callbacks (onEvent, onComplete, onError). Sends to engines via pool. Pause/resume/trigger. ~200 lines.
+- **PandoServer** (`server/server.ts`) — HTTP API with SSE streaming. Engine/schedule/health endpoints. ~200 lines.
+- **One engine = one session = one active agent at a time**
+- **Shared database** — all engines sharing same SQLite DB can communicate via send_message
+
+**Key files:** `engine/engine.ts` (~1400 lines, main loop), `board/board.ts`, `agent/sub-agent.ts`, `agent/frame-builder.ts`, `memory/store.ts`, `tool/registry.ts`, `tool/send-message-tool.ts`, `tool/check-agents.ts`, `provider/provider.ts`
+
+#### 3.2.7 Web UI
+
+| Tab | Component | What it shows |
+|---|---|---|
+| Sessions | SessionsView.tsx | Conversations, chat, message history |
+| Agents | AgentsView.tsx | Persistent agent profiles, roles, status, create/delete |
+| Board | BoardView.tsx | Task board, filters by agent/status, metrics dashboard |
+| Tests | TestsView.tsx | Test scenarios, results |
+| Settings | Settings.tsx | Model, budget, config |
+
+#### 3.2.8 Integration with @pando/node
+
+- Zero @pando/* imports. Structural typing for integration.
 - Dual budget: `UsdBudgetProvider` (standalone) vs `LuxBudgetProvider` (injected by node).
-- Custom tools registered at runtime via `engine.registerTool()`.
+- Custom tools registered at runtime via `engine.tools.register()`.
+- **pando-node's ONLY job:** register pando_* tools + inject Lux budget + set system prompts via agentOverride. Everything else (agents, board, memory, communication) is PandoCode's responsibility.
 
 ### 3.3 @pando/tests (PHASE 4 COMPLETE)
 
@@ -236,8 +307,7 @@ Reads from @pando/node HTTP API. No direct database access.
 | **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Git pull + build + restart. GossipSub broadcast. |
 | **GatewayDeployPool** | `core/gateway-deploy-pool.ts` | DONE | Deploy gateway to all contributed hosting accounts |
 | **PaymentGate** | `core/payment-gate.ts` | DONE | Lux escrow for task execution |
-| **FindingsStore** | `core/findings-store.ts` | DONE | In-memory findings table. CRUD + onCreated callback for event-driven council wake. |
-| **CouncilPrompts** | `core/council-prompts.ts` | DONE | System prompts + TOOL_SETS for observer/qa/council agents. Step-by-step tool-calling instructions tuned for Gemini Flash. |
+| **CouncilPrompts** | `core/council-prompts.ts` | REWIRING | System prompts for observer/qa/council. Being simplified — TOOL_SETS removed (PandoCode roles handle tool filtering). |
 | **RequestReply** | `core/request-reply.ts` | DONE | P2P unicast calls (TCP + GossipSub fallback) |
 | **HostingAdapters** | `core/hosting-adapters.ts` | DONE | Provider-agnostic deployment (Vercel, Netlify) |
 
@@ -268,8 +338,7 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 | Projects | `/v1/projects/*` | Create, deploy, undeploy |
 | Auth | `/v1/auth/*` | Challenge, verify (Pando Login), me, refresh |
 | Testing | `/v1/testing/*` | Status, runs, findings, scenarios, playbooks, specs, stats |
-| Findings | `/v1/findings/*` | Create, list, update, summary. Council communication channel. |
-| Council | `/v1/council/*` | Status (health overview), trigger/:agent (manual agent run) |
+| Council | `/v1/council/trigger/:agent` | Manual agent trigger (observer/qa/council). Returns tool calls + response. |
 | Gateways | `/v1/gateways` | All known live gateway deployments |
 | Capabilities | `/v1/capabilities` | Node capability profile |
 | Admin | `/v1/admin/shutdown` | Graceful shutdown (exit 0) |
@@ -764,11 +833,13 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 
 **NOT YET BUILT.** PandoCode currently has no linking setting. Engine Adapter creates engines but doesn't manage a dedicated network workspace. This is the next architecture milestone.
 
-### 5.10 The Council — AI-Managed Ecosystem (BUILT — LIVE)
+### 5.10 The Council — AI-Managed Ecosystem (ARCHITECTURE CORRECTED — REWIRE IN PROGRESS)
 
-The Council system makes Pando a **100% AI-maintained ecosystem**. Three specialized PandoCode engine instances — Council, Observer, and QA — run on contributed nodes and continuously maintain, improve, and heal the entire network. No human intervention required for routine operations.
+The Council system makes Pando a **100% AI-maintained ecosystem**. Three agents — Observer, QA, and Council — run on contributor nodes and continuously maintain, improve, and heal the network.
 
-**Core insight:** Council, Observer, and QA are NOT new infrastructure. They are PandoCode engine instances with different system prompts and tool permissions. PandoCode already has everything they need: Board (tasks/goals), Memory (lessons/reflections), Sub-agents (explore/builder/tester/lead), Tools, and Scheduler. The legacy orchestrator was 9,414 lines. This design is ~400 lines.
+**Core insight:** Council agents are standard PandoCode agents using PandoCode's native systems: agent profiles, board tasks, send_message, memory, sub-agents. pando-node ONLY adds network-specific tools (pando_*) and Lux budget. It does NOT rebuild PandoCode's agent infrastructure.
+
+**CRITICAL RULE: Never build agent/communication/task systems in pando-node. PandoCode already has them. See Section 3.2.**
 
 #### 5.10.1 The Three Agents
 
@@ -776,227 +847,147 @@ The Council system makes Pando a **100% AI-maintained ecosystem**. Three special
 ┌──────────────────────────────────────────────────────────────────────┐
 │                    HOW THE THREE AGENTS WORK                        │
 │                                                                     │
-│  Observer Engine                                                    │
-│  ├─ Runs every 30 min (scheduler tick) + event-driven wake         │
-│  ├─ ONLY pando_* tools: pando_status, pando_peers, pando_balance,  │
-│  │   pando_capabilities, pando_list_projects, pando_test_status,   │
-│  │   pando_create_finding, pando_list_findings                     │
-│  ├─ Inspects: network health, peer count, deploy status            │
-│  ├─ Creates FINDINGS (severity: info/warning/critical)             │
-│  └─ Never modifies code. Never proposes. Only observes + reports.  │
+│  Observer (PandoCode role: explorer)                                │
+│  ├─ Runs every 30 min (scheduler tick)                             │
+│  ├─ Built-in tools: read-only (explorer role)                      │
+│  ├─ Extra tools: pando_status, pando_peers (read-only network ops) │
+│  ├─ Checks: network health, peer count, deploy status              │
+│  ├─ Reports: creates board tasks + sends message to council        │
+│  └─ Never modifies code. Read-only role enforced by PandoCode.     │
 │                                                                     │
-│  QA Engine                                                          │
-│  ├─ Runs every 30 min (scheduler tick, offset 15 min from Observer)│
-│  ├─ ONLY pando_* tools: same as Observer + pando_test_run          │
-│  ├─ Checks API health, peer connectivity, project system           │
-│  ├─ Creates FINDINGS from test failures                            │
-│  └─ Reports: what failed, expected vs actual, probable cause       │
+│  QA (PandoCode role: tester)                                        │
+│  ├─ Runs every 30 min (scheduler tick, offset 15 min)              │
+│  ├─ Built-in tools: read + bash + test (tester role)               │
+│  ├─ Extra tools: pando_status, pando_peers, pando_test_run         │
+│  ├─ Checks: API health, peer connectivity, project system          │
+│  ├─ Reports: creates board tasks + sends message to council        │
+│  └─ Reports what failed, expected vs actual, probable cause.       │
 │                                                                     │
-│  Council Engine (the CEO)                                           │
-│  ├─ Runs every 15 min (scheduler tick) + event-driven wake         │
-│  ├─ ALL pando_* tools (17 total, incl. pando_update_finding)       │
-│  ├─ Reads FINDINGS from Observer and QA                            │
-│  ├─ Investigates: calls pando_status, pando_peers to verify        │
-│  ├─ Resolves: calls pando_update_finding for every open finding    │
-│  ├─ Can propose changes through GOVERNANCE (pando_governance_*)    │
-│  └─ Event-driven: wakes 3s after any new finding is created        │
+│  Council (PandoCode role: lead)                                     │
+│  ├─ Runs every 15 min (scheduler tick)                             │
+│  ├─ Built-in tools: spawn_agent, manage_tasks, check_agents,      │
+│  │   send_message (lead role — full delegation power)              │
+│  ├─ Extra tools: ALL pando_* tools (deploy, governance, etc.)      │
+│  ├─ Reads inbox (check_agents) for messages from observer/qa       │
+│  ├─ Reads board tasks for pending issues                           │
+│  ├─ Spawns builder sub-agents to write code fixes                  │
+│  ├─ Calls pando_governance_propose for code changes                │
+│  └─ Resolves board tasks when done                                 │
 │                                                                     │
-│  Communication: HTTP API (pando_* tools → 127.0.0.1:apiPort)       │
-│  No message bus. No IPC. No shared memory.                          │
-│  FindingsStore (in-memory) = the communication channel.             │
+│  Communication: PandoCode's send_message (DB-backed queue)          │
+│  Task tracking: PandoCode's board (board_tasks table)               │
+│  Memory: PandoCode's memory store (per-engine, persistent)          │
+│  NO custom FindingsStore. NO tool stripping. NO sendToCouncilAgent. │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 #### 5.10.2 Council Scope — ANY Project
 
-The Council is NOT limited to pando-node. It can update ANY project in the ecosystem:
+The Council is NOT limited to pando-node. It can update ANY project in the ecosystem.
 
-| Target | What Council Does | Example |
+| Target | What Council Does | How |
 |---|---|---|
-| **@pando/node** | Fix bugs, add features, optimize | Observer finds memory leak → Council patches |
-| **@pando-code/core** | Improve engine, fix tools | QA finds tool failure → Council fixes tool code |
-| **@pando/identity** | Security patches, key rotation | Observer detects expired certs → Council patches |
-| **@pando/ledger** | Fix accounting bugs | QA finds balance mismatch → Council fixes |
-| **@pando/gateway** | UI fixes, new dashboard views | Observer notes missing metrics → Council adds |
-| **User projects** | Heal broken deployments | Observer detects 502 → Council redeploys |
+| **@pando/node** | Fix bugs, optimize | Council spawns builder sub-agent → edits code → pando_governance_propose |
+| **@pando-code/core** | Improve engine, fix tools | Same flow. Council has lead role — CAN spawn sub-agents. |
+| **User projects** | Heal broken deployments | Council calls pando_deploy to redeploy |
 
-**Governance gate:** Every change goes through governance (Section 5.4). Council calls `pando_propose` → 6-layer pipeline → peer vote → approved/rejected. In **dev mode**, proposals auto-approve (no quorum needed). In **production mode**, real peer voting required.
+**Governance gate:** Every code change goes through governance (Section 5.4). Council calls `pando_governance_propose` → 6-layer pipeline → peer vote → approved/rejected.
 
 ```
-Council decides to fix a bug in @pando/node (FUTURE — requires governance integration):
-  1. Council reads findings → identifies issue
-  2. Council calls pando_governance_propose(description, target_repo)
-  3. Governance pipeline:
-     Layer 1-4: Deterministic checks ✓
-     Layer 5: AI review ✓
-     Layer 6: Peer vote (auto-approve in dev mode) ✓
-  4. Change merged → upgrade-protocol detects new HEAD → node restarts (exit code 75)
-
-CURRENT REALITY: Council agents ONLY have pando_* tools (built-in tools stripped).
-They can create/update findings, check status, and propose changes through governance.
-They CANNOT spawn sub-agents (spawn_agent is stripped) or edit files directly.
+Council fixes a bug in @pando/node:
+  1. Observer creates board task: "API latency > 2s on /v1/status"
+  2. Observer sends message to council: "New issue on board"
+  3. Council reads inbox (check_agents) → reads board (pending tasks)
+  4. Council spawns builder sub-agent: "Fix latency in api-server.ts"
+  5. Builder (ephemeral): reads code, writes fix, runs tests, returns diff
+  6. Council reviews diff → calls pando_governance_propose(diff, description)
+  7. Governance: 6-layer pipeline validates → approved
+  8. upgrade-protocol: all nodes pull + rebuild + restart
+  9. Council marks board task done
 ```
 
-#### 5.10.3 The Findings System
-
-Findings replace the legacy "directives" system (which was ambiguous and had no priority). A finding is a structured observation from Observer or QA that Council acts on.
-
-```typescript
-// Findings table schema (in-memory Map, ~130 lines in findings-store.ts)
-interface Finding {
-  id: string;              // uuid
-  source: 'observer' | 'qa' | 'council' | 'user';
-  severity: 'info' | 'warning' | 'critical';
-  category: 'health' | 'test_failure' | 'security' | 'performance' | 'suggestion';
-  title: string;           // "Memory usage exceeds 80% on EC2-1"
-  detail: string;          // Full diagnostic text
-  target?: string;         // Which project/component affected
-  status: 'open' | 'in_progress' | 'resolved' | 'wont_fix';
-  createdAt: number;
-  resolvedAt?: number;
-  resolvedBy?: string;     // Which engine resolved it
-  actionTaken?: string;    // "Patched worker-pool.ts, PR #47"
-}
-```
-
-**API endpoints** (~50 lines in core-api.ts or a new findings-api.ts):
-```
-POST   /v1/findings          — Create a finding (Observer/QA call this)
-GET    /v1/findings           — List findings (Council reads this)
-PATCH  /v1/findings/:id       — Update status (Council marks resolved)
-GET    /v1/findings/summary   — Counts by severity/status (dashboard)
-```
-
-**Pando tools** for engines (~30 lines in agent-tools.ts):
-```
-pando_create_finding  → POST /v1/findings       (Observer/QA use this)
-pando_list_findings   → GET  /v1/findings        (Council reads this)
-pando_update_finding  → PATCH /v1/findings/:id   (Council resolves this)
-```
-
-#### 5.10.4 System Prompts (the only "special" code)
-
-Each agent is a PandoCode engine with a different system prompt. The prompt defines personality, scope, and behavior. ~40 lines each. **Source of truth: `core/council-prompts.ts`.**
-
-**IMPORTANT:** Prompts use explicit step-by-step tool call instructions (STEP 1, STEP 2, etc.) because Gemini Flash needs direct action commands, not narrative descriptions. Each prompt starts with "IMPORTANT: You MUST call tools. Do not just describe what you would do."
-
-**Observer prompt** (read-only, diagnostic):
-- Calls: pando_status → pando_peers → pando_list_findings(observer) → analyzes → pando_create_finding if issues found
-- Rules: no duplicates, no info findings for healthy state, read-only
-
-**QA prompt** (test runner, diagnostic):
-- Calls: pando_status → pando_peers → pando_list_projects → pando_list_findings(qa) → pando_create_finding for each failure
-- Rules: no duplicates, include specific error details, read-only
-
-**Council prompt** (CEO, finding resolver):
-- Calls: pando_list_findings(open) → pando_list_findings(in_progress) → for each: pando_status/pando_peers to verify → pando_update_finding (resolved/wont_fix/in_progress)
-- Rules: NEVER leave a finding in "open" after reviewing, every code change through governance
-- Critical: Council ONLY has pando_* tools — cannot spawn sub-agents or edit files directly
-
-#### 5.10.5 Engine Lifecycle & Scheduler Wiring
-
-**CRITICAL GOTCHAS (learned the hard way):**
-
-1. **PandoCode's `EngineOptions` does NOT accept `systemPrompt`.** Passing it to `pool.getOrCreate()` is silently ignored. You MUST use `engine.send(msg, { agentOverride: { agentId, role, systemPrompt } })` to inject system prompts per-send. For scheduler ticks (which use `pool.send()` directly), prepend the system prompt into the message string.
-
-2. **PandoCode engines come with 35+ built-in tools** (read_file, edit_file, bash, spawn_agent, manage_tasks, etc.). Council agents MUST have these stripped in `onAfterCreate` — otherwise the model uses `spawn_agent` and `manage_tasks` instead of `pando_*` tools. Strip with: `engine.tools.list().filter(n => !n.startsWith('pando_')).forEach(n => engine.tools.unregister(n))`.
-
-3. **Tool API base URL must be `127.0.0.1`**, not `localhost`. Node.js `fetch()` with `localhost` can fail silently on some platforms.
-
-4. **Event-driven wake uses debounce.** `FindingsStore.onCreated()` fires a 3s debounced callback that sends a message to the council engine via `sendToCouncilAgent()`. This ensures the council responds within seconds of a new finding, not just on 15-min ticks.
+#### 5.10.3 Communication (uses PandoCode's native systems)
 
 ```
-Node startup (--council flag or auto-detected PandoCode):
-  │
-  ├─ engine-adapter.ts onAfterCreate hook:
-  │   ├─ Strips ALL non-pando_* tools from council agents
-  │   ├─ Registers pando_* tools filtered by TOOL_SETS[agentId]
-  │   └─ Injects Lux budget provider
-  │
-  ├─ startCouncilAgents() creates 3 engines:
-  │   ├─ engineId: "observer" → 8 pando_* tools (read-only + findings)
-  │   ├─ engineId: "qa"       → 9 pando_* tools (+ pando_test_run)
-  │   └─ engineId: "council"  → 17 pando_* tools (all, incl. update_finding)
-  │
-  ├─ Scheduler registers ticks (system prompt prepended to message):
-  │   ├─ "observer-tick"  every 30 min
-  │   ├─ "qa-tick"        every 30 min (offset by half)
-  │   └─ "council-tick"   every 15 min
-  │
-  ├─ Event-driven wake:
-  │   └─ FindingsStore.onCreated() → 3s debounce → sendToCouncilAgent()
-  │
-  └─ sendToCouncilAgent() uses engine.send() with agentOverride (NOT pool.send)
-
-API endpoints:
-  POST /v1/council/trigger/:agent  — manually trigger observer/qa/council
-  GET  /v1/council/status          — council health, engines, schedules, findings summary
-```
-
-#### 5.10.6 What PandoCode Already Provides vs What We Build
-
-| Capability | PandoCode has it? | Notes |
-|---|---|---|
-| Engine instances with isolated state | YES | `new PandoCode(config)` — each agent is an instance |
-| Board (tasks, goals, priorities) | YES | `engine.board` — Council uses for long-term planning |
-| Memory (lessons, reflections) | YES | `engine.memory` — Council learns from outcomes |
-| Sub-agents (builder, tester, explorer, lead) | YES | `engine.spawnSubAgent()` — Council delegates work |
-| Tool registration | YES | `engine.registerTool(name, fn)` — Pando tools added |
-| System prompt customization | YES* | *NOT via EngineOptions — use `agentOverride` on `send()` |
-| Session persistence (disk) | YES | Board + memory auto-save between sessions |
-| Scheduler (periodic ticks) | YES | `Scheduler.register(name, interval, fn)` with onEvent callback |
-| **Findings table + API** | **DONE** | `findings-store.ts` (~130 lines) + 4 REST endpoints in `core-api.ts` |
-| **System prompts for 3 agents** | **DONE** | `council-prompts.ts` (~110 lines) + TOOL_SETS |
-| **Engine lifecycle in adapter** | **DONE** | `startCouncilAgents()` + `sendToCouncilAgent()` in `engine-adapter.ts` |
-| **Scheduler wiring + event wake** | **DONE** | 3 scheduler ticks + FindingsStore.onCreated debounced wake |
-| **Built-in tool stripping** | **DONE** | `onAfterCreate` strips non-pando_* tools from council agents |
-
-**Total new code: ~500 lines.** Replaces 9,414 lines of legacy orchestrator. Proven E2E live.
-
-#### 5.10.7 Communication Flow
-
-```
-Observer/QA → Findings table → Council → Sub-agents → Governance → Network
+Observer/QA → board tasks + send_message → Council → spawn sub-agents → Governance
 
 Detailed:
-  1. Observer runs checks, creates findings via pando_create_finding
-  2. QA runs tests, creates findings via pando_create_finding
-  3. FindingsStore.onCreated() fires → 3s debounce → sendToCouncilAgent() wakes council
-  4. Council reads findings via pando_list_findings (open + in_progress)
-  5. Council prioritizes (critical first, then warning)
-  6. Council verifies each finding (calls pando_status, pando_peers)
-  7. Council resolves via pando_update_finding (resolved/wont_fix/in_progress)
-  8. FUTURE: Council calls pando_governance_propose for code changes
-  9. FUTURE: Governance pipeline validates (6 layers) → peers vote → merge
+  1. Observer checks health → creates board task (pending) with issue description
+  2. Observer calls send_message to council: "New issue found, check board"
+  3. QA runs tests → creates board task if failures found → messages council
+  4. Council reads inbox via check_agents (action: "inbox")
+  5. Council reads board via manage_tasks → sees pending tasks
+  6. Council spawns builder sub-agent for code fixes
+  7. Council calls pando_governance_propose for code changes
+  8. Council marks board task done via manage_tasks
+  9. Council stores lesson in memory for future reference
 
-No message bus. No IPC. No shared state between agents.
-Each agent talks to the HTTP API via Pando tools.
-The findings table IS the communication channel.
+Communication channel: PandoCode's send_message (state table, DB-backed)
+Task tracking: PandoCode's board_tasks table
+NO custom FindingsStore. NO custom /v1/findings endpoints.
 ```
 
-#### 5.10.8 Failure Modes & Recovery
+#### 5.10.4 System Prompts
+
+Each agent gets a system prompt via `agentOverride` on `engine.send()`. The prompt tells the agent what to do. **Source of truth: `core/council-prompts.ts`.**
+
+Prompts use PandoCode's native tools (manage_tasks, send_message, check_agents, spawn_agent) plus pando_* network tools. No step-by-step tool-call instructions needed when using proper roles — PandoCode's role system handles tool access.
+
+#### 5.10.5 Engine Lifecycle
+
+```
+Node startup (contributor node with PandoCode):
+  │
+  ├─ engine-adapter.ts start():
+  │   ├─ Creates EnginePool (shared DB for cross-engine send_message)
+  │   ├─ Injects Lux budget provider
+  │   └─ Registers pando_* tool templates
+  │
+  ├─ startCouncilAgents():
+  │   ├─ Creates agent profiles via PandoCode API:
+  │   │   observer (role: explorer), qa (role: tester), council (role: lead)
+  │   ├─ Creates one engine per agent in pool
+  │   ├─ Registers pando_* tools on each engine (filtered by role)
+  │   │   observer: read-only pando tools (pando_status, pando_peers)
+  │   │   qa: read-only + pando_test_run
+  │   │   council: ALL pando_* tools
+  │   └─ Registers scheduler ticks (30 min observer, 30 min qa, 15 min council)
+  │
+  └─ Node is running. Council agents tick on schedule.
+
+GOTCHAS:
+  1. EngineOptions does NOT accept systemPrompt — use agentOverride on send()
+  2. Tool API base URL must be 127.0.0.1, not localhost
+  3. All council engines must share the same SQLite DB for send_message to work cross-engine
+```
+
+#### 5.10.6 Implementation Status
+
+**ARCHITECTURE CORRECTED — needs rewire. See docs/BRAINSTORM-ROADMAP.md for execution plan.**
+
+Previous implementation bypassed PandoCode's agent system (built custom FindingsStore, stripped built-in tools, custom sendToCouncilAgent). This is being corrected to use PandoCode's native infrastructure.
+
+| What | Status |
+|---|---|
+| Agent profiles via PandoCode API | TODO — currently bypassed |
+| Board tasks for issue tracking | TODO — currently uses custom FindingsStore |
+| send_message for inter-agent communication | TODO — currently uses custom event wake |
+| Council with lead role (CAN spawn sub-agents) | TODO — currently stripped of all built-in tools |
+| Scheduler ticks | DONE — working correctly |
+| pando_* tool registration | DONE — working correctly |
+| Lux budget injection | DONE — working correctly |
+| System prompts via agentOverride | DONE — working correctly |
+| E2E tests | TODO — need rewrite for new architecture |
+
+#### 5.10.7 Failure Modes & Recovery
 
 | Failure | Recovery |
 |---|---|
-| Council host node dies | Governance elects new host. New host clones council state from GitHub (board + memory persisted as project). Resumes. |
-| Observer creates too many findings | Council has rate awareness in prompt — batch similar findings, skip info-level if backlog is large |
-| Council proposes bad code | Governance Layer 5 (AI review) catches it. If it passes review, QA catches it next cycle. Council learns from the test failure. |
-| Council and Observer disagree | They can't — Observer only reports, Council decides. No conflict possible. |
-| QA tests flaky | QA prompt says: "If a test has been failing for 3+ cycles, escalate to critical." Council investigates flaky tests as a code issue. |
-| All three agents on same node, node overloaded | Stagger ticks (Observer at :00, QA at :15, Council at :30). Only one active at a time. Sub-agents are short-lived. |
-
-#### 5.10.9 Implementation Status
-
-All core steps complete and proven live:
-
-1. **Findings table + API** — DONE. `findings-store.ts` (in-memory Map), 4 REST endpoints, 3 Pando tools
-2. **System prompts** — DONE. `council-prompts.ts` with TOOL_SETS, step-by-step tool-calling instructions
-3. **Engine lifecycle** — DONE. `startCouncilAgents()` + `sendToCouncilAgent()` with agentOverride
-4. **Scheduler wiring** — DONE. 3 ticks with stagger + event-driven wake via FindingsStore.onCreated
-5. **Tool-set filtering** — DONE. Built-in tools stripped in onAfterCreate, only pando_* tools remain
-6. **E2E tests** — DONE. 7/7 pass (findings CRUD, council status, trigger validation)
-7. **Governance integration** — TODO. Council can call pando_governance_propose but not yet tested live
-8. **Memory persistence** — TODO. Board + memory persist via PandoCode but not verified across restarts
+| Council host node dies | Another contributor node's council takes over. Board + memory persist in PandoCode's SQLite. |
+| Observer creates too many tasks | Council has rate awareness — batches similar issues, prioritizes critical. |
+| Council proposes bad code | Governance Layer 5 (AI review) catches it. QA catches post-deploy regressions. |
+| Council and Observer disagree | Can't — Observer only reports, Council decides. No conflict possible. |
+| All agents on same node, overloaded | Stagger ticks (Observer at :00, QA at :15, Council at :30). |
 
 ### 5.11 Pando Login (Agent Identity)
 
@@ -1061,7 +1052,7 @@ No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoCode'
 
 ## 6. THE ENGINE ADAPTER (detailed spec)
 
-The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. ~700 lines (grew from ~280 after council agent lifecycle was added). It only exists on **PandoCode contributor nodes** and **full dev nodes**.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~700 lines (will shrink to ~400 after council rewire removes duplicated PandoCode functionality). It only exists on **PandoCode contributor nodes** and **full dev nodes**.
 
 **Key principle:** PandoCode uses its OWN configured provider and model. The engine-adapter does NOT override the model. Contributors choose their provider (default: Google/gemini-2.5-flash).
 
@@ -1118,9 +1109,6 @@ These tools call the node's own HTTP API. The engine doesn't import pando-node.
 | `pando_broadcast` | Send P2P GossipSub message | POST /v1/broadcast |
 | `pando_test_run` | Trigger test run | POST /v1/testing/run |
 | `pando_test_status` | Get test results | GET /v1/testing/status |
-| `pando_create_finding` | Create a finding (Observer/QA) | POST /v1/findings |
-| `pando_list_findings` | List/filter findings | GET /v1/findings |
-| `pando_update_finding` | Update finding status (Council) | PATCH /v1/findings/:id |
 
 ### Lux Budget Provider
 
@@ -1272,7 +1260,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 ### API changes
 - **Removed:** `/v1/bridge/*`, `/v1/agents/*`, `/v1/context/*`
-- **Added:** `/v1/engines`, `/v1/engines/schedules`, `/v1/findings/*`, `/v1/council/status`, `/v1/council/trigger/:agent`
+- **Added:** `/v1/engines`, `/v1/engines/schedules`, `/v1/council/trigger/:agent`
 - **Unchanged:** `/v1/chat/message` (same interface, different backend)
 
 ---
@@ -1351,9 +1339,8 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 ### Core (Layer 1)
 | File | Purpose |
 |---|---|
-| `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. Council agent lifecycle. ~700 lines. |
-| `core/findings-store.ts` | In-memory findings table. CRUD + onCreated callback for event-driven council wake. |
-| `core/council-prompts.ts` | System prompts + TOOL_SETS for observer/qa/council. Step-by-step instructions for Gemini Flash. |
+| `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. Council agent setup. |
+| `core/council-prompts.ts` | System prompts for observer/qa/council agents. |
 | `core/deploy-pipeline.ts` | Build → GitHub → EC2 deploy → metadata. Auto-triggers after sendToEngine(). |
 | `core/credential-store.ts` | AES-256-GCM encrypt/decrypt |
 | `core/storage-backend.ts` | MongoDB or P2P proxy |
@@ -1374,7 +1361,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 |---|---|
 | `api/api-server.ts` | Fastify server setup |
 | `api/kernel-api.ts` | Status, peers, capabilities, governance routes |
-| `api/core-api.ts` | Tasks, upgrade, credentials, findings, council routes |
+| `api/core-api.ts` | Tasks, upgrade, credentials, council trigger route |
 | `api/platform-api.ts` | Projects, auth, chat, engine routes. `findBestBuilder()` for unified PandoCode peer routing. |
 | `api/testing-api.ts` | Testing dashboard routes (11 endpoints) |
 
@@ -1440,7 +1427,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 2. **Each project gets its own engine instance.** The adapter manages `Map<projectId, PandoCode>`. Engines don't know about each other. They communicate only through Pando tools (which call the shared HTTP API).
 
-3. **The system engine manages the node itself.** It's just another pando-code engine with Pando tools. It gets periodic "check for work" messages and decides what to do. Observer, QA, and Council are SEPARATE engine instances (not sub-agents of system) — each with their own system prompt and filtered tool set, managed by engine-adapter.ts.
+3. **Council agents are standard PandoCode agents.** Observer (explorer role), QA (tester role), and Council (lead role) are separate engine instances in the EnginePool — each with their own session, memory, and board. They use PandoCode's native send_message for communication and board tasks for issue tracking. pando-node only adds pando_* tools and Lux budget. Do NOT build custom agent/communication systems — PandoCode already has them (see Section 3.2).
 
 4. **Governance is NOT an AI agent.** It's deterministic code in kernel/governance.ts. It only calls the AI (via adapter.reviewDiff) for Layer 5 smart analysis. The 6-layer pipeline is deterministic code, not an LLM.
 
