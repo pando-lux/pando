@@ -759,7 +759,7 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 
 **NOT YET BUILT.** PandoCode currently has no linking setting. Engine Adapter creates engines but doesn't manage a dedicated network workspace. This is the next architecture milestone.
 
-### 5.10 The Council — AI-Managed Ecosystem (NOT YET BUILT)
+### 5.10 The Council — AI-Managed Ecosystem (BUILT — LIVE)
 
 The Council system makes Pando a **100% AI-maintained ecosystem**. Three specialized PandoCode engine instances — Council, Observer, and QA — run on contributed nodes and continuously maintain, improve, and heal the entire network. No human intervention required for routine operations.
 
@@ -772,35 +772,33 @@ The Council system makes Pando a **100% AI-maintained ecosystem**. Three special
 │                    HOW THE THREE AGENTS WORK                        │
 │                                                                     │
 │  Observer Engine                                                    │
-│  ├─ Runs every 30 min (scheduler tick)                             │
-│  ├─ READ-ONLY tools (pando_status, pando_peers, pando_logs, grep)  │
-│  ├─ Inspects: network health, peer count, deploy status, errors    │
+│  ├─ Runs every 30 min (scheduler tick) + event-driven wake         │
+│  ├─ ONLY pando_* tools: pando_status, pando_peers, pando_balance,  │
+│  │   pando_capabilities, pando_list_projects, pando_test_status,   │
+│  │   pando_create_finding, pando_list_findings                     │
+│  ├─ Inspects: network health, peer count, deploy status            │
 │  ├─ Creates FINDINGS (severity: info/warning/critical)             │
 │  └─ Never modifies code. Never proposes. Only observes + reports.  │
 │                                                                     │
 │  QA Engine                                                          │
 │  ├─ Runs every 30 min (scheduler tick, offset 15 min from Observer)│
-│  ├─ Tools: read_file, bash (test runner), grep, pando_status       │
-│  ├─ Runs Playwright tests, integration tests, API health checks    │
+│  ├─ ONLY pando_* tools: same as Observer + pando_test_run          │
+│  ├─ Checks API health, peer connectivity, project system           │
 │  ├─ Creates FINDINGS from test failures                            │
-│  ├─ Can read code to diagnose failures, but doesn't fix            │
-│  └─ Reports: what broke, which test, probable root cause           │
+│  └─ Reports: what failed, expected vs actual, probable cause       │
 │                                                                     │
 │  Council Engine (the CEO)                                           │
-│  ├─ Runs every 15 min (scheduler tick)                             │
-│  ├─ FULL tools: read, write, bash, grep + ALL Pando tools         │
+│  ├─ Runs every 15 min (scheduler tick) + event-driven wake         │
+│  ├─ ALL pando_* tools (17 total, incl. pando_update_finding)       │
 │  ├─ Reads FINDINGS from Observer and QA                            │
-│  ├─ Prioritizes work based on severity + board state + memory      │
-│  ├─ Spawns SUB-AGENTS to implement fixes:                          │
-│  │   ├─ builder sub-agent → writes code, runs build                │
-│  │   ├─ tester sub-agent → verifies fix                            │
-│  │   └─ lead sub-agent → complex multi-file changes                │
-│  ├─ Submits changes through GOVERNANCE (pando_propose tool)        │
-│  └─ Learns from outcomes (Memory: what worked, what didn't)        │
+│  ├─ Investigates: calls pando_status, pando_peers to verify        │
+│  ├─ Resolves: calls pando_update_finding for every open finding    │
+│  ├─ Can propose changes through GOVERNANCE (pando_governance_*)    │
+│  └─ Event-driven: wakes 3s after any new finding is created        │
 │                                                                     │
-│  Communication: HTTP API (Pando tools → localhost)                  │
+│  Communication: HTTP API (pando_* tools → 127.0.0.1:apiPort)       │
 │  No message bus. No IPC. No shared memory.                          │
-│  Findings table = the communication channel.                        │
+│  FindingsStore (in-memory) = the communication channel.             │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -962,44 +960,42 @@ RULES:
 
 #### 5.10.5 Engine Lifecycle & Scheduler Wiring
 
+**CRITICAL GOTCHAS (learned the hard way):**
+
+1. **PandoCode's `EngineOptions` does NOT accept `systemPrompt`.** Passing it to `pool.getOrCreate()` is silently ignored. You MUST use `engine.send(msg, { agentOverride: { agentId, role, systemPrompt } })` to inject system prompts per-send. For scheduler ticks (which use `pool.send()` directly), prepend the system prompt into the message string.
+
+2. **PandoCode engines come with 35+ built-in tools** (read_file, edit_file, bash, spawn_agent, manage_tasks, etc.). Council agents MUST have these stripped in `onAfterCreate` — otherwise the model uses `spawn_agent` and `manage_tasks` instead of `pando_*` tools. Strip with: `engine.tools.list().filter(n => !n.startsWith('pando_')).forEach(n => engine.tools.unregister(n))`.
+
+3. **Tool API base URL must be `127.0.0.1`**, not `localhost`. Node.js `fetch()` with `localhost` can fail silently on some platforms.
+
+4. **Event-driven wake uses debounce.** `FindingsStore.onCreated()` fires a 3s debounced callback that sends a message to the council engine via `sendToCouncilAgent()`. This ensures the council responds within seconds of a new finding, not just on 15-min ticks.
+
 ```
-Node startup (PandoCode contributor with linked=ON):
+Node startup (--council flag or auto-detected PandoCode):
   │
-  ├─ engine-adapter.ts creates 3 special engines:
-  │   ├─ engineId: "council"   → Council system prompt + full tools
-  │   ├─ engineId: "observer"  → Observer system prompt + read-only tools
-  │   └─ engineId: "qa"        → QA system prompt + test tools
+  ├─ engine-adapter.ts onAfterCreate hook:
+  │   ├─ Strips ALL non-pando_* tools from council agents
+  │   ├─ Registers pando_* tools filtered by TOOL_SETS[agentId]
+  │   └─ Injects Lux budget provider
   │
-  ├─ Scheduler registers ticks:
-  │   ├─ "observer-tick"  every 30 min → adapter.send("observer", "Run your checks.")
-  │   ├─ "qa-tick"        every 30 min (offset 15 min) → adapter.send("qa", "Run tests.")
-  │   └─ "council-tick"   every 15 min → adapter.send("council", "Check findings and act.")
+  ├─ startCouncilAgents() creates 3 engines:
+  │   ├─ engineId: "observer" → 8 pando_* tools (read-only + findings)
+  │   ├─ engineId: "qa"       → 9 pando_* tools (+ pando_test_run)
+  │   └─ engineId: "council"  → 17 pando_* tools (all, incl. update_finding)
   │
-  └─ On shutdown: engines persist board + memory to disk (standard PandoCode behavior)
+  ├─ Scheduler registers ticks (system prompt prepended to message):
+  │   ├─ "observer-tick"  every 30 min
+  │   ├─ "qa-tick"        every 30 min (offset by half)
+  │   └─ "council-tick"   every 15 min
+  │
+  ├─ Event-driven wake:
+  │   └─ FindingsStore.onCreated() → 3s debounce → sendToCouncilAgent()
+  │
+  └─ sendToCouncilAgent() uses engine.send() with agentOverride (NOT pool.send)
 
-Code in engine-adapter.ts (~60 lines):
-  private startCouncilAgents() {
-    if (!this.pandoCodeLinked) return;
-
-    // Council, Observer, QA are just engines with special system prompts
-    const agents = [
-      { id: 'council',  prompt: COUNCIL_PROMPT,  tools: 'full' },
-      { id: 'observer', prompt: OBSERVER_PROMPT, tools: 'read_only' },
-      { id: 'qa',       prompt: QA_PROMPT,       tools: 'test' },
-    ];
-
-    for (const agent of agents) {
-      this.getOrCreateEngine(agent.id, { systemPrompt: agent.prompt, toolSet: agent.tools });
-    }
-
-    // Scheduler ticks
-    this.scheduler.register('observer-tick', 30 * 60_000, () =>
-      this.send('observer', 'Run your periodic checks.'));
-    this.scheduler.register('qa-tick', 30 * 60_000, () =>
-      this.send('qa', 'Run your test suite.'), 15 * 60_000); // 15 min offset
-    this.scheduler.register('council-tick', 15 * 60_000, () =>
-      this.send('council', 'Check findings. Prioritize and act on open items.'));
-  }
+API endpoints:
+  POST /v1/council/trigger/:agent  — manually trigger observer/qa/council
+  GET  /v1/council/status          — council health, engines, schedules, findings summary
 ```
 
 #### 5.10.6 What PandoCode Already Provides vs What We Build
@@ -1011,15 +1007,16 @@ Code in engine-adapter.ts (~60 lines):
 | Memory (lessons, reflections) | YES | `engine.memory` — Council learns from outcomes |
 | Sub-agents (builder, tester, explorer, lead) | YES | `engine.spawnSubAgent()` — Council delegates work |
 | Tool registration | YES | `engine.registerTool(name, fn)` — Pando tools added |
-| System prompt customization | YES | `config.systemPrompt` — different per agent role |
+| System prompt customization | YES* | *NOT via EngineOptions — use `agentOverride` on `send()` |
 | Session persistence (disk) | YES | Board + memory auto-save between sessions |
-| Scheduler (periodic ticks) | YES | `Scheduler.register(name, interval, fn)` |
-| **Findings table + API** | **NO — BUILD THIS** | ~150 lines (table + API + Pando tools) |
-| **System prompts for 3 agents** | **NO — WRITE THESE** | ~130 lines (3 prompts × ~40 lines) |
-| **Engine lifecycle in adapter** | **NO — ADD THIS** | ~60 lines in engine-adapter.ts |
-| **Scheduler wiring** | **NO — ADD THIS** | ~20 lines in engine-adapter.ts |
+| Scheduler (periodic ticks) | YES | `Scheduler.register(name, interval, fn)` with onEvent callback |
+| **Findings table + API** | **DONE** | `findings-store.ts` (~130 lines) + 4 REST endpoints in `core-api.ts` |
+| **System prompts for 3 agents** | **DONE** | `council-prompts.ts` (~110 lines) + TOOL_SETS |
+| **Engine lifecycle in adapter** | **DONE** | `startCouncilAgents()` + `sendToCouncilAgent()` in `engine-adapter.ts` |
+| **Scheduler wiring + event wake** | **DONE** | 3 scheduler ticks + FindingsStore.onCreated debounced wake |
+| **Built-in tool stripping** | **DONE** | `onAfterCreate` strips non-pando_* tools from council agents |
 
-**Total new code: ~400 lines.** Replaces 9,414 lines of legacy orchestrator.
+**Total new code: ~500 lines.** Replaces 9,414 lines of legacy orchestrator. Proven E2E live.
 
 #### 5.10.7 Communication Flow
 
@@ -1056,18 +1053,18 @@ The findings table IS the communication channel.
 | QA tests flaky | QA prompt says: "If a test has been failing for 3+ cycles, escalate to critical." Council investigates flaky tests as a code issue. |
 | All three agents on same node, node overloaded | Stagger ticks (Observer at :00, QA at :15, Council at :30). Only one active at a time. Sub-agents are short-lived. |
 
-#### 5.10.9 Implementation Plan
+#### 5.10.9 Implementation Status
 
-Build order (each step is independently testable):
+All core steps complete and proven live:
 
-1. **Findings table + API** (~150 lines) — SQLite table or in-memory Map, 4 REST endpoints, 3 Pando tools
-2. **System prompts** (~130 lines) — 3 prompt strings, stored in `packages/node/src/core/council-prompts.ts`
-3. **Engine lifecycle** (~60 lines) — `startCouncilAgents()` in engine-adapter.ts, creates 3 engines
-4. **Scheduler wiring** (~20 lines) — register 3 ticks with offsets
-5. **Tool-set filtering** (~40 lines) — Observer gets read-only subset, QA gets test subset
-6. **E2E test** — start node, wait for Observer tick, verify finding created, verify Council reads it
-7. **Governance integration test** — Council proposes a change, verify governance pipeline runs
-8. **Memory persistence test** — kill council, restart, verify board + memory restored
+1. **Findings table + API** — DONE. `findings-store.ts` (in-memory Map), 4 REST endpoints, 3 Pando tools
+2. **System prompts** — DONE. `council-prompts.ts` with TOOL_SETS, step-by-step tool-calling instructions
+3. **Engine lifecycle** — DONE. `startCouncilAgents()` + `sendToCouncilAgent()` with agentOverride
+4. **Scheduler wiring** — DONE. 3 ticks with stagger + event-driven wake via FindingsStore.onCreated
+5. **Tool-set filtering** — DONE. Built-in tools stripped in onAfterCreate, only pando_* tools remain
+6. **E2E tests** — DONE. 7/7 pass (findings CRUD, council status, trigger validation)
+7. **Governance integration** — TODO. Council can call pando_governance_propose but not yet tested live
+8. **Memory persistence** — TODO. Board + memory persist via PandoCode but not verified across restarts
 
 ### 5.11 Pando Login (Agent Identity)
 
