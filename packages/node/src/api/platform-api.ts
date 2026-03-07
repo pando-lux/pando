@@ -28,13 +28,12 @@ export async function registerPlatformRoutes(
   async function sendToEngine(
     message: string,
     projectId?: string,
-    opts?: { model?: string },
   ): Promise<{ sent: boolean; response?: string }> {
     const adapter = node.getEngineAdapter();
     if (!adapter?.available) return { sent: false };
     try {
       const chunks: string[] = [];
-      for await (const event of adapter.send(message, projectId, opts)) {
+      for await (const event of adapter.send(message, projectId)) {
         if (event.type === 'stream:chunk' && event.content) {
           chunks.push(event.content);
         }
@@ -124,7 +123,7 @@ export async function registerPlatformRoutes(
     fastify.post('/chat/message', async (request: any, reply: any) => {
       const peerId = await deps.verifyUserJwt(request);
       if (!peerId) { reply.status(401).send({ error: 'Unauthorized' }); return; }
-      const { message, projectId, model } = request.body || {};
+      const { message, projectId } = request.body || {};
       if (!message || typeof message !== 'string') {
         return reply.code(400).send({ error: 'message is required' });
       }

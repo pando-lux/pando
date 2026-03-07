@@ -24,11 +24,6 @@
  *   pando_broadcast        — broadcast a message to the network
  *   pando_test_run         — run E2E tests
  *   pando_test_status      — get testing status
- *   pando_save_memory      — save a lesson to memory
- *   pando_board_update     — update a board task
- *   pando_board_create     — create a board task
- *   pando_send_message     — send a message to an agent
- *   pando_check_inbox      — check agent inbox
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -190,67 +185,6 @@ server.setRequestHandler(ListToolsRequestSchema, async () => ({
       description: 'Get current testing status and results',
       inputSchema: { type: 'object' as const, properties: {} },
     },
-    {
-      name: 'pando_save_memory',
-      description: 'Save a lesson or insight to persistent memory',
-      inputSchema: {
-        type: 'object' as const,
-        properties: {
-          lesson: { type: 'string', description: 'The lesson or insight to save' },
-          category: { type: 'string', description: 'Category for the memory (optional)' },
-          projectId: { type: 'string', description: 'Associated project ID (optional)' },
-        },
-        required: ['lesson'],
-      },
-    },
-    {
-      name: 'pando_board_update',
-      description: 'Update a board task status or progress',
-      inputSchema: {
-        type: 'object' as const,
-        properties: {
-          taskId: { type: 'string', description: 'Task ID to update' },
-          status: { type: 'string', description: 'New status (e.g. "in-progress", "done")' },
-          progress: { type: 'string', description: 'Progress description' },
-        },
-        required: ['taskId'],
-      },
-    },
-    {
-      name: 'pando_board_create',
-      description: 'Create a new board task',
-      inputSchema: {
-        type: 'object' as const,
-        properties: {
-          title: { type: 'string', description: 'Task title' },
-          description: { type: 'string', description: 'Task description (optional)' },
-          projectId: { type: 'string', description: 'Associated project ID (optional)' },
-        },
-        required: ['title'],
-      },
-    },
-    {
-      name: 'pando_send_message',
-      description: 'Send a message to another agent on the Pando network',
-      inputSchema: {
-        type: 'object' as const,
-        properties: {
-          toAgentId: { type: 'string', description: 'Agent ID to send the message to' },
-          message: { type: 'string', description: 'Message content' },
-        },
-        required: ['toAgentId', 'message'],
-      },
-    },
-    {
-      name: 'pando_check_inbox',
-      description: 'Check the agent message inbox',
-      inputSchema: {
-        type: 'object' as const,
-        properties: {
-          agentId: { type: 'string', description: 'Agent ID to check inbox for (optional, defaults to self)' },
-        },
-      },
-    },
   ],
 }));
 
@@ -275,11 +209,6 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
       case 'pando_broadcast': return await handleBroadcast(args as any);
       case 'pando_test_run': return await handleTestRun(args as any);
       case 'pando_test_status': return await handleTestStatus();
-      case 'pando_save_memory': return await handleSaveMemory(args as any);
-      case 'pando_board_update': return await handleBoardUpdate(args as any);
-      case 'pando_board_create': return await handleBoardCreate(args as any);
-      case 'pando_send_message': return await handleSendMessage(args as any);
-      case 'pando_check_inbox': return await handleCheckInbox(args as any);
       default:
         return { content: [{ type: 'text' as const, text: `Unknown tool: ${name}` }] };
     }
@@ -569,118 +498,6 @@ async function handleTestStatus() {
   ].join('\n');
 
   return { content: [{ type: 'text' as const, text }] };
-}
-
-async function handleSaveMemory(args: { lesson: string; category?: string; projectId?: string }) {
-  const res = await fetch(`${PANDO_NODE_URL}/v1/memory/save`, {
-    method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify(args),
-    signal: AbortSignal.timeout(10000),
-  });
-
-  if (!res.ok) {
-    const error = await res.json() as any;
-    throw new Error(error.error || 'Memory save failed');
-  }
-
-  const data = await res.json() as any;
-  return {
-    content: [{
-      type: 'text' as const,
-      text: `Memory saved!\n  Category: ${args.category || 'general'}\n  Project: ${args.projectId || 'none'}\n  ID: ${data.id || data.memoryId || 'unknown'}`,
-    }],
-  };
-}
-
-async function handleBoardUpdate(args: { taskId: string; status?: string; progress?: string }) {
-  const body: Record<string, string> = {};
-  if (args.status) body.status = args.status;
-  if (args.progress) body.progress = args.progress;
-
-  const res = await fetch(`${PANDO_NODE_URL}/v1/board/tasks/${args.taskId}`, {
-    method: 'PATCH',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(10000),
-  });
-
-  if (!res.ok) {
-    const error = await res.json() as any;
-    throw new Error(error.error || 'Board task update failed');
-  }
-
-  const data = await res.json() as any;
-  return {
-    content: [{
-      type: 'text' as const,
-      text: `Board task updated!\n  Task ID: ${args.taskId}\n  Status: ${args.status || 'unchanged'}\n  Progress: ${args.progress || 'unchanged'}`,
-    }],
-  };
-}
-
-async function handleBoardCreate(args: { title: string; description?: string; projectId?: string }) {
-  const res = await fetch(`${PANDO_NODE_URL}/v1/board/tasks`, {
-    method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify(args),
-    signal: AbortSignal.timeout(10000),
-  });
-
-  if (!res.ok) {
-    const error = await res.json() as any;
-    throw new Error(error.error || 'Board task creation failed');
-  }
-
-  const data = await res.json() as any;
-  return {
-    content: [{
-      type: 'text' as const,
-      text: `Board task created!\n  Title: ${args.title}\n  Task ID: ${data.id || data.taskId || 'unknown'}\n  Project: ${args.projectId || 'none'}`,
-    }],
-  };
-}
-
-async function handleSendMessage(args: { toAgentId: string; message: string }) {
-  const res = await fetch(`${PANDO_NODE_URL}/v1/agents/message`, {
-    method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify(args),
-    signal: AbortSignal.timeout(10000),
-  });
-
-  if (!res.ok) {
-    const error = await res.json() as any;
-    throw new Error(error.error || 'Message send failed');
-  }
-
-  const data = await res.json() as any;
-  return {
-    content: [{
-      type: 'text' as const,
-      text: `Message sent!\n  To: ${args.toAgentId}\n  Message ID: ${data.id || data.messageId || 'unknown'}`,
-    }],
-  };
-}
-
-async function handleCheckInbox(args: { agentId?: string }) {
-  const url = args.agentId
-    ? `${PANDO_NODE_URL}/v1/agents/inbox?agentId=${encodeURIComponent(args.agentId)}`
-    : `${PANDO_NODE_URL}/v1/agents/inbox`;
-
-  const res = await fetch(url, { headers: authHeaders(), signal: AbortSignal.timeout(5000) });
-  const data = await res.json() as any;
-
-  const messages = data.messages || data || [];
-  if (!Array.isArray(messages) || messages.length === 0) {
-    return { content: [{ type: 'text' as const, text: 'No messages in inbox.' }] };
-  }
-
-  const lines = messages.map((m: any) =>
-    `  [${m.from || 'unknown'}] ${m.message || m.content || m.text || JSON.stringify(m)}`
-  );
-
-  return { content: [{ type: 'text' as const, text: `Inbox (${messages.length} messages):\n${lines.join('\n')}` }] };
 }
 
 // --- Start server ---

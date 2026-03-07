@@ -6,10 +6,9 @@
  *
  * Responsibilities:
  *   - Manages EnginePool (Map<id, PandoCode>) with lifecycle hooks
- *   - Manages ClaudeCodeSessions (Map<id, ClaudeCodeSession>) when claude-code model selected
  *   - Registers Pando tools on each engine (deploy, governance, transfer, etc.)
  *   - Injects Lux budget provider
- *   - Routes messages to the right engine/session (system vs project, API vs Claude Code)
+ *   - Routes messages to the right engine (system vs project)
  *   - Provides governance AI review hook
  *   - Runs Scheduler for periodic autonomous behavior
  *   - Council agents: observer (explorer), qa (tester), council (lead)
@@ -22,8 +21,6 @@ import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import type { ResourceRegistry } from '../platform/resource-registry.js';
 import { OBSERVER_PROMPT, QA_PROMPT, COUNCIL_PROMPT } from './council-prompts.js';
-import { ClaudeCodeSession } from './claude-code-session.js';
-import type { ClaudeCodeEvent } from './claude-code-session.js';
 
 // ─── Dynamic imports (pando-code is ESM, loaded at runtime) ─────────────
 
@@ -307,8 +304,6 @@ export interface AdapterConfig {
   enableScheduler?: boolean;
   /** Enable council agents (observer, qa, council). Default: false. */
   enableCouncil?: boolean;
-  /** Use Claude Code CLI as the coding engine. Default: auto-detect. */
-  useClaudeCode?: boolean;
 }
 
 export interface ReviewResult {
@@ -327,9 +322,6 @@ export class EngineAdapter {
   private councilDbPath: string | null = null;
   private Database: any = null;  // better-sqlite3 constructor (cached at startup)
   private projectTicks = new Set<string>();  // Track which projects have scheduler ticks
-  private claudeCodeSessions = new Map<string, ClaudeCodeSession>();  // Claude Code subprocess sessions
-  private _useClaudeCode = false;  // Whether to use Claude Code CLI as the engine
-  private _claudeCodeAvailable = false;  // Whether Claude Code CLI is installed + authenticated
 
   /** Whether the adapter is ready (pando-code loaded + pool started). */
   get available(): boolean { return this.started; }
@@ -337,31 +329,13 @@ export class EngineAdapter {
   /** Network linking: always linked when adapter is started (node IS the network). */
   get linked(): boolean { return this.started; }
 
-  /** Whether Claude Code CLI is being used as the engine. */
-  get useClaudeCode(): boolean { return this._useClaudeCode; }
-
-  /** Whether Claude Code CLI is available on this machine. */
-  get claudeCodeAvailable(): boolean { return this._claudeCodeAvailable; }
-
   /**
    * Start the adapter: load pando-code, create pool, boot system engine.
    */
   async start(config: AdapterConfig): Promise<void> {
     this.config = config;
 
-    // Detect Claude Code CLI availability
-    this._claudeCodeAvailable = this.detectClaudeCodeCli();
-    if (this._claudeCodeAvailable) {
-      console.log('[EngineAdapter] Claude Code CLI detected and authenticated.');
-    }
-
-    // Decide whether to use Claude Code: explicit config, or auto-detect
-    this._useClaudeCode = config.useClaudeCode ?? this._claudeCodeAvailable;
-    if (this._useClaudeCode) {
-      console.log('[EngineAdapter] Claude Code mode ENABLED — using CLI as coding engine.');
-    }
-
-    // Load pando-code dynamically (still needed for EnginePool, council, etc.)
+    // Load pando-code dynamically
     await loadPandoCode();
 
     // Cache better-sqlite3 for board operations (ESM-safe)
@@ -433,7 +407,7 @@ export class EngineAdapter {
    * No projectId → system engine.
    * Project engines get a dedicated workspace directory under dataDir/projects/.
    */
-  async *send(message: string, projectId?: string, opts?: { model?: string }): AsyncGenerator<any> {
+  async *send(message: string, projectId?: string): AsyncGenerator<any> {
     if (!this.pool) throw new Error('EngineAdapter not started');
     const id = projectId || 'system';
 
@@ -442,14 +416,6 @@ export class EngineAdapter {
       await this.ensureProjectWorkspace(id);
     }
 
-    // Route: Claude Code mode (if selected as model or default)
-    const useCC = (opts?.model === 'claude-code') || (this._useClaudeCode && opts?.model !== 'api');
-    if (useCC && this._claudeCodeAvailable) {
-      yield* this.sendToClaudeCode(id, message);
-      return;
-    }
-
-    // Route: API mode (PandoCode engine pool — Gemini/OpenAI/Anthropic)
     if (id !== 'system' && !this.pool.has(id)) {
       const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
       const projectDir = pathJoin(baseDir, 'projects', id);
@@ -478,94 +444,6 @@ export class EngineAdapter {
       }, null, 2));
     }
     return projectDir;
-  }
-
-  /**
-   * Send a message via Claude Code CLI subprocess.
-   * Gets or creates a ClaudeCodeSession for the project.
-   * Yields events compatible with the standard EngineEvent format.
-   * After response completes, sends a reflection reminder.
-   */
-  private async *sendToClaudeCode(id: string, message: string): AsyncGenerator<any> {
-    const session = await this.getOrCreateClaudeCodeSession(id);
-
-    // Yield all events from the main response
-    for await (const event of session.send(message)) {
-      yield this.convertClaudeCodeEvent(event);
-    }
-
-    // After response completes, send reflection reminder
-    for await (const event of session.sendReflection()) {
-      yield this.convertClaudeCodeEvent(event);
-    }
-
-    // Calculate Lux cost from token counts
-    const tokens = session.tokens;
-    if (tokens.input > 0 || tokens.output > 0) {
-      const luxCost = this.luxProvider?.calculateCost({
-        model: 'claude-sonnet-4-6',  // estimate — Claude Code uses its configured model
-        inputTokens: tokens.input,
-        outputTokens: tokens.output,
-      }) || 0;
-      yield { type: 'budget:update', cost: luxCost, currency: 'lux' };
-    }
-  }
-
-  /**
-   * Get or create a ClaudeCodeSession for a project.
-   */
-  private async getOrCreateClaudeCodeSession(id: string): Promise<ClaudeCodeSession> {
-    let session = this.claudeCodeSessions.get(id);
-    if (session?.alive) return session;
-
-    const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
-    const projectDir = pathJoin(baseDir, 'projects', id);
-    const { mkdirSync } = await import('node:fs');
-    mkdirSync(projectDir, { recursive: true });
-
-    // Build system prompt with agent identity
-    const systemPrompt = `You are a Pando network builder agent.
-Agent ID: ${id}
-Node ID: ${this.config?.nodeId || 'unknown'}
-Your workspace: ${projectDir}
-
-You have access to pando_* MCP tools for network operations (deploy, governance, status, etc.).
-After completing tasks, call pando_save_memory for any lessons learned.
-Update board task status using pando_board_update when you complete work.`;
-
-    // Build context from board + memory (append to system prompt)
-    const dbForBoard = id === 'system' ? this.councilDbPath : pathJoin(projectDir, '.pando-code.db');
-    const boardSnapshot = dbForBoard ? this.getBoardSnapshot(dbForBoard) : 'BOARD STATE: No database available.';
-
-    session = new ClaudeCodeSession({
-      sessionId: `pando-${id}`,
-      workingDirectory: projectDir,
-      systemPrompt,
-      appendSystemPrompt: boardSnapshot,
-      apiPort: this.config?.apiPort,
-      apiToken: this.config?.apiToken,
-      idleTimeoutMs: 30 * 60 * 1000,
-    });
-
-    await session.start();
-    this.claudeCodeSessions.set(id, session);
-
-    // Clean up on exit
-    session.on('exit', () => {
-      this.claudeCodeSessions.delete(id);
-    });
-
-    console.log(`[EngineAdapter] Claude Code session started for "${id}"`);
-    return session;
-  }
-
-  /**
-   * Convert a ClaudeCodeEvent to the standard EngineEvent format
-   * used by the rest of pando-node (SSE, platform-api, etc.).
-   */
-  private convertClaudeCodeEvent(event: ClaudeCodeEvent): any {
-    // ClaudeCodeEvent types already match EngineEvent types
-    return event;
   }
 
   /**
@@ -743,76 +621,6 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   }
 
   /**
-   * Update a board task's status/progress. Used by MCP tools (Claude Code mode).
-   */
-  updateBoardTask(taskId: string, updates: { status?: string; progress?: string }, projectId?: string | null): boolean {
-    const dbPath = projectId ? this.resolveProjectDbPath(projectId) : this.councilDbPath;
-    if (!dbPath || !this.Database) return false;
-    try {
-      const db = new this.Database(dbPath);
-      const sets: string[] = [];
-      const vals: any[] = [];
-      if (updates.status) { sets.push('status = ?'); vals.push(updates.status); }
-      if (updates.progress) { sets.push('progress = ?'); vals.push(updates.progress); }
-      if (sets.length === 0) { db.close(); return false; }
-      vals.push(taskId);
-      db.prepare(`UPDATE board_tasks SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
-      db.close();
-      return true;
-    } catch {
-      return false;
-    }
-  }
-
-  /**
-   * Send a message to another agent via the council DB state table.
-   * Used by MCP tools (Claude Code mode) — mirrors PandoCode's send_message.
-   */
-  sendAgentMessage(toAgentId: string, message: string, fromAgentId: string = 'system'): boolean {
-    if (!this.councilDbPath || !this.Database) return false;
-    try {
-      const db = new this.Database(this.councilDbPath);
-      const { randomUUID } = require('node:crypto');
-      const key = `msg:${toAgentId}:${randomUUID()}`;
-      const value = JSON.stringify({ from: fromAgentId, message, timestamp: Date.now() });
-      const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString(); // 1 hour TTL
-      db.prepare(
-        `INSERT INTO state (key, value, engine_id, updated_at, expires_at) VALUES (?, ?, ?, datetime('now'), ?)`
-      ).run(key, value, 'council', expiresAt);
-      db.close();
-      return true;
-    } catch (err: any) {
-      console.warn(`[EngineAdapter] sendAgentMessage failed: ${err.message}`);
-      return false;
-    }
-  }
-
-  /**
-   * Read inbox messages for an agent from the council DB state table.
-   * Used by MCP tools (Claude Code mode) — mirrors PandoCode's check_agents.
-   */
-  readAgentInbox(agentId: string): any[] {
-    if (!this.councilDbPath || !this.Database) return [];
-    try {
-      const db = new this.Database(this.councilDbPath);
-      const rows = db.prepare(
-        `SELECT key, value FROM state WHERE key LIKE ? ORDER BY updated_at ASC`
-      ).all(`msg:${agentId}:%`) as { key: string; value: string }[];
-      // Delete after reading (same as PandoCode's check_agents)
-      if (rows.length > 0) {
-        const deleteStmt = db.prepare(`DELETE FROM state WHERE key = ?`);
-        for (const row of rows) deleteStmt.run(row.key);
-      }
-      db.close();
-      return rows.map(r => {
-        try { return JSON.parse(r.value); } catch { return { message: r.value }; }
-      });
-    } catch {
-      return [];
-    }
-  }
-
-  /**
    * Register a periodic scheduler tick for a project engine.
    * Only registers once per projectId. Tick reads the project board and prompts the engine
    * to process pending tasks (same pattern as the council tick).
@@ -892,13 +700,6 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     for (const interval of ((this as any)._projectIntervals || [])) clearInterval(interval);
     this.scheduler?.stop();
     await this.pool?.shutdown();
-
-    // Close all Claude Code sessions
-    for (const [id, session] of this.claudeCodeSessions) {
-      console.log(`[EngineAdapter] Closing Claude Code session "${id}"...`);
-      await session.close();
-    }
-    this.claudeCodeSessions.clear();
 
     this.started = false;
     console.log('[EngineAdapter] Shut down.');
@@ -1172,33 +973,9 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
     // 4. Warn if no keys available at all
     const finalAvailable = Object.entries(PROVIDER_ENV_MAP).filter(([_, v]) => process.env[v]);
-    if (finalAvailable.length === 0 && !this._useClaudeCode) {
+    if (finalAvailable.length === 0) {
       console.warn('[EngineAdapter] No AI API keys found. PandoCode will use its own configured provider. Set GOOGLE_GENERATIVE_AI_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY if needed.');
     }
   }
 
-  /**
-   * Detect if Claude Code CLI is installed and authenticated.
-   * Checks: binary exists + OAuth credentials or ANTHROPIC_API_KEY.
-   */
-  private detectClaudeCodeCli(): boolean {
-    try {
-      const { execSync } = require('node:child_process');
-      const { platform } = require('node:os');
-      const cmd = platform() === 'win32' ? 'where claude' : 'which claude';
-      execSync(cmd, { encoding: 'utf-8', stdio: 'pipe', windowsHide: true });
-
-      // Check auth: ANTHROPIC_API_KEY or OAuth credentials from `claude login`
-      if (process.env.ANTHROPIC_API_KEY) return true;
-      const credPath = pathJoin(homedir(), '.claude', '.credentials.json');
-      if (existsSync(credPath)) {
-        const { readFileSync } = require('node:fs');
-        const content = readFileSync(credPath, 'utf-8').trim();
-        if (content.length > 2) return true; // more than just "{}"
-      }
-      return false;
-    } catch {
-      return false;
-    }
-  }
 }

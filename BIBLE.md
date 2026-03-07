@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-07 (index.ts monolith extraction: 3,772→1,670 lines. Init files: init-kernel.ts, init-core.ts, init-platform.ts. Contributor earning built. 12/12 E2E pass). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-07 (Claude Code agent runtime IMPLEMENTED + VERIFIED — see Section 3.2.9). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -106,9 +106,9 @@ Pure cryptographic primitives. No storage, no SQLite, no MongoDB, no network.
 ### 3.2 @pando-code/core
 
 **Location:** Separate repo at `pando/code/`
-**Lines:** 60K+ TypeScript | **Status:** DONE as standalone. Network integration infra built (EnginePool, Scheduler, PandoServer). Claude Code CLI integration pending.
+**Lines:** 60K+ TypeScript | **Status:** DONE as standalone. Network integration infra built (EnginePool, Scheduler, PandoServer). Claude Code CLI provider DONE (in pando-code repo).
 
-The AI coding engine. Multi-provider (Anthropic, OpenAI, Google, Ollama). Multi-agent orchestration. Persistent memory. AST-based code intelligence.
+The AI coding engine. Multi-provider (Anthropic, OpenAI, Google, Ollama, Claude Code CLI). Multi-agent orchestration. Persistent memory. AST-based code intelligence.
 
 **CRITICAL: PandoCode is a COMPLETE agent platform. Before building ANY agent/team/communication/task system in pando-node, check if PandoCode already provides it. It almost certainly does. See the capability reference below.**
 
@@ -204,7 +204,58 @@ PandoCode has a **full persistent agent system**. Do NOT build a parallel one in
 - Zero @pando/* imports. Structural typing for integration.
 - Dual budget: `UsdBudgetProvider` (standalone) vs `LuxBudgetProvider` (injected by node).
 - Custom tools registered at runtime via `engine.tools.register()`.
-- **pando-node's ONLY job:** register pando_* tools + inject Lux budget + set system prompts via agentOverride. Everything else (agents, board, memory, communication) is PandoCode's responsibility.
+- **pando-node's ONLY job:** register pando_* tools + inject Lux budget + set system prompts via agentOverride. Everything else (agents, board, memory, communication, model selection) is PandoCode's responsibility.
+
+#### 3.2.9 Claude Code CLI as Agent Runtime (IMPLEMENTED + VERIFIED)
+
+Claude Code is NOT a dumb model API. It is a **persistent agent runtime** with its own session management, tool system, and memory. It lives in `@pando-code/core`, NOT in pando-node.
+
+> **Full roadmap:** `pando/code/docs/CLAUDE-CODE-AGENT-ROADMAP.md`
+
+**Key files in pando-code repo:**
+- `packages/core/src/provider/claude-code.ts` — `createClaudeCodeModel()` returns LanguageModelV3-compatible object. Persistent sessions via `--session-id`/`--resume`. Windows-safe (no shell, stdin pipe, full path resolve). System text length guard (32K limit).
+- `packages/core/src/provider/provider.ts` — `ProviderName` includes `"claude-code"`. `createModel()` routes `modelId === "claude-code"` to the CLI provider with server port.
+- `packages/core/src/engine/engine.ts` — Input wrapping ([BOARD]+[GOALS]+[SITUATION]+[MESSAGE]), reflection follow-up with `_inReflectionFollowUp` recursion guard, `_claudeCodeLock` for sequential turn execution.
+- `packages/server/src/routes/api.ts` — Memory HTTP API: `GET /v1/memories/search`, `GET /v1/memories`, `POST /v1/memories`, `GET /v1/memories/health`. Model includes `{ id: "claude-code", label: "Claude Code (CLI)", tier: "local" }`.
+
+**Architecture (implemented):**
+
+1. **Session persistence** — `--session-id <uuid>` on first turn, `--resume <uuid>` on subsequent turns. Session ID tracked in closure per model instance. Claude Code's `-p` mode (spawn/die per turn) with session data persisting in `~/.claude/`. Full persistent process management is Phase 6 (not yet built).
+
+2. **Two-layer context model:**
+   - **Pre-injected (every input message):** Board state, goal stack, situation — wrapped around user message as `[BOARD]\n[GOALS]\n[SITUATION]\n[MESSAGE]`. System messages (L0-L5b frames) concatenated into `--append-system-prompt`.
+   - **Agent-pulled (Claude Code decides when):** Memory search via HTTP API (`GET /v1/memories/search?q=<topic>`). Claude Code calls this via curl when it needs context.
+
+3. **Reflection pipeline (verified working):**
+   - After Claude Code responds, engine sends a fire-and-forget follow-up to the same session asking for reflection.
+   - `_inReflectionFollowUp` boolean guard prevents infinite recursion (reflection response would otherwise trigger another reflection).
+   - Reflection messages skip conversation DB persistence and turn count increment (no history pollution).
+   - Claude Code evaluates: "No lessons." for trivial tasks, saves genuine insights via `curl -s -X POST http://127.0.0.1:<port>/v1/memories`.
+   - **Proven:** Claude Code autonomously saved a lesson about Windows 32K command-line limit during testing.
+
+4. **No MCP dependency:** All agent operations use PandoCode's HTTP API. MCP is optional enhancement.
+
+5. **`--append-system-prompt`** (not `--system-prompt`) — keeps Claude Code's own tool instructions, adds PandoCode identity + memory API instructions on top. Length-guarded: truncated with warning if system text exceeds 28K chars (Windows CreateProcessW 32K limit).
+
+6. **Sequential turn execution** — `_claudeCodeLock` promise chain ensures concurrent `send()` calls (e.g., user message while reflection is in-flight) execute sequentially. Prevents race conditions with `--resume` on the same Claude Code session.
+
+**What's different from API-path models (Gemini, OpenAI):**
+
+| Aspect | API Models | Claude Code |
+|---|---|---|
+| Frame layers | System messages via FrameBuilder | Board/Goals/Situation in input message wrapper |
+| Memory | Injected into L3 system message | Agent-pulled via HTTP API |
+| Reflection | Engine's reflection pipeline (callReflectionModel) | Post-response follow-up → Claude Code calls POST /v1/memories |
+| Tools | PandoCode's tool system | Claude Code's own tools (Read, Edit, Bash) |
+| Session | PandoCode manages conversation history | Claude Code manages via --session-id |
+| Process | N/A (API call) | Spawn-per-turn with session resume (persistent process is Phase 6) |
+| Concurrency | Parallel OK | Sequential via lock (single Claude Code session) |
+
+**CRITICAL RULES:**
+- Never put model/provider logic in pando-node. Model selection is a brain (PandoCode) decision.
+- Claude Code cannot be launched inside another Claude Code session. Provider deletes `CLAUDECODE` env var.
+- API-path models are UNCHANGED by this architecture. Only Claude Code gets the new treatment.
+- Reflection messages MUST skip conversation DB persistence to avoid history pollution.
 
 ### 3.3 @pando/tests (PHASE 4 COMPLETE)
 
@@ -424,7 +475,7 @@ PandoCode peer processes the build:
   v
 PandoCode uses contributor's configured provider:
   a) API-based agents (default: Google/Gemini, or OpenAI, Anthropic, Ollama)
-  b) Claude Code CLI as subprocess (FUTURE — not built yet, see Section 7)
+  b) Claude Code CLI as persistent agent runtime (DONE — see Section 3.2.9)
   |
   v
 SSE streams progress back → to user
@@ -604,7 +655,7 @@ A regular user with PandoCode installed. The backbone of network intelligence.
 - Network routes build jobs to them via P2P
 - Can set limits: max requests/day, budget caps, model preferences (NOT YET BUILT)
 - Earns Lux per job completed (BUILT — `WorkType.COMPUTE_CONTRIBUTED`, daily cap: 50 jobs/day via `PANDO_DAILY_COMPUTE_CAP`)
-- Future: Claude Code CLI as subprocess for superior coding (NOT YET BUILT)
+- Claude Code CLI as persistent agent runtime (DONE — see Section 3.2.9)
 
 ```
 Build request arrives via P2P (routed by any node that received user's message)
@@ -1173,7 +1224,7 @@ Used by Path B (builds). Contributor runs PandoCode with their own keys.
 Contributor's machine:
   PandoCode's .env file (auto-loaded by engine-adapter)
   OR local env vars (GOOGLE_GENERATIVE_AI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY)
-  OR Claude Code CLI authenticated (FUTURE — not built yet)
+  OR Claude Code CLI authenticated (DONE — see Section 3.2.9)
   → PandoCode uses local keys directly
   → Keys NEVER leave the machine
   → Work comes TO the contributor via P2P
@@ -1205,7 +1256,7 @@ The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-nod
 ```
 PandoCode reads: GOOGLE_GENERATIVE_AI_API_KEY  (default provider)
            OR:   ANTHROPIC_API_KEY, OPENAI_API_KEY (alternative providers)
-           OR:   Claude Code CLI (future — not built yet)
+           OR:   Claude Code CLI (persistent agent runtime — see Section 3.2.9)
 ```
 
 ### Class Interface
@@ -1325,18 +1376,23 @@ scheduler.register({
 });
 ```
 
-### PandoCode + Claude Code CLI (future)
+### PandoCode + Claude Code CLI (DONE — in pando-code repo)
 
-PandoCode can use Claude Code CLI as a subprocess for superior coding:
+Claude Code CLI is a provider in `@pando-code/core`, not in pando-node:
 
 ```
-PandoCode receives build request
-  → Breaks into tasks on its Board
-  → For coding tasks: spawns `claude -p "implement feature X"` as subprocess
-  → Claude Code does file editing, testing, git commits
-  → PandoCode reviews output, continues orchestration
-  → Result: better code quality than API-only agents
+User selects "claude-code" from PandoCode's model dropdown
+  → PandoCode's engine calls provider.doStream() as always
+  → claude-code provider spawns `claude -p` with frame as --system-prompt
+  → Claude Code does file editing, testing, git commits using its own tools
+  → Pando MCP tools (deploy, governance, status) available via --mcp-config
+  → Response parsed from stream-json → LanguageModelV3 stream parts
+  → PandoCode's post-turn hooks run normally (reflection, memory, board)
 ```
+
+**Key files:** `provider/claude-code.ts` in `@pando-code/core` (provider implementation)
+
+**pando-node's role:** NONE. pando-node calls `engine.send()` and doesn't know what model is running.
 
 This makes a contributor's Claude Code subscription a network resource — they earn Lux when Claude Code processes jobs for the network.
 
@@ -1443,7 +1499,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | Issue | Location | Problem |
 |---|---|---|
 | **PandoCode Network Linking** | PandoCode config + engine-adapter | PARTIAL — Node creates PANDO_PROJECT.json in project workspaces. PandoCode config-side settings (network.linked) not yet in pando-code repo. See Section 5.9. |
-| **Claude Code CLI integration** | `@pando-code/core` | Not built yet. PandoCode needs a tool/subprocess to invoke `claude -p` for coding tasks. This would let contributors use their Claude Code subscription instead of a raw API key. |
+| ~~**Claude Code CLI provider**~~ | `@pando-code/core` provider/claude-code.ts | **DONE.** Lives in pando-code repo as a provider. Shows in model dropdown. See Section 3.2.9. |
 | **Contributor limits** | Partially built | Contributors need to set max requests/day, budget caps. Daily compute cap (50 jobs/day) is built. Per-user API limits not yet implemented. |
 | ~~**Node mode CLI flag**~~ | `cli.ts` | **FIXED.** Modes: `contributor|secure|lightweight|full`. Legacy `compute|relay` kept as aliases. |
 | ~~**S3 upload awaiting**~~ | `index.ts` | **FIXED.** Uses `Promise.all(uploadPromises)` instead of 2s sleep. Upload errors surfaced in console. |
@@ -1496,7 +1552,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 ### Core (Layer 1)
 | File | Purpose |
 |---|---|
-| `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. Council agent setup. |
+| `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. Council agent setup. Does NOT handle model selection — that's PandoCode's job. |
 | `core/council-prompts.ts` | System prompts for observer/qa/council agents. |
 | `core/deploy-pipeline.ts` | Build → GitHub → EC2 deploy → metadata. Auto-triggers after sendToEngine(). |
 | `core/credential-store.ts` | AES-256-GCM encrypt/decrypt |
@@ -1561,6 +1617,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 **PandoCode contributor (adds to baseline):**
 - @pando-code/core + Engine Adapter (one file, one dependency)
 - Local API keys (any provider — PandoCode's `.env` or local env vars. Default: Google/gemini-2.5-flash)
+- OR Claude Code CLI installed — PandoCode selects "claude-code" as provider internally. pando-node doesn't know or care.
 - That's it. Contributor earns Lux for processing build jobs.
 
 **Secure compute / EC2 (adds to baseline):**
@@ -1618,7 +1675,11 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 17. **Board task dedup is by exact title match.** `addBoardTask()` checks if a pending/in_progress task with the identical title exists and returns its ID instead of creating a duplicate. This prevents user spam but doesn't catch semantically similar reports (e.g., "login broken" vs "login page crashes"). The council handles semantic dedup by batching similar issues during tick processing.
 
-18. **Doorman severity classification uses word-variant regex.** `crash(es|ed|ing)`, `bug`, `error`, `fail(s|ed|ing)` all match as BUG. Without the variant suffixes, "crashes" would be classified as FEATURE (word boundary `\bcrash\b` doesn't match "crashes"). This was a real production bug found in E2E testing.
+18. **Claude Code is a PandoCode provider, NOT a pando-node feature.** Model/provider selection lives in `@pando-code/core`. pando-node calls `engine.send()` and doesn't know what model is running. NEVER put model-routing logic in engine-adapter.ts or platform-api.ts. This mistake was made once (ClaudeCodeSession in engine-adapter) and reverted. The brain/body boundary is inviolable.
+
+19. **Claude Code nested session prevention.** The claude-code provider in PandoCode deletes the `CLAUDECODE` env var from the subprocess environment. Without this, spawning Claude Code from within a Claude Code session fails. This is handled in `@pando-code/core`, not pando-node.
+
+20. **Doorman severity classification uses word-variant regex.** `crash(es|ed|ing)`, `bug`, `error`, `fail(s|ed|ing)` all match as BUG. Without the variant suffixes, "crashes" would be classified as FEATURE (word boundary `\bcrash\b` doesn't match "crashes"). This was a real production bug found in E2E testing.
 
 19. **P2P credential proxy has a timeout chain.** GitHub repo creation requires: P2P credential decrypt (30s timeout) + GitHub API call (45s inner timeout). If EC2 nodes are slow or offline, the credential proxy times out and GitHub operations fail. The timeouts were tuned for production latency on 2026-03-06.
 
