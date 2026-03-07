@@ -1908,7 +1908,7 @@ export class GovernanceSync {
 
     const matches: import('@pando/shared').DangerousPatternMatch[] = [];
     try {
-      const diff = execSync('git diff HEAD~1 -U0', { encoding: 'utf-8', timeout: 15000 });
+      const diff = execSync('git diff HEAD~1 HEAD -U0', { encoding: 'utf-8', timeout: 15000 });
       let currentFile = '';
       let lineNum = 0;
       for (const line of diff.split('\n')) {
@@ -1967,14 +1967,14 @@ export class GovernanceSync {
 
     // Parse git diff for changed files and line counts (fail-open if git unavailable)
     try {
-      const diffOutput = execSync('git diff HEAD~1 --name-only', { encoding: 'utf-8', timeout: 10000 });
+      const diffOutput = execSync('git diff HEAD~1 HEAD --name-only', { encoding: 'utf-8', timeout: 10000 });
       changedFiles = diffOutput.trim().split('\n').filter(f => f.length > 0);
     } catch (err) {
       console.warn('[governance] WARNING: git diff --name-only failed, skipping file-based checks:', (err as Error).message);
     }
 
     try {
-      const statOutput = execSync('git diff HEAD~1 --stat', { encoding: 'utf-8', timeout: 10000 });
+      const statOutput = execSync('git diff HEAD~1 HEAD --stat', { encoding: 'utf-8', timeout: 10000 });
       // Last line of git diff --stat looks like: " 5 files changed, 120 insertions(+), 30 deletions(-)"
       const statMatch = statOutput.match(/(\d+)\s+insertions?\(\+\).*?(\d+)\s+deletions?\(-\)/);
       if (statMatch) {
@@ -2015,7 +2015,7 @@ export class GovernanceSync {
       try {
         let diff = '';
         try {
-          diff = execSync('git diff HEAD~1', { encoding: 'utf-8', timeout: 15000 });
+          diff = execSync('git diff HEAD~1 HEAD', { encoding: 'utf-8', timeout: 15000 });
         } catch { /* git unavailable — skip AI review */ }
         if (diff) {
           const review = await this.engineAdapter.reviewDiff(diff, proposal.description || '');
