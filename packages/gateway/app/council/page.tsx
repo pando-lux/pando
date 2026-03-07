@@ -37,8 +37,10 @@ interface BoardTask {
 /** POST /v1/council/trigger/:agent response shape */
 interface TriggerResult {
   agent: string;
-  toolCalls: { tool: string; args?: any; success?: boolean; output?: string }[];
-  response: string;
+  toolCalls?: { tool: string; args?: any; success?: boolean; output?: string }[];
+  response?: string;
+  status?: string;
+  message?: string;
 }
 
 /* -- Helpers ---------------------------------------------------- */
@@ -406,11 +408,16 @@ export default function CouncilPage() {
                 )}
                 {triggerResult && (
                   <>
-                    {triggerResult.toolCalls.length > 0 && (
+                    {triggerResult.status === 'triggered' && (
+                      <p className="text-sm text-emerald-600 dark:text-emerald-400 mb-2">
+                        {triggerResult.message || 'Agent running in background.'}
+                      </p>
+                    )}
+                    {(triggerResult.toolCalls?.length ?? 0) > 0 && (
                       <div className="mb-2">
                         <p className="text-xs text-neutral-500 mb-1">Tool calls:</p>
                         <div className="flex flex-wrap gap-1.5">
-                          {triggerResult.toolCalls.map((tc, i) => (
+                          {triggerResult.toolCalls!.map((tc, i) => (
                             <span
                               key={i}
                               className={`text-[10px] px-2 py-0.5 rounded-full font-medium border ${

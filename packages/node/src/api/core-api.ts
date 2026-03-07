@@ -401,6 +401,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
     });
 
     // POST /council/trigger/:agent — Manually trigger a council agent
+    // Observer and QA run synchronously (fast, gemini). Council runs in background (claude-code, slow).
     fastify.post('/council/trigger/:agent', async (request: any, reply: any) => {
       const agentId = request.params.agent as string;
       if (!['observer', 'qa', 'council'].includes(agentId)) {
@@ -421,6 +422,13 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       };
       const message = (request.body as any)?.message || defaults[agentId];
 
+      // Council uses claude-code (takes minutes) — run in background, return immediately.
+      if (agentId === 'council') {
+        adapter.triggerCouncilBackground('council', message);
+        return { agent: 'council', status: 'triggered', message: 'Council running in background. Check board/inbox for results.' };
+      }
+
+      // Observer and QA are fast (gemini) — wait for completion.
       const toolCalls: any[] = [];
       const textChunks: string[] = [];
       try {
@@ -480,6 +488,58 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         return reply.code(500).send({ error: 'Could not create board task' });
       }
       return { status: 'ok', taskId, message: 'Report submitted to council board.' };
+    });
+
+    // ── Council Agent API (used by Claude Code CLI via curl) ─────────────
+
+    // GET /council/inbox/:agentId — Read and consume inbox messages for a council agent
+    fastify.get('/council/inbox/:agentId', async (request: any) => {
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return { messages: [] };
+      const agentId = request.params.agentId as string;
+      return { messages: adapter.getCouncilInbox(agentId) };
+    });
+
+    // POST /council/message — Send a message between council agents
+    fastify.post('/council/message', async (request: any, reply: any) => {
+      const body = request.body as any;
+      const { from, to, message } = body || {};
+      if (!from || !to || !message) {
+        return reply.code(400).send({ error: 'Required: from, to, message' });
+      }
+      const lawViolation = violatesTwoLaws(message);
+      if (lawViolation) return reply.code(403).send({ error: lawViolation });
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return reply.code(503).send({ error: 'Council not running' });
+      const ok = adapter.sendCouncilMessage(from, to, message);
+      return ok ? { status: 'sent' } : reply.code(500).send({ error: 'Failed to send message' });
+    });
+
+    // POST /council/tasks — Create a new board task
+    fastify.post('/council/tasks', async (request: any, reply: any) => {
+      const body = request.body as any;
+      const title = body?.title?.trim();
+      if (!title) return reply.code(400).send({ error: 'Title required' });
+      const lawViolation = violatesTwoLaws(`${title} ${body?.description || ''}`);
+      if (lawViolation) return reply.code(403).send({ error: lawViolation });
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return reply.code(503).send({ error: 'Council not running' });
+      const taskId = adapter.addBoardTask(title, body?.description);
+      if (!taskId) return reply.code(500).send({ error: 'Failed to create task' });
+      return { status: 'created', taskId };
+    });
+
+    // PATCH /council/tasks/:taskId — Update a board task (status, progress)
+    fastify.patch('/council/tasks/:taskId', async (request: any, reply: any) => {
+      const taskId = request.params.taskId as string;
+      const body = request.body as any;
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return reply.code(503).send({ error: 'Council not running' });
+      const ok = adapter.updateBoardTask(taskId, {
+        status: body?.status,
+        progress: body?.progress,
+      });
+      return ok ? { status: 'updated' } : reply.code(404).send({ error: 'Task not found or no changes' });
     });
 
     // ── Chat API (Phase 27: AgentManager) ──────────────────────────────────

@@ -823,7 +823,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       const userPeerId = await deps.verifyUserJwt(request);
       const identity = node.getIdentity();
       const proposerPeerId = userPeerId || identity?.peerId;
-      const { title, description, votingDurationMs, category, isEmergency } = request.body || {};
+      const { title, description, votingDurationMs, category, isEmergency, commitHash } = request.body || {};
       if (!title || !description) return reply.code(400).send({ error: 'title and description required' });
       const trimmedTitle = title.trim();
       const trimmedDesc = description.trim();
@@ -831,7 +831,10 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       if (trimmedTitle.length > 200) return reply.code(400).send({ error: 'Title must be 200 characters or fewer' });
       if (trimmedDesc.length > 2000) return reply.code(400).send({ error: 'Description must be 2000 characters or fewer' });
       try {
-        const proposal = await gov.createProposal(trimmedTitle, trimmedDesc, votingDurationMs || 300_000, { category, isEmergency });
+        // If commitHash provided, auto-set category to 'upgrade' and build upgradePayload
+        const effectiveCategory = commitHash ? 'upgrade' as any : category;
+        const upgradePayload = commitHash ? { commitHash, description: trimmedDesc } : undefined;
+        const proposal = await gov.createProposal(trimmedTitle, trimmedDesc, votingDurationMs || 300_000, { category: effectiveCategory, isEmergency, upgradePayload });
         return { success: true, proposal, proposer: proposerPeerId };
       } catch (err: any) {
         return reply.code(429).send({ error: err.message });

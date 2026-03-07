@@ -549,6 +549,107 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   }
 
   /**
+   * Read the council inbox for a given agent. Messages are stored in the state table
+   * by send_message as `msg:{toAgentId}:{uuid}`. Returns and deletes (consumes) them.
+   */
+  getCouncilInbox(agentId: string): { from: string; message: string; timestamp: string }[] {
+    if (!this.councilDbPath || !this.Database) return [];
+    try {
+      const db = new this.Database(this.councilDbPath);
+      const prefix = `msg:${agentId}:%`;
+      const rows = db.prepare(
+        `SELECT key, value, updated_at FROM state WHERE key LIKE ? ORDER BY updated_at ASC`
+      ).all(prefix) as { key: string; value: string; updated_at: string }[];
+
+      const messages: { from: string; message: string; timestamp: string }[] = [];
+      for (const row of rows) {
+        try {
+          const parsed = JSON.parse(row.value);
+          messages.push({
+            from: parsed.from || parsed.agentId || 'unknown',
+            message: parsed.message || parsed.content || row.value,
+            timestamp: row.updated_at,
+          });
+        } catch {
+          messages.push({ from: 'unknown', message: row.value, timestamp: row.updated_at });
+        }
+        // Consume: delete after reading
+        db.prepare(`DELETE FROM state WHERE key = ?`).run(row.key);
+      }
+      db.close();
+      return messages;
+    } catch {
+      return [];
+    }
+  }
+
+  /**
+   * Send a message from one council agent to another.
+   * Stores in the state table as `msg:{toAgentId}:{uuid}` with 1-hour TTL.
+   */
+  sendCouncilMessage(fromAgentId: string, toAgentId: string, message: string): boolean {
+    if (!this.councilDbPath || !this.Database) return false;
+    try {
+      const db = new this.Database(this.councilDbPath);
+      const uuid = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const key = `msg:${toAgentId}:${uuid}`;
+      const value = JSON.stringify({ from: fromAgentId, message, timestamp: new Date().toISOString() });
+      const ttl = new Date(Date.now() + 3600_000).toISOString(); // 1 hour
+      db.prepare(
+        `INSERT OR REPLACE INTO state (key, value, engine_id, updated_at) VALUES (?, ?, ?, ?)`
+      ).run(key, value, fromAgentId, ttl);
+      db.close();
+      return true;
+    } catch (err: any) {
+      console.warn(`[EngineAdapter] sendCouncilMessage failed: ${err.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Update a council board task's status and/or progress.
+   */
+  updateBoardTask(taskId: string, updates: { status?: string; progress?: string }): boolean {
+    if (!this.councilDbPath || !this.Database) return false;
+    try {
+      const db = new this.Database(this.councilDbPath);
+      const sets: string[] = [];
+      const vals: any[] = [];
+      if (updates.status) { sets.push('status = ?'); vals.push(updates.status); }
+      if (updates.progress !== undefined) { sets.push('progress = ?'); vals.push(updates.progress); }
+      if (sets.length === 0) { db.close(); return false; }
+      vals.push(taskId);
+      db.prepare(`UPDATE board_tasks SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+      db.close();
+      return true;
+    } catch (err: any) {
+      console.warn(`[EngineAdapter] updateBoardTask failed: ${err.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * Trigger a council agent in the background. Returns immediately.
+   * The agent processes asynchronously — check board/inbox for results.
+   */
+  triggerCouncilBackground(agentId: 'observer' | 'qa' | 'council', message: string): void {
+    (async () => {
+      try {
+        console.log(`[Council] Background trigger: ${agentId}`);
+        for await (const event of this.sendToCouncilAgent(agentId, message)) {
+          if (event.type === 'stream:chunk' && event.content) {
+            // Log council output for debugging
+            process.stdout.write(event.content);
+          }
+        }
+        console.log(`\n[Council] ${agentId} trigger complete.`);
+      } catch (err: any) {
+        console.error(`[Council] ${agentId} trigger error: ${err.message}`);
+      }
+    })();
+  }
+
+  /**
    * Add a task to a project's board. Used for per-project bug reports.
    * Returns the task ID on success, null on failure. Dedup by exact title match.
    * Registers a project scheduler tick if one doesn't exist yet.
@@ -736,8 +837,9 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   private async startCouncilAgents(): Promise<void> {
     if (!this.pool || !this.config) return;
 
-    const { join } = await import('node:path');
+    const { join, resolve, dirname } = await import('node:path');
     const { mkdirSync } = await import('node:fs');
+    const { fileURLToPath } = await import('node:url');
     const baseDir = this.config.dataDir || join((await import('node:os')).homedir(), '.pando');
 
     // Shared DB path — all council engines share one SQLite DB for cross-engine communication
@@ -746,16 +848,30 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     const councilDbPath = join(councilDir, 'council.db');
     this.councilDbPath = councilDbPath;
 
+    // Resolve the pando-node repo root for council's working directory.
+    // Council lead needs the actual repo root (not dist/) so builder sub-agents
+    // can read/write source code, run builds, commit, and push.
+    const thisDir = dirname(fileURLToPath(import.meta.url));
+    const nodeRepoRoot = resolve(thisDir, '..', '..', '..', '..');
+
     // Import PandoCode tool creators for re-registration with correct agent IDs
     const { createCheckAgentsTool, createSendMessageTool, createManageTasksTool } =
       await import('@pando-code/core');
 
     // Create one engine per council agent with shared DB
+    // Council lead uses claude-code (persistent sessions, full CLI tools, codebase access).
+    // Its projectPath = pando-node repo root so builder sub-agents work on actual source.
+    // Observer and QA use the default model (fast/cheap — they only call pando_* tools).
     for (const agent of COUNCIL_AGENTS) {
       const engine = await this.pool.getOrCreate(agent.id, {
-        projectPath: councilDir,
+        projectPath: agent.id === 'council' ? nodeRepoRoot : councilDir,
         dbPath: councilDbPath,
         role: agent.role,
+        // All council agents skip knowledge sync — they use pando_* tools for code access,
+        // not local codebase indexing. This prevents slow first-run scans of large repos.
+        skipKnowledgeSync: true,
+        // Council lead uses Claude Code for persistent sessions + full CLI tools.
+        ...(agent.id === 'council' ? { model: 'claude-code' } : {}),
       });
 
       // CRITICAL: Start session BEFORE re-registering tools.
@@ -864,14 +980,13 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         onError: (err: Error) => console.warn(`[qa] Tick error: ${err.message}`),
       });
 
-      // Council tick uses a custom interval to inject dynamic board snapshot.
-      // The scheduler doesn't support dynamic prompts, so we manage council's
-      // periodic tick ourselves. Observer and QA use the scheduler (static prompts).
+      // Council tick uses a custom interval because it needs dynamic data injection.
+      // sendToCouncilAgent() handles inbox + board injection for council automatically.
       const councilTickMs = 15 * 60_000;
       const councilInterval = setInterval(async () => {
         try {
-          const boardSnapshot = this.getBoardSnapshot(councilDbPath);
-          const message = `${COUNCIL_PROMPT}\n\n---\n\nCheck your inbox and review board tasks now.\n\n${boardSnapshot}`;
+          // sendToCouncilAgent enriches the message with inbox + board for council
+          const message = 'Check your inbox and review board tasks now.';
           for await (const event of this.sendToCouncilAgent('council', message)) {
             logEvent('council')(event);
           }
@@ -889,6 +1004,8 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
   /**
    * Send a message to a council agent with the correct system prompt.
+   * For the council lead: injects inbox + board state into the message so
+   * Claude Code CLI sees everything without needing PandoCode tool calls.
    */
   async *sendToCouncilAgent(agentId: CouncilAgentId, message: string): AsyncGenerator<any> {
     if (!this.pool) throw new Error('EngineAdapter not started');
@@ -900,8 +1017,21 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       await engine.startSession(`Council: ${agentId}`);
     }
 
+    // For council lead: inject inbox + board state into the message.
+    // Claude Code CLI can't call PandoCode tools (check_agents, manage_tasks),
+    // so we read the data and pass it in the prompt.
+    let enrichedMessage = message;
+    if (agentId === 'council' && this.councilDbPath) {
+      const inbox = this.getCouncilInbox('council');
+      const inboxText = inbox.length > 0
+        ? `INBOX (${inbox.length} messages):\n${inbox.map(m => `  [${m.from}] ${m.message}`).join('\n')}`
+        : 'INBOX: Empty — no new messages.';
+      const boardText = this.getBoardSnapshot(this.councilDbPath);
+      enrichedMessage = `${message}\n\n${inboxText}\n\n${boardText}`;
+    }
+
     const agentDef = COUNCIL_AGENTS.find(a => a.id === agentId);
-    yield* engine.send(message, {
+    yield* engine.send(enrichedMessage, {
       agentOverride: {
         agentId,
         role: agentDef?.role || agentId,

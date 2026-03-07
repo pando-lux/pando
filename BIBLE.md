@@ -1168,7 +1168,7 @@ GOTCHAS:
 | Project scheduler ticks | DONE — registered on first user report via `ensureProjectTick()`. Every 6h, injects board snapshot and prompts engine to process pending tasks. Cleanup on shutdown. |
 | Per-project board endpoints | DONE — `GET /v1/projects/:id/board` (read), `POST /v1/projects/:id/request` (submit). Returns 404 if project has no engine DB yet. |
 | Rate limiting on reports | DONE — 3 requests/hour per IP on `POST /council/request` and `POST /projects/:id/request`. RateLimiter with 1-hour window. |
-| Gateway `/council` page | **TODO** — live board, submit form, ticket status |
+| Gateway `/council` page | DONE — live board, submit form, agent trigger buttons, schedule display. Proxied via `/api/council/dashboard` → `GET /v1/council/status`. |
 
 #### 5.10.10 Failure Modes & Recovery
 
@@ -1523,6 +1523,106 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | ~~index.ts is a monolith~~ | **RESOLVED.** Extracted `_start()` into `init-kernel.ts` (793 lines), `init-core.ts` (154 lines), `init-platform.ts` (1,213 lines). index.ts is now 1,670 lines (class definition, lifecycle, getters, utilities). |
 | Agent identity is ephemeral | Ephemeral agents are sufficient for dev mode. |
 | Governance auto-approves (<=8 peers) | Dev mode only. Real voting kicks in with more peers. |
+
+---
+
+## 10b. SELF-SUSTAINING COUNCIL & AUTO-UPGRADE
+
+### Vision
+
+The end-state: **no human intervention required.** The council monitors, detects issues, fixes code, proposes changes through governance, deploys, and restarts all nodes including itself. Users interact only through the gateway — submitting bug reports or feature requests. The council handles everything.
+
+### Council Model: Claude Code (Persistent Sessions)
+
+The council lead agent uses Claude Code as its model inside PandoCode. This gives it:
+- **Persistent sessions** via `--session-id`/`--resume` — context survives across ticks
+- **Native CLI tools** — bash, read, write, edit, grep, glob (no synthetic tool wrappers)
+- **Full codebase access** — can read, understand, and modify any file in pando-node or pando-code
+- **Tool chaining** — can run tests, check build output, iterate on fixes
+
+Observer and QA agents remain on fast/cheap models (gemini-2.5-flash) since they only need to call pando_* tools and report.
+
+### The Self-Sustaining Loop
+
+```
+1. DETECT
+   Observer tick (30min) → pando_status + pando_peers → reports issues to council
+   QA tick (30min) → health checks → reports failures to council
+   Users → gateway "Report Bug" → board task created
+
+2. TRIAGE
+   Council tick (15min) → check_agents(inbox) + board review
+   Prioritize: CRITICAL > BUG:user > WARNING > FEATURE:user
+   Skip duplicates, close stale tasks (>24h)
+
+3. FIX
+   Council → pando_workspace({ repo: "pando-lux/node" }) → gets local clone path
+   Council → spawn_agent({ role: "builder", task: "Fix ...", working_directory: <path> })
+   Builder reads code, writes fix, runs `npm run build`, runs tests
+   Builder commits: git add + git commit
+   Builder pushes: git push origin master
+
+4. GOVERN
+   Council → pando_governance_propose({ title, description, commitHash })
+   Governance pipeline: format check → duplicate check → rate limit → AI review → vote
+   Auto-approves in dev mode (<=8 peers). Real voting with more peers.
+   Approved → broadcasts commit hash via GossipSub topic "pando/upgrades"
+
+5. UPGRADE (all nodes)
+   Each node receives upgrade broadcast →
+   UpgradeProtocol.pullAndUpgrade(commitHash):
+     - git fetch origin master
+     - Verify commit hash matches governance approval
+     - git reset --hard origin/master (stashes uncommitted changes first)
+     - npm run build
+     - Safe restart check: 0 active workers + 0 pending messages
+     - Exit with code 75
+
+6. RESTART
+   Supervisor detects exit(75) → respawns after 2s delay
+   Node boots → loads new compiled code → re-initializes council
+   Council resumes from persistent session (Claude Code --resume)
+   Loop restarts from step 1
+
+7. PROPOSER NODE (self-upgrade)
+   The node that pushed the fix is already at the target commit.
+   When it receives its own governance broadcast:
+     - pullAndUpgrade detects HEAD matches target
+     - Checks: runningCommit !== currentHead (stale in-memory code)
+     - Triggers safeRestart → exit(75) → supervisor respawns
+     - Fresh process loads the rebuilt dist/
+```
+
+### Key Invariants
+
+1. **Every code change goes through governance.** No direct deploys. Council proposes, network approves.
+2. **Safe restart only.** Never kill a node with active workers or pending messages. Defer to next cycle.
+3. **Exit code 75 = restart.** Exit code 78 = port conflict (don't respawn). Any other crash = backoff respawn.
+4. **Council survives restart.** Claude Code persistent sessions resume. Board tasks persist in SQLite. Memory persists.
+5. **Stale code detection.** `runningCommit` (snapshot at boot) vs `git rev-parse HEAD` (current). Mismatch → restart needed.
+6. **Build must pass.** If `npm run build` fails after git reset, rollback to previous commit. No broken deploys.
+7. **Two Laws filter.** All user input and board tasks filtered. Council cannot be weaponized.
+
+### The Goal
+
+**Phase 1 (current):** Council detects issues, creates board tasks, spawns builders, fixes code, proposes via governance. Manual testing confirms each step works.
+
+**Phase 2 (next):** Full autonomous loop — fix pushed → governance approves → all nodes upgrade → council restarts → resumes monitoring. No human in the loop.
+
+**Phase 3 (future):** Users submit fixes/suggestions from gateway. Council evaluates, implements if valid, rejects if not. Human role shifts from operator to advisor. The system maintains itself.
+
+### Files Involved
+
+| File | Role |
+|---|---|
+| `core/engine-adapter.ts` | Spawns council engines, registers tools, manages scheduler |
+| `core/council-prompts.ts` | System prompts for observer, qa, council |
+| `core/upgrade-protocol.ts` | Git pull, hash verify, build, safe restart |
+| `supervisor.ts` | Watches exit codes, respawns on 75 |
+| `cli.ts` | Crash guard, circuit breaker |
+| `kernel/governance.ts` | Proposal pipeline, voting, AI review |
+
+See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 ---
 
