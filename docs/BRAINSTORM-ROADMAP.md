@@ -369,22 +369,113 @@ Key points:
 
 ---
 
-## Open Questions (carried from brainstorm)
+## Decisions (all questions resolved)
 
-### Q1: Shared DB for council engines
-All three council engines need to share the same SQLite database so send_message works cross-engine. EnginePool may create separate DBs per engine. Need to verify and potentially set a shared `dbPath` for all council engines.
+### D1: Shared DB for council engines — YES, shared dbPath
 
-### Q2: Board as findings replacement
-Board tasks have status lifecycle (pending → in_progress → done) similar to findings (open → resolved). But board tasks don't have severity/category. Options:
-- Use task title prefix: "[CRITICAL] API health check failed"
-- Add severity field to PandoCode's board_tasks schema
-- Keep a thin findings wrapper in pando-node that creates board tasks with metadata
+All three council engines share one SQLite DB at `~/.pando/council/council.db`.
 
-### Q3: Sub-agent code access
-When council spawns a builder sub-agent to fix @pando/node code, what's the workspace? The node's own repo? A clone? The project workspace? This needs to be worked out in Phase 3.
+**Why it works:** All engines run in the same Node.js process. `better-sqlite3` is synchronous — writes are serialized by the event loop. No "database is locked" issues.
 
-### Q4: Scaling council
-If we need 100 observers: create 100 engines in the pool, one per observer. Each with its own region/scope. PandoCode's EnginePool supports this (maxEngines config). The node decides how many — PandoCode just manages them.
+**How:** Pass `dbPath: '~/.pando/council/council.db'` to each engine's options when calling `pool.getOrCreate()`. PandoCode's EngineOptions accepts `dbPath`.
+
+**Result:** send_message works cross-engine (all agents read/write to same `state` table). Board tasks visible across all agents (same `board_tasks` table).
+
+### D2: Board tasks replace findings — title convention for severity
+
+Board tasks already have the status lifecycle we need: `pending → in_progress → done / failed / cancelled`.
+
+**Severity via title convention:** `[SEVERITY:CATEGORY] description`
+
+```
+Observer creates:  "[CRITICAL:health] API latency > 2s on /v1/status"
+Observer creates:  "[WARNING:health] Only 1 peer connected"
+QA creates:        "[CRITICAL:test_failure] /v1/status returned 503"
+QA creates:        "[INFO:suggestion] Consider adding retry logic"
+```
+
+Council parses the prefix to prioritize: CRITICAL first, then WARNING, then INFO.
+
+**No PandoCode changes needed.** If we later want proper severity fields on board_tasks, we enhance PandoCode then — but title convention works now and works for any developer (not just pando-node).
+
+**The `progress` field** stores investigation notes: `"Observed by observer at 2026-03-07T10:30:00Z. Response time: 2.3s average over 5 calls."`
+
+### D3: Sub-agent workspace — council engine's projectPath = node repo
+
+When council spawns a builder sub-agent, the builder inherits the council engine's `projectPath`. For ecosystem fixes (@pando/node), set:
+
+```
+council engine projectPath = the pando/node repo root
+  → builder sub-agent reads/writes files directly in the repo
+  → builder runs tests directly (npm run build, npm test)
+  → builder returns diff to council
+  → council calls pando_governance_propose with the diff
+```
+
+**For user projects:** Council would create a separate engine with `projectPath` = that project's workspace (`~/.pando/projects/{projectId}/`). This is a Phase 5 concern.
+
+**Risk in dev mode:** Builder has write access to the live repo. Acceptable because:
+- Governance validates before broadcasting changes to other nodes
+- Git is the safety net — `git reset --hard` recovers
+- In production, we'd add git worktree isolation (Phase 5+)
+
+### D4: Scaling — three agents now, more later
+
+Three agents (observer, qa, council) for the current network. Period.
+
+If we need 100 observers tomorrow, we create 100 engines in the pool. Each gets a different scope (region, node subset, etc.). PandoCode's EnginePool supports this via `maxEngines` config. The node decides how many. PandoCode just manages them. No architecture changes needed.
+
+**Don't over-engineer now.** Three agents is enough for a network of 5 nodes.
+
+### D5: Cross-node council coordination — none needed
+
+Each contributor node runs its own independent council. No coordination between councils on different nodes.
+
+- Each council monitors its own node's health
+- If two councils propose fixes for the same issue, governance handles the conflict (first approved wins, second may get rejected for merge conflict)
+- Project ownership: one node at a time. Transfer on offline detection via P2P heartbeat timeout.
+
+### D6: Authority levels — none, governance is the gate
+
+Council can propose anything. Governance decides. If governance rejects, council learns from memory.
+
+No authority tiers. No permission levels. No complexity. Governance IS the control mechanism.
+
+### D7: Rollback — natural feedback loop
+
+```
+Council approves fix → upgrade-protocol deploys → QA detects regression
+  → QA creates board task "[CRITICAL:test_failure] Regression after last deploy"
+  → Council reads it → proposes revert → governance approves → upgrade deploys revert
+```
+
+QA IS the safety net. No special rollback mechanism needed. The loop handles it.
+
+### D8: Governance scope — ecosystem only
+
+- **Ecosystem repos** (@pando/*, @pando-code/*): full governance (6-layer pipeline, peer vote)
+- **User projects**: skip governance. Their code, their risk. Deploy pipeline runs directly.
+- **Malicious apps on Pando infra**: future concern (Phase 6+). Deploy pipeline could add a security scan layer, but not blocking now.
+
+### D9: Agent profile creation — programmatic via shared DB
+
+PandoCode has `POST /v1/agents` in its server API. But engine-adapter doesn't use PandoCode's server — it uses the library directly (EnginePool).
+
+**Solution:** Insert agent profiles directly into the shared SQLite DB using PandoCode's DB schema. The agent profiles are just rows in the `agents` table. engine-adapter can insert them at startup using the same DB connection the engines use.
+
+If PandoCode's core exports an agent management API (like `db.insertAgent()`), use that. If not, insert directly — the schema is simple: `id, role, displayName, description, status, sessionId, model, createdAt, updatedAt`.
+
+### D10: Scheduler addressing — one engine per agent is sufficient
+
+Scheduler sends messages to engines by ID. One engine per agent means scheduler tick goes to the right agent automatically.
+
+```
+scheduler.register({ name: "observer-tick", engineId: "observer", ... })
+scheduler.register({ name: "qa-tick", engineId: "qa", ... })
+scheduler.register({ name: "council-tick", engineId: "council", ... })
+```
+
+Each engine IS one agent. No need for sub-addressing. System prompt injected via agentOverride on each send() call.
 
 ---
 
