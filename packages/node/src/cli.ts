@@ -354,6 +354,15 @@ async function main() {
     }
   }
 
+  // Council flag — enable council agents on PandoCode-capable nodes
+  if (nodeMode === 'full') {
+    const explicitCouncil = args.includes('--council');
+    const noCouncil = args.includes('--no-council');
+    if (!noCouncil && (explicitCouncil || detectClaudeCode())) {
+      node.setCouncilEnabled(true);
+    }
+  }
+
   // Try session.json first (works with encrypted identities)
   const session = await loadSession(node.getDataDir());
   if (session) {

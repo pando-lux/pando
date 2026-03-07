@@ -11,10 +11,14 @@
  *   - Routes messages to the right engine (system vs project)
  *   - Provides governance AI review hook
  *   - Runs Scheduler for periodic autonomous behavior
+ *   - Council agents: observer (explorer), qa (tester), council (lead)
+ *     using PandoCode's native agent system (board, send_message, check_agents)
  *   - Injects contributed AI API keys from ResourceRegistry
  */
 
 import type { ResourceRegistry } from '../platform/resource-registry.js';
+import { OBSERVER_PROMPT, QA_PROMPT, COUNCIL_PROMPT } from './council-prompts.js';
+
 // ─── Dynamic imports (pando-code is ESM, loaded at runtime) ─────────────
 
 let _EnginePool: any = null;
@@ -199,6 +203,16 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
   ];
 }
 
+// ─── Council Agent Definitions ──────────────────────────────────────────
+
+const COUNCIL_AGENTS = [
+  { id: 'observer', role: 'explorer', displayName: 'Network Observer', prompt: OBSERVER_PROMPT },
+  { id: 'qa',       role: 'tester',   displayName: 'QA Agent',         prompt: QA_PROMPT },
+  { id: 'council',  role: 'lead',     displayName: 'Council',          prompt: COUNCIL_PROMPT },
+] as const;
+
+type CouncilAgentId = typeof COUNCIL_AGENTS[number]['id'];
+
 // ─── Engine Adapter ─────────────────────────────────────────────────────
 
 export interface AdapterConfig {
@@ -211,6 +225,8 @@ export interface AdapterConfig {
   resourceRegistry?: ResourceRegistry | null;
   /** Schedule periodic system checks. Default: true. */
   enableScheduler?: boolean;
+  /** Enable council agents (observer, qa, council). Default: false. */
+  enableCouncil?: boolean;
 }
 
 export interface ReviewResult {
@@ -285,6 +301,11 @@ export class EngineAdapter {
       });
 
       this.scheduler.start();
+    }
+
+    // Start council agents if enabled
+    if (config.enableCouncil) {
+      await this.startCouncilAgents();
     }
 
     this.started = true;
@@ -393,6 +414,149 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     console.log('[EngineAdapter] Shut down.');
   }
 
+  // ─── Council Agents ──────────────────────────────────────────────────
+
+  /**
+   * Start the three council agents using PandoCode's native agent system.
+   * Each agent is a PandoCode engine with:
+   *   - Shared SQLite DB (cross-engine send_message + board tasks)
+   *   - Role-based tool filtering (explorer/tester/lead)
+   *   - pando_* tools for network operations
+   *   - System prompt via agentOverride on each send()
+   *
+   * See BIBLE.md Section 5.10 and docs/BRAINSTORM-ROADMAP.md.
+   */
+  private async startCouncilAgents(): Promise<void> {
+    if (!this.pool || !this.config) return;
+
+    const { join } = await import('node:path');
+    const { mkdirSync } = await import('node:fs');
+    const baseDir = this.config.dataDir || join((await import('node:os')).homedir(), '.pando');
+
+    // Shared DB path — all council engines share one SQLite DB for cross-engine communication
+    const councilDir = join(baseDir, 'council');
+    mkdirSync(councilDir, { recursive: true });
+    const councilDbPath = join(councilDir, 'council.db');
+
+    // Create one engine per council agent with shared DB
+    for (const agent of COUNCIL_AGENTS) {
+      await this.pool.getOrCreate(agent.id, {
+        projectPath: councilDir,
+        dbPath: councilDbPath,
+        role: agent.role,
+      });
+      console.log(`[EngineAdapter] Council agent "${agent.id}" (${agent.role}) started.`);
+    }
+
+    // Insert agent profiles into shared DB so send_message and check_agents work
+    try {
+      const engine = this.pool.get('council');
+      if (engine?.db) {
+        const now = new Date().toISOString();
+        const sqlite = (engine.db as any).$client;
+        for (const agent of COUNCIL_AGENTS) {
+          sqlite.prepare(
+            `INSERT OR IGNORE INTO agents (id, role, model, system_prompt, tools, scope, status, display_name, created_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+          ).run(
+            agent.id,
+            agent.role,
+            'default',
+            agent.prompt,
+            '[]',
+            '{}',
+            'idle',
+            agent.displayName,
+            now,
+          );
+        }
+        console.log('[EngineAdapter] Council agent profiles registered in shared DB.');
+      }
+    } catch (err: any) {
+      // Non-fatal — agents still work without profiles, just no cross-engine messaging
+      console.warn('[EngineAdapter] Could not register agent profiles:', err.message);
+    }
+
+    // Register scheduler ticks for each agent
+    if (this.scheduler) {
+      const logEvent = (agentId: string) => (event: any) => {
+        if (event.type === 'tool:start') {
+          console.log(`[${agentId}] TOOL CALL: ${event.toolName}(${JSON.stringify(event.args)})`);
+        } else if (event.type === 'tool:result') {
+          const out = event.result?.output || '';
+          const preview = out.length > 200 ? out.slice(0, 200) + '...' : out;
+          console.log(`[${agentId}] TOOL RESULT: ${event.toolName} → ${event.result?.success ? 'OK' : 'FAIL'}: ${preview}`);
+        } else if (event.type === 'stream:chunk' && event.content) {
+          process.stdout.write(`[${agentId}] ${event.content}`);
+        }
+      };
+
+      this.scheduler.register({
+        name: 'observer-tick',
+        engineId: 'observer',
+        intervalMs: 30 * 60_000,
+        prompt: `${OBSERVER_PROMPT}\n\n---\n\nRun your periodic checks now.`,
+        active: true,
+        onEvent: logEvent('observer'),
+        onComplete: () => console.log(`\n[observer] Tick complete.`),
+        onError: (err: Error) => console.warn(`[observer] Tick error: ${err.message}`),
+      });
+
+      this.scheduler.register({
+        name: 'qa-tick',
+        engineId: 'qa',
+        intervalMs: 30 * 60_000,
+        prompt: `${QA_PROMPT}\n\n---\n\nRun your health checks now.`,
+        active: true,
+        onEvent: logEvent('qa'),
+        onComplete: () => console.log(`\n[qa] Tick complete.`),
+        onError: (err: Error) => console.warn(`[qa] Tick error: ${err.message}`),
+      });
+
+      this.scheduler.register({
+        name: 'council-tick',
+        engineId: 'council',
+        intervalMs: 15 * 60_000,
+        prompt: `${COUNCIL_PROMPT}\n\n---\n\nCheck your inbox and review board tasks now.`,
+        active: true,
+        onEvent: logEvent('council'),
+        onComplete: () => console.log(`\n[council] Tick complete.`),
+        onError: (err: Error) => console.warn(`[council] Tick error: ${err.message}`),
+      });
+
+      console.log('[EngineAdapter] Council scheduler ticks registered.');
+    }
+  }
+
+  /**
+   * Send a message to a council agent with the correct system prompt.
+   */
+  async *sendToCouncilAgent(agentId: CouncilAgentId, message: string): AsyncGenerator<any> {
+    if (!this.pool) throw new Error('EngineAdapter not started');
+    const engine = this.pool.get(agentId);
+    if (!engine) throw new Error(`Council agent "${agentId}" not found`);
+
+    // Start session if needed
+    if (!engine.getSessionId()) {
+      await engine.startSession(`Council: ${agentId}`);
+    }
+
+    const agentDef = COUNCIL_AGENTS.find(a => a.id === agentId);
+    yield* engine.send(message, {
+      agentOverride: {
+        agentId,
+        role: agentDef?.role || agentId,
+        systemPrompt: agentDef?.prompt || '',
+      },
+    });
+  }
+
+  /** Check if council agents are running. */
+  isCouncilActive(): boolean {
+    if (!this.pool) return false;
+    return this.pool.has('observer') && this.pool.has('qa') && this.pool.has('council');
+  }
+
   // ─── Internal ─────────────────────────────────────────────────────────
 
   /**
@@ -464,7 +628,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       }
     }
 
-    // 3. Warn if no keys available at all
+    // 4. Warn if no keys available at all
     const finalAvailable = Object.entries(PROVIDER_ENV_MAP).filter(([_, v]) => process.env[v]);
     if (finalAvailable.length === 0) {
       console.warn('[EngineAdapter] No AI API keys found. PandoCode will use its own configured provider. Set GOOGLE_GENERATIVE_AI_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY if needed.');

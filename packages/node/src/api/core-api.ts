@@ -382,6 +382,68 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       return { appealed: true, entry };
     });
 
+    // ── Council API ──────────────────────────────────────────────────────────
+
+    // GET /council/status — Council system status (uses PandoCode's native agent system)
+    fastify.get('/council/status', async () => {
+      const adapter = node.getEngineAdapter();
+      const active = adapter?.isCouncilActive() ?? false;
+      return {
+        active,
+        engines: active ? adapter!.getActiveEngines().filter((e: any) =>
+          ['observer', 'qa', 'council'].includes(e.id)
+        ) : [],
+        schedules: adapter?.getSchedules()?.filter((s: any) =>
+          ['observer-tick', 'qa-tick', 'council-tick'].includes(s.name)
+        ) ?? [],
+      };
+    });
+
+    // POST /council/trigger/:agent — Manually trigger a council agent
+    fastify.post('/council/trigger/:agent', async (request: any, reply: any) => {
+      const agentId = request.params.agent as string;
+      if (!['observer', 'qa', 'council'].includes(agentId)) {
+        return reply.code(400).send({ error: 'Invalid agent. Must be: observer, qa, or council' });
+      }
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) {
+        return reply.code(503).send({ error: 'Engine adapter not available' });
+      }
+      if (!adapter.isCouncilActive()) {
+        return reply.code(503).send({ error: 'Council agents not running' });
+      }
+
+      const prompts: Record<string, string> = {
+        observer: 'Run your periodic checks now.',
+        qa: 'Run your health checks now.',
+        council: 'Check your inbox and review board tasks now.',
+      };
+
+      const toolCalls: any[] = [];
+      const textChunks: string[] = [];
+      try {
+        for await (const event of adapter.sendToCouncilAgent(agentId as any, prompts[agentId])) {
+          if (event.type === 'tool:start') {
+            toolCalls.push({ tool: event.toolName, args: event.args });
+          } else if (event.type === 'tool:result') {
+            const out = event.result?.output || '';
+            const preview = out.length > 300 ? out.slice(0, 300) + '...' : out;
+            toolCalls.push({ tool: event.toolName, success: event.result?.success, output: preview });
+          } else if (event.type === 'stream:chunk' && event.content) {
+            textChunks.push(event.content);
+          }
+        }
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+
+      return {
+        agent: agentId,
+        toolCalls,
+        response: textChunks.join(''),
+      };
+    });
+
     // ── Chat API (Phase 27: AgentManager) ──────────────────────────────────
 
     // POST /chat/message — Phase 68.3: Doorman-routed chat

@@ -115,3 +115,39 @@ test('Full chat round-trip: send message → get AI response → verify in threa
   console.log(`[e2e] PASS: Chat round-trip complete. Thread ${threadId}, reply length: ${reply.length}`);
 });
 
+// ── Council System E2E Tests ──────────────────────────────────────────
+
+test('Council status API returns valid response', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/council/status`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+
+  // Council may or may not be active depending on node configuration
+  expect(typeof data.active).toBe('boolean');
+
+  if (data.active) {
+    // If active, should have 3 engines (observer, qa, council)
+    expect(data.engines.length).toBe(3);
+    const ids = data.engines.map((e: any) => e.id);
+    expect(ids).toContain('observer');
+    expect(ids).toContain('qa');
+    expect(ids).toContain('council');
+    console.log(`[e2e] PASS: Council active with ${data.engines.length} agents.`);
+  } else {
+    console.log('[e2e] PASS: Council status API works (council not enabled).');
+  }
+});
+
+test('Council trigger rejects invalid agent', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/council/trigger/invalid`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.status).toBe(400);
+  const data = await res.json() as any;
+  expect(data.error).toContain('Invalid agent');
+  console.log('[e2e] PASS: Council trigger validation works.');
+});
+
