@@ -213,15 +213,22 @@ async function main() {
     }
   }
 
-  // --mode <full|compute|relay> (node specialization, default: full)
+  // --mode <full|contributor|secure|lightweight> (node specialization, default: full)
   // 'full' = everything (default for double-click launchers, zero config)
-  // 'compute' = P2P + hosting + resource proxy (auto-set for cloud instances)
-  // 'relay' = P2P only, routing + network growth
+  // 'contributor' = full + shareCompute (contributes PandoCode AI compute, earns Lux)
+  // 'secure' = EC2 with MongoDB, credential storage, deploy target (legacy alias: 'compute')
+  // 'lightweight' = P2P only, routing + network growth (legacy alias: 'relay')
+  const VALID_MODES = ['full', 'contributor', 'secure', 'lightweight', 'compute', 'relay'];
+  const MODE_ALIASES: Record<string, string> = { compute: 'secure', relay: 'lightweight' };
   const modeFlag = args.indexOf('--mode');
-  const nodeMode = modeFlag !== -1 ? (args[modeFlag + 1] as any) : 'full';
-  if (!['full', 'compute', 'relay'].includes(nodeMode)) {
-    console.error(`[cli] Invalid --mode: ${nodeMode}. Must be full, compute, or relay.`);
+  let nodeMode = modeFlag !== -1 ? (args[modeFlag + 1] as any) : 'full';
+  if (!VALID_MODES.includes(nodeMode)) {
+    console.error(`[cli] Invalid --mode: ${nodeMode}. Must be full, contributor, secure, or lightweight.`);
     process.exit(1);
+  }
+  // Normalize legacy aliases
+  if (MODE_ALIASES[nodeMode]) {
+    nodeMode = MODE_ALIASES[nodeMode];
   }
 
   // --ledger-mode <full|light> (ledger retention, default: full)
@@ -355,7 +362,7 @@ async function main() {
   }
 
   // Council flag — enable council agents on PandoCode-capable nodes
-  if (nodeMode === 'full') {
+  if (nodeMode === 'full' || nodeMode === 'contributor') {
     const explicitCouncil = args.includes('--council');
     const noCouncil = args.includes('--no-council');
     if (!noCouncil && (explicitCouncil || detectClaudeCode())) {
@@ -378,7 +385,11 @@ async function main() {
     console.log('');
     console.log('Pando — The Open Network');
     console.log(`  Peer ID:    ${identity.peerId}`);
-    console.log(`  Mode:       ${nodeMode}${nodeMode === 'full' ? '' : ` (${nodeMode === 'compute' ? 'hosting + P2P' : 'P2P routing only'})`}`);
+    const modeDesc: Record<string, string> = {
+      full: '', contributor: ' (contributing AI compute, earning Lux)',
+      secure: ' (hosting + P2P + credential storage)', lightweight: ' (P2P routing only)',
+    };
+    console.log(`  Mode:       ${nodeMode}${modeDesc[nodeMode] || ''}`);
     console.log(`  Status:     http://127.0.0.1:${apiPort}/status`);
     console.log(`  Health:     http://127.0.0.1:${apiPort}/health`);
     console.log(`  Bootstrap:  ${bootstrapPeers.join(', ')}`);
@@ -402,10 +413,10 @@ async function main() {
   resetCircuitBreaker(dataDir);
   markStable(dataDir);
 
-  // Agent system, pipeline, and scheduler only run in 'full' mode.
-  // 'compute' and 'relay' modes skip these (no PandoCode engine on cloud instances).
+  // Agent system, pipeline, and scheduler only run in 'full' and 'contributor' modes.
+  // 'secure' and 'lightweight' modes skip these (no PandoCode engine on cloud instances).
   let schedulerEnabled = false;
-  if (nodeMode === 'full') {
+  if (nodeMode === 'full' || nodeMode === 'contributor') {
     // Enable Phase 16 pipeline if --pipeline flag was passed (must precede scheduler start)
     if (args.includes('--pipeline')) {
       console.log('[cli] Enabling Phase 16 code pipeline (--pipeline flag)...');

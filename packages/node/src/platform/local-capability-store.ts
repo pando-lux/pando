@@ -90,6 +90,12 @@ export class LocalCapabilityStore {
     return this.data.shareCompute;
   }
 
+  /** Set shareCompute flag (used by --mode contributor to auto-enable) */
+  setShareCompute(value: boolean): void {
+    this.data.shareCompute = value;
+    this.save();
+  }
+
   /**
    * Opt in to sharing a capability (called by /contribute claude-code in Phase 97).
    * No-op if capability is not locally detected (cannot share what you don't have).

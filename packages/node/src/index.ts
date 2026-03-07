@@ -310,6 +310,11 @@ export class PandoNode {
     // Phase 96: Init LocalCapabilityStore before capability detection
     this.localCapStore = new LocalCapabilityStore(this.config.dataDir || undefined);
 
+    // Contributor mode: auto-enable shareCompute (contributes PandoCode AI compute)
+    if (this.config.nodeMode === 'contributor') {
+      this.localCapStore.setShareCompute(true);
+    }
+
     this.capabilityDetection = detectCapabilities(this.config.capabilities);
     this.detectedCapabilities = this.capabilityDetection.capabilities.map(c => c as string);
     // Phase 96: Write full detected list to local store (preserves existing sharedCapabilities)
@@ -1343,6 +1348,8 @@ export class PandoNode {
           const projectApiKey = envVars?.PANDO_PROJECT_API_KEY || '';
 
           let uploadCount = 0;
+          const uploadPromises: Promise<void>[] = [];
+          const uploadErrors: string[] = [];
 
           // Recursively find all static files
           const scanDir = (dir: string, prefix: string): void => {
@@ -1374,7 +1381,7 @@ export class PandoNode {
                     content = Buffer.from(html, 'utf-8');
                   }
 
-                  // Queue upload (synchronous for simplicity)
+                  // Queue upload — collected in uploadPromises for proper await
                   const key = `public/${projectId}/${relPath}`;
                   const putCmd = new PutObjectCommand({
                     Bucket: bucket,
@@ -1382,9 +1389,11 @@ export class PandoNode {
                     Body: content,
                     ContentType: mimeTypes[ext] || 'application/octet-stream',
                   });
-                  // Fire upload (we'll await them below)
-                  s3.send(putCmd).then(() => {}).catch((e: any) => console.log(`[deploy] S3 upload failed for ${key}: ${e.message}`));
-                  uploadCount++;
+                  uploadPromises.push(
+                    s3.send(putCmd)
+                      .then(() => { uploadCount++; })
+                      .catch((e: any) => { uploadErrors.push(`${key}: ${e.message}`); })
+                  );
                 }
               } catch {}
             }
@@ -1398,8 +1407,11 @@ export class PandoNode {
             scanDir(appDir, '');
           }
 
-          // Wait a bit for uploads to complete
-          await new Promise(r => setTimeout(r, 2000));
+          // Await all S3 uploads
+          await Promise.all(uploadPromises);
+          if (uploadErrors.length > 0) {
+            console.error(`[deploy] ${uploadErrors.length} S3 upload(s) failed: ${uploadErrors.slice(0, 3).join('; ')}`);
+          }
 
           const s3Url = `http://${bucket}.s3-website-${s3Config.region || 'us-east-1'}.amazonaws.com/public/${projectId}/index.html`;
           console.log(`[deploy] Tier 1 complete: ${uploadCount} files uploaded → ${s3Url}`);
@@ -1549,8 +1561,8 @@ location /apps/${projectId}/ {
       }
     });
 
-    // Phase 80: Startup reconciliation — cross-check port registry with PM2 on compute nodes
-    if (this.config.nodeMode === 'compute') {
+    // Phase 80: Startup reconciliation — cross-check port registry with PM2 on secure/compute nodes
+    if (this.config.nodeMode === 'compute' || this.config.nodeMode === 'secure') {
       try {
         const { execSync } = await import('node:child_process');
         const registry = loadPortRegistry();
@@ -2152,8 +2164,9 @@ Be friendly and helpful. Keep answers short.`
     });
 
     // Start EngineAdapter — connects to @pando-code/core brain.
-    // 'compute' and 'relay' modes skip engines (cloud instances don't have PandoCode).
-    if (this.config.nodeMode !== 'compute' && this.config.nodeMode !== 'relay') {
+    // 'secure' and 'lightweight' modes skip engines (cloud instances don't have PandoCode).
+    if (this.config.nodeMode !== 'compute' && this.config.nodeMode !== 'relay'
+      && this.config.nodeMode !== 'secure' && this.config.nodeMode !== 'lightweight') {
       await this.startEngine();
     } else {
       console.log(`[node] Mode '${this.config.nodeMode}' — engine skipped.`);

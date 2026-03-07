@@ -1732,10 +1732,13 @@ export interface ProjectRegistryRecord {
 }
 
 // Phase 64: Node specialization modes
-// 'full' = everything (default, double-click launcher)
-// 'compute' = P2P + hosting + resource proxy (auto-set for cloud instances)
-// 'relay' = P2P only, network routing + growth
-export type NodeMode = 'full' | 'compute' | 'relay';
+// Node specialization modes:
+// 'full' = everything (default, double-click launcher, desktop dev)
+// 'contributor' = full + shareCompute (contributes PandoCode AI compute, earns Lux)
+// 'secure' = EC2 nodes with MongoDB, credential storage, deploy target (alias: 'compute')
+// 'lightweight' = P2P only, network routing + growth (alias: 'relay')
+// Legacy aliases kept for backward compat: 'compute' → 'secure', 'relay' → 'lightweight'
+export type NodeMode = 'full' | 'contributor' | 'secure' | 'lightweight' | 'compute' | 'relay';
 
 // Phase 64: Ledger retention modes
 // 'full' = all transactions forever (default)
