@@ -2689,11 +2689,6 @@ Be friendly and helpful. Keep answers short.`
     return this.config.apiPort;
   }
 
-  /** Enable/disable council agents. Must be called before startEngine(). */
-  setCouncilEnabled(enabled: boolean): void {
-    this.config.enableCouncil = enabled;
-  }
-
   getCapabilities(): string[] {
     return [...this.detectedCapabilities];
   }
@@ -3017,7 +3012,6 @@ Be friendly and helpful. Keep answers short.`
         nodeId: this.identity?.peerId,
         dataDir: this.config.dataDir,
         resourceRegistry: this.resourceRegistry,
-        enableCouncil: this.config.enableCouncil ?? false,
       });
       console.log('[engine] EngineAdapter started — PandoCode brain connected.');
     } catch (err: any) {

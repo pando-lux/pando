@@ -354,15 +354,6 @@ async function main() {
     }
   }
 
-  // Council flag must be set BEFORE node.start() (which calls startEngine())
-  if (nodeMode === 'full') {
-    const explicitCouncil = args.includes('--council');
-    const noCouncil = args.includes('--no-council');
-    if (!noCouncil && (explicitCouncil || detectClaudeCode())) {
-      node.setCouncilEnabled(true);
-    }
-  }
-
   // Try session.json first (works with encrypted identities)
   const session = await loadSession(node.getDataDir());
   if (session) {

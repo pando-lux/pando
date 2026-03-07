@@ -12,12 +12,8 @@
 export { EngineAdapter } from './engine-adapter.js';
 export type { AdapterConfig, ReviewResult } from './engine-adapter.js';
 
-// Findings — Council/Observer/QA communication channel
-export { FindingsStore, getFindingsStore } from './findings-store.js';
-export type { Finding, FindingSeverity, FindingCategory, FindingStatus, FindingSource, CreateFindingInput, UpdateFindingInput } from './findings-store.js';
-
 // Council prompts
-export { OBSERVER_PROMPT, QA_PROMPT, COUNCIL_PROMPT, TOOL_SETS } from './council-prompts.js';
+export { OBSERVER_PROMPT, QA_PROMPT, COUNCIL_PROMPT } from './council-prompts.js';
 
 // Storage
 export type { StorageBackend } from './storage-backend.js';
