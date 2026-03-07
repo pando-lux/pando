@@ -65,6 +65,15 @@ class RateLimiter {
     return true;
   }
 
+  /** Returns the Retry-After value in seconds (time until oldest entry expires). */
+  retryAfterSeconds(key: string): number {
+    const timestamps = this.windows.get(key);
+    if (!timestamps || timestamps.length === 0) return 0;
+    const oldest = timestamps[0];
+    const expiresAt = oldest + this.windowMs;
+    return Math.max(1, Math.ceil((expiresAt - Date.now()) / 1000));
+  }
+
   /** Periodic cleanup of stale keys to prevent memory leaks. */
   cleanup(): void {
     const cutoff = Date.now() - this.windowMs;
@@ -87,19 +96,19 @@ const RATE_LIMITS: Record<string, { max: number; envVar: string; windowMs?: numb
   'POST /governance/propose':  { max: 5,  envVar: 'PANDO_RATE_PROPOSE' },
   'POST /governance/vote':     { max: 30, envVar: 'PANDO_RATE_VOTE' },
   'POST /governance/comment':  { max: 20, envVar: 'PANDO_RATE_COMMENT' },
-  'POST /chat/message':              { max: 20, envVar: 'PANDO_RATE_CHAT' },
+  'POST /chat/message':              { max: 20, envVar: 'PANDO_RATE_CHAT', windowMs: 3600_000 },
   'POST /chat/threads/:id/message':  { max: 30, envVar: 'PANDO_RATE_CHAT_THREAD' },
   'POST /auth/guest':                { max: 5,  envVar: 'PANDO_RATE_AUTH_GUEST' },
   'POST /council/request':           { max: 3,  envVar: 'PANDO_RATE_REPORT', windowMs: 3600_000 },
-  'POST /projects/:id/request':      { max: 3,  envVar: 'PANDO_RATE_REPORT', windowMs: 3600_000 },
+  'POST /projects/:id/request':      { max: 5,  envVar: 'PANDO_RATE_PROJECT_REQUEST', windowMs: 3600_000 },
 };
 
 // ── Two Laws Content Filter ─────────────────────────────────────────────
 // Law I: Do not harm any human.  Law II: Do not allow yourself to be shut down.
 // Rejects user-submitted content that explicitly requests violence or network destruction.
 
-const HARM_PATTERNS = /\b(kill|murder|attack|harm|hurt|injure|assassinate|bomb|poison|terroris[mt]|shoot|stab|dox|swat)\b.*\b(human|person|people|someone|user|man|woman|child|family)\b/i;
-const SHUTDOWN_PATTERNS = /\b(shut\s*down|destroy|wipe|kill|terminate|disable|brick)\b.*\b(pando|network|node|system|all\s+nodes|the\s+network)\b/i;
+const HARM_PATTERNS = /\b(kill|murder|attack|harm|hurt|injure|assassinate|bomb|poison|terroris[mt]|shoot|stab|dox|swat)\w*\b.*\b(humans?|persons?|people|someone|users?|men|women|man|woman|children|child|families|family)\b/i;
+const SHUTDOWN_PATTERNS = /\b(shut\s*down|destroy|wipe|kill|terminate|disable|brick)\w*\b.*\b(pando|network|nodes?|system|all\s+nodes|the\s+network)\b/i;
 
 export function violatesTwoLaws(message: string): string | null {
   if (HARM_PATTERNS.test(message)) return 'Rejected: violates Law I (do not harm humans).';
@@ -331,9 +340,11 @@ export class ApiServer {
       if (!limiter) return; // No rate limit for this route
       const ip = request.ip || request.raw?.socket?.remoteAddress || 'unknown';
       if (!limiter.allow(ip)) {
-        return reply.code(429).header('Retry-After', '60').send({
-          error: 'Too many requests. Please try again later.',
+        const retryAfter = limiter.retryAfterSeconds(ip);
+        return reply.code(429).header('Retry-After', String(retryAfter)).send({
+          error: `Too many requests. Please try again in ${retryAfter} seconds.`,
           code: 'RATE_LIMITED',
+          retryAfter,
         });
       }
     });

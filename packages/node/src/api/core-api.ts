@@ -467,7 +467,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       }
       const lawViolation = violatesTwoLaws(message);
       if (lawViolation) {
-        return reply.code(400).send({ error: lawViolation });
+        return reply.code(403).send({ error: lawViolation });
       }
       const adapter = node.getEngineAdapter();
       if (!adapter?.available) {

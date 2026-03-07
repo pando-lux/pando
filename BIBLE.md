@@ -216,7 +216,7 @@ Claude Code is NOT a dumb model API. It is a **persistent agent runtime** with i
 - `packages/core/src/provider/claude-code.ts` — `createClaudeCodeModel()` returns LanguageModelV3-compatible object. Persistent sessions via `--session-id`/`--resume`. Windows-safe (no shell, stdin pipe, full path resolve). System text length guard (32K limit).
 - `packages/core/src/provider/provider.ts` — `ProviderName` includes `"claude-code"`. `createModel()` routes `modelId === "claude-code"` to the CLI provider with server port.
 - `packages/core/src/engine/engine.ts` — Input wrapping ([BOARD]+[GOALS]+[SITUATION]+[MESSAGE]), reflection follow-up with `_inReflectionFollowUp` recursion guard, `_claudeCodeLock` for sequential turn execution.
-- `packages/server/src/routes/api.ts` — Memory HTTP API: `GET /v1/memories/search`, `GET /v1/memories`, `POST /v1/memories`, `GET /v1/memories/health`. Model includes `{ id: "claude-code", label: "Claude Code (CLI)", tier: "local" }`.
+- `packages/server/src/routes/api.ts` — Memory HTTP API: `GET /v1/memories/search` (FTS5 full-text with LIKE fallback), `GET /v1/memories`, `POST /v1/memories`, `GET /v1/memories/health`. FTS5 lazy-initialized via `ensureFts5()` — creates `memories_fts` virtual table, auto-synced on insert. Model includes `{ id: "claude-code", label: "Claude Code (CLI)", tier: "local" }`.
 
 **Architecture (implemented):**
 
@@ -892,7 +892,7 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 5. Project metadata (visibility, owner) set by node based on user request
 6. When build completes → DeployPipeline triggers (GitHub → deploy → marketplace)
 
-**PARTIALLY BUILT.** Engine Adapter creates `~/.pando/projects/{id}/` directories with `PANDO_PROJECT.json` metadata (nodeUrl, nodeId, projectId, linked flag). PandoCode config-side linking settings (network.linked, network.nodeUrl) not yet in PandoCode itself — requires pando-code repo changes.
+**BUILT.** Engine Adapter creates `~/.pando/projects/{id}/` directories with `PANDO_PROJECT.json` metadata (nodeUrl, nodeId, projectId, linked flag). PandoCode detects this on config load via `detectNetworkLinking()` in `config/index.ts` — scans project path + `~/.pando/projects/` for linked metadata. Exposes `GET /api/network` (PandoCode server) and `GET /v1/network` (Hono API) for clients to check linking status.
 
 ### 5.10 The Universal Project Pattern — Board as Work Queue
 
@@ -960,7 +960,7 @@ Validation (at doorman + API level):
   1. Min 5 chars, max 500 chars
   2. Board task dedup: exact title match on pending/in_progress tasks returns existing task ID
   3. Rate limit: 3 requests/hour per IP (RateLimiter with 1-hour window on council/request + projects/:id/request)
-  4. TODO: Two Laws filter (content safety check before board insertion)
+  4. Two Laws filter: violatesTwoLaws() at API endpoints (403) + HARM/SHUTDOWN patterns in insertBoardTask() (defense-in-depth)
 ```
 
 **API endpoints (BUILT):**
@@ -969,9 +969,10 @@ Validation (at doorman + API level):
 - `GET /v1/projects/:id/board` — per-project board view (empty array if no engine DB)
 - `POST /v1/projects/:id/request` — submit bug/feature to specific project board (rate limited: 3/hour)
 
-**Gateway integration (TODO):**
-- `/council` page: live board, submit form, ticket status
-- Per-project pages: "Report Bug" / "Suggest Feature"
+**Gateway integration (BUILT):**
+- `/council` page: live board view, submit report form, agent status + trigger buttons
+- Proxied via `/api/council/dashboard` → `GET /v1/council/status` and `/api/council/trigger` → `POST /v1/council/trigger/:agent`
+- Per-project pages: "Report Bug" / "Suggest Feature" (TODO)
 
 #### 5.10.3 Project Teams Wake Up on Schedule
 
@@ -1175,7 +1176,7 @@ GOTCHAS:
 |---|---|
 | Council host node dies | Another contributor node's council takes over. Board + memory persist in SQLite. |
 | Too many user requests | Board is the buffer. Rate limited: 3/hour per IP on report endpoints. Council batches similar. |
-| Bad/spam requests | Board task dedup (exact title match). Rate limit: 3/hour per IP. Council deprioritizes low-value tasks. TODO: Two Laws filter. |
+| Bad/spam requests | Board task dedup (exact title match). Rate limit: 3/hour per IP. Council deprioritizes low-value tasks. Two Laws filter at API (403) + storage (defense-in-depth). |
 | Observer creates too many tasks | Council batches similar issues, prioritizes CRITICAL. |
 | Council proposes bad code | Governance Layer 5 (AI review) catches it. QA catches post-deploy regressions. |
 | Project board grows too large | Lead closes stale tasks (>24h). Spawns parallel builders if backlog >10. |
@@ -1498,7 +1499,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 | Issue | Location | Problem |
 |---|---|---|
-| **PandoCode Network Linking** | PandoCode config + engine-adapter | PARTIAL — Node creates PANDO_PROJECT.json in project workspaces. PandoCode config-side settings (network.linked) not yet in pando-code repo. See Section 5.9. |
+| **PandoCode Network Linking** | PandoCode config + engine-adapter | BUILT — Node creates PANDO_PROJECT.json, PandoCode detects via `detectNetworkLinking()`. `GET /api/network` endpoint. See Section 5.9. |
 | ~~**Claude Code CLI provider**~~ | `@pando-code/core` provider/claude-code.ts | **DONE.** Lives in pando-code repo as a provider. Shows in model dropdown. See Section 3.2.9. |
 | **Contributor limits** | Partially built | Contributors need to set max requests/day, budget caps. Daily compute cap (50 jobs/day) is built. Per-user API limits not yet implemented. |
 | ~~**Node mode CLI flag**~~ | `cli.ts` | **FIXED.** Modes: `contributor|secure|lightweight|full`. Legacy `compute|relay` kept as aliases. |

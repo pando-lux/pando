@@ -22,6 +22,13 @@ import { homedir } from 'node:os';
 import type { ResourceRegistry } from '../platform/resource-registry.js';
 import { OBSERVER_PROMPT, QA_PROMPT, COUNCIL_PROMPT } from './council-prompts.js';
 
+// ─── Two Laws Content Filter (defense-in-depth at storage level) ─────────
+// Duplicated from api-server.ts so the storage layer rejects harmful content
+// even if an internal code path bypasses the API endpoint checks.
+
+const HARM_PATTERNS = /\b(kill|murder|attack|harm|hurt|injure|assassinate|bomb|poison|terroris[mt]|shoot|stab|dox|swat)\w*\b.*\b(humans?|persons?|people|someone|users?|men|women|man|woman|children|child|families|family)\b/i;
+const SHUTDOWN_PATTERNS = /\b(shut\s*down|destroy|wipe|kill|terminate|disable|brick)\w*\b.*\b(pando|network|nodes?|system|all\s+nodes|the\s+network)\b/i;
+
 // ─── Dynamic imports (pando-code is ESM, loaded at runtime) ─────────────
 
 let _EnginePool: any = null;
@@ -587,6 +594,15 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   /** Insert a board task into any PandoCode SQLite DB. Dedup by exact title match. */
   private insertBoardTask(dbPath: string | null, title: string, description?: string): string | null {
     if (!dbPath || !this.Database) return null;
+
+    // Defense-in-depth: Two Laws content filter at the storage level.
+    // API endpoints check too, but this catches any code path that calls addBoardTask() directly.
+    const textToCheck = `${title} ${description || ''}`;
+    if (HARM_PATTERNS.test(textToCheck) || SHUTDOWN_PATTERNS.test(textToCheck)) {
+      console.warn(`[EngineAdapter] insertBoardTask rejected: Two Laws violation in "${title.slice(0, 60)}"`);
+      return null;
+    }
+
     try {
       const db = new this.Database(dbPath);
 
