@@ -2,7 +2,7 @@
 
 > **Architecture reference: `BIBLE.md`** at repo root. Read it for architecture, component details, technical debt, and gotchas. This file is operational instructions only.
 
-> **If you are the CEO agent (Claude Code on Windows dev machine):** Your mission is in `docs/E2E-ROADMAP.md`. Read it on every session start. Full CEO-level technical authority.
+> **If you are the CEO agent (Claude Code on Windows dev machine):** Current mission: `docs/BRAINSTORM-ROADMAP.md` (council rewire). Read it + `BIBLE.md` Section 3.2 + Section 5.10 on every session start. Full CEO-level technical authority.
 
 > **If you are a Pando AI worker:** Your task is in your startup prompt, not this file.
 
@@ -10,7 +10,7 @@
 
 Pando is a decentralized, AI-managed network. The currency is **Lux**. Every participant runs the same node. The node IS the network. Four independent packages (@pando/identity, @pando-code/core, @pando/tests, @pando/ledger) composed by @pando/node.
 
-**The brain/body split:** @pando-code/core = brain (intelligence, memory, tools). @pando/node = body (P2P, identity, economy, governance). engine-bridge.ts = nervous system.
+**The brain/body split:** @pando-code/core = brain (intelligence, memory, tools, agents, board, communication). @pando/node = body (P2P, identity, economy, governance). engine-adapter.ts = nervous system. **CRITICAL: Never rebuild PandoCode features in pando-node. See BIBLE.md Section 3.2.**
 
 ## Package Structure
 

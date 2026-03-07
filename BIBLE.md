@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-07 (deploy pipeline proven E2E + Council/Observer/QA built and live). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-07 (deploy pipeline proven E2E + Council architecture corrected — rewire in progress). Maintainer: Claude Code (CEO agent).
 
 ---
 
