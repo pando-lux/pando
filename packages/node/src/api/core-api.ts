@@ -143,6 +143,51 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       };
     });
 
+    // GET /upgrade/diagnose — diagnostic: check what the catchup timer would do
+    fastify.get('/upgrade/diagnose', async () => {
+      const upgradeProtocol = node.getUpgradeProtocol();
+      const gov = node.getGovernance();
+      if (!gov || !upgradeProtocol) return { error: 'Not ready' };
+
+      const results: any[] = [];
+      const proposals = gov.getProposals();
+      const currentVersion = upgradeProtocol.getUpgradeStatus().currentVersion;
+
+      for (const p of proposals) {
+        if (p.status !== 'passed' || p.category !== 'upgrade') continue;
+        const commitHash = (p as any).upgradePayload?.commitHash;
+        if (!commitHash) { results.push({ id: p.id.slice(0, 16), skip: 'no commitHash' }); continue; }
+        if (upgradeProtocol.hasApplied(commitHash)) { results.push({ id: p.id.slice(0, 16), commitHash, skip: 'already applied' }); continue; }
+        if (currentVersion?.startsWith(commitHash) || commitHash.startsWith((currentVersion || '').slice(0, commitHash.length))) {
+          results.push({ id: p.id.slice(0, 16), commitHash, skip: 'current version matches' }); continue;
+        }
+
+        // Check git
+        let isAncestor = false;
+        try {
+          execSync(`git merge-base --is-ancestor ${commitHash} HEAD`, { cwd: process.cwd(), timeout: 5000, stdio: 'pipe' });
+          isAncestor = true;
+        } catch {}
+
+        let canFetch = false;
+        try {
+          execSync('git ls-remote --exit-code origin master', { cwd: process.cwd(), timeout: 10000, stdio: 'pipe' });
+          canFetch = true;
+        } catch {}
+
+        results.push({
+          id: p.id.slice(0, 16),
+          commitHash,
+          currentVersion,
+          isAncestor,
+          canFetch,
+          wouldUpgrade: !isAncestor && canFetch,
+        });
+      }
+
+      return { diagnose: results, upgradeInProgress: node.isUpgradeInProgress() };
+    });
+
     // POST /upgrade/propose — submit upgrade proposal (description only, no diff)
     fastify.post('/upgrade/propose', async (request: any, reply: any) => {
       const authHeader = request.headers.authorization || '';
