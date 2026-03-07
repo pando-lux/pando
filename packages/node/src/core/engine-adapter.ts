@@ -310,12 +310,15 @@ export class EngineAdapter {
       maxEngines: 20,
       idleTTLMs: 30 * 60 * 1000,
       skipKnowledgeSync: true,
-      onAfterCreate: async (_id: string, engine: any) => {
+      onAfterCreate: async (id: string, engine: any) => {
         // Inject Lux budget
         engine.setBudgetProvider(this.luxProvider);
-        // Register Pando tools
+        // Register Pando tools (filtered for council agents)
+        const allowedSet = (TOOL_SETS as any)[id] as string[] | null | undefined;
         for (const tool of this.pandoTools) {
-          engine.tools.register(tool);
+          if (!allowedSet || allowedSet.includes(tool.name)) {
+            engine.tools.register(tool);
+          }
         }
       },
     });
@@ -467,33 +470,20 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     const baseDir = this.config.dataDir || join((await import('node:os')).homedir(), '.pando');
 
     const agents = [
-      { id: 'observer', prompt: OBSERVER_PROMPT, toolSet: TOOL_SETS.observer },
-      { id: 'qa',       prompt: QA_PROMPT,       toolSet: TOOL_SETS.qa },
-      { id: 'council',  prompt: COUNCIL_PROMPT,  toolSet: TOOL_SETS.council },
-    ] as const;
+      { id: 'observer', prompt: OBSERVER_PROMPT },
+      { id: 'qa',       prompt: QA_PROMPT },
+      { id: 'council',  prompt: COUNCIL_PROMPT },
+    ];
 
     for (const agent of agents) {
       const agentDir = join(baseDir, 'council', agent.id);
       mkdirSync(agentDir, { recursive: true });
 
+      // Tool filtering happens in onAfterCreate via TOOL_SETS lookup by engine id
       await this.pool.getOrCreate(agent.id, {
         projectPath: agentDir,
         systemPrompt: agent.prompt,
       });
-
-      // Apply tool filtering for restricted agents
-      if (agent.toolSet) {
-        const engine = this.pool.get(agent.id);
-        if (engine?.tools) {
-          const allowed = new Set(agent.toolSet);
-          const allTools = engine.tools.list?.() || [];
-          for (const tool of allTools) {
-            if (tool.name?.startsWith('pando_') && !allowed.has(tool.name)) {
-              engine.tools.unregister?.(tool.name);
-            }
-          }
-        }
-      }
 
       console.log(`[EngineAdapter] Council agent "${agent.id}" started.`);
     }
