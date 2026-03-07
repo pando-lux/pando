@@ -201,7 +201,7 @@ export async function registerPlatformRoutes(
       if (classification.intent === 'report') {
         // User is reporting a bug or requesting a feature — create a board task for the council
         const adapter = node.getEngineAdapter();
-        const severity = /\b(crash|critical|down|outage|broken)\b/i.test(trimmed) ? 'BUG' : 'FEATURE';
+        const severity = /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(trimmed) ? 'BUG' : 'FEATURE';
         const taskTitle = `[${severity}:user] ${(classification.description || trimmed).slice(0, 120)}`;
         const taskId = adapter?.addBoardTask(taskTitle, trimmed.slice(0, 500));
         const reply = taskId

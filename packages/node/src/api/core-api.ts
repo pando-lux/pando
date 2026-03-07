@@ -468,7 +468,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       if (!adapter?.available) {
         return reply.code(503).send({ error: 'Council not running' });
       }
-      const severity = /\b(crash|critical|down|outage|broken)\b/i.test(message) ? 'BUG' : 'FEATURE';
+      const severity = /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(message) ? 'BUG' : 'FEATURE';
       const taskTitle = `[${severity}:user] ${message.slice(0, 120)}`;
       const taskId = adapter.addBoardTask(taskTitle, message.slice(0, 500));
       if (!taskId) {
