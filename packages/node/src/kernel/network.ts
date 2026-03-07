@@ -266,6 +266,11 @@ export class PandoNetwork {
       pubsub: gossipsub({
         emitSelf: false,
         allowPublishToZeroTopicPeers: true,
+        // Low-latency tuning: flood-publish sends to ALL mesh peers directly
+        // instead of relying on gossip forwarding — ideal for small networks (<20 nodes)
+        floodPublish: true,
+        // Faster mesh maintenance (default 1000ms)
+        heartbeatInterval: 700,
       }),
       dcutr: dcutr(),
     };
@@ -284,7 +289,11 @@ export class PandoNetwork {
       },
       transports,
       connectionEncrypters: [noise()],
-      streamMuxers: [yamux()],
+      streamMuxers: [yamux({
+        // Keep connections warm to reduce latency on idle links
+        enableKeepAlive: true,
+        keepAliveInterval: 15_000, // 15s keepalive pings
+      })],
       peerDiscovery,
       services,
     });
@@ -332,8 +341,10 @@ export class PandoNetwork {
         connectedAt: Date.now(),
         lastSeen: Date.now(),
       });
-      // Phase 54.2: Persist known peer (delayed 3s to allow identify protocol to populate peerStore)
-      this.updateKnownPeer(peerId).catch(() => {});
+      // Phase 54.2: Persist known peer — delay 3s to allow identify protocol to populate
+      // peerStore with announce addresses (public IPs). Without delay, saved addresses
+      // may be incomplete, causing stale reconnection attempts.
+      setTimeout(() => this.updateKnownPeer(peerId).catch(() => {}), 3_000);
       // Notify handlers
       for (const handler of this.peerConnectHandlers) {
         try { handler(peerId); } catch {}
