@@ -1134,7 +1134,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       const db = new this.Database(teamData.dbPath);
       const sets: string[] = [];
       const vals: any[] = [];
-      if (updates.status && ALLOWED_COLUMNS.has('status')) { sets.push('status = ?'); vals.push(updates.status); }
+      if (updates.status && ALLOWED_COLUMNS.has('status')) { sets.push('status = ?'); vals.push(updates.status.replace(/-/g, '_')); }
       if (updates.progress !== undefined && ALLOWED_COLUMNS.has('progress')) { sets.push('progress = ?'); vals.push(updates.progress); }
       if (sets.length === 0) { db.close(); return false; }
       vals.push(taskId);
@@ -1199,7 +1199,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       const db = new this.Database(dbPath);
       const tasks = db.prepare(
         `SELECT id, title, status, created_at, progress FROM board_tasks
-         WHERE status IN ('pending', 'in_progress')
+         WHERE status IN ('pending', 'in_progress', 'in-progress')
          ORDER BY created_at DESC LIMIT 50`
       ).all();
       db.close();
