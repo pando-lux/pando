@@ -3,7 +3,6 @@ import { ContentSafetyReviewer } from './platform/content-safety.js';
 import { ResourceRegistry } from './platform/resource-registry.js';
 import { CredentialStore } from './core/credential-store.js';
 import { ResourceHealthChecker } from './platform/resource-health.js';
-import { GatewayDeployPool } from './core/gateway-deploy-pool.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
@@ -113,42 +112,6 @@ export async function initCore(node: any): Promise<void> {
       }
     }
 
-    // Distributed Hosting Pool — deploys gateway to all contributed hosting accounts on governance approval
-    node.gatewayDeployPool = new GatewayDeployPool(node.network, node.identity.peerId, node.resourceRegistry, process.cwd());
-    {
-      const credStore = (node as any)._credentialStore as import('./core/credential-store.js').CredentialStore | undefined;
-      if (credStore) node.gatewayDeployPool.setCredentialStore(credStore);
-
-      // Legacy migration: VERCEL_DEPLOY_TOKEN env var → hosting_platform resource
-      if (process.env.VERCEL_DEPLOY_TOKEN && credStore?.hasDecryptionCapability()) {
-        const existing = node.resourceRegistry.findResources('hosting_platform').filter((r: any) => r.metadata?.provider === 'vercel');
-        if (existing.length === 0) {
-          try {
-            await node.resourceRegistry.registerResource('hosting_platform', process.env.VERCEL_DEPLOY_TOKEN, {
-              metadata: { provider: 'vercel', service: 'Vercel', migrated: true },
-            });
-            console.log('[gateway-pool] Migrated VERCEL_DEPLOY_TOKEN to hosting_platform resource');
-          } catch (err: any) {
-            console.warn(`[gateway-pool] Failed to migrate VERCEL_DEPLOY_TOKEN: ${err.message}`);
-          }
-        }
-        delete process.env.VERCEL_DEPLOY_TOKEN;
-      }
-    }
-    await node.gatewayDeployPool.start();
-
-    // Advertise hosting providers in capability profile
-    {
-      const hostingResources = node.resourceRegistry.findResources('hosting_platform');
-      if (hostingResources.length > 0 && node.capabilityRegistry) {
-        const localProfile = node.capabilityRegistry.getLocalProfile();
-        if (localProfile) {
-          const providers = hostingResources.map((r: any) => r.metadata?.provider).filter(Boolean) as import('@pando/shared').HostingProvider[];
-          if (!localProfile.details) localProfile.details = {} as any;
-          localProfile.details!.hosting = { providers };
-          localProfile.updatedAt = Date.now();
-          node.capabilityRegistry.setLocalProfile(localProfile);
-        }
-      }
-    }
+    // Gateway hosting pool removed — gateway is managed separately on Vercel.
+    // App deployment is now handled by AppManager (see core/app-manager.ts).
 }

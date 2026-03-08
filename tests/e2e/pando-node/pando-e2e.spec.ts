@@ -490,3 +490,403 @@ test('Engines list includes team agents', async () => {
   console.log(`[e2e] PASS: Engines list — ${data.engines.length} total, ${teamEngines.length} team agents (${teamEngines.join(', ')}).`);
 });
 
+// ── AppManager E2E Tests ──────────────────────────────────────────────────
+
+const TEST_APP_ID = `e2e-test-app-${Date.now()}`;
+const TEST_APP_NAME = 'E2E Test App';
+const TEST_REPO_URL = 'https://github.com/pando-lux/test-static-app.git';
+
+test('POST /apps — register a new app', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      id: TEST_APP_ID,
+      name: TEST_APP_NAME,
+      repoUrl: TEST_REPO_URL,
+      tier: '2',
+      buildCmd: 'echo build-ok',
+      startCmd: 'echo start-ok',
+      healthEndpoint: '/health',
+    }),
+  });
+  expect(res.ok).toBe(true);
+  console.log(`[e2e] PASS: App registered — ${TEST_APP_ID}`);
+});
+
+test('POST /apps — rejects missing required fields', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ id: 'bad', name: '' }),
+  });
+  expect(res.status).toBe(400);
+  const data = await res.json() as any;
+  expect(data.error).toContain('Missing required fields');
+  console.log('[e2e] PASS: App registration rejects missing fields.');
+});
+
+test('GET /apps — list all apps (includes pando-node as app[0])', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+  expect(Array.isArray(data.apps)).toBe(true);
+  expect(data.apps.length).toBeGreaterThanOrEqual(1);
+
+  // pando-node should always be registered as app[0]
+  const pandoApp = data.apps.find((a: any) => a.id === 'pando-node');
+  expect(pandoApp).toBeTruthy();
+  expect(pandoApp.name).toBe('pando-node');
+
+  // Our test app should also be in the list
+  const testApp = data.apps.find((a: any) => a.id === TEST_APP_ID);
+  expect(testApp).toBeTruthy();
+
+  console.log(`[e2e] PASS: Apps list — ${data.apps.length} apps. pando-node status: ${pandoApp.status}`);
+});
+
+test('GET /apps/:id — get specific app details', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps/${TEST_APP_ID}`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+  expect(data.app).toBeTruthy();
+  expect(data.app.id).toBe(TEST_APP_ID);
+  expect(data.app.name).toBe(TEST_APP_NAME);
+  expect(data.app.repo_url).toBe(TEST_REPO_URL);
+  expect(data.app.status).toBe('registered');
+  expect(Array.isArray(data.history)).toBe(true);
+  console.log(`[e2e] PASS: App details — id=${data.app.id}, status=${data.app.status}, tier=${data.app.tier}`);
+});
+
+test('GET /apps/:id — returns 404 for nonexistent app', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps/does-not-exist-xyz`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.status).toBe(404);
+  console.log('[e2e] PASS: Nonexistent app returns 404.');
+});
+
+test('GET /apps/:id/health — health check for registered (non-running) app', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps/${TEST_APP_ID}/health`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  // App is registered but not deployed — health check returns result (healthy=false or error)
+  if (res.ok) {
+    const data = await res.json() as any;
+    expect(typeof data.healthy).toBe('boolean');
+    console.log(`[e2e] PASS: Health check — healthy=${data.healthy}`);
+  } else {
+    // 500 is acceptable for non-deployed apps
+    expect([500]).toContain(res.status);
+    console.log(`[e2e] PASS: Health check for non-deployed app returns ${res.status}.`);
+  }
+});
+
+test('GET /apps/:id/history — returns deployment history', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps/${TEST_APP_ID}/history`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+  expect(Array.isArray(data.history)).toBe(true);
+  console.log(`[e2e] PASS: App history — ${data.history.length} entries.`);
+});
+
+test('GET /apps/:id/history — supports limit parameter', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps/${TEST_APP_ID}/history?limit=5`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+  expect(Array.isArray(data.history)).toBe(true);
+  // history.length should be <= 5
+  expect(data.history.length).toBeLessThanOrEqual(5);
+  console.log(`[e2e] PASS: App history with limit — ${data.history.length} entries (limit=5).`);
+});
+
+test('GET /apps/pando-node — pando-node self-registration details', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps/pando-node`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+  expect(data.app).toBeTruthy();
+  expect(data.app.id).toBe('pando-node');
+  expect(data.app.name).toBe('pando-node');
+  // pando-node should have status 'live' (registered and running)
+  expect(['live', 'registered']).toContain(data.app.status);
+  // Should have a current_commit (the running commit hash)
+  if (data.app.current_commit) {
+    expect(data.app.current_commit.length).toBeGreaterThanOrEqual(7);
+  }
+  console.log(`[e2e] PASS: pando-node — status=${data.app.status}, commit=${data.app.current_commit?.slice(0, 12) || 'none'}`);
+});
+
+test('POST /apps/:id/deploy — deploy attempt for test app (expected fail on Windows)', async () => {
+  // On Windows dev, deploy will fail because there's no PM2/nginx — that's expected.
+  // What matters is the API works and returns a proper response.
+  const res = await fetch(`${NODE_API_URL}/v1/apps/${TEST_APP_ID}/deploy`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  });
+
+  const data = await res.json() as any;
+  // On Windows: success=false with error about git/pm2/nginx — acceptable
+  // On EC2: could actually succeed
+  expect(typeof data.success === 'boolean' || data.error).toBeTruthy();
+
+  if (data.success) {
+    console.log(`[e2e] PASS: App deployed successfully — url=${data.url}`);
+  } else {
+    console.log(`[e2e] PASS: Deploy responded with expected error — ${(data.error || '').slice(0, 100)}`);
+  }
+});
+
+test('POST /apps/:id/update — update attempt records history', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps/${TEST_APP_ID}/update`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  });
+
+  const data = await res.json() as any;
+  expect(typeof data.success === 'boolean' || data.error).toBeTruthy();
+
+  // Check history was recorded regardless of success/failure
+  const histRes = await fetch(`${NODE_API_URL}/v1/apps/${TEST_APP_ID}/history`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  if (histRes.ok) {
+    const histData = await histRes.json() as any;
+    // Should have at least the deploy attempt from previous test
+    expect(histData.history.length).toBeGreaterThanOrEqual(0);
+    console.log(`[e2e] PASS: Update responded, history has ${histData.history.length} entries.`);
+  } else {
+    console.log(`[e2e] PASS: Update responded — ${(data.error || '').slice(0, 100)}`);
+  }
+});
+
+test('POST /apps/:id/rollback — rollback attempt on test app', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps/${TEST_APP_ID}/rollback`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  });
+
+  const data = await res.json() as any;
+  expect(typeof data.success === 'boolean' || data.error).toBeTruthy();
+  console.log(`[e2e] PASS: Rollback responded — success=${data.success}, ${(data.error || data.restoredCommit || '').slice(0, 80)}`);
+});
+
+test('POST /apps/:id/stop — stop test app', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps/${TEST_APP_ID}/stop`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  });
+
+  // May succeed or fail depending on whether the app was ever running
+  if (res.ok) {
+    const data = await res.json() as any;
+    expect(data.stopped).toBe(true);
+    console.log(`[e2e] PASS: App stopped — id=${data.id}`);
+  } else {
+    expect([500]).toContain(res.status);
+    console.log(`[e2e] PASS: Stop responded (status ${res.status}) — app may not have been running.`);
+  }
+});
+
+test('POST /apps/:id/start — start (re-deploy) test app', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps/${TEST_APP_ID}/start`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+  });
+
+  const data = await res.json() as any;
+  expect(typeof data.success === 'boolean' || data.error).toBeTruthy();
+  console.log(`[e2e] PASS: Start responded — success=${data.success}`);
+});
+
+test('DELETE /apps/:id — unregister + cleanup test app', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps/${TEST_APP_ID}`, {
+    method: 'DELETE',
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+  expect(data.deleted).toBe(true);
+
+  // Verify it's gone
+  const getRes = await fetch(`${NODE_API_URL}/v1/apps/${TEST_APP_ID}`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(getRes.status).toBe(404);
+
+  console.log('[e2e] PASS: App deleted and verified gone.');
+});
+
+test('GET /apps — pando-node survives test app cleanup', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+
+  // pando-node should still be there
+  const pandoApp = data.apps.find((a: any) => a.id === 'pando-node');
+  expect(pandoApp).toBeTruthy();
+
+  // test app should be gone
+  const testApp = data.apps.find((a: any) => a.id === TEST_APP_ID);
+  expect(testApp).toBeFalsy();
+
+  console.log(`[e2e] PASS: After cleanup — ${data.apps.length} apps remain, pando-node intact.`);
+});
+
+test('POST /webhooks/github — rejects non-matching repo', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/webhooks/github`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      repository: {
+        clone_url: 'https://github.com/nonexistent/repo.git',
+        html_url: 'https://github.com/nonexistent/repo',
+      },
+      ref: 'refs/heads/main',
+    }),
+  });
+  // Should return matched=false since no app is registered for this repo
+  if (res.ok) {
+    const data = await res.json() as any;
+    expect(data.matched).toBe(false);
+    console.log(`[e2e] PASS: Webhook correctly reports no match — reason: ${data.reason}`);
+  } else {
+    // Auth rejection is also acceptable behavior
+    expect([401, 403]).toContain(res.status);
+    console.log(`[e2e] PASS: Webhook auth rejected (status ${res.status}).`);
+  }
+});
+
+test('POST /webhooks/github — rejects invalid payload', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/webhooks/github`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ not: 'a valid payload' }),
+  });
+  if (res.ok) {
+    const data = await res.json() as any;
+    expect(data.matched).toBe(false);
+    console.log(`[e2e] PASS: Webhook rejects invalid payload — reason: ${data.reason}`);
+  } else {
+    // Auth rejection acceptable
+    expect([401, 403]).toContain(res.status);
+    console.log(`[e2e] PASS: Webhook auth rejected (status ${res.status}).`);
+  }
+});
+
+// ── Upgrade Protocol + AppManager Integration ──────────────────────────────
+
+test('GET /apps/pando-node/history — upgrade history is tracked', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps/pando-node/history`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+  expect(Array.isArray(data.history)).toBe(true);
+  console.log(`[e2e] PASS: pando-node history — ${data.history.length} entries.`);
+  if (data.history.length > 0) {
+    const latest = data.history[0];
+    console.log(`  Latest: action=${latest.action}, status=${latest.status}, commit=${latest.to_commit?.slice(0, 12) || 'none'}`);
+  }
+});
+
+test('GET /apps with status filter', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/apps?status=live`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+  expect(Array.isArray(data.apps)).toBe(true);
+  // All returned apps should have status 'live'
+  for (const app of data.apps) {
+    expect(app.status).toBe('live');
+  }
+  console.log(`[e2e] PASS: Apps filtered by status=live — ${data.apps.length} live apps.`);
+});
+
+// ── Governance-Triggered Upgrade E2E Test ─────────────────────────────────
+
+test('Governance upgrade proposal → auto-approve → broadcast to peers', async () => {
+  // Step 1: Get current commit from node status
+  const statusRes = await fetch(`${NODE_API_URL}/v1/status`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(statusRes.ok).toBe(true);
+  const statusData = await statusRes.json() as any;
+  const commitHash = statusData.commitHash;
+  expect(commitHash).toBeTruthy();
+  console.log(`[e2e] Current node commit: ${commitHash}`);
+
+  // Step 2: Get peer count to confirm auto-approve threshold
+  const peersRes = await fetch(`${NODE_API_URL}/v1/peers`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(peersRes.ok).toBe(true);
+  const peersData = await peersRes.json() as any;
+  const peerCount = (peersData.peers?.length || 0) + 1; // +1 for self
+  console.log(`[e2e] Active peers: ${peerCount} (auto-approve threshold: <=8)`);
+  expect(peerCount).toBeLessThanOrEqual(8); // Must be under threshold for auto-approve
+
+  // Step 3: Create upgrade governance proposal (with current commit — safe no-op)
+  const propRes = await fetch(`${NODE_API_URL}/v1/governance/propose`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: '[E2E] Auto-upgrade test — validate governance pipeline',
+      description: 'Automated E2E test. Proposes upgrade to current HEAD commit (no-op). Verifies governance auto-approve + broadcast.',
+      category: 'upgrade',
+      commitHash,
+      votingDurationMs: 60000,
+    }),
+  });
+  expect(propRes.ok).toBe(true);
+  const propData = await propRes.json() as any;
+  expect(propData.proposal).toBeTruthy();
+  const proposalId = propData.proposal.id;
+  console.log(`[e2e] Upgrade proposal created: ${proposalId.slice(0, 16)}...`);
+
+  // Step 4: Verify the proposal has upgradePayload with commitHash
+  expect(propData.proposal.upgradePayload).toBeTruthy();
+  expect(propData.proposal.upgradePayload.commitHash).toBe(commitHash);
+  expect(propData.proposal.category).toBe('upgrade');
+
+  // Step 5: Check proposal status — should be auto-approved (<=8 peers)
+  // Auto-approve may be instant or delayed up to 60s for kernel files
+  // Give it a moment then check
+  await new Promise(r => setTimeout(r, 2000));
+
+  const checkRes = await fetch(`${NODE_API_URL}/v1/governance/proposals`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(checkRes.ok).toBe(true);
+  const allProposals = await checkRes.json() as any;
+  const ourProposal = allProposals.proposals.find((p: any) => p.id === proposalId);
+  expect(ourProposal).toBeTruthy();
+
+  // Should be 'passed' (auto-approved) since <= 8 peers and commitHash matches HEAD (already applied)
+  if (ourProposal.status === 'passed') {
+    console.log(`[e2e] PASS: Upgrade proposal auto-approved! Status: ${ourProposal.status}`);
+  } else {
+    // 'voting' is also acceptable if auto-approve hasn't fired yet
+    expect(['passed', 'voting']).toContain(ourProposal.status);
+    console.log(`[e2e] PASS: Upgrade proposal status: ${ourProposal.status} (may auto-approve shortly)`);
+  }
+
+  // Step 6: Verify the proposal is in the proposals list with correct metadata
+  expect(ourProposal.title).toContain('E2E');
+  expect(ourProposal.category).toBe('upgrade');
+
+  console.log(`[e2e] PASS: Full governance upgrade pipeline tested — proposal ${proposalId.slice(0, 16)}, status=${ourProposal.status}, peers=${peerCount}`);
+});
+

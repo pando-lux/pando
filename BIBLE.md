@@ -353,16 +353,14 @@ Reads from @pando/node HTTP API. No direct database access.
 | Component | File | Status | What it does |
 |---|---|---|---|
 | **EngineAdapter** | `core/engine-adapter.ts` | DONE | The ONE pando-code integration point. PandoCode contributor nodes only. Multi-engine, routing, Pando tools, Lux budget. |
-| **DeployPipeline** | `core/deploy-pipeline.ts` | DONE | Auto-triggers after build: GitHub push → find EC2 secure node → HTTP deploy → update metadata. |
+| **AppManager** | `core/app-manager.ts` | DONE | Unified app lifecycle: SQLite registry (apps.db), blue-green deploy, PM2+nginx (Tier 2), S3 (Tier 1), health monitoring, rollback, P2P dispatch. pando-node = app[0]. |
 | **CredentialStore** | `core/credential-store.ts` | DONE | AES-256-GCM encrypt/decrypt. Secure compute nodes (EC2) only. |
 | **StorageBackend** | `core/storage-backend.ts` | DONE | MongoDB direct or HTTP proxy to compute nodes |
 | **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Git pull + build + restart. GossipSub broadcast. |
-| **GatewayDeployPool** | `core/gateway-deploy-pool.ts` | DONE | Deploy gateway to all contributed hosting accounts |
 | **PaymentGate** | `core/payment-gate.ts` | DONE | Lux escrow for task execution |
 | **CouncilPrompts** | `core/council-prompts.ts` | DONE | System prompts for observer/qa/council. No TOOL_SETS — PandoCode roles handle tool filtering. |
 | **RequestReply** | `core/request-reply.ts` | DONE | Handler registry + broadcast queries only. Unicast removed (Phase A). |
 | **HttpPeerClient** | `core/http-peer-client.ts` | DONE | Direct HTTP for all inter-node operations. Ed25519-signed requests. See Section 4.5. |
-| **HostingAdapters** | `core/hosting-adapters.ts` | DONE | Provider-agnostic deployment (Vercel, Netlify) |
 
 ### 4.3 Platform Layer (non-brain services)
 
@@ -862,66 +860,38 @@ No tick loop. No orchestrator. No message bus. The engine runs when it has somet
 | **Observer** | Long-running engine. Read-only. Monitors network health, peer status. Sends issues to council via send_message. | Scheduler tick (every 30 min) |
 | **QA** | Long-running engine. Runs health checks, API validation. Sends findings to council via send_message. | Scheduler tick (every 30 min) |
 
-### 5.8 Deploy Pipeline (build → github → deploy → marketplace) — PROVEN E2E
+### 5.8 App Lifecycle (AppManager) — Unified Deploy/Update/Monitor
 
-The full lifecycle of a network-built project. **Tested live 2026-03-06.** PandoCode builds. Secure nodes deploy. Keys never travel.
+**AppManager replaces 3 separate systems** (DeployPipeline, HostingService, init-platform deploy handlers) with a single unified app lifecycle manager. SQLite `apps.db` is the single source of truth per node.
+
+**pando-node is app[0].** At boot, AppManager registers pando-node itself as the first app (`app_id: 'pando-node'`) with status `live`, current port, and commit hash. This means the same system that manages user apps also tracks the node itself.
 
 ```
-PandoCode Contributor Node              EC2 Secure Node
-───────────────────────────              ─────────────────
-1. Engine builds code in workspace
-   ~/.pando/projects/{projectId}/
-                │
-2. Build complete (sendToEngine stream ends)
-                │
-3. DeployPipeline auto-triggers (fire-and-forget from platform-api.ts):
-                │
-   Step 1: GitHub push
-      POST /v1/projects/:id/github/push
-      └─ git init (if needed)
-      └─ git add -A
-      └─ git commit "Deploy {ISO timestamp}"
-      └─ git push -u origin HEAD:main --force
-      └─ GitHub token decrypted via HTTP credential proxy to EC2
-      └─ Repo created if new: pando-lux/app-{8chars}-{slug}
-                │
-   Step 2: Find deploy target
-      └─ Query CapabilityRegistry.getAllProfiles()
-      └─ Filter: credentialAccess === true && storageBackend === 'mongodb'
-      └─ This finds EC2 SECURE nodes (NOT PandoCode builders)
-      └─ Self-deploy fallback only if local node has credentialAccess
-                │
-   Step 3: HTTP deploy ─────────────────→ Receives pando/deploy-app
-                                          │
-                                          ├─ git clone {repoUrl} (from GitHub)
-                                          │   OR git pull origin main (if re-deploy)
-                                          │
-                                          ├─ Auto-detect tier from package.json:
-                                          │   Tier 2 if: scripts.start, express/fastify/ws deps,
-                                          │              server.js/app.js main, backend/ dir
-                                          │   Tier 1 otherwise (static HTML/CSS/JS)
-                                          │
-                                          ├─ Tier 1 (static):
-                                          │   Decrypt S3 creds (CREDENTIAL_MASTER_KEY)
-                                          │   Inject window.PANDO_GATEWAY_URL into HTML <head>
-                                          │   Inject window.PANDO_PROJECT_ID into HTML <head>
-                                          │   Upload all static files to S3
-                                          │   Key format: public/{projectId}/{relPath}
-                                          │   Return S3 website URL
-                                          │
-                                          └─ Tier 2 (server app):
-                                              npm install --production
-                                              PM2 start (persistent port registry)
-                                              nginx reverse proxy: /apps/{projectId}/ → localhost:{port}
-                                              Return http://{PUBLIC_IP}/apps/{projectId}/
-                │
-   Step 4: Update project metadata
-      └─ repoUrl, deploymentUrl, deployPeerId
-      └─ deploymentStatus → 'live'
-      └─ Persisted to MongoDB via HTTP storage proxy
-                │
-5. Project appears in marketplace (GET /v1/marketplace)
-   User sees: "Your app is live at https://..."
+App Lifecycle Flow
+──────────────────
+
+REGISTER → DEPLOY → UPDATE → MONITOR
+   │          │        │         │
+   │          │        │         └─ 30s health checks, auto-restart, circuit breaker
+   │          │        │
+   │          │        └─ git pull → blue-green swap:
+   │          │             1. Start new instance on temp port
+   │          │             2. Health check new instance
+   │          │             3. Swap nginx upstream
+   │          │             4. Graceful kill old instance
+   │          │             5. Record in app_history
+   │          │
+   │          └─ Clone from GitHub → detect tier → deploy:
+   │               Tier 1 (static): S3 upload (via contributed ResourceRegistry creds)
+   │               Tier 2 (server): npm install → PM2 start → nginx reverse proxy
+   │
+   └─ appManager.register({ projectId, repoUrl, tier, ... })
+       Auto-register: if update() called for unknown app, auto-registers from ProjectStore
+
+ROLLBACK: restore previous_commit → blue-green swap back → record in history
+
+P2P DISPATCH: findDeployTarget() → CapabilityRegistry (credentialAccess + mongodb)
+              → HttpPeerClient forwards deploy/update to EC2 secure node
 ```
 
 **PROVEN LIVE (2026-03-06) — BOTH TIERS:**
@@ -932,8 +902,8 @@ PandoCode Contributor Node              EC2 Secure Node
 
 **CRITICAL: Builder vs Deployer targeting (the #1 gotcha)**
 ```
-findBestBuilder()      → shareCompute === true && compute_cpu === true   → PandoCode CONTRIBUTOR nodes
-stepFindDeployTarget() → credentialAccess === true && storageBackend === 'mongodb'  → EC2 SECURE nodes
+findBestBuilder()              → shareCompute === true && compute_cpu === true   → PandoCode CONTRIBUTOR nodes
+appManager.findDeployTarget()  → credentialAccess === true && storageBackend === 'mongodb'  → EC2 SECURE nodes
 
 These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse them.
 ```
@@ -952,8 +922,14 @@ These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse 
 **Timeout chain (production-tuned):**
 - HTTP credential proxy: 30s (decrypting GitHub token via EC2)
 - GitHub repo creation inner call: 45s (includes credential decrypt + GitHub API)
-- Deploy pipeline GitHub push: 120s (AbortSignal.timeout)
+- AppManager GitHub push: 120s (AbortSignal.timeout)
 - HTTP deploy request: 300s (5 min — includes git clone + S3 upload or npm install + PM2)
+
+**Health monitoring (Tier 2 apps):**
+- 30s interval health checks (HTTP GET to app port)
+- Auto-restart on failure (up to `max_restarts` threshold)
+- Circuit breaker: if app fails repeatedly, marked `error` — no further restart attempts until manual intervention or rollback
+- All health events recorded in `app_history` table
 
 **Marketplace visibility:**
 - New projects start with `visibility: 'listed'`
@@ -962,20 +938,16 @@ These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse 
 - Use a real project name to see it in the marketplace. "hello world" is intentionally filtered.
 - 128+ projects visible in marketplace as of 2026-03-06.
 
-**Where deploy code lives (all working):**
+**Where app lifecycle code lives:**
 | Component | File | What it does |
 |---|---|---|
-| **DeployPipeline** | `core/deploy-pipeline.ts` | Orchestrator — 4 steps: GitHub push → find EC2 → HTTP deploy → update metadata |
-| **Trigger** | `api/platform-api.ts` `triggerDeployPipeline()` | Fire-and-forget after every `sendToEngine()` completion (4 call sites) |
-| **Deploy handler** | `init-platform.ts` handler for `pando/deploy-app` | Clone from GitHub, detect tier, deploy to S3 or PM2+nginx (dispatched via HTTP) |
-| **Tier 1 (S3)** | `init-platform.ts` (inside deploy-app handler) | S3Client + PutObjectCommand, HTML injection, MIME types |
-| **Tier 2 (PM2)** | `init-platform.ts` (inside deploy-app handler) | npm install, PM2 (for user apps only), port registry, nginx config |
-| **Port registry** | `{dataDir}/app-ports.json` | Persistent port allocation — survives node restarts |
-| **S3 hosting service** | `platform/hosting-service.ts` | Standalone S3 service (pre-signed URLs for private projects) |
-| **GitHub push** | `api/platform-api.ts:3417-3499` | git add -A, commit, force push to origin/main |
-| **GitHub repo create** | `api/platform-api.ts:3326-3414` | GitHub API — create repo in pando-lux org |
-| **Undeploy** | `init-platform.ts:368` handler for `pando/undeploy-app` | PM2 delete, nginx cleanup, port registry removal |
-| **Deploy route** | `api/platform-api.ts` POST /projects/:id/deploy | Manual trigger endpoint |
+| **AppManager** | `core/app-manager.ts` | Unified lifecycle: register, deploy, update (blue-green), rollback, health monitoring, P2P dispatch, SQLite registry |
+| **App API** | `api/app-api.ts` | REST endpoints: /v1/apps/* (13 routes), /v1/webhooks/github |
+| **Trigger** | `api/platform-api.ts` | `appManager.update(projectId)` called with `.catch()` after build completion |
+| **Deploy handler** | `core/app-manager.ts` (internal) | Clone from GitHub, detect tier, deploy to S3 or PM2+nginx |
+| **Port registry** | `apps.db` (SQLite) | Persistent port allocation — per-app row in `apps` table |
+| **GitHub push** | `api/platform-api.ts` | git add -A, commit, force push to origin/main |
+| **GitHub repo create** | `api/platform-api.ts` | GitHub API — create repo in pando-lux org |
 
 **S3 bucket:** `pando-deployments` (us-east-1). URL pattern: `http://pando-deployments.s3-website-us-east-1.amazonaws.com/public/{projectId}/index.html`
 
@@ -1009,7 +981,7 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 3. When linked, node's Engine Adapter can create project engines
 4. Network-created projects go to `~/.pando/projects/{projectId}/`
 5. Project metadata (visibility, owner) set by node based on user request
-6. When build completes → DeployPipeline triggers (GitHub → deploy → marketplace)
+6. When build completes → AppManager.update() triggers (GitHub → deploy → marketplace)
 
 **BUILT.** Engine Adapter creates `~/.pando/projects/{id}/` directories with `PANDO_PROJECT.json` metadata (nodeUrl, nodeId, projectId, linked flag). PandoCode detects this on config load via `detectNetworkLinking()` in `config/index.ts` — scans project path + `~/.pando/projects/` for linked metadata. Exposes `GET /api/network` (PandoCode server) and `GET /v1/network` (Hono API) for clients to check linking status.
 
@@ -1724,7 +1696,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | **Path B end-to-end** | Full pipeline | TESTED LIVE — "build me a portfolio website" → doorman classifies (HTTP to EC2) → project created → PandoCode builds → DeployPipeline → GitHub push → HTTP deploy to EC2 → S3 upload → live URL returned → marketplace listing. Full pipeline proven. |
 | **Unified build routing** | `api/platform-api.ts` | DONE — `findBestBuilder()` replaces the split `hasClaudeCodeAuth` logic. All 4 build handlers use unified flow: create project → find best PandoCode peer (including self) → route. `hasClaudeCodeAuth()` removed from routing (was Anthropic-only, broken for Gemini). |
 | **Circuit breaker fix** | `cli.ts`, `supervisor.ts`, `kernel/` | DONE — Port-conflict exits use code 78 (supervisor won't respawn). Immediate circuit breaker reset on successful boot. Thresholds raised (crash-guard 3→6, circuit-breaker 3→5). |
-| **Deploy Pipeline** | `core/deploy-pipeline.ts` | DONE — Targets EC2 secure nodes (`credentialAccess + storageBackend='mongodb'`). GitHub push → HTTP `pando/deploy-app` to EC2 → S3 (Tier 1) or PM2+nginx (Tier 2) → update project metadata. Auto-triggers after every build completion. |
+| **App Lifecycle (AppManager)** | `core/app-manager.ts`, `api/app-api.ts` | DONE — Unified system replacing DeployPipeline + HostingService + init-platform handlers. SQLite registry, blue-green deploy, health monitoring, rollback, P2P dispatch. 46/46 E2E tests pass. |
 
 ### Restart Architecture (Verified 2026-03-08)
 
@@ -1762,41 +1734,8 @@ The `resourceId` is generated when a credential is contributed (via `/contribute
 | ~~**Node mode CLI flag**~~ | `cli.ts` | **FIXED.** Modes: `contributor|secure|lightweight|full`. Legacy `compute|relay` kept as aliases. |
 | ~~**S3 upload awaiting**~~ | `index.ts` | **FIXED.** Uses `Promise.all(uploadPromises)` instead of 2s sleep. Upload errors surfaced in console. |
 | ~~**Tier 2 PM2 persistence**~~ | `init-platform.ts` | **ALREADY HANDLED.** `pm2 save` is called after every deploy. Port registry also persists. |
-| **Deploy pipeline resilience** | `core/deploy-pipeline.ts` | No retry on GitHub API timeout (full pipeline failure). S3 partial upload = broken deployment (no rollback). PM2 port collision silently kills existing app. Error messages truncated. Pipeline step errors captured but not persisted to project metadata. |
+| **Deploy pipeline resilience** | `core/app-manager.ts` | AppManager provides blue-green deploy (no port collision) + rollback (restore previous commit). Retry on transient failures still TODO. S3 partial upload edge case mitigated by rollback capability. All deploy events persisted to `app_history` table in apps.db. |
 | ~~**deployPeerId not persisting**~~ | `platform-api.ts:3685` | **ALREADY HANDLED.** Saved to both ProjectStore (MongoDB) and ProjectRegistry (local). |
-
-### App Lifecycle Gaps (Tier 2 deployed apps)
-
-**NOTE: PM2 in this section refers to deployed USER APPS (Express, WebSocket servers, etc.), NOT pando-node itself. pando-node is managed by systemd (EC2) or supervisor.ts (Windows).**
-
-Deployed backend apps (Tier 2 / PM2) have no:
-- **Auto-deploy from GitHub** — NO webhook/polling mechanism exists. Deployments are triggered manually via `/v1/projects/:id/deploy` or automatically after PandoCode builds. If someone pushes new code to the app's GitHub repo externally, the running deployment is NOT updated. There is no Vercel-like auto-deploy.
-- **Upgrade mechanism** — redeploy kills old process, starts new one (no blue-green)
-- **Graceful shutdown** — PM2 process terminated immediately, WebSocket connections severed
-- **Version tracking** — no commit history, no rollback capability per deploy
-- **Auto-recovery** — if PM2 fails to restart, Pando only logs a warning (no auto-fix)
-- **Health checks** — no liveness probing of deployed apps
-- **Network awareness** — no centralized registry of which app runs on which node. The project's `deployPeerId` in ProjectStore records where it was LAST deployed, but if that node dies, no other node picks it up.
-
-**How deploy currently works (no auto-redeploy):**
-```
-1. PandoCode builds app code → git push to pando-lux/{repo}
-2. DeployPipeline finds a secure EC2 node (has MongoDB + credentials)
-3. HTTP dispatch → EC2 clones repo, npm install, detects tier:
-   - Tier 1 (static): upload to S3 → public URL
-   - Tier 2 (backend): PM2 start on allocated port → nginx reverse proxy
-4. Project metadata updated with deployUrl + deployPeerId
-5. DONE — no ongoing monitoring or auto-redeploy
-```
-
-**What would be needed for Vercel-like auto-deploy:**
-- GitHub webhook receiver (POST endpoint) that fires on push events
-- Lookup which node runs the app (deployPeerId in ProjectStore)
-- HTTP dispatch to that node: git pull → npm install → PM2 restart
-- Health check after restart to confirm app is healthy
-- Fallback: if deploy node is down, find another secure node and redeploy
-
-Pando node itself has a proper auto-upgrade path (governance → git pull → build → safeRestart → all nodes), but deployed user apps don't benefit from this.
 
 ### Stubs
 
@@ -1961,7 +1900,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 |---|---|
 | `index.ts` | PandoNode class definition (1,670 lines). Lifecycle, getters, utilities. `_start()` delegates to init files. |
 | `init-kernel.ts` | Kernel init (793 lines): P2P, ledger, sync, governance, security, emission, upgrade, request-reply handlers. |
-| `init-core.ts` | Core init (154 lines): storage backends, credentials, deploy pool. |
+| `init-core.ts` | Core init (154 lines): storage backends, credentials, app manager. |
 | `init-platform.ts` | Platform init (1,213 lines): API server, deploy handlers, resources, content, SSE, message handling. |
 | `cli.ts` | Non-interactive entry. Supervisor, crash guard (exit 78 for port conflict), circuit breaker auto-reset on successful boot, port check. |
 | `tui.ts` | Interactive terminal. 30+ slash commands. |
@@ -1983,12 +1922,11 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 |---|---|
 | `core/team-registry.ts` | **NEW.** Team registry (SQLite), GossipSub sync, heartbeat, orphan detection, handoff, P2P board proxy. See Section 5.10. |
 | `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. Team agent setup via startTeam(). Does NOT handle model selection — that's PandoCode's job. |
-| `core/deploy-pipeline.ts` | Build → GitHub → EC2 deploy → metadata. Auto-triggers after sendToEngine(). |
+| `core/app-manager.ts` | Unified app lifecycle: register, deploy, update, rollback, health monitoring. SQLite apps.db. pando-node = app[0]. |
 | `core/credential-store.ts` | AES-256-GCM encrypt/decrypt |
 | `core/http-peer-client.ts` | Direct HTTP for all inter-node operations. Ed25519-signed. See Section 4.5. |
 | `core/storage-backend.ts` | MongoDB or HTTP proxy |
 | `core/upgrade-protocol.ts` | Git pull + build + restart + broadcast |
-| `core/gateway-deploy-pool.ts` | Multi-account gateway deployment |
 | `core/payment-gate.ts` | Lux escrow |
 
 ### Platform (Layer 2)
@@ -2006,6 +1944,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 | `api/kernel-api.ts` | Status, peers, tasks, governance, guardrails, monitoring, scheduler, reputation, admin, wallet, activity, search (~2,400 lines) |
 | `api/core-api.ts` | Upgrade, emissions, security, team routes (/v1/teams/* — board proxy, CRUD, trigger) (~485 lines) |
 | `api/platform-api.ts` | Projects, auth, chat, engines, content, marketplace, resources, testing, templates, per-project board/request, `findBestBuilder()` (~4,200 lines) |
+| `api/app-api.ts` | App lifecycle REST endpoints: /v1/apps/*, /v1/webhooks/github (13 routes) |
 | `api/testing-api.ts` | Testing dashboard routes (11 endpoints) |
 
 ---
@@ -2020,7 +1959,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 ### Import Boundaries (enforced)
 - kernel → only kernel + @pando/*
-- core → kernel + @pando/* (exception: 2 type-only imports from platform — `ResourceRegistry` in engine-adapter.ts and gateway-deploy-pool.ts)
+- core → kernel + @pando/* (exception: type-only import from platform — `ResourceRegistry` in engine-adapter.ts)
 - platform → core + kernel + @pando/*
 - api → platform + core + kernel + @pando/*
 - Never upward (runtime imports). Type-only exceptions acceptable.
@@ -2059,7 +1998,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 - Everything above. Full self-sufficiency.
 
 **Optional (graceful degradation if missing):**
-- GatewayDeployPool (only if hosting tokens contributed)
+- AppManager (manages deployed user apps — Tier 1 S3, Tier 2 PM2+nginx)
 - ResourceMarketplace (operational, not critical path)
 - SecurityMonitor, ReputationManager (enhance but don't block)
 
@@ -2095,9 +2034,9 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 14. **Two kinds of "contribute."** `/contribute openai sk-xxx` donates a key to the network (encrypted on EC2, used server-side for Path A). Running PandoCode on your node contributes your COMPUTE (your local keys, your machine, you earn Lux for builds).
 
-15. **Builder targeting ≠ Deploy targeting.** `findBestBuilder()` looks for `shareCompute + compute_cpu` (PandoCode contributor nodes). `stepFindDeployTarget()` looks for `credentialAccess + storageBackend='mongodb'` (EC2 secure nodes). These are DIFFERENT node types. If you mix them up, deploys silently fail because PandoCode nodes can't decrypt S3 credentials.
+15. **Builder targeting ≠ Deploy targeting.** `findBestBuilder()` looks for `shareCompute + compute_cpu` (PandoCode contributor nodes). `AppManager.findDeployTarget()` looks for `credentialAccess + storageBackend='mongodb'` (EC2 secure nodes). These are DIFFERENT node types. If you mix them up, deploys silently fail because PandoCode nodes can't decrypt S3 credentials.
 
-16. **Deploy pipeline errors are silent.** `triggerDeployPipeline()` is fire-and-forget (`.catch(() => {})`). If it fails, the project still has its GitHub repo but `deploymentStatus` stays `none`. Check node logs for `[deploy-pipeline]` prefixed messages.
+16. **AppManager update errors are logged but non-blocking.** `appManager.update(projectId)` is called with `.catch()` from platform-api.ts after build completion. If it fails, the app retains its previous state. Check node logs for `[app-manager]` prefixed messages. History is recorded in apps.db regardless of success/failure.
 
 17. **Marketplace filters test artifacts.** `getMarketplaceAsync()` uses a regex to strip projects named "hello world", "test app", "demo", "example", etc. If your test project doesn't show up in the marketplace, that's why. Use a real project name.
 

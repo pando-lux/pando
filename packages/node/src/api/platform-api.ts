@@ -11,7 +11,6 @@
 import { toString as uint8ArrayToString, fromString as uint8ArrayFromString } from 'uint8arrays';
 import { publicKeyFromProtobuf } from '@libp2p/crypto/keys';
 import { randomBytes } from 'node:crypto';
-import type { DeployFile } from '../platform/hosting-service.js';
 import type { RouteHelpers } from './middleware/auth.js';
 import { violatesTwoLaws } from './api-server.js';
 
@@ -82,44 +81,6 @@ export async function registerPlatformRoutes(
     return null;
   }
 
-  /**
-   * Trigger the deploy pipeline after a build completes for a project.
-   * Non-blocking — runs in background and logs results.
-   */
-  async function triggerDeployPipeline(projectId: string): Promise<void> {
-    try {
-      const { DeployPipeline } = await import('../core/deploy-pipeline.js');
-      const projectStore = node.getProjectStore?.();
-      const capRegistry = node.getCapabilityRegistry();
-      const selfPeerId = node.getIdentity()?.peerId;
-
-      if (!projectStore || !selfPeerId) {
-        console.log(`[deploy-pipeline] Skipping — missing dependencies (projectStore=${!!projectStore})`);
-        return;
-      }
-
-      const pipeline = new DeployPipeline({
-        apiPort: (fastify.server.address() as any)?.port || 4000,
-        apiToken: deps.apiToken,
-        projectStore,
-        httpPeerClient: (node as any).httpPeerClient || undefined,
-        requestReply: node.getRequestReply() || undefined,
-        capabilityRegistry: capRegistry || undefined,
-        localPeerId: selfPeerId,
-        pushEvent: deps.pushEvent,
-      });
-
-      const result = await pipeline.run(projectId);
-      if (result.success) {
-        console.log(`[deploy-pipeline] Project ${projectId} deployed: repo=${result.repoUrl}, url=${result.deploymentUrl}`);
-      } else {
-        console.warn(`[deploy-pipeline] Project ${projectId} pipeline incomplete: ${result.error || 'some steps failed'}`);
-      }
-    } catch (err: any) {
-      console.warn(`[deploy-pipeline] Failed for ${projectId}: ${err.message}`);
-    }
-  }
-
     fastify.post('/chat/message', async (request: any, reply: any) => {
       const peerId = await deps.verifyUserJwt(request);
       if (!peerId) { reply.status(401).send({ error: 'Unauthorized' }); return; }
@@ -164,8 +125,11 @@ export async function registerPlatformRoutes(
                 await threadStore.addMessage(threadId, { role: 'assistant', content: result.response, timestamp: Date.now(), tier: 'complex' as any });
               }
               deps.pushEvent('chat_message', { threadId, projectId, role: 'assistant', content: result.response || 'Build complete.', timestamp: Date.now(), tier: 'complex' });
-              // Trigger deploy pipeline after build
-              if (projectId) triggerDeployPipeline(projectId).catch(() => {});
+              // Trigger app-manager update after build
+              const appMgr = node.getAppManager?.();
+              if (appMgr && projectId) {
+                appMgr.update(projectId).catch((e: any) => console.warn('[app-manager] Auto-update failed:', e.message));
+              }
             } catch (err) {
               console.error('[chat] sendToEngine failed:', (err as Error).message);
               if (threadStore && threadId) {
@@ -293,8 +257,11 @@ export async function registerPlatformRoutes(
               await threadStore.addMessage(threadId, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' as any });
             }
             deps.pushEvent('chat_message', { threadId, projectId: newProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
-            // Trigger deploy pipeline after build
-            if (newProjectId) triggerDeployPipeline(newProjectId).catch(() => {});
+            // Trigger app-manager update after build
+            const appMgr = node.getAppManager?.();
+            if (appMgr && newProjectId) {
+              appMgr.update(newProjectId).catch((e: any) => console.warn('[app-manager] Auto-update failed:', e.message));
+            }
           } catch (err) {
             console.error('[router] Local engine failed:', (err as Error).message);
             if (threadStore && threadId) {
@@ -481,8 +448,11 @@ export async function registerPlatformRoutes(
                 await threadStore.addMessage(id, { role: 'assistant', content: engineResult.response, timestamp: Date.now(), tier: 'complex' as any });
               }
               deps.pushEvent('chat_message', { threadId: id, projectId: threadMeta.projectId, role: 'assistant', content: engineResult.response || 'Done.', timestamp: Date.now(), tier: 'complex' });
-              // Trigger deploy pipeline after build
-              if (threadMeta.projectId) triggerDeployPipeline(threadMeta.projectId).catch(() => {});
+              // Trigger app-manager update after build
+              const appMgr = node.getAppManager?.();
+              if (appMgr && threadMeta.projectId) {
+                appMgr.update(threadMeta.projectId).catch((e: any) => console.warn('[app-manager] Auto-update failed:', e.message));
+              }
             } catch (err) {
               console.error('[router] Engine failed:', (err as Error).message);
               await threadStore.addMessage(id, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' as any });
@@ -596,8 +566,11 @@ export async function registerPlatformRoutes(
             const engineReply = result.response || 'Build complete.';
             await threadStore.addMessage(id, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' as any });
             deps.pushEvent('chat_message', { threadId: id, projectId: targetProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
-            // Trigger deploy pipeline after build
-            if (targetProjectId) triggerDeployPipeline(targetProjectId).catch(() => {});
+            // Trigger app-manager update after build
+            const appMgr = node.getAppManager?.();
+            if (appMgr && targetProjectId) {
+              appMgr.update(targetProjectId).catch((e: any) => console.warn('[app-manager] Auto-update failed:', e.message));
+            }
           } catch (err) {
             console.error('[router] Local engine failed:', (err as Error).message);
             await threadStore.addMessage(id, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' as any });
@@ -1553,15 +1526,9 @@ export async function registerPlatformRoutes(
       return { available: true, result: suite.getLastResult() };
     });
 
-    // ── Gateway Hosting Pool API ──────────────────────────────────
-
-    // GET /gateways — List all known live gateway deployments across the network
+    // GET /gateways — Gateway hosting pool removed (gateway is managed on Vercel separately)
     fastify.get('/gateways', async () => {
-      const pool = node.getGatewayDeployPool();
-      if (!pool) return { gateways: [], total: 0 };
-      const all = pool.getAllGateways();
-      const live = all.filter(g => g.status === 'live');
-      return { gateways: all, total: all.length, live: live.length };
+      return { gateways: [], total: 0, live: 0, note: 'Gateway hosting pool removed — use AppManager for app deployments' };
     });
 
     // ── Payment Gate API (Phase 18.6) ──────────────────────────────
@@ -2883,165 +2850,6 @@ export async function registerPlatformRoutes(
       return { stats };
     });
 
-    // ── Phase 32: S3 Hosting ──────────────────────────────────────────────
-
-    // POST /projects/:id/hosting — Deploy project files to S3
-    fastify.post('/projects/:id/hosting', async (request: any, reply: any) => {
-      const hosting = node.getHostingService();
-      if (!hosting) return reply.code(503).send({ error: 'Hosting service not available' });
-
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id } = request.params as { id: string };
-      const project = await ps.getProjectAsync(id);
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (!role || (role !== 'owner' && role !== 'admin')) {
-        return reply.code(403).send({ error: 'Only owner or admin can deploy' });
-      }
-
-      // Expect JSON body: { files: [{ path, content (base64), contentType }] }
-      const body = (request.body || {}) as {
-        files?: { path: string; content: string; contentType: string }[];
-      };
-
-      if (!body.files || !Array.isArray(body.files) || body.files.length === 0) {
-        return reply.code(400).send({ error: 'files array is required (each entry: { path, content (base64), contentType })' });
-      }
-
-      const deployFiles: DeployFile[] = [];
-      for (const f of body.files) {
-        if (!f.path || !f.content || !f.contentType) {
-          return reply.code(400).send({ error: 'Each file must have path, content (base64), and contentType' });
-        }
-        deployFiles.push({
-          path: f.path,
-          content: Buffer.from(f.content, 'base64'),
-          contentType: f.contentType,
-        });
-      }
-
-      // Phase 65: Inject gateway URL, project ID, and API key into HTML files
-      // Same injection that agent-manager does, but for direct hosting deploys
-      const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
-      let projectApiKey = '';
-      // ProjectRegistry only stores apiKeyHash — get plaintext from ProjectStore (MongoDB)
-      try {
-        const proj = await ps.getProjectAsync(id);
-        if (proj?.apiKey) projectApiKey = proj.apiKey;
-      } catch { /* best-effort */ }
-      const injVars = [
-        `window.PANDO_GATEWAY_URL="${gatewayUrl}"`,
-        `window.PANDO_PROJECT_ID="${id}"`,
-      ];
-      if (projectApiKey) injVars.push(`window.PANDO_PROJECT_API_KEY="${projectApiKey}"`);
-      const injScript = `<script>${injVars.join(';')};</script>`;
-      for (const file of deployFiles) {
-        if (file.path.endsWith('.html')) {
-          let html = file.content.toString('utf-8');
-          if (html.includes('<head>')) {
-            html = html.replace('<head>', '<head>' + injScript);
-          } else if (html.includes('<head ')) {
-            html = html.replace(/<head\s[^>]*>/, (m: string) => m + injScript);
-          } else {
-            html = injScript + html;
-          }
-          file.content = Buffer.from(html, 'utf-8');
-        }
-      }
-
-      try {
-        const info = await hosting.deployProject(id, project.type, deployFiles);
-        // For public projects the URL is immediate; for private we generate a pre-signed URL
-        if (project.type !== 'public') {
-          info.url = await hosting.getHostedUrl(id, project.type);
-        }
-
-        // Auto-publish: set project visibility to 'listed' so it appears in the marketplace
-        try {
-          await ps.updateProject(id, {
-            visibility: 'listed',
-            deploymentUrl: info.url,
-            deploymentStatus: 'deployed',
-          });
-          console.log(`[hosting] Auto-published project ${id} to marketplace after deploy`);
-        } catch (pubErr: any) {
-          console.warn(`[hosting] Failed to auto-publish project ${id}: ${pubErr.message}`);
-        }
-
-        return reply.code(201).send({ deployment: info });
-      } catch (err: any) {
-        console.error(`[hosting] Deploy failed for project ${id}:`, err.message);
-        return reply.code(500).send({ error: 'Deployment failed', detail: err.message });
-      }
-    });
-
-    // GET /projects/:id/hosting — Get deployment info + URL
-    fastify.get('/projects/:id/hosting', async (request: any, reply: any) => {
-      const hosting = node.getHostingService();
-      if (!hosting) return reply.code(503).send({ error: 'Hosting service not available' });
-
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const { id } = request.params as { id: string };
-      const project = await ps.getProjectAsync(id);
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      // Private projects require user auth to view deployment info
-      if (project.type !== 'public') {
-        const userId = await deps.verifyUserJwt(request);
-        if (!userId || !(await ps.hasAccessAsync(id, userId))) {
-          return reply.code(403).send({ error: 'Access denied' });
-        }
-      }
-
-      try {
-        const info = await hosting.getDeploymentInfo(id);
-        if (info.deployed && project.type !== 'public') {
-          info.url = await hosting.getHostedUrl(id, project.type);
-        }
-        return { deployment: info };
-      } catch (err: any) {
-        console.error(`[hosting] Info failed for project ${id}:`, err.message);
-        return reply.code(500).send({ error: 'Failed to get deployment info', detail: err.message });
-      }
-    });
-
-    // DELETE /projects/:id/hosting — Remove deployment
-    fastify.delete('/projects/:id/hosting', async (request: any, reply: any) => {
-      const hosting = node.getHostingService();
-      if (!hosting) return reply.code(503).send({ error: 'Hosting service not available' });
-
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id } = request.params as { id: string };
-      const project = await ps.getProjectAsync(id);
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (!role || (role !== 'owner' && role !== 'admin')) {
-        return reply.code(403).send({ error: 'Only owner or admin can remove deployments' });
-      }
-
-      try {
-        await hosting.removeDeployment(id);
-        return { removed: true, projectId: id };
-      } catch (err: any) {
-        console.error(`[hosting] Remove failed for project ${id}:`, err.message);
-        return reply.code(500).send({ error: 'Failed to remove deployment', detail: err.message });
-      }
-    });
-
     // ── Phase 53: Project Resource Assignment ──────────────────────────────
 
     // POST /projects/:id/resources/assign — Assign a resource to a project
@@ -3522,330 +3330,10 @@ export async function registerPlatformRoutes(
       }
     });
 
-    // POST /projects/:id/deploy — Unified deploy endpoint (Phase 70)
-    // Pushes to GitHub, then P2P deploys to EC2 (both Tier 1 and Tier 2).
-    // Manager calls this ONE endpoint. Node handles everything.
-    fastify.post('/projects/:id/deploy', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+    // POST /projects/:id/deploy — REMOVED (replaced by POST /v1/apps/:id/deploy via AppManager)
 
-      const authHeader = request.headers?.authorization || '';
-      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId && !hasBearerToken) return reply.code(401).send({ error: 'Authentication required' });
 
-      const { id } = request.params as { id: string };
-      const body = (request.body || {}) as {
-        workspaceDir?: string;
-        type?: string;          // Legacy: 'vercel', 'github', 's3', 'custom'
-        config?: Record<string, any>;
-      };
-
-      let project: any;
-      try { project = await ps.getProjectAsync(id); } catch {}
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      const tier = project.tier || 1;
-
-      // Step 1: Push to GitHub (if workspace provided)
-      let repoUrl = project.repoUrl || '';
-      let githubRepo = project.githubRepo || '';
-      if (body.workspaceDir) {
-        try {
-          const pushUrl = `http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/v1/projects/${id}/github/push`;
-          const pushRes = await fetch(pushUrl, {
-            method: 'POST',
-            headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
-            body: JSON.stringify({ workspaceDir: body.workspaceDir }),
-            signal: AbortSignal.timeout(60000),
-          });
-          if (pushRes.ok) {
-            const pushData = await pushRes.json() as any;
-            repoUrl = pushData.repoUrl || repoUrl;
-            githubRepo = pushData.githubRepo || githubRepo;
-            console.log(`[deploy] GitHub push succeeded: ${repoUrl}`);
-          } else {
-            const errData = await pushRes.json().catch(() => ({})) as any;
-            console.log(`[deploy] GitHub push failed: ${errData.error || pushRes.status}`);
-            // Don't block deploy — GitHub push failure is non-fatal for Tier 1 if we have workspace
-          }
-        } catch (err: any) {
-          console.log(`[deploy] GitHub push error: ${err.message}`);
-        }
-      }
-
-      // Step 2: Deploy via P2P discovery (Phase 87 — CapabilityProfile, not CloudInstanceManager)
-      const requestReply = node.getRequestReply?.();
-      if (!requestReply) return reply.code(503).send({ error: 'P2P RequestReply not available' });
-
-      // Find compute peers with MongoDB (persistent EC2 nodes) via CapabilityRegistry
-      // NOTE: Include self — if the local node is a compute node, it can deploy locally
-      const capRegistry = node.getCapabilityRegistry?.();
-      const localPeerId = node.getIdentity()?.peerId || '';
-      const allProfiles = capRegistry?.getAllProfiles?.() || [];
-      const computePeers = allProfiles.filter((p: any) =>
-        p.storageBackend === 'mongodb'
-      );
-      // Sort: prefer remote peers first (avoid self-deploy when others are available)
-      computePeers.sort((a: any, b: any) => {
-        if (a.peerId === localPeerId && b.peerId !== localPeerId) return 1;  // self goes last
-        if (a.peerId !== localPeerId && b.peerId === localPeerId) return -1;
-        return 0;
-      });
-
-      if (computePeers.length === 0 || !repoUrl) {
-        return reply.code(503).send({
-          error: 'No compute peers available for deployment',
-          hint: 'Ensure at least one EC2 node with MongoDB is connected to the network',
-          repoUrl,
-          githubRepo,
-        });
-      }
-
-      // Build env vars for injection
-      const envVars: Record<string, string> = {};
-      if (project.apiKey) {
-        envVars.PROJECT_API_KEY = project.apiKey;
-        const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
-        if (gatewayUrl) envVars.RESOURCE_PROXY_URL = `${gatewayUrl}/api/resource-proxy/db`;
-        envVars.PANDO_GATEWAY_URL = gatewayUrl;
-        envVars.PANDO_PROJECT_ID = id;
-        envVars.PANDO_PROJECT_API_KEY = project.apiKey;
-      }
-
-      const deployPayload = {
-        projectId: id,
-        repoUrl,
-        tier,
-        envVars,
-      };
-
-      // Try up to 3 compute peers (same pattern as P2PStorageBackend)
-      // For self-deploy (local node is compute peer), call the handler directly (no P2P round-trip)
-      let lastError = '';
-      for (const profile of computePeers.slice(0, 3)) {
-        try {
-          let response: any;
-          if (profile.peerId === localPeerId) {
-            // Self-deploy: invoke handler directly (P2P self-routing may not work via GossipSub)
-            console.log(`[deploy] Self-deploy — local compute node, tier ${tier}`);
-            const handler = requestReply.getHandler?.('pando/deploy-app');
-            if (handler) {
-              const result = await handler({ payload: deployPayload } as any);
-              response = { success: true, payload: result };
-            } else {
-              lastError = 'Deploy handler not registered on local node';
-              continue;
-            }
-          } else {
-            console.log(`[deploy] Sending HTTP deploy to ${profile.peerId} — tier ${tier}`);
-            const httpClient = (deps.node as any).httpPeerClient;
-            if (httpClient) {
-              const result = await httpClient.deployApp(profile.peerId, deployPayload);
-              response = { success: true, payload: result };
-            } else {
-              lastError = 'HTTP peer client not available';
-              continue;
-            }
-          }
-
-          if (response?.success && response.payload) {
-            const payload = response.payload as any;
-            if (payload.status === 'failed') {
-              lastError = payload.error || 'Deploy failed on compute node';
-              console.log(`[deploy] Peer ${profile.peerId} deploy failed: ${lastError}`);
-              continue; // Try next peer
-            }
-
-            let liveUrl = '';
-            let deploymentPort: number | undefined;
-            const actualTier = payload.detectedTier || tier; // Phase 88: use detected tier for URL construction
-
-            if (actualTier === 2 && payload.port) {
-              // Tier 2: Use publicAddress from CapabilityProfile for URL
-              const publicAddr = profile.publicAddress || payload.publicAddress;
-              if (publicAddr) {
-                deploymentPort = payload.port;
-                liveUrl = `http://${publicAddr}/apps/${id}/`;
-              } else {
-                deploymentPort = payload.port;
-                liveUrl = payload.url || `http://${profile.peerId}:${payload.port}`;
-              }
-            } else if (payload.url) {
-              liveUrl = payload.url;
-            } else if (payload.s3Url) {
-              liveUrl = payload.s3Url;
-            }
-
-            // Phase 88: Use detected tier from compute node (code is truth)
-            const detectedTier = payload.detectedTier || tier;
-            const tierReason = payload.tierReason || '';
-            if (detectedTier !== tier) {
-              console.log(`[deploy] Tier auto-corrected: project had ${tier}, code detected ${detectedTier} (${tierReason})`);
-            }
-
-            // Update project record — store deployPeerId (not instanceId)
-            const update: Record<string, any> = {
-              deploymentUrl: liveUrl,
-              deploymentStatus: 'deployed',
-              repoUrl,
-              githubRepo,
-              deployPeerId: profile.peerId,
-              tier: detectedTier, // Phase 88: always use detected tier
-              updatedAt: Date.now(),
-            };
-            if (deploymentPort) update.deploymentPort = deploymentPort;
-
-            await ps.updateProject(id, update);
-
-            // Sync to ProjectRegistry
-            const pr = node.getProjectRegistry?.();
-            if (pr) {
-              pr.updateProject(id, {
-                deploymentUrl: liveUrl,
-                liveUrl,
-                tier: detectedTier,
-                deploymentPort,
-                deployPeerId: profile.peerId,
-                lastDeployedAt: Date.now(),
-                githubRepo,
-              } as any);
-            }
-
-            console.log(`[deploy] Project ${id} deployed: ${liveUrl} (tier ${detectedTier}, peer ${profile.peerId})`);
-            return {
-              url: liveUrl,
-              tier: detectedTier,
-              detectedTier,
-              tierReason,
-              status: 'deployed',
-              repoUrl,
-              githubRepo,
-              deployPeerId: profile.peerId,
-              port: deploymentPort,
-            };
-          } else {
-            lastError = response?.payload?.error || 'Deploy failed';
-            console.log(`[deploy] Peer ${profile.peerId} failed: ${lastError}`);
-          }
-        } catch (err: any) {
-          lastError = err.message;
-          console.log(`[deploy] Peer ${profile.peerId} error: ${err.message}`);
-        }
-      }
-
-      return reply.code(502).send({ error: lastError || 'All compute peers failed to deploy' });
-    });
-
-    // Phase 80: POST /projects/:id/undeploy — stop and remove a deployed app
-    fastify.post('/projects/:id/undeploy', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      // Auth: user session OR node Bearer token
-      const userId = await deps.verifyUserJwt(request);
-      const authHeader = request.headers?.authorization || '';
-      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
-      if (!userId && !hasBearerToken) {
-        return reply.code(401).send({ error: 'Authentication required' });
-      }
-
-      const { id } = request.params as { id: string };
-      const project = await ps.getProjectAsync(id);
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      // Only owner or bearer token can undeploy
-      if (!hasBearerToken && project.ownerId !== userId) {
-        return reply.code(403).send({ error: 'Only the project owner can undeploy' });
-      }
-
-      const tier = (project as any).tier || 1;
-      const deleteFiles = (request.body as any)?.deleteFiles !== false; // default true
-
-      try {
-        if (tier === 2 && (project as any).deployPeerId) {
-          // Tier 2: Send P2P undeploy to compute node (Phase 87 — uses deployPeerId directly)
-          const requestReply = node.getRequestReply?.();
-          const deployPeerId = (project as any).deployPeerId;
-
-          const httpClient = (node as any).httpPeerClient;
-          if (deployPeerId && httpClient) {
-            const response = await httpClient.sendRequest(deployPeerId, '/v1/internal/undeploy', {
-              projectId: id,
-              deleteFiles,
-            }, 60_000);
-
-            if (response?.status === 'failed') {
-              return reply.code(502).send({ error: response?.error || 'Undeploy failed on compute node' });
-            }
-          }
-        } else if (tier === 1) {
-          // Tier 1: Remove S3 files — only delete files under public/<projectId>/ prefix
-          try {
-            const resourceRegistry = node.getResourceRegistry?.();
-            if (resourceRegistry) {
-              const s3Resources = resourceRegistry.findResources('storage_blob' as any);
-              if (s3Resources.length > 0) {
-                const s3Cred = await resourceRegistry.getCredential(s3Resources[0].resourceId);
-                if (s3Cred) {
-                  const s3Config = JSON.parse(s3Cred);
-                  const { S3Client, ListObjectsV2Command, DeleteObjectsCommand } = await import('@aws-sdk/client-s3');
-                  const s3 = new S3Client({
-                    region: s3Config.region || 'us-east-1',
-                    credentials: { accessKeyId: s3Config.accessKeyId, secretAccessKey: s3Config.secretAccessKey },
-                  });
-                  const bucket = s3Config.bucket || 'pando-deployments';
-                  const prefix = `public/${id}/`;
-
-                  // List all objects under this project's prefix
-                  const listResp = await s3.send(new ListObjectsV2Command({ Bucket: bucket, Prefix: prefix }));
-                  if (listResp.Contents && listResp.Contents.length > 0) {
-                    await s3.send(new DeleteObjectsCommand({
-                      Bucket: bucket,
-                      Delete: { Objects: listResp.Contents.map(obj => ({ Key: obj.Key! })) },
-                    }));
-                    console.log(`[undeploy] Deleted ${listResp.Contents.length} S3 objects under ${prefix}`);
-                  }
-                }
-              }
-            }
-          } catch (s3Err: any) {
-            console.log(`[undeploy] S3 cleanup failed: ${s3Err.message}`);
-          }
-
-          // Also remove local hosting if present
-          const hosting = node.getHostingService?.();
-          if (hosting) {
-            try { (hosting as any).removeApp?.(id); } catch {}
-          }
-        }
-
-        // Clear deployment fields in MongoDB
-        await ps.updateProject(id, {
-          deploymentUrl: '',
-          deploymentStatus: 'none',
-          deploymentPort: undefined as any,
-          deployPeerId: undefined as any,
-        });
-
-        // Update P2P ProjectRegistry
-        const pr = node.getProjectRegistry?.();
-        if (pr) {
-          pr.updateProject(id, {
-            deploymentUrl: '',
-            liveUrl: '',
-            deploymentPort: undefined,
-            deployPeerId: undefined,
-          } as any);
-        }
-
-        console.log(`[undeploy] Project ${id} undeployed (tier ${tier})`);
-        return { status: 'undeployed', projectId: id, tier };
-      } catch (err: any) {
-        console.log(`[undeploy] Error: ${err.message}`);
-        return reply.code(500).send({ error: err.message });
-      }
-    });
+    // POST /projects/:id/undeploy — REMOVED (replaced by DELETE /v1/apps/:id via AppManager)
 
     // POST /projects/:id/validate-deploy — lightweight deploy health check
     fastify.post('/projects/:id/validate-deploy', async (request: any, reply: any) => {
@@ -3864,7 +3352,6 @@ export async function registerPlatformRoutes(
       const project = await ps.getProjectAsync(id);
       if (!project) return reply.code(404).send({ error: 'Project not found' });
 
-      const hosting = node.getHostingService?.();
       const errors: string[] = [];
 
       // Determine validation URL based on project tier
@@ -4091,98 +3578,8 @@ export async function registerPlatformRoutes(
       };
     });
 
-    // Phase 53.1: Legacy /apps/data routes, gateway mongodb.ts, S3 proxy all deleted. Apps have their own backends.
-
-    // Phase 65: Deploy app to local hosted-apps directory
-    fastify.post('/apps/:appName/deploy', async (request: any, reply: any) => {
-      const authHeader = request.headers.authorization || '';
-      if (!authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
-        return reply.status(401).send({ error: 'Unauthorized' });
-      }
-      const { appName } = request.params;
-      const body = request.body as { files: Array<{ path: string; content: string }>; projectId?: string; apiKey?: string };
-      if (!body?.files?.length) return reply.status(400).send({ error: 'files array required' });
-      const { join } = await import('node:path');
-      const { mkdirSync, writeFileSync } = await import('node:fs');
-      const dataDir = node.getDataDir?.() || join((await import('node:os')).homedir(), '.pando');
-      const appDir = join(dataDir, 'hosted-apps', appName);
-      mkdirSync(appDir, { recursive: true });
-      for (const file of body.files) {
-        const filePath = join(appDir, file.path);
-        mkdirSync(join(filePath, '..'), { recursive: true });
-        writeFileSync(filePath, file.content, 'utf-8');
-      }
-      // Write app config
-      if (body.projectId || body.apiKey) {
-        writeFileSync(join(appDir, '.pando-app.json'), JSON.stringify({
-          projectId: body.projectId || '', apiKey: body.apiKey || '', deployedAt: Date.now()
-        }));
-      }
-      return reply.send({ ok: true, appName, files: body.files.length, url: `/apps/${appName}/index.html` });
-    });
-
-    // Phase 65: Static app serving for compute instances
-    // Serves HTML/JS/CSS from <data-dir>/hosted-apps/<appName>/
-    // Injects PANDO_GATEWAY_URL, PROJECT_ID, PROJECT_API_KEY into HTML files
-    fastify.get('/apps/:appName/*', async (request: any, reply: any) => {
-      const { appName } = request.params;
-      const filePath = (request.params as any)['*'] || 'index.html';
-      const { join } = await import('node:path');
-      const { readFileSync, existsSync } = await import('node:fs');
-      const dataDir = node.getDataDir?.() || join((await import('node:os')).homedir(), '.pando');
-      const fullPath = join(dataDir, 'hosted-apps', appName, filePath);
-
-      // Security: prevent path traversal
-      const hostedRoot = join(dataDir, 'hosted-apps', appName);
-      const { resolve } = await import('node:path');
-      if (!resolve(fullPath).startsWith(resolve(hostedRoot))) {
-        return reply.status(403).send({ error: 'Forbidden' });
-      }
-
-      if (!existsSync(fullPath)) {
-        return reply.status(404).send({ error: 'Not found' });
-      }
-
-      let content = readFileSync(fullPath);
-      const ext = filePath.split('.').pop()?.toLowerCase() || '';
-
-      // Set content type
-      const mimeTypes: Record<string, string> = {
-        html: 'text/html', css: 'text/css', js: 'application/javascript',
-        json: 'application/json', png: 'image/png', jpg: 'image/jpeg',
-        svg: 'image/svg+xml', ico: 'image/x-icon',
-      };
-      reply.header('Content-Type', mimeTypes[ext] || 'application/octet-stream');
-      reply.header('Access-Control-Allow-Origin', '*');
-
-      // Inject gateway vars into HTML
-      if (ext === 'html') {
-        let html = content.toString('utf-8');
-        const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
-        // Read app config for project binding
-        const configPath = join(hostedRoot, '.pando-app.json');
-        let projectId = '', apiKey = '';
-        if (existsSync(configPath)) {
-          try {
-            const cfg = JSON.parse(readFileSync(configPath, 'utf-8'));
-            projectId = cfg.projectId || '';
-            apiKey = cfg.apiKey || '';
-          } catch { /* ignore */ }
-        }
-        const vars = [`window.PANDO_GATEWAY_URL="${gatewayUrl}"`];
-        if (projectId) vars.push(`window.PANDO_PROJECT_ID="${projectId}"`);
-        if (apiKey) vars.push(`window.PANDO_PROJECT_API_KEY="${apiKey}"`);
-        const script = `<script>${vars.join(';')};</script>`;
-        if (html.includes('<head>')) {
-          html = html.replace('<head>', '<head>' + script);
-        } else {
-          html = script + html;
-        }
-        return reply.send(html);
-      }
-
-      return reply.send(content);
-    });
+    // Phase 53.1/65: Legacy /apps/data + deploy + static serving routes REMOVED.
+    // All app lifecycle is now managed by AppManager (see app-api.ts).
 
   // ==========================================================================
   // Phase 105: Agent Template CRUD — removed (brain now in @pando-code/core)

@@ -29,22 +29,19 @@ export { generateDataKey, encryptCredential, decryptCredential } from './credent
 // Deployment & versioning
 export { DeployManager } from './deploy-manager.js';
 export type { DeployStatus, CommitResult, BuildResult, BackupInfo } from './deploy-manager.js';
-export { DeployPipeline } from './deploy-pipeline.js';
-export type { DeployPipelineConfig, PipelineResult, PipelineStep } from './deploy-pipeline.js';
 export { VersionProtocol } from './version-protocol.js';
 export { UpgradeProtocol, TOPIC_UPGRADES } from './upgrade-protocol.js';
 export type { UpgradeProtocolDeps } from './upgrade-protocol.js';
+
+// App lifecycle — unified deploy, update, health, rollback
+export { AppManager } from './app-manager.js';
+export type { AppConfig, App, AppHistory, DeployResult, UpdateResult, RollbackResult } from './app-manager.js';
 
 // Payment
 export { PaymentGate } from './payment-gate.js';
 
 // Cloud instances
 export { CloudInstanceManager } from './cloud-instance-manager.js';
-
-// Hosting pool
-export { GatewayDeployPool, TOPIC_GATEWAYS } from './gateway-deploy-pool.js';
-export { getHostingAdapter, registerHostingAdapter } from './hosting-adapters.js';
-export type { HostingAdapter } from './hosting-adapters.js';
 
 // HTTP peer client — direct HTTP for inter-node operations (replaces P2P unicast)
 export { HttpPeerClient, HttpPeerError } from './http-peer-client.js';

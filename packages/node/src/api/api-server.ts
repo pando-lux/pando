@@ -21,6 +21,7 @@ import { registerKernelRoutes } from './kernel-api.js';
 import { registerCoreRoutes } from './core-api.js';
 import { registerPlatformRoutes } from './platform-api.js';
 import { registerTestingRoutes } from './testing-api.js';
+import { registerAppRoutes } from './app-api.js';
 import type { RouteHelpers } from './middleware/auth.js';
 
 // ── Phase 86: JWT-Style Self-Verifying Auth Tokens ───────────────────────
@@ -299,7 +300,8 @@ export class ApiServer {
         pathNoVersion.startsWith('/chat/') ||
         pathNoVersion.startsWith('/council/') ||
         pathNoVersion.startsWith('/teams/') ||
-        pathNoVersion.startsWith('/internal/')
+        pathNoVersion.startsWith('/internal/') ||
+        pathNoVersion.startsWith('/webhooks/')
       ) return;
 
       // Extract Bearer token from Authorization header
@@ -397,6 +399,7 @@ export class ApiServer {
       await registerKernelRoutes(v1, deps);
       await registerCoreRoutes(v1, deps);
       await registerPlatformRoutes(v1, deps);
+      await registerAppRoutes(v1, deps);
 
       // Testing API routes (dashboard, runs, findings, scenarios, playbooks, stats)
       const apiPort = this.node.getApiPort();

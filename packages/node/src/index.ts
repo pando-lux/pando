@@ -66,9 +66,8 @@ import { ContributionTracker } from './platform/contribution-tracker.js';
 // Council replaced by Orchestrator
 import { NetworkState } from './kernel/network-state.js';
 import { ThreadStore } from './platform/thread-store.js';
-import { HostingService } from './platform/hosting-service.js';
 import { CloudInstanceManager } from './core/cloud-instance-manager.js';
-import { GatewayDeployPool } from './core/gateway-deploy-pool.js';
+import { AppManager } from './core/app-manager.js';
 import type { StorageBackend } from './core/storage-backend.js';
 import { LocalEnvironment } from './kernel/local-environment.js';
 import { join, resolve as pathResolve } from 'node:path';
@@ -166,7 +165,7 @@ export class PandoNode {
   private resourceMarketplace: ResourceMarketplace | null = null;
   private resourceRegistry: ResourceRegistry | null = null;
   private resourceHealthChecker: ResourceHealthChecker | null = null;
-  private gatewayDeployPool: GatewayDeployPool | null = null;
+  private appManager: AppManager | null = null;
   private upgradeProtocol: UpgradeProtocol | null = null;
   private regressionSuite: RegressionSuite | null = null;
   private paymentGate: PaymentGate | null = null;
@@ -186,8 +185,6 @@ export class PandoNode {
   private contentMaintenance: ContentMaintenance | null = null;
   // Phase 27: Thread Store for gateway chat
   private threadStore: ThreadStore | null = null;
-  // Phase 32: S3 Hosting Service
-  private hostingService: HostingService | null = null;
   // Phase 50: Network State Aggregator
   private networkState: NetworkState | null = null;
   // Phase 64: Cloud Instance Manager (EC2 compute nodes)
@@ -293,6 +290,26 @@ export class PandoNode {
     await initKernel(this);
     await initCore(this);
     await initPlatform(this);
+
+    // Initialize AppManager
+    this.appManager = new AppManager(this);
+    // Register pando-node as app[0] in the unified app registry
+    this.appManager.register({
+      id: 'pando-node',
+      name: 'pando-node',
+      repoUrl: 'https://github.com/pando-lux/node.git',
+      buildCmd: 'npm run build',
+      startCmd: 'node packages/node/dist/cli.js',
+      healthEndpoint: '/v1/status',
+      processManager: process.platform === 'win32' ? 'supervisor' : 'systemd',
+      tier: 2,
+    });
+    // pando-node is always live when this code runs — mark it so
+    const commit = this.upgradeProtocol?.getUpgradeStatus()?.currentVersion || null;
+    this.appManager.markLive('pando-node', { port: this.config.apiPort, commit: commit || undefined });
+    // Start health monitoring for deployed apps (30s interval)
+    this.appManager.startMonitoring();
+
     this._computeBootHealth();
   }
 
@@ -667,9 +684,8 @@ export class PandoNode {
     return this.resourceHealthChecker;
   }
 
-  /** Get the GatewayDeployPool for hosting pool operations */
-  getGatewayDeployPool(): GatewayDeployPool | null {
-    return this.gatewayDeployPool;
+  getAppManager(): AppManager | null {
+    return this.appManager;
   }
 
   /** Returns the reward recipient — only linked user accounts earn rewards */
@@ -1439,10 +1455,6 @@ export class PandoNode {
     return this.contributionTracker;
   }
 
-  getHostingService(): HostingService | null {
-    return this.hostingService;
-  }
-
   /** Phase 64: Get the CloudInstanceManager */
   getCloudInstanceManager(): CloudInstanceManager | null {
     return this.cloudInstanceManager;
@@ -1518,9 +1530,12 @@ export class PandoNode {
       this.localEnv = null;
     }
 
+    // Stop AppManager
+    this.appManager?.stopMonitoring();
+    this.appManager?.close();
+    this.appManager = null;
+
     // Stop resource network components
-    this.gatewayDeployPool?.stop();
-    this.gatewayDeployPool = null;
     this.resourceHealthChecker?.stop();
     this.resourceHealthChecker = null;
     this.resourceRegistry?.stop();

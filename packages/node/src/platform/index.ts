@@ -26,9 +26,6 @@ export { ContributionTracker } from './contribution-tracker.js';
 
 export { FileRegistry } from './file-registry.js';
 
-export { HostingService } from './hosting-service.js';
-export type { DeployFile } from './hosting-service.js';
-
 export { PipelineRunner } from './pipeline-runner.js';
 export type { PipelineRunnerConfig, PipelineStageResult, PipelineRunResult, PipelineStatus } from './pipeline-runner.js';
 

@@ -472,35 +472,10 @@ export async function initKernel(node: any): Promise<void> {
               console.log(`[chat_proxy] Earned Lux for compute job (project ${projectId})`);
             } catch { /* best-effort reward */ }
           }
-          // Trigger deploy pipeline after engine completes (same as platform-api)
-          try {
-            const { DeployPipeline } = await import('./core/deploy-pipeline.js');
-            const projectStore = node.getProjectStore?.();
-            const requestReply = node.getRequestReply?.();
-            const capRegistry = node.getCapabilityRegistry();
-            const selfPeerId = node.getIdentity()?.peerId;
-            if (projectStore && selfPeerId) {
-              const dataDir = node.getDataDir() || join(homedir(), '.pando');
-              const tokenPath = join(dataDir, 'api-token');
-              const apiToken = existsSync(tokenPath) ? readFileSync(tokenPath, 'utf-8').trim() : '';
-              const apiPort = (node.getApiServer() as any)?.fastify?.server?.address()?.port || 4000;
-              const pipeline = new DeployPipeline({
-                apiPort, apiToken, projectStore,
-                httpPeerClient: node.httpPeerClient || undefined,
-                requestReply: node.getRequestReply() || undefined,
-                capabilityRegistry: capRegistry || undefined,
-                localPeerId: selfPeerId,
-                pushEvent: (type: string, data: any) => node.apiServer?.pushEvent?.(type, data),
-              });
-              const result = await pipeline.run(projectId);
-              if (result.success) {
-                console.log(`[chat_proxy] Deploy pipeline complete: ${result.deploymentUrl || result.repoUrl}`);
-              } else {
-                console.warn(`[chat_proxy] Deploy pipeline incomplete: ${result.error || 'some steps failed'}`);
-              }
-            }
-          } catch (deployErr: any) {
-            console.warn(`[chat_proxy] Deploy pipeline failed: ${deployErr.message?.slice(0, 100)}`);
+          // Trigger app update via AppManager after engine completes
+          const appMgr = node.getAppManager?.();
+          if (appMgr && projectId) {
+            appMgr.update(projectId).catch((e: any) => console.warn('[app-manager] Auto-update failed:', e.message));
           }
         } catch (err: any) {
           console.warn(`[chat_proxy] Engine send failed: ${err.message?.slice(0, 100)}`);
