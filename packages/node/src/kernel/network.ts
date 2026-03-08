@@ -363,9 +363,9 @@ export class PandoNetwork {
         connectedAt: Date.now(),
         lastSeen: Date.now(),
       });
-      // Phase 54.2: Persist known peer — delay 1.5s to allow identify protocol to populate
-      // peerStore with announce addresses (public IPs). Identify typically completes in <1s.
-      setTimeout(() => this.updateKnownPeer(peerId).catch(() => {}), 1_500);
+      // Phase 54.2: Persist known peer — delay 500ms to allow identify protocol to populate
+      // peerStore with announce addresses (public IPs). Identify typically completes in <500ms.
+      setTimeout(() => this.updateKnownPeer(peerId).catch(() => {}), 500);
       // Notify handlers
       for (const handler of this.peerConnectHandlers) {
         try { handler(peerId); } catch {}
@@ -391,7 +391,7 @@ export class PandoNetwork {
     // Auto-reconnect and discovery sweep: dial bootstrap + known peers every 5s
     // (reduced from 10s for faster new-node discovery)
     if (this.config.bootstrapPeers.length > 0) {
-      this.reconnectTimer = setInterval(() => this.checkAndReconnect(), 5_000);
+      this.reconnectTimer = setInterval(() => this.checkAndReconnect().catch(err => console.error('[p2p] checkAndReconnect error:', err.message)), 5_000);
     }
 
     // Health check: remove stale peers every 60s
