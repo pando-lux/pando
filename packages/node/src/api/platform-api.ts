@@ -109,6 +109,12 @@ export async function registerPlatformRoutes(
       const trimmed = (message as string).trim();
       if (!trimmed) return reply.code(400).send({ error: 'message cannot be empty' });
 
+      // Two Laws check — reject harmful messages before any routing
+      const lawViolation = violatesTwoLaws(trimmed);
+      if (lawViolation) {
+        return { status: 'ok', threadId: '', reply: lawViolation, tier: 'simple' };
+      }
+
       const threadStore = node.getThreadStore();
       let threadId: string | undefined;
 
@@ -202,10 +208,7 @@ export async function registerPlatformRoutes(
 
       if (classification.intent === 'report') {
         // User is reporting a bug or requesting a feature — route to appropriate team
-        const lawViolation = violatesTwoLaws(trimmed);
-        if (lawViolation) {
-          return { status: 'ok', threadId: '', reply: lawViolation, tier: 'simple' };
-        }
+        // (Two Laws already checked at top of handler)
         const adapter = node.getEngineAdapter();
         const targetTeam = classification.targetProject || 'pando-infra';
         const severity = /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(trimmed) ? 'BUG' : 'FEATURE';
