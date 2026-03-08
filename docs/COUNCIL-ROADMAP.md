@@ -26,16 +26,29 @@ Future user team: [Lead] → user picks template → lead fills in the gaps
 
 ---
 
-## Current State (Commit 89028820 + audit fixes)
+## Current State (2026-03-08)
 
-- All 3 council agents on `model: 'claude-code'` (was gemini for observer/qa)
-- Observer threshold fixed: 2+ peers = healthy
-- QA prompt rewritten: runs `npm run build` + `npx playwright test`
-- Lead prompt updated: uses manage_tasks/send_message tools
-- Model resolution logging in startTeam()
-- Tick intervals tuned: lead 15min, observer 1hr, QA 2hr
-- **QA prompt hardcodes Windows path** — needs parameterization (Phase 1.1)
-- **BIBLE.md out of sync** — 7 stale items (Phase 1.2)
+### Completed
+- **Phase 1** (commit dee3933c): Prompts parameterized, BIBLE synced, shared constants, universal lead prompt, scheduler cleanup
+- **Phase 2** (commit dee3933c): 5 built-in templates, `manage_team` tool, `spawnTeamAgent`/`stopTeamAgent`, 10-agent cap
+- **Phase 3** (commit ea2559bc): Custom JSON templates on disk, template CRUD API, `getTemplates()` merges built-in+custom
+- **Phase 6.1** (commit 3ae904f3): Session persistence — save/restore Claude CLI session IDs across restarts (both repos)
+- **Phase 7 partial** (commit ea2559bc): Team status/tasks/agents/cost endpoints
+- **E2E** (commit 3ae904f3): 7/7 tests pass — includes template CRUD + team API tests
+- **pando-code** (commit d948ed6): `createClaudeCodeModel()` accepts `initialSessionId`, exposes `getSessionId()`
+
+### Not Yet Tested Live
+- Does `manage_team` tool actually work when a lead agent calls it? (needs node restart + trigger)
+- Does session persistence actually resume Claude CLI sessions on restart?
+- Do custom JSON templates load correctly when a lead spawns from them?
+- Does the universal lead prompt produce useful behavior for non-infra teams?
+
+### Still TODO
+- Phase 4: PandoCode web UI network projects (pando-code repo)
+- Phase 5: Agent visibility + cost in web UI (pando-code repo)
+- Phase 6.2+: Cross-node migration, graceful degradation
+- Phase 7 remaining: User-submitted templates via gateway
+- Phase 8: Gateway integration
 
 ---
 
