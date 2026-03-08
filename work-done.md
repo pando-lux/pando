@@ -119,9 +119,41 @@
 - Get initial count (3) → spawn worker → verify count +1 (4) → stop worker → verify count -1 (3)
 - Safety: lead stop rejected (400), nonexistent agent (404), bad template (400), Two Laws violation (403), missing template/prompt (400)
 
+### Security Audit & Fixes
+
+#### 7. Command Injection via commitHash in P2P Upgrade (CRITICAL)
+- **Root cause**: `core-api.ts:168` — `execSync(\`git merge-base --is-ancestor ${commitHash} HEAD\`)` where `commitHash` comes from P2P governance proposals (untrusted peer input)
+- **Fix**: Validate `commitHash` matches `/^[0-9a-f]{6,40}$/i` before use
+- **File**: `packages/node/src/api/core-api.ts:159`
+
+#### 8. Command Injection via targetCommit in App Update API (CRITICAL)
+- **Root cause**: `app-api.ts:103` — `body.targetCommit` from HTTP request flows to `execSync(\`git checkout ${targetCommit}\`)` without validation
+- **Fix**: Validate hex git hash format at API boundary + `safeGitRef()` validator in app-manager
+- **Files**: `packages/node/src/api/app-api.ts:103`, `packages/node/src/core/app-manager.ts`
+
+#### 9. Command Injection via repoUrl in git clone (HIGH)
+- **Root cause**: `app-manager.ts:1772` — `execSync(\`git clone ${repoUrl}\`)` where repoUrl comes from app registration
+- **Fix**: Validate repoUrl matches safe URL pattern before shell execution
+- **File**: `packages/node/src/core/app-manager.ts:1765`
+
+#### 10. Shell Metachar Injection in git commit message (MEDIUM)
+- **Root cause**: `index.ts:891` — `execSync(\`git commit -m "${message.replace(/"/g, '\\"')}"\`)` — backticks and `$()` still dangerous in double-quoted bash strings
+- **Fix**: Use `execFileSync('git', ['commit', '-m', message])` to avoid shell interpretation entirely
+- **File**: `packages/node/src/index.ts:891`
+
 ### E2E Test Results
-- **9/9 pass** (Pipeline 4 skipped — rate-limited, not a bug)
+- **9/9 pass** (all pipelines including Pipeline 4)
 - Test suite expanded from 7 to 9 pipelines
+
+#### 11. Two Laws Bypass on Trigger Endpoints (SECURITY)
+- **Root cause**: Three trigger endpoints accepted `message` from request body and passed it to AI agents without Two Laws check
+- **Fix**: Added `violatesTwoLaws(message)` check to all three endpoints
+- **Endpoints**: `/teams/:id/trigger`, `/teams/:id/agents/:agentId/trigger`, `/council/trigger/:agent`
+
+### Commits Pushed
+5. `b1e85c00` — Fix nonexistent task update bug + Pipeline 7/8 E2E tests
+6. `e861b636` — Security: fix command injection in 5 git operation attack surfaces
+7. `14857ea2` — Security: Two Laws checks on 3 trigger endpoints
 
 ### Pending
 - [ ] PandoCode web UI testing (UI not running currently)
@@ -132,3 +164,4 @@
 - [x] Fix: updateTeamBoardTask nonexistent task returns 404
 - [x] Pipeline 7: Board Task CRUD E2E test
 - [x] Pipeline 8: Agent Spawn/Stop E2E test
+- [x] Security: command injection fixes (5 attack surfaces)
