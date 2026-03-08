@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-08 (Comprehensive audit: line counts refreshed across all files, tool endpoint table corrected, missing components added to Sections 4.1-4.3 and API, CLI flags updated, security/operational hardening features documented, council-prompts.ts removed from component table, internal consistency verified). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-09 (Phase 6.2 resilience: DB corruption recovery, stale session TTL, dead engine detection. Chat balance fix. Input validation hardening across 13 API endpoints. P2P promise rejection fixes. Section 5.10.10 added.). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -1086,6 +1086,14 @@ All shell command execution in app-manager.ts uses `execFileSync()` with array a
 - Workspace paths: `path.relative()` guard prevents path traversal via crafted appId
 - PM2 logs endpoint (app-api.ts): uses `execFileSync('pm2', ['logs', ...])` with SAFE_ID validation and lines clamping (1-10000)
 
+**Input validation hardening (commit 74249c43):**
+- All `query.limit` params capped at 200 across 13 API endpoints (core-api, kernel-api, platform-api, app-api, testing-api)
+- Team creation: id max 100 chars, displayName max 200 chars, description max 2000 chars
+- Agent spawn: templateId type-validated as string
+- Chat balance/status: now uses authenticated user's peerId, not node operator's
+- Thread messages: 404 on non-existent thread IDs (was auto-creating)
+- P2P sync: 7 unhandled promise rejections now caught and logged
+
 ### 5.9 PandoCode Network Linking
 
 PandoCode works as a standalone developer tool (like Claude Code). Optionally, it links to the Pando network.
@@ -1373,7 +1381,20 @@ BOARD RECOVERY (three sources, in priority order):
   3. Fresh start: empty board, lead reads repo state from commit history
 ```
 
-#### 5.10.10 System Prompts and Engine Details
+#### 5.10.10 Resilience and Graceful Degradation (Phase 6.2)
+
+**DB corruption recovery (team-registry.ts):** On `TeamRegistry` construction, `PRAGMA integrity_check` runs against `teams.db`. If the check fails, the DB files (+ WAL/SHM) are deleted and recreated fresh. Team metadata repopulates from P2P sync within seconds. The node never crashes from a corrupted team DB.
+
+**Stale CLI session cleanup (engine-adapter.ts):** Saved Claude Code CLI session IDs (`cli-session:*` in state table) have a 24-hour TTL. On `startTeam()`, sessions older than 24h are discarded and deleted from the DB. Agents start fresh instead of hanging on dead sessions.
+
+**Dead engine detection (engine-adapter.ts):** Lead agent tick handlers track consecutive failures. After 3 consecutive tick failures or a fatal error pattern (`ENOENT`, `spawn`, `session expired`, `process exit`), a `CRITICAL` log is emitted with recovery instructions. This makes zombie engines visible instead of silently broken.
+
+**What's NOT yet implemented:**
+- **Automatic engine restart** — when a CLI process dies, the engine is not restarted. Requires node restart.
+- **Board state replication** — when a team migrates to a new node, board tasks stay on the old node. The `team-state.json` git backup is the designed recovery path but is not yet wired.
+- **Cross-node claiming conflict resolution** — the atomic UPDATE handles basic races, but there's no notification when a claim is overridden.
+
+#### 5.10.11 System Prompts and Engine Details
 
 Each agent gets a system prompt via `agentOverride` on `engine.send()`. Prompts are defined in seed configs (constants in engine-adapter.ts), NOT in a separate file.
 
@@ -1437,7 +1458,7 @@ GOTCHAS:
   6. Board is NOT in the frame (PandoCode Option B) — inject in tick message
 ```
 
-#### 5.10.11 API Endpoints
+#### 5.10.12 API Endpoints
 
 ```
 GET  /v1/teams                        — List all teams (from local registry)
@@ -1459,7 +1480,7 @@ All board endpoints follow the same pattern:
 
 **Legacy endpoints** (`/v1/council/*`) will be removed after migration. Do NOT build on them.
 
-#### 5.10.12 What This Replaces
+#### 5.10.13 What This Replaces
 
 The following legacy code is being removed:
 - `core/council-prompts.ts` — prompts move to seed config constants in engine-adapter.ts
