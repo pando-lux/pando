@@ -524,6 +524,10 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const message = (request.body as any)?.message || 'Check your inbox and review board tasks now.';
       const agentId = (request.body as any)?.agentId || 'lead';
 
+      // Two Laws check on trigger message
+      const lawViolation = violatesTwoLaws(message);
+      if (lawViolation) return reply.code(403).send({ error: lawViolation });
+
       // Lead uses claude-code (slow) — run in background
       if (agentId === 'lead') {
         adapter.triggerTeamAgentBackground(teamId, agentId, message);
@@ -805,6 +809,9 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
           return reply.status(404).send({ error: 'Team not running' });
         }
         const message = (request.body as any)?.message || 'Manual trigger: check your inbox and process board tasks.';
+        // Two Laws check on trigger message
+        const lawViolation = violatesTwoLaws(message);
+        if (lawViolation) return reply.code(403).send({ error: lawViolation });
         // Run in background — return immediately
         adapter.triggerTeamAgentBackground(teamId, agentId, message);
         return { status: 'triggered', teamId, agentId };
@@ -984,6 +991,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
       if (!adapter.isTeamActive('pando-infra')) return reply.code(503).send({ error: 'pando-infra team not running' });
       const message = (request.body as any)?.message || 'Run your checks now.';
+      const lawViolation = violatesTwoLaws(message);
+      if (lawViolation) return reply.code(403).send({ error: lawViolation });
       adapter.triggerTeamAgentBackground('pando-infra', agentId, message);
       return { agent: agentId, status: 'triggered' };
     });
