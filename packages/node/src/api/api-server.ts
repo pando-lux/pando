@@ -326,17 +326,15 @@ export class ApiServer {
       const method = request.method;
       if (method === 'GET' || method === 'HEAD' || method === 'OPTIONS') return;
 
-      // User-facing endpoints are public — they use their own auth (userId scoping, E2E encryption).
+      // User-facing endpoints use their own auth (userId scoping, E2E encryption).
       // Only operator/admin endpoints require the node-level API Bearer token.
-      // Strip version prefix (/v1/) before matching — routes are registered under /v1/ prefix.
+      // NOTE: /teams/ and /council/ mutations require API token (they control AI agents).
       const urlPath = (request.url as string).split('?')[0];
       const pathNoVersion = urlPath.replace(/^\/v\d+/, '');
       if (
         pathNoVersion.startsWith('/auth/') ||
         pathNoVersion.startsWith('/projects') ||
         pathNoVersion.startsWith('/chat/') ||
-        pathNoVersion.startsWith('/council/') ||
-        pathNoVersion.startsWith('/teams/') ||
         pathNoVersion.startsWith('/internal/')
       ) {
         // Banned users are rejected even on user-facing endpoints
