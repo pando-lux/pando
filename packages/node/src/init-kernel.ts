@@ -828,7 +828,7 @@ export async function initKernel(node: any): Promise<void> {
         }, delay);
       }
 
-      // Periodic peer exchange: every 60s, share peer lists to discover new nodes
+      // Periodic peer exchange: every 30s, share peer lists to discover new nodes
       setInterval(async () => {
         if (!node.network) return;
         const peers = node.network.getPeers();
@@ -846,7 +846,7 @@ export async function initKernel(node: any): Promise<void> {
             });
           } catch {}
         }
-      }, 60_000);
+      }, 30_000);
 
       // Log if this is a post-upgrade restart
       const lastUpgradeFile = join(dataDir, 'last-upgrade.json');

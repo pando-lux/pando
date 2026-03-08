@@ -823,27 +823,52 @@ Be friendly and helpful. Keep answers short.`
           );
           console.log(`[peer-exchange] Received ${exchangedPeers.length} peer(s) from ${from.slice(0, 12)}, ${unknownPeers.length} unknown, already connected to ${connectedPeers.size}`);
           if (unknownPeers.length > 0) {
-            // Dial all unknown peers in parallel with per-address timeout
+            // Dial all unknown peers in parallel, racing addresses per peer for speed
+            const { multiaddr: ma } = await import('@multiformats/multiaddr');
             Promise.allSettled(unknownPeers.map(async (peer: any) => {
-              for (const addr of peer.addrs) {
-                try {
-                  const ac = new AbortController();
-                  const timer = setTimeout(() => ac.abort(), 5_000);
-                  const libp2p = network.getLibp2p();
-                  if (!libp2p) return;
-                  const { multiaddr: ma } = await import('@multiformats/multiaddr');
-                  await libp2p.dial(ma(addr), { signal: ac.signal });
-                  clearTimeout(timer);
-                  console.log(`[peer-exchange] Connected to ${peer.peerId.slice(0, 12)} via exchange from ${from.slice(0, 12)}`);
-                  return; // connected, skip remaining addrs
-                } catch {
-                  // addr unreachable or timed out, try next
-                }
+              const libp2p = network.getLibp2p();
+              if (!libp2p) return;
+              if (peer.addrs.length === 1) {
+                const ac = new AbortController();
+                const timer = setTimeout(() => ac.abort(), 3_000);
+                await libp2p.dial(ma(peer.addrs[0]), { signal: ac.signal });
+                clearTimeout(timer);
+                console.log(`[peer-exchange] Connected to ${peer.peerId.slice(0, 12)} via exchange from ${from.slice(0, 12)}`);
+                return;
               }
-            })).then((results) => {
+              // Multiple addresses: race them — first success wins
+              const ac = new AbortController();
+              const timer = setTimeout(() => ac.abort(), 3_000);
+              try {
+                await Promise.any(peer.addrs.map(async (addr: string) => {
+                  await libp2p!.dial(ma(addr), { signal: ac.signal });
+                  console.log(`[peer-exchange] Connected to ${peer.peerId.slice(0, 12)} via exchange from ${from.slice(0, 12)}`);
+                }));
+              } finally {
+                clearTimeout(timer);
+              }
+            })).then(async (results) => {
               const dialed = results.filter(r => r.status === 'fulfilled').length;
               if (dialed > 0) {
                 console.log(`[peer-exchange] Discovered ${dialed} new peer(s) from ${from.slice(0, 12)}`);
+                // Cascade: re-share updated peer list so newly-discovered peers propagate fast
+                try {
+                  const allPeers = network.getPeers();
+                  const peerAddrs = await network.getConnectedPeerAddresses();
+                  if (allPeers.length >= 2 && peerAddrs.length > 0) {
+                    for (const p of allPeers) {
+                      const toShare = peerAddrs.filter((a: any) => a.peerId !== p.peerId);
+                      if (toShare.length === 0) continue;
+                      network.sendMessage(p.peerId, {
+                        type: MessageType.PEER_EXCHANGE,
+                        from: node.getIdentity()!.peerId,
+                        timestamp: Date.now(),
+                        payload: { peers: toShare },
+                      }).catch(() => {});
+                    }
+                    console.log(`[peer-exchange] Cascade re-shared with ${allPeers.length} peer(s)`);
+                  }
+                } catch {}
               }
             });
           }
