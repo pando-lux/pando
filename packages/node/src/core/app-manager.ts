@@ -16,7 +16,7 @@
  */
 
 import Database from 'better-sqlite3';
-import { join } from 'node:path';
+import { join, relative } from 'node:path';
 import { homedir } from 'node:os';
 import {
   existsSync,
@@ -29,7 +29,7 @@ import {
   rmSync,
   cpSync,
 } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -124,6 +124,9 @@ const NGINX_CONF_DIR = '/etc/nginx/pando-apps';
 const APPS_BASE_DIR = join(homedir(), '.pando', 'hosted-apps');
 const WORKSPACE_BASE_DIR = join(homedir(), '.pando', 'projects');
 const DB_PATH = join(homedir(), '.pando', 'apps.db');
+
+/** Validate that an ID is safe for shell/filesystem use. */
+const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 
 const STATIC_EXTS = new Set([
   '.html', '.css', '.js', '.json', '.png', '.jpg', '.jpeg', '.gif',
@@ -610,25 +613,25 @@ export class AppManager {
     const port = this.allocatePort();
     const pm2Name = `app-${app.id}`;
 
-    // Build env vars
+    // Build env vars — use process env option, never shell interpolation
     const envVars: Record<string, string> = app.env_json ? JSON.parse(app.env_json) : {};
-    const envObj: Record<string, string> = {
+    const processEnv: Record<string, string> = {
+      ...process.env as Record<string, string>,
       PORT: String(port),
       NODE_ENV: 'production',
       ...envVars,
     };
-    const envArgs = Object.entries(envObj).map(([k, v]) => `${k}=${v}`).join(' ');
 
     // Delete any existing PM2 process
-    try { execSync(`pm2 delete ${pm2Name}`, EXEC_OPTS); } catch { /* not running */ }
+    try { execFileSync('pm2', ['delete', pm2Name], EXEC_OPTS); } catch { /* not running */ }
 
     // Start via PM2
     const pkg = this.readPackageJson(appDir);
     if (pkg?.scripts?.start) {
-      execSync(`env ${envArgs} pm2 start npm --name ${pm2Name} -- start`, { ...EXEC_OPTS, cwd: appDir });
+      execFileSync('pm2', ['start', 'npm', '--name', pm2Name, '--', 'start'], { ...EXEC_OPTS, cwd: appDir, env: processEnv });
     } else {
       const mainFile = pkg?.main || 'server.js';
-      execSync(`env ${envArgs} pm2 start ${mainFile} --name ${pm2Name}`, { ...EXEC_OPTS, cwd: appDir });
+      execFileSync('pm2', ['start', mainFile, '--name', pm2Name], { ...EXEC_OPTS, cwd: appDir, env: processEnv });
     }
 
     console.log(`[app-manager] PM2 process ${pm2Name} started on port ${port}`);
@@ -668,7 +671,7 @@ export class AppManager {
       return { success: true, url: deployUrl, port };
     } else {
       // Health check failed — clean up
-      try { execSync(`pm2 delete ${pm2Name}`, EXEC_OPTS); } catch { /* best effort */ }
+      try { execFileSync('pm2', ['delete', pm2Name], EXEC_OPTS); } catch { /* best effort */ }
 
       const error = 'Health check failed after deploy — process started but did not respond to health probe';
       this.db.prepare('UPDATE apps SET status = ?, error_message = ?, updated_at = ? WHERE id = ?')
@@ -1012,25 +1015,25 @@ export class AppManager {
     const tempPort = this.allocatePort();
     const pm2NameStaging = `app-${app.id}-staging`;
 
-    // Build env vars
+    // Build env vars — use process env option, never shell interpolation
     const envVars: Record<string, string> = app.env_json ? JSON.parse(app.env_json) : {};
-    const envObj: Record<string, string> = {
+    const processEnv: Record<string, string> = {
+      ...process.env as Record<string, string>,
       PORT: String(tempPort),
       NODE_ENV: 'production',
       ...envVars,
     };
-    const envArgs = Object.entries(envObj).map(([k, v]) => `${k}=${v}`).join(' ');
 
     // Delete any stale staging process
-    try { execSync(`pm2 delete ${pm2NameStaging}`, EXEC_OPTS); } catch { /* not running */ }
+    try { execFileSync('pm2', ['delete', pm2NameStaging], EXEC_OPTS); } catch { /* not running */ }
 
     // Start staging process on temp port
     const pkg = this.readPackageJson(appDir);
     if (pkg?.scripts?.start) {
-      execSync(`env ${envArgs} pm2 start npm --name ${pm2NameStaging} -- start`, { ...EXEC_OPTS, cwd: appDir });
+      execFileSync('pm2', ['start', 'npm', '--name', pm2NameStaging, '--', 'start'], { ...EXEC_OPTS, cwd: appDir, env: processEnv });
     } else {
       const mainFile = pkg?.main || 'server.js';
-      execSync(`env ${envArgs} pm2 start ${mainFile} --name ${pm2NameStaging}`, { ...EXEC_OPTS, cwd: appDir });
+      execFileSync('pm2', ['start', mainFile, '--name', pm2NameStaging], { ...EXEC_OPTS, cwd: appDir, env: processEnv });
     }
 
     console.log(`[app-manager] Staging process ${pm2NameStaging} started on port ${tempPort}`);
@@ -1047,20 +1050,20 @@ export class AppManager {
 
       // Kill old PM2 process
       const pm2Name = `app-${app.id}`;
-      try { execSync(`pm2 delete ${pm2Name}`, EXEC_OPTS); } catch { /* best effort */ }
+      try { execFileSync('pm2', ['delete', pm2Name], EXEC_OPTS); } catch { /* best effort */ }
 
       // Rename staging → production
       try {
-        execSync(`pm2 restart ${pm2NameStaging} --name ${pm2Name}`, EXEC_OPTS);
+        execFileSync('pm2', ['restart', pm2NameStaging, '--name', pm2Name], EXEC_OPTS);
       } catch {
         // pm2 rename is not a real command — delete staging and re-start with production name
-        try { execSync(`pm2 delete ${pm2NameStaging}`, EXEC_OPTS); } catch { /* best effort */ }
+        try { execFileSync('pm2', ['delete', pm2NameStaging], EXEC_OPTS); } catch { /* best effort */ }
 
         if (pkg?.scripts?.start) {
-          execSync(`env ${envArgs} pm2 start npm --name ${pm2Name} -- start`, { ...EXEC_OPTS, cwd: appDir });
+          execFileSync('pm2', ['start', 'npm', '--name', pm2Name, '--', 'start'], { ...EXEC_OPTS, cwd: appDir, env: processEnv });
         } else {
           const mainFile = pkg?.main || 'server.js';
-          execSync(`env ${envArgs} pm2 start ${mainFile} --name ${pm2Name}`, { ...EXEC_OPTS, cwd: appDir });
+          execFileSync('pm2', ['start', mainFile, '--name', pm2Name], { ...EXEC_OPTS, cwd: appDir, env: processEnv });
         }
       }
 
@@ -1092,7 +1095,7 @@ export class AppManager {
       return { success: true, previousCommit: oldCommit || undefined, newCommit };
     } else {
       // Staging health check failed — clean up staging, restore old commit
-      try { execSync(`pm2 delete ${pm2NameStaging}`, EXEC_OPTS); } catch { /* best effort */ }
+      try { execFileSync('pm2', ['delete', pm2NameStaging], EXEC_OPTS); } catch { /* best effort */ }
 
       // Restore old commit so old process's code is intact
       if (oldCommit) {
@@ -1191,25 +1194,25 @@ export class AppManager {
         const tempPort = this.allocatePort();
         const pm2NameStaging = `app-${appId}-staging`;
 
-        // Build env vars
+        // Build env vars — use process env option, never shell interpolation
         const envVars: Record<string, string> = app.env_json ? JSON.parse(app.env_json) : {};
-        const envObj: Record<string, string> = {
+        const processEnv: Record<string, string> = {
+          ...process.env as Record<string, string>,
           PORT: String(tempPort),
           NODE_ENV: 'production',
           ...envVars,
         };
-        const envArgs = Object.entries(envObj).map(([k, v]) => `${k}=${v}`).join(' ');
 
         // Delete any stale staging process
-        try { execSync(`pm2 delete ${pm2NameStaging}`, EXEC_OPTS); } catch { /* not running */ }
+        try { execFileSync('pm2', ['delete', pm2NameStaging], EXEC_OPTS); } catch { /* not running */ }
 
         // Start staging with rolled-back code
         const pkg = this.readPackageJson(appDir);
         if (pkg?.scripts?.start) {
-          execSync(`env ${envArgs} pm2 start npm --name ${pm2NameStaging} -- start`, { ...EXEC_OPTS, cwd: appDir });
+          execFileSync('pm2', ['start', 'npm', '--name', pm2NameStaging, '--', 'start'], { ...EXEC_OPTS, cwd: appDir, env: processEnv });
         } else {
           const mainFile = pkg?.main || 'server.js';
-          execSync(`env ${envArgs} pm2 start ${mainFile} --name ${pm2NameStaging}`, { ...EXEC_OPTS, cwd: appDir });
+          execFileSync('pm2', ['start', mainFile, '--name', pm2NameStaging], { ...EXEC_OPTS, cwd: appDir, env: processEnv });
         }
 
         await this.sleep(3000);
@@ -1222,15 +1225,15 @@ export class AppManager {
           this.updateNginx(appId, tempPort);
 
           const pm2Name = `app-${appId}`;
-          try { execSync(`pm2 delete ${pm2Name}`, EXEC_OPTS); } catch { /* best effort */ }
+          try { execFileSync('pm2', ['delete', pm2Name], EXEC_OPTS); } catch { /* best effort */ }
 
           // Re-start with production name
-          try { execSync(`pm2 delete ${pm2NameStaging}`, EXEC_OPTS); } catch { /* best effort */ }
+          try { execFileSync('pm2', ['delete', pm2NameStaging], EXEC_OPTS); } catch { /* best effort */ }
           if (pkg?.scripts?.start) {
-            execSync(`env ${envArgs} pm2 start npm --name ${pm2Name} -- start`, { ...EXEC_OPTS, cwd: appDir });
+            execFileSync('pm2', ['start', 'npm', '--name', pm2Name, '--', 'start'], { ...EXEC_OPTS, cwd: appDir, env: processEnv });
           } else {
             const mainFile = pkg?.main || 'server.js';
-            execSync(`env ${envArgs} pm2 start ${mainFile} --name ${pm2Name}`, { ...EXEC_OPTS, cwd: appDir });
+            execFileSync('pm2', ['start', mainFile, '--name', pm2Name], { ...EXEC_OPTS, cwd: appDir, env: processEnv });
           }
 
           const publicAddress = app.host_address || process.env.PUBLIC_IP || null;
@@ -1260,7 +1263,7 @@ export class AppManager {
           return { success: true, restoredCommit: targetCommit };
         } else {
           // Rollback staging failed — restore original commit
-          try { execSync(`pm2 delete ${pm2NameStaging}`, EXEC_OPTS); } catch { /* best effort */ }
+          try { execFileSync('pm2', ['delete', pm2NameStaging], EXEC_OPTS); } catch { /* best effort */ }
 
           if (currentCommit) {
             try { execSync(`git checkout ${currentCommit}`, { ...GIT_OPTS, cwd: appDir }); } catch { /* best effort */ }
@@ -1363,7 +1366,7 @@ export class AppManager {
     // 1. Stop PM2 process
     if (app.tier === 2) {
       try {
-        execSync(`pm2 delete ${pm2Name}`, EXEC_OPTS);
+        execFileSync('pm2', ['delete', pm2Name], EXEC_OPTS);
         console.log(`[app-manager] PM2 process ${pm2Name} deleted`);
       } catch {
         console.log(`[app-manager] PM2 process ${pm2Name} not found (already stopped?)`);
@@ -1489,7 +1492,7 @@ export class AppManager {
           // Attempt restart
           const pm2Name = `app-${app.id}`;
           try {
-            execSync(`pm2 restart ${pm2Name}`, EXEC_OPTS);
+            execFileSync('pm2', ['restart', pm2Name], EXEC_OPTS);
             console.log(`[app-manager] Restarted ${app.id} (attempt ${newRestartCount}/${app.max_restarts})`);
           } catch (err: any) {
             console.log(`[app-manager] Failed to restart ${app.id}: ${err.message}`);
@@ -1822,7 +1825,11 @@ location /apps/${appId}/ {
    * Returns the path if it exists and has deployable content, null otherwise.
    */
   private resolveWorkspace(appId: string): string | null {
+    if (!SAFE_ID.test(appId)) return null;
     const wsDir = join(WORKSPACE_BASE_DIR, appId);
+    // Guard against path traversal
+    const rel = relative(WORKSPACE_BASE_DIR, wsDir);
+    if (rel.startsWith('..') || rel.includes('..')) return null;
     if (!existsSync(wsDir)) return null;
 
     // Verify workspace has deployable content

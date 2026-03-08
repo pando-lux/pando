@@ -14,8 +14,11 @@
  * does not reject it. Add: pathNoVersion.startsWith('/webhooks/')
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import type { RouteHelpers } from './middleware/auth.js';
+
+/** Validate that an ID is safe for shell/filesystem use (alphanumeric, hyphens, underscores). */
+const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
 
 export async function registerAppRoutes(
   fastify: any,
@@ -205,10 +208,13 @@ export async function registerAppRoutes(
   // ── GET /apps/:id/logs — PM2 logs ───────────────────────────────────
   fastify.get('/apps/:id/logs', async (request: any, reply: any) => {
     const { id } = request.params;
-    const lines = parseInt((request.query as any)?.lines, 10) || 100;
+    if (!SAFE_ID.test(id)) {
+      return reply.code(400).send({ error: 'Invalid app id' });
+    }
+    const lines = Math.min(Math.max(parseInt((request.query as any)?.lines, 10) || 100, 1), 10_000);
 
     try {
-      const output = execSync(`pm2 logs app-${id} --lines ${lines} --nostream`, {
+      const output = execFileSync('pm2', ['logs', `app-${id}`, '--lines', String(lines), '--nostream'], {
         encoding: 'utf-8',
         timeout: 10_000,
       });
