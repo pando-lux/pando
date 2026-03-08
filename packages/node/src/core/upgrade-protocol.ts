@@ -636,16 +636,35 @@ export class UpgradeProtocol {
         if (p.status !== 'passed' || p.category !== 'upgrade') continue;
         const commitHash = p.upgradePayload?.commitHash;
         if (!commitHash) continue;
-        // Skip if already applied or if we're already at this version
+        // Skip if already applied
         if (this.hasApplied(commitHash)) continue;
-        if (currentVersion.startsWith(commitHash) || commitHash.startsWith(currentVersion.slice(0, commitHash.length))) continue;
-        // Skip if this commit is already in our git history (ancestor of HEAD)
-        try {
-          this.git(`merge-base --is-ancestor ${commitHash} HEAD`);
+        // Check if we're already at this version (git HEAD matches)
+        const headMatches = currentVersion.startsWith(commitHash) || commitHash.startsWith(currentVersion.slice(0, commitHash.length));
+        // Check if this commit is already in our git history (ancestor of HEAD)
+        let isAncestor = false;
+        if (!headMatches) {
+          try {
+            this.git(`merge-base --is-ancestor ${commitHash} HEAD`);
+            isAncestor = true;
+          } catch { /* not an ancestor */ }
+        }
+        if (headMatches || isAncestor) {
+          // HEAD has this commit, but is the BUILD stale?
+          // This catches the proposer-node case: lead committed locally but process is running old dist/
+          if (this.runningCommit !== 'unknown' && this.runningCommit !== this.git('rev-parse HEAD')) {
+            console.log(`[upgrade] Catch-up: HEAD has ${commitHash.slice(0, 8)} but running commit is stale (${this.runningCommit.slice(0, 8)}) — rebuilding`);
+            try {
+              execSync('npm run build', { cwd: this.repoDir, timeout: 180_000, stdio: 'pipe', windowsHide: true });
+              console.log('[upgrade] Rebuild complete after local commit — triggering safe restart');
+              this.safeRestart(this.git('rev-parse HEAD'));
+            } catch (buildErr: any) {
+              console.warn(`[upgrade] Rebuild failed: ${buildErr.message?.slice(0, 200)}`);
+            }
+          }
           this.appliedProposalIds.add(commitHash);
           this.saveState();
           continue;
-        } catch { /* not an ancestor — proceed with upgrade */ }
+        }
         // Skip if pinned
         if (this.pinnedVersion) continue;
 

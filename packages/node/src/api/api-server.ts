@@ -99,6 +99,7 @@ const RATE_LIMITS: Record<string, { max: number; envVar: string; windowMs?: numb
   'POST /chat/message':              { max: 20, envVar: 'PANDO_RATE_CHAT', windowMs: 3600_000 },
   'POST /chat/threads/:id/message':  { max: 30, envVar: 'PANDO_RATE_CHAT_THREAD' },
   'POST /auth/guest':                { max: 5,  envVar: 'PANDO_RATE_AUTH_GUEST' },
+  'POST /teams/:id/request':         { max: 3,  envVar: 'PANDO_RATE_REPORT', windowMs: 3600_000 },
   'POST /council/request':           { max: 3,  envVar: 'PANDO_RATE_REPORT', windowMs: 3600_000 },
   'POST /projects/:id/request':      { max: 5,  envVar: 'PANDO_RATE_PROJECT_REQUEST', windowMs: 3600_000 },
 };
@@ -296,7 +297,8 @@ export class ApiServer {
         pathNoVersion.startsWith('/auth/') ||
         pathNoVersion.startsWith('/projects') ||
         pathNoVersion.startsWith('/chat/') ||
-        pathNoVersion.startsWith('/council/')
+        pathNoVersion.startsWith('/council/') ||
+        pathNoVersion.startsWith('/teams/')
       ) return;
 
       // Extract Bearer token from Authorization header
@@ -541,13 +543,13 @@ export class ApiServer {
     const lower = message.toLowerCase().replace(/[?!.,]/g, '').trim();
 
     // ── Report fast-path: bug reports, feature requests, network issues ──
-    // These go to the council or a specific project's board as tasks.
+    // These go to the pando-infra team or a specific project's board as tasks.
     const reportPatterns = /\b(report|bug|broken|not working|crashes?|error|issue|problem|fix|slow|down|outage|regression|investigate)\b/i;
     const networkPatterns = /\b(network|node|peer|p2p|latency|connectivity|health)\b/i;
     const featurePatterns = /\b(suggest|feature|request|idea|add|could you|wish|would be nice|improvement)\b/i;
     if ((reportPatterns.test(message) && networkPatterns.test(message)) ||
         (featurePatterns.test(message) && networkPatterns.test(message))) {
-      return { intent: 'report', description: message.slice(0, 200), targetProject: 'council' };
+      return { intent: 'report', description: message.slice(0, 200), targetProject: 'pando-infra' };
     }
 
     // ── Deterministic fast-path (zero cost, instant) ──────────────────────
@@ -606,16 +608,16 @@ Classify the user's message into ONE of these categories and respond with ONLY v
 JSON format:
 For questions: {"intent":"question","response":"<your friendly answer, 1-3 sentences>"}
 For builds: {"intent":"build","description":"<what they want built, 1 sentence>","tier":<1 or 2>}
-For reports: {"intent":"report","description":"<what the issue/suggestion is, 1 sentence>","targetProject":"council"}
+For reports: {"intent":"report","description":"<what the issue/suggestion is, 1 sentence>","targetProject":"pando-infra"}
 
 Tier rules:
 - Tier 1: Pure static apps (portfolio, landing page, simple form with no backend). HTML/CSS/JS only, no server.
 - Tier 2: Anything that needs a server. This includes: chat, messaging, real-time, polls, voting, multiplayer, games with scores, dashboards with live data, APIs, WebSocket, Express, Node.js backend, database queries, user accounts, login systems. When in doubt, choose Tier 2 — it's safer than deploying a server app to static hosting.
 
 Report rules:
-- targetProject is "council" for network/infrastructure issues.
+- targetProject is "pando-infra" for network/infrastructure issues.
 - targetProject is the project name if the user mentions a specific app (e.g. "the exchange app is broken" → "exchange").
-- If unsure which project, use "council".
+- If unsure which project, use "pando-infra".
 
 Be friendly and helpful. Keep answers short.`
               },
@@ -641,7 +643,7 @@ Be friendly and helpful. Keep answers short.`
                 return { intent: 'build', description: parsed.description, tier: parsed.tier || 1 };
               }
               if (parsed.intent === 'report' && parsed.description) {
-                return { intent: 'report', description: parsed.description, targetProject: parsed.targetProject || 'council' };
+                return { intent: 'report', description: parsed.description, targetProject: parsed.targetProject || 'pando-infra' };
               }
             } catch {
               return { intent: 'question', response: content };
@@ -676,10 +678,10 @@ Be friendly and helpful. Keep answers short.`
       return { intent: 'build', description: message.slice(0, 200), tier: tier2Keywords.test(message) ? 2 : 1 };
     }
 
-    // Report fallback: bug/issue/broken + optional context → report to council
+    // Report fallback: bug/issue/broken + optional context → report to pando-infra
     const reportFallback = /\b(bug|broken|not working|crashes?|error|outage|regression|report)\b/i;
     if (reportFallback.test(message)) {
-      return { intent: 'report', description: message.slice(0, 200), targetProject: 'council' };
+      return { intent: 'report', description: message.slice(0, 200), targetProject: 'pando-infra' };
     }
 
     // Default: treat as a build request if it contains action words, otherwise question

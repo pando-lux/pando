@@ -641,9 +641,9 @@ export class PandoNode {
     return this.config.apiPort;
   }
 
-  /** Enable/disable council agents. Must be called before startEngine(). */
-  setCouncilEnabled(enabled: boolean): void {
-    this.config.enableCouncil = enabled;
+  /** Get the team registry (if initialized). */
+  getTeamRegistry(): any {
+    return (this as any)._teamRegistry ?? null;
   }
 
   getCapabilities(): string[] {
@@ -969,7 +969,6 @@ export class PandoNode {
         nodeId: this.identity?.peerId,
         dataDir: this.config.dataDir,
         resourceRegistry: this.resourceRegistry,
-        enableCouncil: this.config.enableCouncil ?? false,
       });
       console.log('[engine] EngineAdapter started — PandoCode brain connected.');
     } catch (err: any) {
@@ -1510,6 +1509,11 @@ export class PandoNode {
     if (this.networkState) {
       this.networkState.stop();
       this.networkState = null;
+    }
+    // Stop TeamRegistry
+    if ((this as any)._teamRegistry) {
+      (this as any)._teamRegistry.stop();
+      (this as any)._teamRegistry = null;
     }
     // Shutdown EngineAdapter
     await this.engineAdapter?.shutdown();

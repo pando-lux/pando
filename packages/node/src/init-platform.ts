@@ -18,6 +18,8 @@ import { NetworkState } from './kernel/network-state.js';
 import { LocalEnvironment } from './kernel/local-environment.js';
 import { ApiServer } from './api/api-server.js';
 import { safeGitReset } from './core/upgrade-protocol.js';
+import { TeamRegistry } from './core/team-registry.js';
+import { PANDO_INFRA_AGENTS } from './core/engine-adapter.js';
 import type { CredentialStore } from './core/credential-store.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -887,12 +889,12 @@ Be friendly and helpful. Keep answers short.`
     node.cloudInstanceManager.init().catch((err: any) =>
       console.warn(`[cloud-instances] Init failed (non-fatal): ${err.message}`));
 
-    // Phase 50: Network State Aggregator — hourly snapshot for council reflection
+    // Phase 50: Network State Aggregator — hourly snapshot for team lead reflection
     node.networkState = new NetworkState(node, dataDir);
     node.networkState.start();
     console.log('[network-state] Aggregator started (hourly snapshots)');
 
-    // Council replaced by EngineAdapter — initialized in startEngine()
+    // Teams managed by EngineAdapter — initialized in startEngine() + team bootstrap
 
     // v2.5: Local Environment — Envelope 1 file index + user memory (always on, no network)
     try {
@@ -1034,6 +1036,85 @@ Be friendly and helpful. Keep answers short.`
       console.log(`[node] Mode '${node.config.nodeMode}' — engine skipped.`);
     }
 
+    // ── Team Registry + Bootstrap ──────────────────────────────────────
+    // Initialize the TeamRegistry (SQLite + GossipSub sync) and auto-bootstrap
+    // the pando-infra team if the EngineAdapter is available.
+    try {
+      const teamsDbPath = join(dataDir, 'teams', 'teams.db');
+      const teamRegistry = new TeamRegistry(teamsDbPath, node.network, node.identity.peerId);
+      (node as any)._teamRegistry = teamRegistry;
+
+      // Subscribe to GossipSub team topic + wire peer sync
+      teamRegistry.start();
+
+      // Start orphan scan (5-minute interval, 20-minute stale threshold)
+      teamRegistry.startOrphanScan();
+
+      // Orphan detection callback: auto-claim + start orphaned teams
+      teamRegistry.onOrphanDetected = (team) => {
+        const adapter = node.getEngineAdapter?.();
+        if (!adapter?.available) return;
+        console.log(`[team-registry] Auto-claiming orphaned team: ${team.id}`);
+        const claimed = teamRegistry.claimTeam(team.id);
+        if (claimed) {
+          // For pando-infra, use seed agents. For others, use a single default agent.
+          const agents = team.id === 'pando-infra' ? PANDO_INFRA_AGENTS : [
+            { id: 'lead', role: 'lead', displayName: `${team.displayName} Lead`, prompt: `You manage the ${team.displayName} team.` },
+          ];
+          adapter.startTeam(team.id, agents).catch((err: any) =>
+            console.warn(`[team-registry] Failed to start claimed team ${team.id}: ${err.message}`)
+          );
+        }
+      };
+
+      // Auto-bootstrap pando-infra if EngineAdapter is available
+      const adapter = node.getEngineAdapter?.();
+      if (adapter?.available) {
+        const existing = teamRegistry.getTeam('pando-infra');
+        if (!existing) {
+          // Create pando-infra team and claim it for this node
+          teamRegistry.createTeam({
+            id: 'pando-infra',
+            displayName: 'Pando Infrastructure',
+            managingNode: node.identity.peerId,
+            lastHeartbeat: Date.now(),
+            status: 'active',
+            repos: ['pando-lux/node', 'pando-lux/code'],
+            agentCount: PANDO_INFRA_AGENTS.length,
+            governanceRequired: true,
+            createdBy: node.identity.peerId,
+            claimedAt: Date.now(),
+          });
+          console.log('[team-registry] pando-infra team created and claimed.');
+        } else if (!existing.managingNode || existing.status === 'orphaned') {
+          // Unclaimed or orphaned — claim it
+          const claimed = teamRegistry.claimTeam('pando-infra');
+          if (claimed) console.log('[team-registry] pando-infra team claimed (was orphaned).');
+        }
+
+        // If we manage pando-infra, start its agents
+        const infra = teamRegistry.getTeam('pando-infra');
+        if (infra && infra.managingNode === node.identity.peerId) {
+          adapter.startTeam('pando-infra', PANDO_INFRA_AGENTS).catch((err: any) =>
+            console.warn(`[team-registry] Failed to start pando-infra team: ${err.message}`)
+          );
+        }
+
+        // Heartbeat for all teams we manage (every 5 minutes)
+        const heartbeatInterval = setInterval(() => {
+          const myTeams = teamRegistry.getTeamsForNode(node.identity.peerId);
+          for (const team of myTeams) {
+            teamRegistry.updateHeartbeat(team.id);
+          }
+        }, 5 * 60_000);
+        heartbeatInterval.unref();
+      }
+
+      console.log('[team-registry] Initialized. Teams: ' + teamRegistry.listTeams().length);
+    } catch (err: any) {
+      console.warn(`[team-registry] Init failed (non-fatal): ${err.message}`);
+    }
+
     // Handle messages and reward work
     node.network.onMessage((message: any, from: any) => {
       // Security: ignore messages from quarantined peers
@@ -1173,6 +1254,8 @@ Be friendly and helpful. Keep answers short.`
       const initialCommit = readBuildCommit();
       if (initialCommit) {
         console.log(`[self-restart] Stale-build watchdog active (built at ${initialCommit.slice(0, 8)})`);
+        let staleSinceTs: number | null = null; // Track when staleness was first detected
+        const MAX_DEFER_MS = 5 * 60_000; // Max 5 minutes deferral then restart anyway
         const selfRestartInterval = setInterval(() => {
           try {
             // Re-read .build-commit each cycle — upgrade catch-up may have rebuilt
@@ -1182,26 +1265,38 @@ Be friendly and helpful. Keep answers short.`
               cwd: process.cwd(), encoding: 'utf8', timeout: 5000,
             }) as string).trim();
             if (currentCommit === builtCommit) {
+              staleSinceTs = null; // Build is fresh
               // Build matches HEAD, but did the build change since this process started?
               if (builtCommit !== initialCommit) {
-                const activeEngines = node.engineAdapter?.getActiveEngines()?.length ?? 0;
-                if (activeEngines > 0) {
-                  console.log(`[self-restart] Build updated since startup (was=${initialCommit.slice(0, 8)}, now=${builtCommit.slice(0, 8)}) but ${activeEngines} engine(s) active — deferring`);
-                  return;
-                }
                 console.log(`[self-restart] Build updated since startup (was=${initialCommit.slice(0, 8)}, now=${builtCommit.slice(0, 8)}) — restarting`);
                 clearInterval(selfRestartInterval);
                 node.selfRestart();
               }
               return;
             }
+            // Build is stale — track how long
+            if (!staleSinceTs) staleSinceTs = Date.now();
+            const staleMs = Date.now() - staleSinceTs;
             const activeEngines = node.engineAdapter?.getActiveEngines()?.length ?? 0;
-            if (activeEngines > 0) {
-              console.log(`[self-restart] Stale build detected (built=${builtCommit.slice(0, 8)}, head=${currentCommit.slice(0, 8)}) but ${activeEngines} engine(s) active — deferring restart`);
+            if (activeEngines > 0 && staleMs < MAX_DEFER_MS) {
+              console.log(`[self-restart] Stale build (built=${builtCommit.slice(0, 8)}, head=${currentCommit.slice(0, 8)}) — ${activeEngines} engine(s) active, deferring (${Math.round(staleMs / 1000)}s/${MAX_DEFER_MS / 1000}s)`);
               return;
             }
-            console.log(`[self-restart] Stale build detected and no active engines — restarting`);
+            // Either no active engines, or we've deferred long enough
+            if (staleMs >= MAX_DEFER_MS) {
+              console.log(`[self-restart] Stale build deferred for ${Math.round(staleMs / 1000)}s (max ${MAX_DEFER_MS / 1000}s) — rebuilding and restarting`);
+            } else {
+              console.log(`[self-restart] Stale build detected and no active engines — restarting`);
+            }
             clearInterval(selfRestartInterval);
+            // Rebuild before restarting to ensure dist/ is fresh
+            try {
+              console.log('[self-restart] Running npm run build...');
+              execSync('npm run build', { cwd: process.cwd(), timeout: 180_000, stdio: 'pipe' });
+              console.log('[self-restart] Rebuild complete — restarting');
+            } catch (buildErr: any) {
+              console.warn(`[self-restart] Rebuild failed (restarting anyway): ${(buildErr as Error).message?.slice(0, 200)}`);
+            }
             node.selfRestart();
           } catch { /* git unavailable or cwd mismatch — skip silently */ }
         }, 60 * 1000);  // Check every 60s — fast restart after CEO commits

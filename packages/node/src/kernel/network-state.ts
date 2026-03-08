@@ -2,8 +2,8 @@
  * Network State Aggregator
  *
  * Periodically aggregates metrics from existing subsystems into a structured
- * NetworkStateSnapshot and writes it to ~/.pando/council/network-state.md.
- * This file is the "short-term memory" that council reflection sessions read.
+ * NetworkStateSnapshot and writes it to ~/.pando/teams/pando-infra/network-state.md.
+ * This file is the "short-term memory" that team lead reflection sessions read.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -101,11 +101,11 @@ export class NetworkState {
   /** Write the current snapshot to disk as readable markdown. */
   async writeState(): Promise<void> {
     const snapshot = await this.generateSnapshot();
-    const councilDir = join(this.dataDir, 'council');
-    mkdirSync(councilDir, { recursive: true });
+    const teamDir = join(this.dataDir, 'teams', 'pando-infra');
+    mkdirSync(teamDir, { recursive: true });
 
     const md = this.formatMarkdown(snapshot);
-    writeFileSync(join(councilDir, 'network-state.md'), md, 'utf-8');
+    writeFileSync(join(teamDir, 'network-state.md'), md, 'utf-8');
   }
 
   /** Start the hourly auto-generation loop (immediate first run). */

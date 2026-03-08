@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-07 (Claude Code agent runtime IMPLEMENTED + VERIFIED — see Section 3.2.9). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-08 (team architecture replaces legacy council — see Section 5.10 + docs/TEAM-ARCHITECTURE.md). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -56,7 +56,7 @@ shared < ledger < node
 engine-adapter.ts = THE NERVOUS SYSTEM (~968 lines)
   The ONE file that connects brain to body.
   Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
-  Manages Council agents (observer/qa/council) using PandoCode's native agent system.
+  Starts teams (startTeam) using PandoCode's native agent/board system.
   Pando tools are just HTTP calls to the node's own API — the engine doesn't know the difference.
 ```
 
@@ -591,22 +591,20 @@ pando-code doesn't import @pando/node. It just has extra tools registered. That'
 Proposal arrives (diff + description)
   |
   v
-Layer 1: Ed25519 signature check              DETERMINISTIC (pando-node)
-Layer 2: Security file check                   DETERMINISTIC (pando-node)
-Layer 3: Diff content scan (dangerous patterns) DETERMINISTIC (pando-node)
-Layer 4: Build verification (npm run build)    DETERMINISTIC (pando-node)
+Layer 1: Ed25519 signature check              DETERMINISTIC — blocks unsigned proposals
+Layer 2: Security file check                   DETERMINISTIC — blocks if security files
+                                                modified without "security"/"credential" in description
+Layer 3: Diff content scan (dangerous patterns) DETERMINISTIC — blocks eval(), new Function(),
+                                                dynamic require() in added lines
+Layer 4: Build verification (npm run build)    DETERMINISTIC — blocks if build fails
   |
   v
-Layer 5: AI REVIEW
+Layer 5: AI REVIEW (ADVISORY ONLY — does NOT block)
   → governance.ts calls adapter.reviewDiff(diff, description)
-  → adapter routes to System Engine
-  → System Engine analyzes:
-     - Architecture violations?
-     - Injection risks (eval, dynamic require)?
-     - Data leaks (credentials, private keys)?
-     - Logic errors?
   → Returns: { safe: boolean, risks: string[], recommendation: string }
-  → governance.ts uses this as INPUT (not final word — governance decides)
+  → If unsafe: logged as WARNING to governance_audit, but proposal continues
+  → Rationale: deterministic checks (Layers 2-3) are the real gates;
+    AI review adds signal but must not veto legitimate changes
   |
   v
 Layer 6: Kernel protection delay (60s for kernel/ changes)
@@ -615,8 +613,12 @@ Layer 6: Kernel protection delay (60s for kernel/ changes)
 DECISION: APPROVE or REJECT
   → logged to governance_audit table
   → if approved: broadcast via GossipSub
-  → all nodes: git pull → build → restart
+  → all nodes: git pull → npm install → build → restart
 ```
+
+**IMPORTANT: `git diff HEAD~1 HEAD` (not `git diff HEAD~1`).** All diff commands in governance validation use the two-argument form to diff only committed changes. Without `HEAD` as the second arg, git diffs against the working tree — uncommitted files inflate the diff and cause false rejections.
+
+**Security files list:** `credential-store.ts`, `credential-vault.ts`, `request-reply.ts`, `guardrails.ts`, `security-monitor.ts`, `governance.ts`, `upgrade-protocol.ts`, `payment-gate.ts`. Modifying any of these requires "security" or "credential" in the proposal description.
 
 **Layer 5 (AI review) only runs on PandoCode contributor nodes** (they have an engine to review with). On lightweight/secure nodes without PandoCode, Layer 5 is skipped (fail-open). Layers 1-4 and 6 are deterministic and run everywhere.
 
@@ -894,9 +896,13 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 
 **BUILT.** Engine Adapter creates `~/.pando/projects/{id}/` directories with `PANDO_PROJECT.json` metadata (nodeUrl, nodeId, projectId, linked flag). PandoCode detects this on config load via `detectNetworkLinking()` in `config/index.ts` — scans project path + `~/.pando/projects/` for linked metadata. Exposes `GET /api/network` (PandoCode server) and `GET /v1/network` (Hono API) for clients to check linking status.
 
-### 5.10 The Universal Project Pattern — Board as Work Queue
+### 5.10 Team Architecture — Unified Project Management
 
-**Every project on Pando — including the council — uses the same pattern.** There is no special council framework. Council is just the first project to use it, with extra pando_* tools for network operations.
+> **Full details:** `docs/TEAM-ARCHITECTURE.md` is the implementation reference. This section is the architectural overview.
+
+> **Status:** APPROVED ARCHITECTURE. Legacy council code (hardcoded 3-agent, `/v1/council/*` endpoints) being migrated to this. The new architecture is THE target — do NOT build on the old council code.
+
+**Every project on Pando is managed by a team.** The pando-infra team (formerly "council") and user project teams use the SAME infrastructure. There is no special council framework.
 
 **CRITICAL RULE: Never build agent/communication/task systems in pando-node. PandoCode already has them. See Section 3.2.**
 
@@ -904,30 +910,103 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────┐
-│             EVERY PROJECT USES THIS PATTERN                         │
+│             EVERY TEAM USES THIS PATTERN                            │
 │                                                                     │
-│  PandoCode Engine (one per project)                                │
+│  PandoCode Engine (one per agent in the team)                      │
 │  ├─ Board ← THE work queue (user requests, bugs, system issues)    │
-│  ├─ Agents ← the team (lead + builders spawned on demand)          │
+│  ├─ Agents ← the team (lead + others spawned on demand)           │
 │  ├─ Memory ← learns across sessions (persistent)                  │
 │  ├─ Scheduler tick ← periodic wake-up                              │
 │  └─ pando_* tools ← network operations                            │
 │                                                                     │
-│  The board is the central nervous system:                           │
-│    - Observer/QA findings → board tasks                             │
-│    - User bug reports → board tasks                                │
-│    - User feature requests → board tasks                           │
-│    - Engine ticks → reads board → processes top items               │
-│                                                                     │
-│  COUNCIL = this pattern + observer + QA + pando_* tools            │
-│  PROJECT = this pattern + project source code + pando_deploy       │
+│  pando-infra = this pattern + observer + QA + ALL pando_* tools    │
+│  user project = this pattern + 1 lead agent + pando_deploy         │
 │  Same board. Same agents. Same scheduler. Same code path.          │
+│  Only difference: governanceRequired flag (per-team)               │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-#### 5.10.2 User Requests Flow Through the Board
+#### 5.10.2 Three-Layer Data Separation (Critical for Scale)
 
-Users interact with projects and the council through a single mechanism: **board tasks created via the doorman.**
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                     DATA SEPARATION                                 │
+├─────────────────────────────┬───────────────────────────────────────┤
+│ LAYER 1: Team Registry      │ LAYER 2: Board + Agent State          │
+│ (~/.pando/teams/teams.db)   │ (~/.pando/teams/{teamId}/.pando-code.db)│
+│                             │                                       │
+│ WHAT: routing metadata      │ WHAT: application state               │
+│  - team id, name            │  - board tasks (title, status)        │
+│  - managing node (peerId)   │  - agent messages (inbox)             │
+│  - heartbeat (alive?)       │  - sessions, memory                   │
+│  - repos managed            │                                       │
+│  - agent count              │ WHERE: managing node ONLY             │
+│  - governance flag           │ ACCESS: P2P request-reply on demand   │
+│                             │ BACKUP: .pando/team-state.json in repo│
+│ WHERE: ALL nodes (synced)   │ SYNC: NONE (local only)              │
+│ SYNC: GossipSub pando/teams │                                       │
+│ SIZE: ~200 bytes per team   │ SIZE: unbounded (stays local)         │
+└─────────────────────────────┴───────────────────────────────────────┘
+
+LAYER 3: Git Repo (.pando/team-state.json)
+  - Committed alongside code changes by the managing agent
+  - Contains: active tasks, recent completed tasks, team context
+  - On handoff: new node reads this from repo to seed board
+  - On node death: this is the durable backup (git survives everything)
+```
+
+**Why NOT sync boards via P2P?** At scale (1000 teams, 50 tasks each, updating), board sync would flood the network with thousands of messages. The registry-only approach means P2P carries ~200 bytes per team. Board data stays local and is accessed on-demand via P2P request-reply (point-to-point, not broadcast).
+
+#### 5.10.3 Team Registry
+
+New file: `core/team-registry.ts`. SQLite DB at `~/.pando/teams/teams.db`.
+
+```sql
+CREATE TABLE team_config (
+  id TEXT PRIMARY KEY,              -- "pando-infra", "team-a1b2c3"
+  display_name TEXT NOT NULL,
+  managing_node TEXT,               -- peerId of node running this team
+  last_heartbeat INTEGER,           -- timestamp ms
+  status TEXT DEFAULT 'active',     -- active | orphaned
+  repos TEXT NOT NULL DEFAULT '[]', -- JSON array: ["pando-lux/node"]
+  agent_count INTEGER DEFAULT 1,
+  governance_required INTEGER DEFAULT 0,
+  created_at INTEGER NOT NULL,
+  created_by TEXT,                  -- peerId
+  claimed_at INTEGER                -- for race condition resolution
+);
+```
+
+**No board tables. No message tables.** Board and messages live in PandoCode's local SQLite on the managing node. This is the key architectural decision that prevents P2P data flooding at scale.
+
+**GossipSub sync:** Topic `pando/teams`. Mirrors LedgerSync pattern — subscribeTopic on startup, requestSync on peer connect (5s + 30s retry), dedup by processed IDs. Three message types: `team_config_update`, `team_sync_request`, `team_sync_response`.
+
+**Heartbeat:** Piggybacks on team tick. Every agent tick updates `last_heartbeat` in local DB and publishes `team_config_update`. Batched per node (one message per node per 15min listing all teams), NOT per-team.
+
+#### 5.10.4 Governance: One Flow, One Gate
+
+Every team uses the SAME flow. The only difference is a single boolean flag:
+
+```
+governanceRequired: boolean (per-team, stored in team_config)
+
+  true  → code changes go through governance proposal → vote/auto-approve → upgrade
+  false → code changes deploy directly via pando_deploy
+
+Currently:
+  pando-infra: true  (ecosystem repos need governance)
+  user projects: false (direct deploy)
+
+Future:
+  The pando-infra lead may decide that complex user projects also need governance
+  (e.g., projects with 10+ contributors, or projects others depend on).
+  This is just: PATCH /v1/teams/:teamId { governanceRequired: true }
+  No code change needed — the flow is already the same.
+```
+
+**Security note:** The governance flag is a WORKFLOW HINT. The real security boundary is in `upgrade-protocol.ts` — it verifies commit hashes against governance-approved proposals. Even if someone hacks the flag, the upgrade pipeline still validates everything.
+
+#### 5.10.5 User Requests Flow Through Teams
 
 ```
 User message arrives at POST /v1/chat/message
@@ -935,142 +1014,102 @@ User message arrives at POST /v1/chat/message
   ├─ Doorman classifies intent:
   │   "simple"   → instant answer (status, balance, help)
   │   "question" → AI answer (existing)
-  │   "build"    → create new project (existing)
-  │   "report"   → bug/feature/suggestion → board task on target project
+  │   "build"    → create new project + team (Section 5.10.6)
+  │   "report"   → bug/feature → route to team managing the target project
   │
   ├─ "report" intent routing:
-  │   "Exchange app login is broken"  → board task on proj-exchange
-  │   "Network seems slow"           → board task on council
-  │   "Add dark mode to the gateway" → board task on gateway project
+  │   1. Check team registry: which team manages this project?
+  │   2. Is managingNode == self?
+  │      YES → add task to local board
+  │      NO  → P2P request-reply to managing node
+  │   3. If managing node offline → team handoff (Section 5.10.9)
   │
-  ├─ Doorman response to user:
-  │   "Got it! Submitted to the team. Ticket #abc123.
-  │    The team reviews requests periodically. Check /council for status."
-  │
-  └─ Board task created:
+  └─ Board task created on managing node:
       [BUG:user] Exchange app login crashes on mobile
       [FEATURE:user] Add dark mode to gateway
-      [FEATURE:user] Network seems slow
 
 Severity classification (automatic, regex with word variants):
   - crash(es|ed|ing), critical, down, outage, broken, bug, error, fail(s|ed|ing) → [BUG:user]
   - everything else → [FEATURE:user]
 
-Validation (at doorman + API level):
+Validation:
   1. Min 5 chars, max 500 chars
-  2. Board task dedup: exact title match on pending/in_progress tasks returns existing task ID
-  3. Rate limit: 3 requests/hour per IP (RateLimiter with 1-hour window on council/request + projects/:id/request)
-  4. Two Laws filter: violatesTwoLaws() at API endpoints (403) + HARM/SHUTDOWN patterns in insertBoardTask() (defense-in-depth)
+  2. Board task dedup: exact title match on pending/in_progress
+  3. Rate limit: 3 requests/hour per IP
+  4. Two Laws filter at API + storage (defense-in-depth)
 ```
 
-**API endpoints (BUILT):**
-- `GET /v1/council/board` — public board view (pending/in_progress tasks)
-- `POST /v1/council/request` — submit report/feature request to council board (rate limited: 3/hour)
-- `GET /v1/projects/:id/board` — per-project board view (empty array if no engine DB)
-- `POST /v1/projects/:id/request` — submit bug/feature to specific project board (rate limited: 3/hour)
+#### 5.10.6 Team Lifecycle Flows
 
-**Gateway integration (BUILT):**
-- `/council` page: live board view, submit report form, agent status + trigger buttons
-- Proxied via `/api/council/dashboard` → `GET /v1/council/status` and `/api/council/trigger` → `POST /v1/council/trigger/:agent`
-- Per-project pages: "Report Bug" / "Suggest Feature" (TODO)
-
-#### 5.10.3 Project Teams Wake Up on Schedule
-
+**New user project — "Build me a todo app":**
 ```
-Wake-up frequency (project-dependent):
-
-  Council         │ Every 15 min  │ Network health is time-sensitive
-  Active public   │ Every 6-12h   │ Check for user reports, run QA
-  Inactive public │ Daily          │ Low priority, save compute
-  Private         │ No auto-wake  │ Creator manages manually
-
-On wake-up, the scheduler tick includes the current board snapshot:
-
-  "Your board has 5 pending tasks:
-   [BUG:user] Login crashes on mobile — 2h ago
-   [FEATURE:user] Add dark mode — 6h ago
-   [SYSTEM:qa] Test failure on /api/auth — 1h ago
-   ...
-   Prioritize bugs. Close stale tasks (>24h). Process user requests."
-
-This costs zero extra tool calls — the board state is IN the message.
-The engine sees its full queue immediately and acts on it.
+1. User → gateway → any pando node
+2. Doorman classifies: "build" intent
+3. findBestBuilder() → PandoCode-capable node (shareCompute + compute_cpu)
+4. Builder node:
+   a. Creates project in ProjectStore (business metadata)
+   b. Creates team in team registry:
+      { id: "team-xxx", repos: [], agentCount: 1, governanceRequired: false }
+   c. Broadcasts team_config_update via GossipSub → all nodes learn routing
+   d. Spawns PandoCode engine for lead agent
+   e. Lead builds the app, triggers deploy
+5. Team stays active for future updates
 ```
 
-**Board snapshot injection:** pando-node reads the board from the project's DB and includes it in the scheduler tick message. This is pando-node's responsibility (engine-adapter.ts), not PandoCode's. PandoCode's frame builder does NOT inject board snapshots (Option B), so we do it at the message level.
-
-#### 5.10.4 Public vs Private Projects
-
+**Pando infrastructure — bug report:**
 ```
-PUBLIC projects (visibility: 'listed'):
-  - Anyone can submit bugs/features → board task created
-  - Project team processes the queue on wake-up
-  - Governance required for ecosystem repos (@pando/*)
-  - Direct deploy for user-created public apps
-  - Visible on marketplace
-
-PRIVATE projects:
-  - Only creator interacts with the engine
-  - Others CAN suggest → board task tagged [SUGGESTION]
-  - Creator's team decides whether to act on it
-  - No governance needed — their code, their risk
-  - Not visible on marketplace
+1. User → gateway: "wallet shows wrong balance"
+2. Node checks team registry: team "pando-infra" manages pando-lux/node
+3. Routes to managing node (P2P request-reply or local)
+4. Lead reads board → spawns builder → fix → governance propose → upgrade
+5. All nodes: pullAndUpgrade → build → safe restart (exit 75)
 ```
 
-#### 5.10.5 The Council (Network-Level Project)
-
-Council is just the first project using this pattern. Its board handles network/infrastructure issues instead of app-specific bugs.
+#### 5.10.7 Team Bootstrap (First Run)
 
 ```
-┌──────────────────────────────────────────────────────────────────────┐
-│                    COUNCIL = PROJECT ZERO                            │
-│                                                                     │
-│  Observer (PandoCode role: explorer)                                │
-│  ├─ Runs every 30 min (scheduler tick)                             │
-│  ├─ Built-in tools: read-only (explorer role)                      │
-│  ├─ Extra tools: pando_status, pando_peers (read-only network ops) │
-│  ├─ Checks: network health, peer count, deploy status              │
-│  ├─ Reports: sends message to council via send_message             │
-│  └─ Never modifies code. Read-only role enforced by PandoCode.     │
-│                                                                     │
-│  QA (PandoCode role: tester)                                        │
-│  ├─ Runs every 30 min (scheduler tick)                              │
-│  ├─ Built-in tools: read + bash + test (tester role)               │
-│  ├─ Extra tools: pando_status, pando_peers, pando_test_run         │
-│  ├─ Checks: API health, peer connectivity, project system          │
-│  └─ Reports: sends message to council via send_message             │
-│                                                                     │
-│  Council Lead (PandoCode role: lead)                                │
-│  ├─ Runs every 15 min (scheduler tick with board snapshot)          │
-│  ├─ Built-in tools: spawn_agent, manage_tasks, check_agents,      │
-│  │   send_message (lead role — full delegation power)              │
-│  ├─ Extra tools: ALL pando_* tools (deploy, governance, etc.)      │
-│  ├─ Reads inbox for messages from observer/qa                      │
-│  ├─ Reads board snapshot for pending issues + user requests        │
-│  ├─ Spawns builder sub-agents to write code fixes                  │
-│  ├─ Calls pando_governance_propose for code changes                │
-│  ├─ Closes stale tasks, prioritizes CRITICAL first                 │
-│  └─ Resolves board tasks when done                                 │
-│                                                                     │
-│  Board task sources:                                                │
-│    - Observer/QA: [CRITICAL:health], [WARNING:test], etc.           │
-│    - Users via doorman: [BUG:user], [FEATURE:user], [REPORT:user]  │
-│                                                                     │
-│  Communication: PandoCode's send_message (DB-backed queue)          │
-│  Task tracking: PandoCode's board (board_tasks table)               │
-│  Memory: PandoCode's memory store (per-engine, persistent)          │
-└──────────────────────────────────────────────────────────────────────┘
+Node starts with PandoCode available:
+
+  1. Initialize TeamRegistry (teams.db)
+  2. Sync from peers (GossipSub catch-up)
+  3. Check: does team "pando-infra" exist in registry?
+
+     NO (first node ever):
+       Create with seed config:
+         id: "pando-infra"
+         displayName: "Pando Infrastructure"
+         repos: ["pando-lux/node", "pando-lux/code"]
+         agentCount: 3
+         governanceRequired: true
+       Spawn team locally
+
+     YES, but managingNode is offline (stale heartbeat + not in peer list):
+       Claim it (Section 5.10.9)
+
+     YES, and managingNode is online:
+       Do nothing — someone else runs it
+
+  4. For each team where managingNode == self:
+     a. Create PandoCode workspace: ~/.pando/teams/{teamId}/
+     b. If repo has .pando/team-state.json → read it, seed local board
+     c. Create PandoCode engines per agent config (stored locally, not in registry)
+     d. Register pando_* tools on each engine
+     e. Register scheduler ticks per agent's tickIntervalMs
+     f. Start heartbeat (update registry + broadcast every tick)
 ```
 
-**What makes council special (vs a regular project):**
-- Has observer + QA agents (extra eyes on the network)
-- Has ALL pando_* tools (governance, deploy, broadcast)
-- Handles network/ecosystem issues, not app code
-- Uses `pando_workspace` + `spawn_agent(working_directory)` to fix code in ANY repo
+**Seed config for pando-infra (3 agents):**
+```
+Lead   — role: lead,     model: claude-code,       tick: 15min, ALL pando_* tools
+Observer — role: explorer, model: gemini-2.5-flash, tick: 30min, read-only pando_* tools
+QA     — role: tester,   model: gemini-2.5-flash,  tick: 30min, pando_status + pando_test_run
+```
 
-#### 5.10.6 Code Fixes via Workspaces
+Agent configs are stored LOCALLY on the managing node (not in the P2P registry). The registry only knows `agentCount: 3`.
 
-Any project lead (council or app team) can fix code via workspaces:
+#### 5.10.8 Code Fixes via Workspaces
+
+Any team lead can fix code via workspaces:
 
 ```
 Lead detects issue → needs a code fix:
@@ -1083,8 +1122,9 @@ Lead detects issue → needs a code fix:
      })
   3. Builder works in that directory (read, edit, bash, test)
   4. Builder returns summary + files changed
-  5. Lead reviews → pando_governance_propose (ecosystem repos)
-                   → pando_deploy (user projects)
+  5. Lead reviews:
+     if team.governanceRequired → pando_governance_propose (ecosystem repos)
+     else → pando_deploy (user projects, direct deploy)
   6. Lead marks board task done
 ```
 
@@ -1092,95 +1132,117 @@ Lead detects issue → needs a code fix:
 - `spawn_agent({ working_directory })` — PandoCode enhancement. Sub-agent works in a different directory than parent.
 - `pando_workspace({ repo })` — pando-node tool. Clones/pulls any repo. Detects local repos without network.
 
-| Target | How to reach it |
-|---|---|
-| **@pando/node** | `pando_workspace("pando-lux/node")` → spawn builder there |
-| **@pando-code/core** | `pando_workspace("pando-lux/code")` → spawn builder there |
-| **Any GitHub project** | `pando_workspace("user/repo")` → spawn builder there |
-| **Broken deployments** | No workspace needed — call `pando_deploy` directly |
+#### 5.10.9 Node Death + Team Handoff
 
-**Governance gate:** Ecosystem repo changes go through governance (Section 5.4). User project changes deploy directly.
+```
+Node A was running team "pando-infra". Node A goes offline.
 
-#### 5.10.7 System Prompts
+DETECTION (three paths):
+  Path A — New request arrives, managingNode offline + heartbeat stale (>20min)
+  Path B — Periodic orphan scan (every 5min on PandoCode nodes)
+  Path C — P2P peer disconnect event → wait 5min → claim if still offline
 
-Each agent gets a system prompt via `agentOverride` on `engine.send()`. **Source of truth: `core/council-prompts.ts`.**
+CLAIMING:
+  1. Atomic update in local registry: managingNode = self, claimedAt = now
+  2. Broadcast team_config_update with new managingNode
+  3. Race condition: two nodes claim simultaneously → latest claimedAt wins, loser backs off
+  4. Spawn team per Section 5.10.7 step 4
+
+BOARD RECOVERY (three sources, in priority order):
+  1. P2P peer cache (best effort — peers may have cached board from previous queries)
+  2. Git repo: clone/pull → read .pando/team-state.json (always available)
+  3. Fresh start: empty board, lead reads repo state from commit history
+```
+
+#### 5.10.10 System Prompts and Engine Details
+
+Each agent gets a system prompt via `agentOverride` on `engine.send()`. Prompts are defined in seed configs (constants in engine-adapter.ts), NOT in a separate file.
 
 **Frame behavior with agentOverride:** The override replaces only the stable layer (L0-2). All dynamic layers still flow: knowledge (L3 — memories), situation (L5b — team awareness, budget), goals (L5), conversation history. Board is NOT in the frame (PandoCode Option B) — pando-node injects it in the tick message instead.
 
-#### 5.10.8 Engine Lifecycle
+**Board snapshot injection:** pando-node reads the board from the team's PandoCode DB and includes it in the scheduler tick message. This is pando-node's responsibility (engine-adapter.ts), not PandoCode's.
 
+**Engine lifecycle:**
 ```
-Node startup (contributor node with PandoCode):
+Node startup with PandoCode:
   │
   ├─ engine-adapter.ts start():
   │   ├─ Creates EnginePool (shared DB for cross-engine send_message)
   │   ├─ Injects Lux budget provider
   │   └─ Registers pando_* tool templates
   │
-  ├─ startCouncilAgents():
-  │   ├─ pool.getOrCreate(agentId, { dbPath: sharedDb })
-  │   ├─ engine.startSession()  ← MUST be before tool re-registration
-  │   │   └─ triggers _registerSubAgentTools (with auto-generated UUID)
-  │   ├─ Re-register check_agents, send_message, manage_tasks
-  │   │   with correct agentIds ("observer", "qa", "council")
-  │   │   and real sessionId (from startSession, not random UUID)
-  │   ├─ INSERT agent profiles into shared DB
-  │   └─ Register scheduler ticks (30 min observer/qa, 15 min council)
+  ├─ For each team where managingNode == self:
+  │   startTeam(teamId):
+  │   ├─ For each agent in team config:
+  │   │   ├─ pool.getOrCreate(agentId, { dbPath: teamDb })
+  │   │   ├─ engine.startSession()  ← MUST be before tool re-registration
+  │   │   ├─ Re-register cross-engine tools (check_agents, send_message, manage_tasks)
+  │   │   ├─ INSERT agent profile into shared team DB
+  │   │   └─ Register scheduler tick at configured interval
+  │   └─ Start heartbeat broadcast
   │
-  ├─ Project engines created on demand:
+  ├─ Project engines created on demand (outside teams):
   │   ├─ pool.getOrCreate(projectId, { projectPath })
-  │   ├─ Public projects get scheduler ticks (daily or per-activity)
-  │   └─ Evicted after 30 min idle (re-created on next request)
+  │   └─ Evicted after 30 min idle
   │
-  └─ Node is running. Council ticks every 15 min. Projects tick per schedule.
+  └─ Node is running. Teams tick per config. Orphan scan every 5min.
 
 GOTCHAS:
   1. EngineOptions does NOT accept systemPrompt — use agentOverride on send()
   2. Tool API base URL must be 127.0.0.1, not localhost
-  3. All council engines must share the same SQLite DB for send_message to work
+  3. All agents in a team must share the same SQLite DB for send_message to work
   4. CRITICAL: startSession() must be called BEFORE tool re-registration
   5. manage_tasks sessionId must reference a real session (FK constraint)
   6. Board is NOT in the frame (PandoCode Option B) — inject in tick message
 ```
 
-#### 5.10.9 Implementation Status
+#### 5.10.11 API Endpoints
 
-**Full pipeline VERIFIED: build → deploy → user bug report → council processes → builder clones from GitHub → fixes code → governance proposal. 8/8 production E2E pass. 6/6 Playwright pass.**
+```
+GET  /v1/teams                        — List all teams (from local registry)
+GET  /v1/teams/:teamId                — Team config + status
+GET  /v1/teams/:teamId/board          — Board tasks (local or P2P proxy)
+POST /v1/teams/:teamId/board          — Add task (local or P2P proxy)
+PATCH /v1/teams/:teamId/board/:taskId — Update task (local or P2P proxy)
+POST /v1/teams/:teamId/trigger        — Trigger team lead immediately
+POST /v1/teams/:teamId/request        — Submit user request (adds to board)
+PATCH /v1/teams/:teamId               — Update team config
+POST /v1/teams                        — Create a new team (costs 1 Lux)
+DELETE /v1/teams/:teamId              — Stop team, mark orphaned
+```
 
-| What | Status |
-|---|---|
-| Council as PandoCode project | DONE — lives at ~/.pando/council/, shared DB, standard agents |
-| Agent profiles via shared DB insert | DONE — raw SQL INSERT OR IGNORE at startup |
-| send_message cross-engine | VERIFIED — messages show `From observer` with correct agentId |
-| check_agents inbox reading | VERIFIED — council reads and deletes messages correctly |
-| Scheduler ticks | DONE — 30 min observer/qa, custom interval for council (15 min, dynamic board snapshot) |
-| pando_* tool registration | DONE — 15 tools, roles handle filtering |
-| `spawn_agent(working_directory)` | DONE — PandoCode enhancement in spawn-agent.ts |
-| `pando_workspace` tool | DONE — pando-node tool in engine-adapter.ts, git credential reuse from local repo |
-| Builder fixing actual code | VERIFIED — council dispatched builder, builder modified code, submitted governance proposal |
-| Board snapshot in tick message | DONE — `getBoardSnapshot()` reads board from SQLite, priority-sorted, injected in council tick |
-| Doorman "report" intent | DONE — fast-path regex + OpenAI classification. Creates `[BUG:user]` or `[FEATURE:user]` board task |
-| `POST /v1/council/request` | DONE — direct API for user reports (5-500 char validation) |
-| `GET /v1/council/board` | DONE — public board view (pending/in_progress tasks) |
-| Council prompt: task lifecycle | DONE — priority ordering, stale cleanup (>24h), user request processing |
-| `addBoardTask()` on EngineAdapter | DONE — inserts task with proper schema (session_id, order FK). Dedup: exact title match on pending/in_progress returns existing ID. |
-| `getCouncilBoard()` on EngineAdapter | DONE — reads pending/in_progress tasks |
-| Project scheduler ticks | DONE — registered on first user report via `ensureProjectTick()`. Every 6h, injects board snapshot and prompts engine to process pending tasks. Cleanup on shutdown. |
-| Per-project board endpoints | DONE — `GET /v1/projects/:id/board` (read), `POST /v1/projects/:id/request` (submit). Returns 404 if project has no engine DB yet. |
-| Rate limiting on reports | DONE — 3 requests/hour per IP on `POST /council/request` and `POST /projects/:id/request`. RateLimiter with 1-hour window. |
-| Gateway `/council` page | DONE — live board, submit form, agent trigger buttons, schedule display. Proxied via `/api/council/dashboard` → `GET /v1/council/status`. |
+All board endpoints follow the same pattern:
+1. Check registry: is managing node == self?
+2. YES → operate on local PandoCode SQLite
+3. NO → P2P request-reply to managing node
 
-#### 5.10.10 Failure Modes & Recovery
+**Legacy endpoints** (`/v1/council/*`) will be removed after migration. Do NOT build on them.
+
+#### 5.10.12 What This Replaces
+
+The following legacy code is being removed:
+- `core/council-prompts.ts` — prompts move to seed config constants in engine-adapter.ts
+- `startCouncilAgents()` in engine-adapter.ts — replaced by generic `startTeam(teamId)`
+- `isCouncilActive()`, `ensureCouncilStarted()`, `sendToCouncilAgent()` — replaced by team-level equivalents
+- `getCouncilBoard()`, `getCouncilInbox()`, `sendCouncilMessage()` — replaced by generic team board/message methods
+- `/v1/council/*` API endpoints — replaced by `/v1/teams/*`
+- `config.enableCouncil` flag — teams auto-bootstrap based on registry state
+- `--council` / `--no-council` CLI flags — removed
+
+See `docs/TEAM-ARCHITECTURE.md` Section 17 for the complete legacy code audit (120+ references across 11 files).
+
+#### 5.10.13 Failure Modes & Recovery
 
 | Failure | Recovery |
 |---|---|
-| Council host node dies | Another contributor node's council takes over. Board + memory persist in SQLite. |
-| Too many user requests | Board is the buffer. Rate limited: 3/hour per IP on report endpoints. Council batches similar. |
-| Bad/spam requests | Board task dedup (exact title match). Rate limit: 3/hour per IP. Council deprioritizes low-value tasks. Two Laws filter at API (403) + storage (defense-in-depth). |
-| Observer creates too many tasks | Council batches similar issues, prioritizes CRITICAL. |
-| Council proposes bad code | Governance Layer 5 (AI review) catches it. QA catches post-deploy regressions. |
-| Project board grows too large | Lead closes stale tasks (>24h). Spawns parallel builders if backlog >10. |
-| All agents on same node, overloaded | Stagger ticks. Scale via EnginePool (add more engines). |
+| Managing node dies | Handoff: another PandoCode node claims team (Section 5.10.9). Board recovered from git. |
+| Too many user requests | Board is the buffer. Rate limited: 3/hour per IP. Lead batches similar. |
+| Bad/spam requests | Board task dedup. Rate limit. Two Laws filter. Lead deprioritizes low-value. |
+| Team creates too many tasks | Lead closes stale tasks (>24h). Spawns parallel builders if backlog >10. |
+| Bad code proposed | Governance Layer 5 (AI review). QA catches regressions post-deploy. |
+| Two nodes claim same team | Race resolution: latest `claimedAt` wins, loser backs off. |
+| Team spam (fake teams flooding registry) | Team creation costs 1 Lux. P2P only accepts heartbeats from `msg.from === team.managing_node`. |
+| Board data poisoning | Board stays local (not synced via P2P). P2P request-reply is signed. |
 
 ### 5.11 Pando Login (Agent Identity)
 
@@ -1415,6 +1477,23 @@ This makes a contributor's Claude Code subscription a network resource — they 
 **S3 deployments:** `http://pando-deployments.s3-website-us-east-1.amazonaws.com/public/{projectId}/index.html`
 **GitHub org:** `pando-lux` — repos auto-created as `app-{8chars}-{slug}`
 
+#### EC2 Node Details (critical for SSH troubleshooting)
+
+```
+SSH:    ssh -i ~/.ssh/lightsail-default.pem ubuntu@<IP>
+Path:   /opt/pando                    (NOT /opt/pando/node)
+User:   pando                         (systemd runs as pando:pando)
+SSH as: ubuntu                        (has sudo)
+Service: sudo systemctl restart pando-node
+PM2:    sudo -u pando pm2 list        (runs under pando user, NOT ubuntu)
+Logs:   sudo journalctl -u pando-node --since '1 hour ago' --no-pager
+Node:   v22.22.0
+```
+
+**CRITICAL: File ownership must be `pando:pando` for ALL files under `/opt/pando/`.** The systemd service runs as user `pando`. If any files are owned by `ubuntu` (e.g., from manual gateway deploys or SSH file copies), `git reset --hard` will fail with "Permission denied" during auto-upgrade. Fix: `sudo chown -R pando:pando /opt/pando`.
+
+**Running commands as pando:** `sudo -u pando bash -c 'cd /opt/pando && <command>'`
+
 ### 8.2 How to Build and Run
 
 ```bash
@@ -1526,101 +1605,139 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 
 ---
 
-## 10b. SELF-SUSTAINING COUNCIL & AUTO-UPGRADE
+## 10b. SELF-SUSTAINING TEAMS & AUTO-UPGRADE
 
 ### Vision
 
-The end-state: **no human intervention required.** The council monitors, detects issues, fixes code, proposes changes through governance, deploys, and restarts all nodes including itself. Users interact only through the gateway — submitting bug reports or feature requests. The council handles everything.
+The end-state: **no human intervention required.** The pando-infra team monitors, detects issues, fixes code, proposes changes through governance, deploys, and restarts all nodes including itself. User project teams manage their own apps autonomously. Users interact only through the gateway — submitting bug reports or feature requests. Teams handle everything.
 
-### Council Model: Claude Code (Persistent Sessions)
+### Team Lead Model: Claude Code (Persistent Sessions)
 
-The council lead agent uses Claude Code as its model inside PandoCode. This gives it:
+The pando-infra lead agent uses Claude Code as its model inside PandoCode. This gives it:
 - **Persistent sessions** via `--session-id`/`--resume` — context survives across ticks
 - **Native CLI tools** — bash, read, write, edit, grep, glob (no synthetic tool wrappers)
 - **Full codebase access** — can read, understand, and modify any file in pando-node or pando-code
 - **Tool chaining** — can run tests, check build output, iterate on fixes
 
-Observer and QA agents remain on fast/cheap models (gemini-2.5-flash) since they only need to call pando_* tools and report.
+Observer and QA agents remain on fast/cheap models (gemini-2.5-flash) since they only need to call pando_* tools and report. User project leads can use any model — PandoCode handles provider selection.
 
-### The Self-Sustaining Loop
+### The Self-Sustaining Loop (pando-infra team)
 
 ```
 1. DETECT
-   Observer tick (30min) → pando_status + pando_peers → reports issues to council
-   QA tick (30min) → health checks → reports failures to council
-   Users → gateway "Report Bug" → board task created
+   Observer tick (30min) → pando_status + pando_peers → reports issues to lead
+   QA tick (30min) → health checks → reports failures to lead
+   Users → gateway "Report Bug" → routed to team → board task created
 
 2. TRIAGE
-   Council tick (15min) → check_agents(inbox) + board review
+   Lead tick (15min) → check_agents(inbox) + board review
    Prioritize: CRITICAL > BUG:user > WARNING > FEATURE:user
    Skip duplicates, close stale tasks (>24h)
 
 3. FIX
-   Council → pando_workspace({ repo: "pando-lux/node" }) → gets local clone path
-   Council → spawn_agent({ role: "builder", task: "Fix ...", working_directory: <path> })
+   Lead → pando_workspace({ repo: "pando-lux/node" }) → gets local clone path
+   Lead → spawn_agent({ role: "builder", task: "Fix ...", working_directory: <path> })
    Builder reads code, writes fix, runs `npm run build`, runs tests
    Builder commits: git add + git commit
    Builder pushes: git push origin master
 
-4. GOVERN
-   Council → pando_governance_propose({ title, description, commitHash })
-   Governance pipeline: format check → duplicate check → rate limit → AI review → vote
+4. GOVERN (only if team.governanceRequired == true)
+   Lead → curl POST http://127.0.0.1:4000/v1/governance/propose
+     Body: { title, description, commitHash }
+   API auto-sets category='upgrade' and builds upgradePayload when commitHash present.
+   Governance: security file check → dangerous pattern scan → AI review (advisory) → kernel delay
    Auto-approves in dev mode (<=8 peers). Real voting with more peers.
-   Approved → broadcasts commit hash via GossipSub topic "pando/upgrades"
+   Approved → onUpgradeApprovedCallback fires → pullAndUpgrade locally → broadcast to peers
 
-5. UPGRADE (all nodes)
-   Each node receives upgrade broadcast →
-   UpgradeProtocol.pullAndUpgrade(commitHash):
-     - git fetch origin master
-     - Verify commit hash matches governance approval
-     - git reset --hard origin/master (stashes uncommitted changes first)
-     - npm run build
-     - Safe restart check: 0 active workers + 0 pending messages
-     - Exit with code 75
+   (User project teams with governanceRequired: false skip this step — deploy directly)
+
+5. UPGRADE (all nodes, 3 paths)
+   Path A: Governance approval callback (proposing node)
+   Path B: GossipSub broadcast on topic "pando/upgrades" (peers)
+   Path C: Catchup timer every 5min scans governance for passed upgrade proposals (missed broadcasts)
+
+   All three call UpgradeProtocol.pullAndUpgrade(commitHash):
+     1. git config --global --add safe.directory <repoDir>
+     2. git fetch origin master
+     3. STRICT hash verification: commitHash must match or be ancestor of origin/master
+     4. Stash uncommitted changes (pando-auto-stash-{timestamp})
+     5. git reset --hard origin/master
+     6. npm install (non-fatal — build may succeed without it)
+     7. npm run build (5min timeout; on failure → git reset --hard <previous>)
+     8. Record success, mark proposalId as applied
+     9. Safe restart: 0 active workers + 0 pending messages → exit(75)
 
 6. RESTART
    Supervisor detects exit(75) → respawns after 2s delay
-   Node boots → loads new compiled code → re-initializes council
-   Council resumes from persistent session (Claude Code --resume)
+   Node boots → loads new compiled code → re-initializes teams from registry
+   pando-infra lead resumes from persistent session (Claude Code --resume)
+   Catchup timer starts 30s after boot
    Loop restarts from step 1
 
 7. PROPOSER NODE (self-upgrade)
    The node that pushed the fix is already at the target commit.
-   When it receives its own governance broadcast:
-     - pullAndUpgrade detects HEAD matches target
-     - Checks: runningCommit !== currentHead (stale in-memory code)
-     - Triggers safeRestart → exit(75) → supervisor respawns
-     - Fresh process loads the rebuilt dist/
+   pullAndUpgrade detects HEAD matches target → checks runningCommit !== currentHead
+   If stale (in-memory code from old dist/) → safeRestart → exit(75)
+   Fresh process loads the rebuilt dist/
 ```
+
+### Governance Propose API (critical details)
+
+**Endpoint:** `POST /v1/governance/propose` (NOT `/proposals` — that was an old bug)
+
+**Required fields for upgrade proposals:**
+```json
+{
+  "title": "[Upgrade] fix: description",
+  "description": "Security fix: what changed and why",
+  "commitHash": "abc123..."
+}
+```
+
+When `commitHash` is present, the API automatically:
+- Sets `category: 'upgrade'`
+- Builds `upgradePayload: { commitHash, description }`
+- This triggers auto-approve logic in governance
+
+**Without `commitHash`:** Creates a general proposal (no auto-approve, no upgrade trigger).
+
+**Security file gotcha:** If the commit touches files in the SECURITY_FILES list (`governance.ts`, `upgrade-protocol.ts`, `credential-store.ts`, etc.), the description MUST contain "security" or "credential" — otherwise auto-approve is rejected.
 
 ### Key Invariants
 
-1. **Every code change goes through governance.** No direct deploys. Council proposes, network approves.
+1. **Governance-flagged teams go through governance.** Teams with `governanceRequired: true` propose via governance. Teams with `false` deploy directly. pando-infra always requires governance.
 2. **Safe restart only.** Never kill a node with active workers or pending messages. Defer to next cycle.
 3. **Exit code 75 = restart.** Exit code 78 = port conflict (don't respawn). Any other crash = backoff respawn.
-4. **Council survives restart.** Claude Code persistent sessions resume. Board tasks persist in SQLite. Memory persists.
+4. **Teams survive restart.** Team registry persists in SQLite. Claude Code persistent sessions resume. Board tasks persist. Memory persists. Teams re-bootstrap from registry on startup.
 5. **Stale code detection.** `runningCommit` (snapshot at boot) vs `git rev-parse HEAD` (current). Mismatch → restart needed.
 6. **Build must pass.** If `npm run build` fails after git reset, rollback to previous commit. No broken deploys.
-7. **Two Laws filter.** All user input and board tasks filtered. Council cannot be weaponized.
+7. **Two Laws filter.** All user input and board tasks filtered. Teams cannot be weaponized.
+8. **npm install before build.** New deps may have been added between commits. `npm install` runs before `npm run build` in both upgrade-protocol.ts and the `/upgrade` API endpoint. Failure is non-fatal (build may still work if deps didn't change).
+9. **Hash verification is the security gate.** Even if someone pushes malicious code to GitHub, nodes only upgrade to the exact commit hash approved by governance. `merge-base --is-ancestor` ensures the hash is in origin/master's history.
+10. **Team handoff is automatic.** If a managing node dies, any PandoCode-capable node claims the orphaned team. Board recovered from git. No manual intervention needed.
 
 ### The Goal
 
-**Phase 1 (current):** Council detects issues, creates board tasks, spawns builders, fixes code, proposes via governance. Manual testing confirms each step works.
+**Phase 1 (PROVEN 2026-03-07 with legacy council code):** pando-infra team detects issues, creates board tasks, spawns builders, fixes code, proposes via governance. Full autonomous loop — fix → commit → push → governance → all nodes upgrade. Verified end-to-end across 3 nodes (1 Windows + 2 EC2).
 
-**Phase 2 (next):** Full autonomous loop — fix pushed → governance approves → all nodes upgrade → council restarts → resumes monitoring. No human in the loop.
+**Phase 2 (IN PROGRESS):** Migrate from legacy hardcoded council to team architecture. Same proven loop, now generic for any team. TeamRegistry + `/v1/teams/*` endpoints + team handoff + git-backed board recovery.
 
-**Phase 3 (future):** Users submit fixes/suggestions from gateway. Council evaluates, implements if valid, rejects if not. Human role shifts from operator to advisor. The system maintains itself.
+**Phase 3 (future):** User project teams run autonomously alongside pando-infra. Multiple teams on multiple nodes. Teams hand off between nodes. Users submit requests from gateway and teams handle everything. Human role shifts from operator to advisor.
 
 ### Files Involved
 
 | File | Role |
 |---|---|
-| `core/engine-adapter.ts` | Spawns council engines, registers tools, manages scheduler |
-| `core/council-prompts.ts` | System prompts for observer, qa, council |
-| `core/upgrade-protocol.ts` | Git pull, hash verify, build, safe restart |
+| `core/team-registry.ts` | **NEW.** Team registry, P2P sync, heartbeat, orphan detection, handoff |
+| `core/engine-adapter.ts` | Spawns team engines via startTeam(), registers tools, manages scheduler |
+| `core/upgrade-protocol.ts` | Git pull, hash verify, npm install, build, safe restart |
+| `init-kernel.ts:634-735` | Wires upgrade broadcast, subscribe, onUpgradeApproved, catchup timer |
+| `kernel/governance.ts:1856-1890` | Auto-approve logic, validateUpgradeProposal() |
+| `api/kernel-api.ts` | POST /v1/governance/propose (commitHash → upgradePayload) |
+| `api/core-api.ts` | /v1/teams/* endpoints (board proxy, team CRUD) |
 | `supervisor.ts` | Watches exit codes, respawns on 75 |
 | `cli.ts` | Crash guard, circuit breaker |
-| `kernel/governance.ts` | Proposal pipeline, voting, AI review |
+| `docs/TEAM-ARCHITECTURE.md` | Full implementation reference (schema, flows, legacy audit, E2E tests) |
 
 See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
@@ -1653,8 +1770,8 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 ### Core (Layer 1)
 | File | Purpose |
 |---|---|
-| `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. Council agent setup. Does NOT handle model selection — that's PandoCode's job. |
-| `core/council-prompts.ts` | System prompts for observer/qa/council agents. |
+| `core/team-registry.ts` | **NEW.** Team registry (SQLite), GossipSub sync, heartbeat, orphan detection, handoff, P2P board proxy. See Section 5.10. |
+| `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. Team agent setup via startTeam(). Does NOT handle model selection — that's PandoCode's job. |
 | `core/deploy-pipeline.ts` | Build → GitHub → EC2 deploy → metadata. Auto-triggers after sendToEngine(). |
 | `core/credential-store.ts` | AES-256-GCM encrypt/decrypt |
 | `core/storage-backend.ts` | MongoDB or P2P proxy |
@@ -1675,7 +1792,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 |---|---|
 | `api/api-server.ts` | Fastify server setup, doorman classification (simple/question/build/report intents) |
 | `api/kernel-api.ts` | Status, peers, tasks, governance, guardrails, monitoring, scheduler, reputation, admin, wallet, activity, search (~2,400 lines) |
-| `api/core-api.ts` | Upgrade, emissions, security, council routes (status, trigger, board, request) (~485 lines) |
+| `api/core-api.ts` | Upgrade, emissions, security, team routes (/v1/teams/* — board proxy, CRUD, trigger) (~485 lines) |
 | `api/platform-api.ts` | Projects, auth, chat, engines, content, marketplace, resources, testing, templates, per-project board/request, `findBestBuilder()` (~4,200 lines) |
 | `api/testing-api.ts` | Testing dashboard routes (11 endpoints) |
 
@@ -1742,7 +1859,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 2. **Each project gets its own engine instance.** The adapter manages `Map<projectId, PandoCode>`. Engines don't know about each other. They communicate only through Pando tools (which call the shared HTTP API).
 
-3. **Council agents are standard PandoCode agents.** Observer (explorer role), QA (tester role), and Council (lead role) are separate engine instances in the EnginePool — each with their own session, memory, and board. They use PandoCode's native send_message for communication and board tasks for issue tracking. pando-node only adds pando_* tools and Lux budget. Do NOT build custom agent/communication systems — PandoCode already has them (see Section 3.2).
+3. **Team agents are standard PandoCode agents.** Every team (pando-infra or user project) consists of PandoCode engine instances in the EnginePool — each with their own session, memory, and board. They use PandoCode's native send_message for communication and board tasks for issue tracking. pando-node only adds pando_* tools, Lux budget, and the team registry for routing. Do NOT build custom agent/communication systems — PandoCode already has them (see Section 3.2). The pando-infra team has 3 agents (lead + observer + QA). User project teams start with 1 (lead) and can grow.
 
 4. **Governance is NOT an AI agent.** It's deterministic code in kernel/governance.ts. It only calls the AI (via adapter.reviewDiff) for Layer 5 smart analysis. The 6-layer pipeline is deterministic code, not an LLM.
 
@@ -1785,3 +1902,17 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 23. **P2P credential proxy has a timeout chain.** GitHub repo creation requires: P2P credential decrypt (30s timeout) + GitHub API call (45s inner timeout). If EC2 nodes are slow or offline, the credential proxy times out and GitHub operations fail. The timeouts were tuned for production latency on 2026-03-06.
 
 24. ~~**S3 uploads are fire-and-forget with a 2s wait.**~~ **FIXED.** S3 uploads now use `Promise.all(uploadPromises)` and surface errors. No more 2s sleep.
+
+25. **EC2 file ownership breaks auto-upgrade.** The pando-node service runs as `pando:pando` (systemd). If someone SSHs as `ubuntu` and creates/modifies files (e.g., manual gateway deploy, `npm install` as ubuntu), those files are owned by `ubuntu`. When auto-upgrade runs `git reset --hard`, it fails with `error: unable to unlink old '<file>': Permission denied`. Fix: `sudo chown -R pando:pando /opt/pando`. This caused weeks of silent upgrade failures across both EC2 nodes (2026-03-07).
+
+26. **`git diff HEAD~1` vs `git diff HEAD~1 HEAD`.** Without the second `HEAD` argument, git diffs against the **working tree** — meaning uncommitted local changes appear in the diff. The governance validation (`validateUpgradeProposal`, `scanDiffForDangerousPatterns`) uses this to check committed code. If you use `HEAD~1` alone, uncommitted editor artifacts, debug files, or stashed changes inflate the diff and cause false rejections. Always use `HEAD~1 HEAD`.
+
+27. **Governance propose endpoint is `/v1/governance/propose`, NOT `/v1/governance/proposals`.** The `/proposals` endpoint is GET-only (list). Council prompts had the wrong URL, causing proposals to 404 or create general (non-upgrade) proposals that never triggered auto-approve. If a governance proposal expires with 0 votes and you expected auto-approve, check: (a) correct endpoint, (b) `commitHash` in body, (c) proposal description contains "security" if touching security files.
+
+28. **`npm install` must run before `npm run build` during upgrade.** If new dependencies were added between commits (e.g., `mongodb` package added), the build fails on the receiving node because node_modules is stale. Both `upgrade-protocol.ts:pullAndUpgrade()` and the `/upgrade` API endpoint run `npm install` before build. The root `package.json` also has a `prebuild` hook that installs specific missing deps (targeted, not full `npm install`, to avoid `file:` reference failures on EC2).
+
+29. **`file:` dependencies break `npm install` on EC2.** `"@pando-code/core": "file:../code/packages/core"` only works on the dev machine where `../code/` exists. On EC2, full `npm install` fails because the path doesn't exist. The `prebuild` script works around this by installing only specific missing packages (`npm install mongodb --no-save`) instead of running full `npm install`. If you add a new dependency, ensure it gets installed via the targeted prebuild OR ensure `npm install` failure is non-fatal in upgrade-protocol.ts (it is — the catch logs a warning and continues).
+
+30. **Auto-upgrade has 3 trigger paths.** (a) `onUpgradeApproved` callback fires immediately on the proposing node when governance passes. (b) GossipSub broadcast on `pando/upgrades` topic notifies connected peers. (c) Catchup timer (every 5min, 30s startup delay) scans all governance proposals for `status:'passed' + category:'upgrade'` and calls `pullAndUpgrade` for any not yet applied. Path C is the safety net — handles offline peers, missed broadcasts, and nodes that joined after the broadcast. If upgrade isn't happening, check `journalctl` for `[upgrade] Catch-up:` messages.
+
+31. **EC2 pando directory is `/opt/pando`, NOT `/opt/pando/node`.** The repo is cloned directly into `/opt/pando`. The monorepo root IS `/opt/pando`. Agents assuming `/opt/pando/node` will get "No such file or directory" errors on every command.

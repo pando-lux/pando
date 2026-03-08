@@ -5,7 +5,7 @@
  *         /network/capabilities/*, /resources/* (network), /capacity,
  *         /network-state, /resources/* (registry), /instances/*,
  *         /content/*, /regression, /payment/*, /auth/*, /projects/*,
- *         /marketplace/*, /council/*, /apps/*
+ *         /marketplace/*, /teams/*, /apps/*
  */
 
 import { toString as uint8ArrayToString, fromString as uint8ArrayFromString } from 'uint8arrays';
@@ -200,18 +200,19 @@ export async function registerPlatformRoutes(
       }
 
       if (classification.intent === 'report') {
-        // User is reporting a bug or requesting a feature — create a board task for the council
+        // User is reporting a bug or requesting a feature — route to appropriate team
         const lawViolation = violatesTwoLaws(trimmed);
         if (lawViolation) {
           return { status: 'ok', threadId: '', reply: lawViolation, tier: 'simple' };
         }
         const adapter = node.getEngineAdapter();
+        const targetTeam = classification.targetProject || 'pando-infra';
         const severity = /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(trimmed) ? 'BUG' : 'FEATURE';
         const taskTitle = `[${severity}:user] ${(classification.description || trimmed).slice(0, 120)}`;
-        const taskId = adapter?.addBoardTask(taskTitle, trimmed.slice(0, 500));
+        const taskId = adapter?.addTeamBoardTask(targetTeam, taskTitle, trimmed.slice(0, 500));
         const reply = taskId
-          ? `Thanks for the report! I've added it to the council's board. Task: ${taskId}`
-          : `Thanks for the report. The council will review it on the next tick.`;
+          ? `Thanks for the report! I've added it to the team's board. Task: ${taskId}`
+          : `Thanks for the report. The team will review it on the next tick.`;
         threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         if (threadStore) {
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
@@ -3967,9 +3968,9 @@ export async function registerPlatformRoutes(
       return { status: 'ok', taskId, projectId: id, message: 'Report submitted to project board.' };
     });
 
-    // ── Phase 50: Council Endpoints ──────────────────────────────────────────
+    // ── Governance Helpers ──────────────────────────────────────────────────
 
-    // ── Auth guard helpers for council routes ──────────────────────────────
+    // ── Auth guard helpers ──────────────────────────────────────────────────
     function requireAuth(request: any, reply: any): boolean {
       const actor = (request as any).actor;
       if (!actor || actor.type === 'anonymous') {
@@ -3997,7 +3998,7 @@ export async function registerPlatformRoutes(
       return true;
     }
 
-    // POST /council/veto/:id — veto a proposal via governance (kept — pure infrastructure)
+    // POST /council/veto/:id — veto a governance proposal (legacy route, kept for compatibility)
     fastify.post('/council/veto/:id', async (request: any, reply: any) => {
       if (!requireOperator(request, reply)) return;
       const governance = node.getGovernance();

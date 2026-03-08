@@ -439,56 +439,86 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       return { appealed: true, entry };
     });
 
-    // ── Council API ──────────────────────────────────────────────────────────
+    // ── Team API ──────────────────────────────────────────────────────────
 
-    // GET /council/status — Council system status (uses PandoCode's native agent system)
-    fastify.get('/council/status', async () => {
-      const adapter = node.getEngineAdapter();
-      const active = adapter?.isCouncilActive() ?? false;
-      return {
-        active,
-        engines: active ? adapter!.getActiveEngines().filter((e: any) =>
-          ['observer', 'qa', 'council'].includes(e.id)
-        ) : [],
-        schedules: adapter?.getSchedules()?.filter((s: any) =>
-          ['observer-tick', 'qa-tick', 'council-tick'].includes(s.name)
-        ) ?? [],
-      };
+    // GET /teams — List all teams from registry
+    fastify.get('/teams', async () => {
+      const registry = node.getTeamRegistry();
+      if (!registry) return { teams: [] };
+      return { teams: registry.listTeams() };
     });
 
-    // POST /council/trigger/:agent — Manually trigger a council agent
-    // Observer and QA run synchronously (fast, gemini). Council runs in background (claude-code, slow).
-    fastify.post('/council/trigger/:agent', async (request: any, reply: any) => {
-      const agentId = request.params.agent as string;
-      if (!['observer', 'qa', 'council'].includes(agentId)) {
-        return reply.code(400).send({ error: 'Invalid agent. Must be: observer, qa, or council' });
-      }
+    // GET /teams/:teamId — Team config + status
+    fastify.get('/teams/:teamId', async (request: any, reply: any) => {
+      const registry = node.getTeamRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Team registry not initialized' });
+      const team = registry.getTeam(request.params.teamId);
+      if (!team) return reply.code(404).send({ error: 'Team not found' });
+      const adapter = node.getEngineAdapter();
+      return { ...team, running: adapter?.isTeamActive(team.id) ?? false };
+    });
+
+    // GET /teams/:teamId/board — Board tasks (local or stub for remote)
+    fastify.get('/teams/:teamId/board', async (request: any, reply: any) => {
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return { tasks: [] };
+      const teamId = request.params.teamId as string;
+      return { tasks: adapter.getTeamBoard(teamId) };
+    });
+
+    // POST /teams/:teamId/board — Add a task to team board
+    fastify.post('/teams/:teamId/board', async (request: any, reply: any) => {
+      const teamId = request.params.teamId as string;
+      const body = request.body as any;
+      const title = body?.title?.trim();
+      if (!title) return reply.code(400).send({ error: 'Title required' });
+      const lawViolation = violatesTwoLaws(`${title} ${body?.description || ''}`);
+      if (lawViolation) return reply.code(403).send({ error: lawViolation });
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      const taskId = adapter.addTeamBoardTask(teamId, title, body?.description);
+      if (!taskId) return reply.code(500).send({ error: 'Failed to create task' });
+      return { status: 'created', taskId };
+    });
+
+    // PATCH /teams/:teamId/board/:taskId — Update a board task
+    fastify.patch('/teams/:teamId/board/:taskId', async (request: any, reply: any) => {
+      const { teamId, taskId } = request.params as any;
+      const body = request.body as any;
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      const ok = adapter.updateTeamBoardTask(teamId, taskId, {
+        status: body?.status,
+        progress: body?.progress,
+      });
+      return ok ? { status: 'updated' } : reply.code(404).send({ error: 'Task not found or no changes' });
+    });
+
+    // POST /teams/:teamId/trigger — Trigger team lead immediately
+    fastify.post('/teams/:teamId/trigger', async (request: any, reply: any) => {
+      const teamId = request.params.teamId as string;
       const adapter = node.getEngineAdapter();
       if (!adapter?.available) {
-        return reply.code(503).send({ error: 'Engine adapter not available' });
+        return reply.code(503).send({ error: 'PandoCode not available on this node' });
       }
-      if (!adapter.isCouncilActive()) {
-        return reply.code(503).send({ error: 'Council agents not running' });
-      }
-
-      const defaults: Record<string, string> = {
-        observer: 'Run your periodic checks now.',
-        qa: 'Run your health checks now.',
-        council: 'Check your inbox and review board tasks now.',
-      };
-      const message = (request.body as any)?.message || defaults[agentId];
-
-      // Council uses claude-code (takes minutes) — run in background, return immediately.
-      if (agentId === 'council') {
-        adapter.triggerCouncilBackground('council', message);
-        return { agent: 'council', status: 'triggered', message: 'Council running in background. Check board/inbox for results.' };
+      if (!adapter.isTeamActive(teamId)) {
+        return reply.code(404).send({ error: `Team "${teamId}" is not running on this node` });
       }
 
-      // Observer and QA are fast (gemini) — wait for completion.
+      const message = (request.body as any)?.message || 'Check your inbox and review board tasks now.';
+      const agentId = (request.body as any)?.agentId || 'lead';
+
+      // Lead uses claude-code (slow) — run in background
+      if (agentId === 'lead') {
+        adapter.triggerTeamAgentBackground(teamId, agentId, message);
+        return { team: teamId, agent: agentId, status: 'triggered', message: 'Running in background.' };
+      }
+
+      // Non-lead agents are fast — wait for completion
       const toolCalls: any[] = [];
       const textChunks: string[] = [];
       try {
-        for await (const event of adapter.sendToCouncilAgent(agentId as any, message)) {
+        for await (const event of adapter.sendToTeamAgent(teamId, agentId, message)) {
           if (event.type === 'tool:start') {
             toolCalls.push({ tool: event.toolName, args: event.args });
           } else if (event.type === 'tool:result') {
@@ -503,24 +533,12 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         return reply.code(500).send({ error: err.message });
       }
 
-      return {
-        agent: agentId,
-        toolCalls,
-        response: textChunks.join(''),
-      };
+      return { team: teamId, agent: agentId, toolCalls, response: textChunks.join('') };
     });
 
-    // ── Board API ─────────────────────────────────────────────────────────
-
-    // GET /council/board — Public view of the council board (pending/in_progress tasks)
-    fastify.get('/council/board', async () => {
-      const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return { tasks: [], error: 'Council not running' };
-      return { tasks: adapter.getCouncilBoard() };
-    });
-
-    // POST /council/request — Submit a user report/feature request to the council board
-    fastify.post('/council/request', async (request: any, reply: any) => {
+    // POST /teams/:teamId/request — Submit user request (adds to board, may trigger lead)
+    fastify.post('/teams/:teamId/request', async (request: any, reply: any) => {
+      const teamId = request.params.teamId as string;
       const body = request.body as any;
       const message = body?.message?.trim();
       if (!message || message.length < 5) {
@@ -530,48 +548,120 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         return reply.code(400).send({ error: 'Message too long (max 500 chars)' });
       }
       const lawViolation = violatesTwoLaws(message);
-      if (lawViolation) {
-        return reply.code(403).send({ error: lawViolation });
-      }
+      if (lawViolation) return reply.code(403).send({ error: lawViolation });
       const adapter = node.getEngineAdapter();
       if (!adapter?.available) {
-        return reply.code(503).send({ error: 'Council not running' });
+        return reply.code(503).send({ error: 'PandoCode not available on this node' });
       }
       const severity = /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(message) ? 'BUG' : 'FEATURE';
       const taskTitle = `[${severity}:user] ${message.slice(0, 120)}`;
-      const taskId = adapter.addBoardTask(taskTitle, message.slice(0, 500));
+      const taskId = adapter.addTeamBoardTask(teamId, taskTitle, message.slice(0, 500));
       if (!taskId) {
         return reply.code(500).send({ error: 'Could not create board task' });
       }
-      return { status: 'ok', taskId, message: 'Report submitted to council board.' };
-    });
-
-    // ── Council Agent API (used by Claude Code CLI via curl) ─────────────
-
-    // GET /council/inbox/:agentId — Read and consume inbox messages for a council agent
-    fastify.get('/council/inbox/:agentId', async (request: any) => {
-      const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return { messages: [] };
-      const agentId = request.params.agentId as string;
-      return { messages: adapter.getCouncilInbox(agentId) };
-    });
-
-    // POST /council/message — Send a message between council agents
-    fastify.post('/council/message', async (request: any, reply: any) => {
-      const body = request.body as any;
-      const { from, to, message } = body || {};
-      if (!from || !to || !message) {
-        return reply.code(400).send({ error: 'Required: from, to, message' });
+      // Auto-trigger lead to process the new task (background, non-blocking)
+      if (adapter.isTeamActive(teamId)) {
+        adapter.triggerTeamAgentBackground(teamId, 'lead', 'New user request on board. Check your inbox and review board tasks now.');
       }
+      return { status: 'ok', taskId, message: `Report submitted to team "${teamId}". Lead triggered.` };
+    });
+
+    // POST /teams — Create a new team
+    fastify.post('/teams', async (request: any, reply: any) => {
+      const registry = node.getTeamRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Team registry not initialized' });
+      const body = request.body as any;
+      if (!body?.id || !body?.displayName) {
+        return reply.code(400).send({ error: 'Required: id, displayName' });
+      }
+      try {
+        const team = registry.createTeam({
+          id: body.id,
+          displayName: body.displayName,
+          managingNode: node.getIdentity()?.peerId || null,
+          lastHeartbeat: Date.now(),
+          status: 'active',
+          repos: body.repos || [],
+          agentCount: body.agentCount || 1,
+          governanceRequired: body.governanceRequired || false,
+          createdBy: node.getIdentity()?.peerId || null,
+          claimedAt: Date.now(),
+        });
+        return { status: 'created', team };
+      } catch (err: any) {
+        return reply.code(400).send({ error: err.message });
+      }
+    });
+
+    // PATCH /teams/:teamId — Update team config
+    fastify.patch('/teams/:teamId', async (request: any, reply: any) => {
+      const registry = node.getTeamRegistry();
+      if (!registry) return reply.code(503).send({ error: 'Team registry not initialized' });
+      const teamId = request.params.teamId as string;
+      const team = registry.getTeam(teamId);
+      if (!team) return reply.code(404).send({ error: 'Team not found' });
+      const body = request.body as any;
+      registry.updateTeam(teamId, body);
+      return { status: 'updated' };
+    });
+
+    // DELETE /teams/:teamId — Stop team, mark orphaned
+    fastify.delete('/teams/:teamId', async (request: any, reply: any) => {
+      const teamId = request.params.teamId as string;
+      const adapter = node.getEngineAdapter();
+      if (adapter?.isTeamActive(teamId)) {
+        await adapter.stopTeam(teamId);
+      }
+      const registry = node.getTeamRegistry();
+      if (registry) {
+        registry.updateTeam(teamId, { status: 'orphaned', managingNode: null });
+      }
+      return { status: 'stopped' };
+    });
+
+    // ── Legacy /council/* compatibility routes (delegate to /teams/pando-infra) ──
+
+    fastify.get('/council/status', async () => {
+      const adapter = node.getEngineAdapter();
+      return { active: adapter?.isTeamActive('pando-infra') ?? false };
+    });
+
+    fastify.get('/council/board', async () => {
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return { tasks: [] };
+      return { tasks: adapter.getTeamBoard('pando-infra') };
+    });
+
+    fastify.post('/council/request', async (request: any, reply: any) => {
+      // Delegate to /teams/pando-infra/request
+      const body = request.body as any;
+      const message = body?.message?.trim();
+      if (!message || message.length < 5) return reply.code(400).send({ error: 'Message required (min 5 chars)' });
+      if (message.length > 500) return reply.code(400).send({ error: 'Message too long (max 500 chars)' });
       const lawViolation = violatesTwoLaws(message);
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
       const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return reply.code(503).send({ error: 'Council not running' });
-      const ok = adapter.sendCouncilMessage(from, to, message);
-      return ok ? { status: 'sent' } : reply.code(500).send({ error: 'Failed to send message' });
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      const severity = /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(message) ? 'BUG' : 'FEATURE';
+      const taskTitle = `[${severity}:user] ${message.slice(0, 120)}`;
+      const taskId = adapter.addTeamBoardTask('pando-infra', taskTitle, message.slice(0, 500));
+      if (!taskId) return reply.code(500).send({ error: 'Could not create board task' });
+      if (adapter.isTeamActive('pando-infra')) {
+        adapter.triggerTeamAgentBackground('pando-infra', 'lead', 'New user request on board.');
+      }
+      return { status: 'ok', taskId };
     });
 
-    // POST /council/tasks — Create a new board task
+    fastify.post('/council/trigger/:agent', async (request: any, reply: any) => {
+      const agentId = request.params.agent as string;
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      if (!adapter.isTeamActive('pando-infra')) return reply.code(503).send({ error: 'pando-infra team not running' });
+      const message = (request.body as any)?.message || 'Run your checks now.';
+      adapter.triggerTeamAgentBackground('pando-infra', agentId, message);
+      return { agent: agentId, status: 'triggered' };
+    });
+
     fastify.post('/council/tasks', async (request: any, reply: any) => {
       const body = request.body as any;
       const title = body?.title?.trim();
@@ -579,23 +669,37 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const lawViolation = violatesTwoLaws(`${title} ${body?.description || ''}`);
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
       const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return reply.code(503).send({ error: 'Council not running' });
-      const taskId = adapter.addBoardTask(title, body?.description);
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      const taskId = adapter.addTeamBoardTask('pando-infra', title, body?.description);
       if (!taskId) return reply.code(500).send({ error: 'Failed to create task' });
       return { status: 'created', taskId };
     });
 
-    // PATCH /council/tasks/:taskId — Update a board task (status, progress)
     fastify.patch('/council/tasks/:taskId', async (request: any, reply: any) => {
       const taskId = request.params.taskId as string;
       const body = request.body as any;
       const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return reply.code(503).send({ error: 'Council not running' });
-      const ok = adapter.updateBoardTask(taskId, {
-        status: body?.status,
-        progress: body?.progress,
-      });
-      return ok ? { status: 'updated' } : reply.code(404).send({ error: 'Task not found or no changes' });
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      const ok = adapter.updateTeamBoardTask('pando-infra', taskId, { status: body?.status, progress: body?.progress });
+      return ok ? { status: 'updated' } : reply.code(404).send({ error: 'Task not found' });
+    });
+
+    fastify.get('/council/inbox/:agentId', async (request: any) => {
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return { messages: [] };
+      return { messages: adapter.getTeamInbox('pando-infra', request.params.agentId) };
+    });
+
+    fastify.post('/council/message', async (request: any, reply: any) => {
+      const body = request.body as any;
+      const { from, to, message } = body || {};
+      if (!from || !to || !message) return reply.code(400).send({ error: 'Required: from, to, message' });
+      const lawViolation = violatesTwoLaws(message);
+      if (lawViolation) return reply.code(403).send({ error: lawViolation });
+      const adapter = node.getEngineAdapter();
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      const ok = adapter.sendTeamMessage('pando-infra', from, to, message);
+      return ok ? { status: 'sent' } : reply.code(500).send({ error: 'Failed to send message' });
     });
 
     // ── Chat API (Phase 27: AgentManager) ──────────────────────────────────

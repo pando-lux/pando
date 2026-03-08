@@ -9,11 +9,12 @@
  */
 
 // Engine Adapter — the ONE connection to @pando-code/core
-export { EngineAdapter } from './engine-adapter.js';
-export type { AdapterConfig, ReviewResult } from './engine-adapter.js';
+export { EngineAdapter, PANDO_INFRA_AGENTS } from './engine-adapter.js';
+export type { AdapterConfig, ReviewResult, TeamAgentConfig } from './engine-adapter.js';
 
-// Council prompts
-export { OBSERVER_PROMPT, QA_PROMPT, COUNCIL_PROMPT } from './council-prompts.js';
+// Team Registry — P2P-synced team routing metadata
+export { TeamRegistry } from './team-registry.js';
+export type { TeamConfig } from './team-registry.js';
 
 // Storage
 export type { StorageBackend } from './storage-backend.js';
