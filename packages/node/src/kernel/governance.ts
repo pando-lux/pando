@@ -499,6 +499,8 @@ export class GovernanceSync {
         ...(row.human_only ? { humanOnly: true } : {}),
         // Phase 73: upgrade payload (commitHash + description for auto-upgrade proposals)
         ...(row.upgrade_payload ? (() => { try { return { upgradePayload: JSON.parse(row.upgrade_payload) }; } catch { return {}; } })() : {}),
+        // Governance hardening: include proposer signature for sync/verification
+        ...(row.proposer_signature ? { proposerSignature: row.proposer_signature } : {}),
       };
       this.proposals.set(proposal.id, proposal);
       this.processedIds.add(`proposal:${proposal.id}`);
