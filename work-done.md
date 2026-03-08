@@ -156,11 +156,23 @@
 - **Fix**: Removed `/teams/` and `/council/` from the auth skip list. All team/council mutations now require Bearer API token. GET requests remain public.
 - **Verified**: Unauthenticated POST returns 401, authenticated POST returns 200. 9/9 E2E tests pass.
 
+#### 13. Command Injection in P2P Upgrade Protocol (CRITICAL)
+- **Root cause**: `init-kernel.ts` and `upgrade-protocol.ts` pass `commitHash` from P2P messages/governance proposals to `git merge-base --is-ancestor ${commitHash}` without validation
+- **Fix**: Validate hex format at all entry points: `pullAndUpgrade()`, `checkForMissedUpgrades()`, peer notification handler, governance approval handler
+- **Files**: `init-kernel.ts:713,743`, `upgrade-protocol.ts:237,637`
+
+#### 14. State Table Schema Mismatch (BUG)
+- **Root cause**: `spawnTeamAgent()` INSERT used `engine_id` column but `CREATE TABLE` only defines `(key, value, updated_at, expires_at)`. Would crash on fresh team databases.
+- **Fix**: Removed `engine_id` from INSERT statement
+- **File**: `packages/node/src/core/engine-adapter.ts:1642`
+
 ### Commits Pushed
 5. `b1e85c00` — Fix nonexistent task update bug + Pipeline 7/8 E2E tests
 6. `e861b636` — Security: fix command injection in 5 git operation attack surfaces
 7. `14857ea2` — Security: Two Laws checks on 3 trigger endpoints
 8. `98f4cd1c` — Security: require API token for team/council mutations (CRITICAL)
+9. `9eadb173` — Fix state table schema mismatch (engine_id column)
+10. `818e6626` — Security: validate commitHash in P2P upgrade paths
 
 ### Pending
 - [ ] PandoCode web UI testing (UI not running currently)
