@@ -711,6 +711,8 @@ export async function initKernel(node: any): Promise<void> {
 
           const { commitHash, description, governanceId } = payload;
           if (!commitHash) return;
+          // Validate commitHash is a safe hex string (prevents command injection via P2P)
+          if (!/^[0-9a-f]{6,40}$/i.test(commitHash)) { console.warn(`[upgrade] REJECTED: invalid commitHash format from peer`); return; }
           if (upgradeProtocol.hasApplied(commitHash)) return;
           if (node.upgradeInProgress || node.restartPending) return;
 
@@ -740,6 +742,7 @@ export async function initKernel(node: any): Promise<void> {
             console.warn(`[upgrade] Governance approved but no commitHash in payload`);
             return;
           }
+          if (!/^[0-9a-f]{6,40}$/i.test(commitHash)) { console.warn(`[upgrade] REJECTED: invalid commitHash format in governance proposal`); return; }
           console.log(`[upgrade] Governance approved upgrade: ${commitHash.slice(0, 8)} — ${description}`);
 
           // Pull and build locally

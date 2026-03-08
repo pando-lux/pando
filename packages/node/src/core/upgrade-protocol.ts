@@ -235,6 +235,10 @@ export class UpgradeProtocol {
     if (this.pinnedVersion) {
       return { success: false, message: `Version pinned to ${this.pinnedVersion}. Unpin first.` };
     }
+    // Validate commitHash format to prevent command injection (P2P input)
+    if (commitHash && !/^[0-9a-f]{6,40}$/i.test(commitHash)) {
+      return { success: false, message: `Invalid commitHash format: ${commitHash.slice(0, 20)}` };
+    }
 
     const repoDir = this.repoDir;
 
@@ -634,6 +638,8 @@ export class UpgradeProtocol {
         if (p.status !== 'passed' || p.category !== 'upgrade') continue;
         const commitHash = p.upgradePayload?.commitHash;
         if (!commitHash) continue;
+        // Validate commitHash format (P2P data — prevent command injection)
+        if (!/^[0-9a-f]{6,40}$/i.test(commitHash)) continue;
         // Skip if already applied
         if (this.hasApplied(commitHash)) continue;
         // Check if we're already at this version (git HEAD matches)
