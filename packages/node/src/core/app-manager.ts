@@ -27,6 +27,7 @@ import {
   writeFileSync,
   unlinkSync,
   rmSync,
+  cpSync,
 } from 'node:fs';
 import { execSync } from 'node:child_process';
 
@@ -121,6 +122,7 @@ const INSTALL_OPTS = { stdio: 'pipe' as const, timeout: 120_000, windowsHide: tr
 const GIT_OPTS = { stdio: 'pipe' as const, timeout: 60_000, windowsHide: true };
 const NGINX_CONF_DIR = '/etc/nginx/pando-apps';
 const APPS_BASE_DIR = join(homedir(), '.pando', 'hosted-apps');
+const WORKSPACE_BASE_DIR = join(homedir(), '.pando', 'projects');
 const DB_PATH = join(homedir(), '.pando', 'apps.db');
 
 const STATIC_EXTS = new Set([
@@ -312,8 +314,23 @@ export class AppManager {
       return { success: false, error: `App ${appId} has status '${app.status}' — must be 'registered', 'failed', or 'stopped' to deploy` };
     }
 
-    if (!app.repo_url) {
-      return { success: false, error: `App ${appId} has no repo_url — cannot deploy without source` };
+    // Check for workspace-based source (chat-created projects)
+    const workspaceDir = this.resolveWorkspace(appId);
+    const hasWorkspace = workspaceDir !== null;
+
+    if (!app.repo_url && !hasWorkspace) {
+      return { success: false, error: `App ${appId} has no repo_url and no workspace — cannot deploy without source` };
+    }
+
+    // Auto-detect tier from workspace if tier is default and workspace exists
+    if (hasWorkspace && app.tier === 2) {
+      const detected = AppManager.detectTier(workspaceDir);
+      if (detected.tier !== app.tier) {
+        this.db.prepare('UPDATE apps SET tier = ?, updated_at = ? WHERE id = ?')
+          .run(detected.tier, Date.now(), appId);
+        app = this.get(appId)!;
+        console.log(`[app-manager] Auto-detected tier ${detected.tier} for ${appId}: ${detected.reason}`);
+      }
     }
 
     // P2P dispatch: if no host set, find a deploy target
@@ -395,8 +412,14 @@ export class AppManager {
       const appDir = join(APPS_BASE_DIR, appId);
       mkdirSync(appDir, { recursive: true });
 
-      // Clone or pull from GitHub
-      this.cloneOrPull(appDir, app.repo_url!);
+      if (app.repo_url) {
+        // Clone or pull from GitHub
+        this.cloneOrPull(appDir, app.repo_url);
+      } else if (hasWorkspace) {
+        // Copy workspace files to hosted-apps directory
+        this.copyWorkspaceToAppDir(workspaceDir, appDir);
+        console.log(`[app-manager] Copied workspace ${workspaceDir} → ${appDir}`);
+      }
 
       const currentCommit = this.getCommit(appDir);
 
@@ -678,24 +701,43 @@ export class AppManager {
         if (project) {
           // Auto-detect tier from workspace if available
           let tier: 1 | 2 = 2;
-          const workspaceDir = project.workspaceDir;
-          if (workspaceDir && existsSync(workspaceDir)) {
-            tier = AppManager.detectTier(workspaceDir).tier;
+          const wsDir = project.workspaceDir || join(WORKSPACE_BASE_DIR, appId);
+          if (existsSync(wsDir)) {
+            tier = AppManager.detectTier(wsDir).tier;
           }
+
+          // Determine repoUrl — may be absent for chat-created projects
+          const repoUrl = project.repoUrl
+            ? project.repoUrl
+            : project.githubRepo
+              ? `https://github.com/${project.githubRepo}.git`
+              : undefined;
 
           this.register({
             id: appId,
             name: project.name || appId,
-            repoUrl: project.repoUrl || project.githubRepo
-              ? `https://github.com/${project.githubRepo}.git`
-              : undefined,
+            repoUrl,
             tier,
           });
 
           // Now try deploy instead of update (it's a new app)
+          // deploy() will fall back to workspace if repoUrl is absent
           return await this.deploy(appId) as any;
         }
       }
+
+      // Even without ProjectStore, check if a workspace directory exists
+      const fallbackWorkspace = this.resolveWorkspace(appId);
+      if (fallbackWorkspace) {
+        const detected = AppManager.detectTier(fallbackWorkspace);
+        this.register({
+          id: appId,
+          name: appId,
+          tier: detected.tier,
+        });
+        return await this.deploy(appId) as any;
+      }
+
       return { success: false, error: `App ${appId} not found` };
     }
 
@@ -740,11 +782,20 @@ export class AppManager {
       return { success: false, error: `App ${appId} has status '${app.status}' — must be 'live' or 'unhealthy' to update` };
     }
 
-    if (!app.repo_url) {
-      return { success: false, error: `App ${appId} has no repo_url` };
+    // For workspace-based apps without repo_url, re-sync from workspace
+    const updateWorkspace = this.resolveWorkspace(appId);
+    if (!app.repo_url && !updateWorkspace) {
+      return { success: false, error: `App ${appId} has no repo_url and no workspace` };
     }
 
     const appDir = join(APPS_BASE_DIR, appId);
+
+    // If workspace-based, re-copy latest workspace files to hosted-apps
+    if (!app.repo_url && updateWorkspace) {
+      this.copyWorkspaceToAppDir(updateWorkspace, appDir);
+      console.log(`[app-manager] Re-synced workspace for update: ${updateWorkspace} → ${appDir}`);
+    }
+
     if (!existsSync(appDir)) {
       return { success: false, error: `App directory ${appDir} does not exist` };
     }
@@ -777,12 +828,19 @@ export class AppManager {
 
   private async updateTier1(app: App, appDir: string, startTime: number): Promise<UpdateResult> {
     const oldCommit = app.current_commit;
+    const isGitRepo = existsSync(join(appDir, '.git'));
 
-    // Pull latest
-    execSync('git pull origin main', { ...GIT_OPTS, cwd: appDir });
-    const newCommit = this.getCommit(appDir);
+    let newCommit: string;
+    if (isGitRepo) {
+      // Pull latest from git
+      execSync('git pull origin main', { ...GIT_OPTS, cwd: appDir });
+      newCommit = this.getCommit(appDir);
+    } else {
+      // Workspace-based: files were already re-copied by update(), use timestamp as "commit"
+      newCommit = `workspace-${Date.now()}`;
+    }
 
-    if (newCommit === oldCommit) {
+    if (isGitRepo && newCommit === oldCommit) {
       // Already current — restore status
       this.db.prepare('UPDATE apps SET status = ?, updated_at = ? WHERE id = ?')
         .run('live', Date.now(), app.id);
@@ -915,29 +973,36 @@ export class AppManager {
   ): Promise<UpdateResult> {
     const oldCommit = app.current_commit;
     const oldPort = app.port;
+    const isGitRepo = existsSync(join(appDir, '.git'));
 
-    // Fetch latest from remote
-    execSync('git fetch origin', { ...GIT_OPTS, cwd: appDir });
-
-    // Determine target commit
     let newCommit: string;
-    if (targetCommit) {
-      newCommit = targetCommit;
+
+    if (isGitRepo) {
+      // Fetch latest from remote
+      execSync('git fetch origin', { ...GIT_OPTS, cwd: appDir });
+
+      // Determine target commit
+      if (targetCommit) {
+        newCommit = targetCommit;
+      } else {
+        newCommit = execSync('git rev-parse origin/main', { ...EXEC_OPTS, cwd: appDir })
+          .toString().trim();
+      }
+
+      // Check if already at target
+      if (newCommit === oldCommit) {
+        this.db.prepare('UPDATE apps SET status = ?, updated_at = ? WHERE id = ?')
+          .run('live', Date.now(), app.id);
+        console.log(`[app-manager] ${app.id} already at commit ${newCommit.slice(0, 8)}`);
+        return { success: true, previousCommit: oldCommit || undefined, newCommit };
+      }
+
+      // Checkout new commit
+      execSync(`git checkout ${newCommit}`, { ...GIT_OPTS, cwd: appDir });
     } else {
-      newCommit = execSync('git rev-parse origin/main', { ...EXEC_OPTS, cwd: appDir })
-        .toString().trim();
+      // Workspace-based: files were already re-copied by update(), use timestamp as "commit"
+      newCommit = `workspace-${Date.now()}`;
     }
-
-    // Check if already at target
-    if (newCommit === oldCommit) {
-      this.db.prepare('UPDATE apps SET status = ?, updated_at = ? WHERE id = ?')
-        .run('live', Date.now(), app.id);
-      console.log(`[app-manager] ${app.id} already at commit ${newCommit.slice(0, 8)}`);
-      return { success: true, previousCommit: oldCommit || undefined, newCommit };
-    }
-
-    // Checkout new commit
-    execSync(`git checkout ${newCommit}`, { ...GIT_OPTS, cwd: appDir });
 
     // Install deps and build
     execSync('npm install --production', { ...INSTALL_OPTS, cwd: appDir });
@@ -1749,6 +1814,61 @@ location /apps/${appId}/ {
 
   private sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Resolve a workspace directory for a given appId.
+   * Chat-created projects live at ~/.pando/projects/{appId}.
+   * Returns the path if it exists and has deployable content, null otherwise.
+   */
+  private resolveWorkspace(appId: string): string | null {
+    const wsDir = join(WORKSPACE_BASE_DIR, appId);
+    if (!existsSync(wsDir)) return null;
+
+    // Verify workspace has deployable content
+    try {
+      const entries = readdirSync(wsDir);
+      const hasContent = entries.some(e =>
+        e === 'package.json' || e === 'index.html' || e === 'server.js' ||
+        e === 'app.js' || e === 'index.js' || e === 'main.js',
+      );
+      if (!hasContent && entries.length === 0) return null;
+      // Even if no recognized entry file, a non-empty directory is still deployable
+      // (could have subdirectories with content like public/)
+      if (entries.length > 0) return wsDir;
+    } catch {
+      return null;
+    }
+
+    return null;
+  }
+
+  /**
+   * Copy workspace files to the hosted-apps directory for deployment.
+   * Skips node_modules and .git to keep the copy lightweight.
+   */
+  private copyWorkspaceToAppDir(workspaceDir: string, appDir: string): void {
+    mkdirSync(appDir, { recursive: true });
+
+    const entries = readdirSync(workspaceDir);
+    for (const entry of entries) {
+      // Skip heavy/irrelevant directories
+      if (entry === 'node_modules' || entry === '.git') continue;
+
+      const src = join(workspaceDir, entry);
+      const dest = join(appDir, entry);
+
+      try {
+        const st = statSync(src);
+        if (st.isDirectory()) {
+          cpSync(src, dest, { recursive: true, force: true });
+        } else {
+          cpSync(src, dest, { force: true });
+        }
+      } catch (err: any) {
+        console.log(`[app-manager] Could not copy ${entry}: ${err.message}`);
+      }
+    }
   }
 
   /**

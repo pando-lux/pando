@@ -607,6 +607,25 @@ User sees: "Your bakery website is live at https://..."
 
 **Subsequent messages** with `projectId` route directly to that project's engine on the PandoCode node that owns it.
 
+#### Pipeline 4: Full User Journey (end-to-end, PROVEN — commit e6fe16b1)
+
+```
+User → Gateway → Chat message "Build me a websocket server"
+  → Doorman classifies: intent=build, tier=complex
+  → Project created in ProjectStore with workspaceDir (~/.pando/projects/{projectId}/)
+  → Engine dispatched (local or remote PandoCode peer via findBestBuilder())
+  → Engine builds in ~/.pando/projects/{projectId}/
+  → Build completes → deploy result AWAITED (not fire-and-forget)
+    → Success: deploy message pushed to chat thread + SSE `app_deployed` event
+    → Failure: failure message pushed to chat thread + SSE `app_deploy_status` event
+  → App auto-registered in AppManager (SQLite apps.db)
+  → Project listed in marketplace WITH deployment data (status, url, tier, commit)
+  → User sends follow-up to same projectId → engine resumes (same team)
+  → Update triggers re-deploy
+```
+
+**Remaining gap:** Chat-created projects lack `repo_url` — they use workspace-based deploy (`workspaceDir`) instead of GitHub-based deploy. This means deploy dispatches to EC2 fail for workspace-only projects (EC2 needs a GitHub repo to clone). Fix is in progress — workspace-to-GitHub push before deploy dispatch.
+
 #### Standalone PandoCode (direct, not through the network)
 
 ```
@@ -931,6 +950,28 @@ These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse 
 - Circuit breaker: if app fails repeatedly, marked `error` — no further restart attempts until manual intervention or rollback
 - All health events recorded in `app_history` table
 
+**Deploy result push (DONE — commit e6fe16b1):**
+
+Deploy result is now AWAITED (not fire-and-forget). After PandoCode finishes building:
+```
+Build completes → appMgr.update(projectId) awaited
+  ├─ SUCCESS:
+  │   → Deploy message pushed to chat thread via threadStore.addMessage()
+  │   → SSE event `app_deployed` pushed: { threadId, projectId, deployUrl, port, status: 'live' }
+  │
+  └─ FAILURE:
+      → Failure message pushed to chat thread via threadStore.addMessage()
+      → SSE event `app_deploy_status` pushed: { threadId, projectId, status: 'failed', error }
+```
+
+**Marketplace enrichment (DONE — commit e6fe16b1):**
+
+`GET /v1/marketplace` enriches project listings with AppManager deployment data. Each project gets a `deployment` object:
+```json
+{ "status": "live", "url": "http://...", "port": 3009, "tier": 1, "commit": "abc123", "deployedAt": 1741... }
+```
+`GET /v1/marketplace/:id` also includes deployment data. This connects the marketplace to live deployment state — users see which projects are deployed and where.
+
 **Marketplace visibility:**
 - New projects start with `visibility: 'listed'`
 - Marketplace endpoint (`GET /v1/marketplace`) filters out test artifacts via regex:
@@ -943,7 +984,7 @@ These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse 
 |---|---|---|
 | **AppManager** | `core/app-manager.ts` | Unified lifecycle: register, deploy, update (blue-green), rollback, health monitoring, P2P dispatch, SQLite registry |
 | **App API** | `api/app-api.ts` | REST endpoints: /v1/apps/* (13 routes), /v1/webhooks/github |
-| **Trigger** | `api/platform-api.ts` | `appManager.update(projectId)` called with `.catch()` after build completion |
+| **Trigger** | `api/platform-api.ts` | `appManager.update(projectId)` awaited after build completion — result pushed to chat thread + SSE |
 | **Deploy handler** | `core/app-manager.ts` (internal) | Clone from GitHub, detect tier, deploy to S3 or PM2+nginx |
 | **Port registry** | `apps.db` (SQLite) | Persistent port allocation — per-app row in `apps` table |
 | **GitHub push** | `api/platform-api.ts` | git add -A, commit, force push to origin/main |
@@ -1696,7 +1737,9 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | **Path B end-to-end** | Full pipeline | TESTED LIVE — "build me a portfolio website" → doorman classifies (HTTP to EC2) → project created → PandoCode builds → DeployPipeline → GitHub push → HTTP deploy to EC2 → S3 upload → live URL returned → marketplace listing. Full pipeline proven. |
 | **Unified build routing** | `api/platform-api.ts` | DONE — `findBestBuilder()` replaces the split `hasClaudeCodeAuth` logic. All 4 build handlers use unified flow: create project → find best PandoCode peer (including self) → route. `hasClaudeCodeAuth()` removed from routing (was Anthropic-only, broken for Gemini). |
 | **Circuit breaker fix** | `cli.ts`, `supervisor.ts`, `kernel/` | DONE — Port-conflict exits use code 78 (supervisor won't respawn). Immediate circuit breaker reset on successful boot. Thresholds raised (crash-guard 3→6, circuit-breaker 3→5). |
-| **App Lifecycle (AppManager)** | `core/app-manager.ts`, `api/app-api.ts` | DONE — Unified system replacing DeployPipeline + HostingService + init-platform handlers. SQLite registry, blue-green deploy, health monitoring, rollback, P2P dispatch. 46/46 E2E tests pass. |
+| **App Lifecycle (AppManager)** | `core/app-manager.ts`, `api/app-api.ts` | DONE — Unified system replacing DeployPipeline + HostingService + init-platform handlers. SQLite registry, blue-green deploy, health monitoring, rollback, P2P dispatch. 5/5 pipeline E2E tests pass (71 total). |
+| **Deploy result push to chat** | `api/platform-api.ts` | DONE — Deploy result awaited (not fire-and-forget). Success/failure pushed to chat thread + SSE. Commit e6fe16b1. |
+| **Marketplace enrichment** | `api/platform-api.ts` | DONE — GET /v1/marketplace and GET /v1/marketplace/:id enriched with AppManager deployment data (status, url, tier, commit, deployedAt). Commit e6fe16b1. |
 
 ### Restart Architecture (Verified 2026-03-08)
 
@@ -1735,6 +1778,7 @@ The `resourceId` is generated when a credential is contributed (via `/contribute
 | ~~**S3 upload awaiting**~~ | `index.ts` | **FIXED.** Uses `Promise.all(uploadPromises)` instead of 2s sleep. Upload errors surfaced in console. |
 | ~~**Tier 2 PM2 persistence**~~ | `init-platform.ts` | **ALREADY HANDLED.** `pm2 save` is called after every deploy. Port registry also persists. |
 | **Deploy pipeline resilience** | `core/app-manager.ts` | AppManager provides blue-green deploy (no port collision) + rollback (restore previous commit). Retry on transient failures still TODO. S3 partial upload edge case mitigated by rollback capability. All deploy events persisted to `app_history` table in apps.db. |
+| **Chat-created projects lack repo_url** | `api/platform-api.ts` | Chat-created projects use workspace-based deploy (workspaceDir). EC2 deploy dispatch requires GitHub repo to clone. Workspace-to-GitHub push before deploy dispatch needed. Being fixed separately. |
 | ~~**deployPeerId not persisting**~~ | `platform-api.ts:3685` | **ALREADY HANDLED.** Saved to both ProjectStore (MongoDB) and ProjectRegistry (local). |
 
 ### Stubs
@@ -2036,7 +2080,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 15. **Builder targeting ≠ Deploy targeting.** `findBestBuilder()` looks for `shareCompute + compute_cpu` (PandoCode contributor nodes). `AppManager.findDeployTarget()` looks for `credentialAccess + storageBackend='mongodb'` (EC2 secure nodes). These are DIFFERENT node types. If you mix them up, deploys silently fail because PandoCode nodes can't decrypt S3 credentials.
 
-16. **AppManager update errors are logged but non-blocking.** `appManager.update(projectId)` is called with `.catch()` from platform-api.ts after build completion. If it fails, the app retains its previous state. Check node logs for `[app-manager]` prefixed messages. History is recorded in apps.db regardless of success/failure.
+16. **AppManager update result is awaited and pushed to chat.** `appManager.update(projectId)` is awaited from platform-api.ts after build completion. On success: deploy message pushed to chat thread via `threadStore.addMessage()` + SSE event `app_deployed`. On failure: failure message pushed to chat thread + SSE event `app_deploy_status`. History is recorded in apps.db regardless of success/failure.
 
 17. **Marketplace filters test artifacts.** `getMarketplaceAsync()` uses a regex to strip projects named "hello world", "test app", "demo", "example", etc. If your test project doesn't show up in the marketplace, that's why. Use a real project name.
 

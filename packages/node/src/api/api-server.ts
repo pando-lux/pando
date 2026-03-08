@@ -15,6 +15,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
+import { verify as verifyEd25519 } from '@pando/identity';
 import type { PandoNode } from '../index.js';
 import type { RequestActor } from '@pando/shared';
 import { registerKernelRoutes } from './kernel-api.js';
@@ -306,14 +307,67 @@ export class ApiServer {
 
       // Extract Bearer token from Authorization header
       const authHeader = request.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        return reply.code(401).send({ error: 'Missing or invalid Authorization header', code: 'UNAUTHORIZED' });
+      if (authHeader?.startsWith('Bearer ')) {
+        const token = authHeader.slice(7);
+        if (token === this.apiToken) {
+          return; // Valid API token — allow through
+        }
       }
 
-      const token = authHeader.slice(7);
-      if (token !== this.apiToken) {
-        return reply.code(403).send({ error: 'Invalid API token', code: 'FORBIDDEN' });
+      // Fallback: P2P signature auth (same headers HttpPeerClient sends)
+      const peerSignature = request.headers['x-pando-signature'] as string | undefined;
+      const peerIdHeader = request.headers['x-pando-peerid'] as string | undefined;
+      const peerTimestamp = request.headers['x-pando-timestamp'] as string | undefined;
+      const peerPublicKey = request.headers['x-pando-publickey'] as string | undefined;
+
+      if (peerSignature && peerIdHeader && peerTimestamp) {
+        // Replay protection: reject timestamps older than 60 seconds
+        const ts = Number(peerTimestamp);
+        if (Number.isNaN(ts) || Math.abs(Date.now() - ts) > 60_000) {
+          return reply.code(401).send({ error: 'Peer timestamp expired or invalid', code: 'UNAUTHORIZED' });
+        }
+
+        // Resolve public key — try header first, then peers map, then capability registry
+        let publicKey: Uint8Array | undefined;
+
+        if (peerPublicKey) {
+          try {
+            publicKey = uint8ArrayFromString(peerPublicKey, 'base64');
+          } catch {}
+        }
+
+        if (!publicKey) {
+          const network = (this.node as any).network;
+          const peer = network?.peers?.get(peerIdHeader);
+          if (peer?.publicKey) {
+            publicKey = peer.publicKey;
+          }
+        }
+
+        if (!publicKey) {
+          const profiles: any[] = this.node.getNetworkCapabilityProfiles?.() ?? [];
+          const profile = profiles.find((p: any) => p.peerId === peerIdHeader);
+          if (profile?.publicKey) {
+            publicKey = profile.publicKey instanceof Uint8Array
+              ? profile.publicKey
+              : new Uint8Array(profile.publicKey);
+          }
+        }
+
+        if (publicKey) {
+          const rawBody = JSON.stringify(request.body ?? {});
+          const signedData = new TextEncoder().encode(rawBody + peerTimestamp);
+          const valid = await verifyEd25519(signedData, peerSignature, publicKey);
+          if (valid) {
+            return; // Valid P2P signature — allow through
+          }
+        }
+
+        return reply.code(401).send({ error: 'Invalid peer signature', code: 'UNAUTHORIZED' });
       }
+
+      // No valid auth method found
+      return reply.code(401).send({ error: 'Missing or invalid Authorization header', code: 'UNAUTHORIZED' });
     });
   }
 
