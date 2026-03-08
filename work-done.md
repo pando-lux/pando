@@ -166,6 +166,43 @@
 - **Fix**: Removed `engine_id` from INSERT statement
 - **File**: `packages/node/src/core/engine-adapter.ts:1642`
 
+#### 15. Two Laws Bypass on Thread Message Endpoint (CRITICAL)
+- **Root cause**: `POST /chat/threads/:id/message` had no `violatesTwoLaws()` check
+- **Fix**: Added Two Laws check + 10000 char message length limit
+- **File**: `packages/node/src/api/platform-api.ts:455`
+
+#### 16. Thread Ownership Not Validated (CRITICAL)
+- **Root cause**: `GET/DELETE/PATCH /chat/threads/:id` had no ownership check — any user could read/delete/modify any thread
+- **Fix**: Added userId ownership verification on all three endpoints
+- **File**: `packages/node/src/api/platform-api.ts:407,420,430`
+
+#### 17. Board Input Validation Gaps (MEDIUM)
+- **Root cause**: Board title/description/status/progress fields lacked type/length/enum validation
+- **Fix**: Title capped at 200 chars, description at 2000 chars, status enum validated, progress type-checked
+- **File**: `packages/node/src/api/core-api.ts:489-510`
+
+### Background Agent Audit Results
+
+#### Chat Flow Agent (10 findings)
+- **CRITICAL**: Thread ownership bypass (FIXED ↑)
+- **CRITICAL**: Two Laws bypass on thread messages (FIXED ↑)
+- **HIGH**: Race condition in persistMessage (read-modify-write without locking) — deferred, needs deeper architecture work
+- **MEDIUM**: No message length limit (FIXED ↑), balance shows wrong user, auto-create threads on non-existent ID
+
+#### P2P Security Agent (10 findings)
+- **CRITICAL**: Unsigned GossipSub messages accepted if signature field missing — deferred, needs protocol redesign
+- **CRITICAL**: Peer publicKey never populated (signature verification broken by design) — deferred
+- **HIGH**: Double-spend race in transaction processing — deferred, needs mutex
+- **MEDIUM**: No replay protection, no per-peer rate limiting, unverified project records, activity records
+
+#### Logic Audit Agent (14 findings)
+- **CRITICAL**: Two Laws on triggers (ALREADY FIXED before agent reported)
+- **HIGH**: Missing type checks on trigger messages, silent promise rejections
+- **MEDIUM**: Inconsistent query.limit bounds, no template ID type validation, no team creation field limits
+
+### Council Live Test Results
+- **7/7 PASSED** — task submitted, lead processed it to completion, agent messages verified, cost data accurate, inter-agent messaging works
+
 ### Commits Pushed
 5. `b1e85c00` — Fix nonexistent task update bug + Pipeline 7/8 E2E tests
 6. `e861b636` — Security: fix command injection in 5 git operation attack surfaces
@@ -173,16 +210,23 @@
 8. `98f4cd1c` — Security: require API token for team/council mutations (CRITICAL)
 9. `9eadb173` — Fix state table schema mismatch (engine_id column)
 10. `818e6626` — Security: validate commitHash in P2P upgrade paths
+11. `540f9b6d` — Security: thread ownership, Two Laws on thread messages, input validation
 
 ### Pending
 - [ ] PandoCode web UI testing (UI not running currently)
 - [ ] Phase 6.2+: Cross-node team migration
 - [ ] Phase 8: Gateway integration
+- [ ] P2P: Fix unsigned message acceptance (protocol design change)
+- [ ] P2P: Populate peer publicKey on connect (signature verification)
+- [ ] P2P: Add mutex on ledger transaction processing (double-spend)
+- [ ] Chat: Fix persistMessage race condition (needs architectural change)
 - [x] Fix: add model field to agent list endpoint
 - [x] Fix: add include_done query param to board endpoint
 - [x] Fix: updateTeamBoardTask nonexistent task returns 404
 - [x] Pipeline 7: Board Task CRUD E2E test
 - [x] Pipeline 8: Agent Spawn/Stop E2E test
-- [x] Security: command injection fixes (5 attack surfaces)
-- [x] Security: Two Laws on trigger endpoints
+- [x] Security: command injection fixes (5 attack surfaces + 4 upgrade paths)
+- [x] Security: Two Laws on trigger + thread message endpoints
 - [x] Security: auth on team/council mutations
+- [x] Security: thread ownership validation
+- [x] Security: input validation (board title/desc/status, message length)
