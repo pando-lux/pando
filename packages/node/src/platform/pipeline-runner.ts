@@ -518,7 +518,7 @@ export class PipelineRunner {
           qaResult = await this.qaRunner.runPageTests(affectedPages, { headless: false });
         } else {
           // No affected pages — run API health check as minimum
-          qaResult = await this.qaRunner.runApiTests(['/api/status']);
+          qaResult = await this.qaRunner.runApiTests(['/v1/status']);
         }
 
         testPassed = qaResult.success;

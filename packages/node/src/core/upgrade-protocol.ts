@@ -334,12 +334,10 @@ export class UpgradeProtocol {
       // Non-fatal — build might still succeed if deps didn't change
     }
 
-    // Step 6b: Build
+    // Step 6b: Build (with fallback to targeted tsc for EC2)
     console.log('[upgrade] Building...');
     try {
-      execSync('npm run build', {
-        cwd: repoDir, timeout: 300_000, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-      });
+      this.build();
     } catch (err: any) {
       const stderr = err.stderr?.toString()?.slice(-500) || err.message;
       console.error(`[upgrade] Build FAILED: ${stderr}`);
@@ -554,7 +552,7 @@ export class UpgradeProtocol {
         const result = deployManager.restoreBackup();
         if (result.success) {
           try {
-            execSync('npm run build', { cwd: this.repoDir, timeout: 180_000, stdio: 'pipe', windowsHide: true });
+            this.build(180_000);
             console.log('[upgrade-protocol] Rollback + rebuild successful.');
             return { success: true, message: `Rolled back from backup: ${result.message}` };
           } catch (err: any) {
@@ -570,7 +568,7 @@ export class UpgradeProtocol {
       } else {
         this.git('checkout HEAD -- packages/');
       }
-      execSync('npm run build', { cwd: this.repoDir, timeout: 180_000, stdio: 'pipe', windowsHide: true });
+      this.build(180_000);
       console.log('[upgrade-protocol] Git-based rollback successful.');
       return { success: true, message: 'Rolled back via git checkout.' };
     } catch (err: any) {
@@ -654,7 +652,7 @@ export class UpgradeProtocol {
           if (this.runningCommit !== 'unknown' && this.runningCommit !== this.git('rev-parse HEAD')) {
             console.log(`[upgrade] Catch-up: HEAD has ${commitHash.slice(0, 8)} but running commit is stale (${this.runningCommit.slice(0, 8)}) — rebuilding`);
             try {
-              execSync('npm run build', { cwd: this.repoDir, timeout: 180_000, stdio: 'pipe', windowsHide: true });
+              this.build(180_000);
               console.log('[upgrade] Rebuild complete after local commit — triggering safe restart');
               this.safeRestart(this.git('rev-parse HEAD'));
             } catch (buildErr: any) {
@@ -744,6 +742,22 @@ export class UpgradeProtocol {
       rollbackPlan: 'Restore from backup or git checkout HEAD -- packages/',
       riskLevel,
     };
+  }
+
+  /**
+   * Build the project — tries full monorepo build first, falls back to targeted tsc.
+   * EC2 nodes don't have @pando-code/core so `npm run build` fails on engine-adapter.ts.
+   */
+  private build(timeoutMs = 300_000): void {
+    try {
+      execSync('npm run build', {
+        cwd: this.repoDir, timeout: timeoutMs, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+      });
+    } catch {
+      execSync('npx tsc -p packages/node/tsconfig.json', {
+        cwd: this.repoDir, timeout: timeoutMs, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+      });
+    }
   }
 
   private git(cmd: string): string {

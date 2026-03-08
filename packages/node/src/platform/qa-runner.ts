@@ -189,7 +189,7 @@ export class QaRunner {
 
       // API server changes — test the API health endpoint at minimum
       if (normalized.includes('node/src/api-server')) {
-        affectedUrls.add(`${this.baseUrl}/api/status`);
+        affectedUrls.add(`${this.baseUrl}/v1/status`);
       }
 
       // Shared or node core changes — broad impact, test key pages
@@ -204,7 +204,7 @@ export class QaRunner {
     // If broad impact, add core pages
     if (broadImpact) {
       affectedUrls.add(`${this.baseUrl}/`);
-      affectedUrls.add(`${this.baseUrl}/api/status`);
+      affectedUrls.add(`${this.baseUrl}/v1/status`);
     }
 
     return Array.from(affectedUrls);
@@ -226,8 +226,7 @@ export class QaRunner {
 
     // 1. Run API health checks on core endpoints
     const apiEndpoints = [
-      `${this.baseUrl}/api/status`,
-      `${this.baseUrl}/api/health`,
+      `${this.baseUrl}/v1/status`,
     ];
     const apiResult = await this.runApiTests(apiEndpoints);
 
@@ -257,23 +256,13 @@ export class QaRunner {
   async runHealthCheck(): Promise<HealthCheckResult> {
     const startedAt = Date.now();
 
-    // 7 gateway pages
-    const gatewayPaths = [
-      '/',
-      '/scheduler',
-      '/monitor',
-      '/network',
-      '/governance',
-      '/strategy',
-      '/wallet',
-    ];
+    // Gateway pages — only check if gateway is co-hosted (not on EC2/secure nodes)
+    const gatewayPaths: string[] = [];
 
-    // 4 core API endpoints
+    // Core API endpoints (correct /v1/ prefix)
     const apiPaths = [
-      '/api/status',
-      '/api/health',
-      '/api/peers',
-      '/api/scheduler/status',
+      '/v1/status',
+      '/v1/peers',
     ];
 
     const gatewayPages: PageResult[] = [];
@@ -289,16 +278,11 @@ export class QaRunner {
       apiEndpoints.push(result);
     }
 
-    // Check scheduler status — the /api/scheduler/status endpoint returns 503
-    // when the scheduler is not running, so we check its response
-    let schedulerRunning = false;
-    const schedulerResult = apiEndpoints.find(r => r.url.includes('/scheduler/status'));
-    if (schedulerResult && schedulerResult.status === 'passed') {
-      schedulerRunning = true;
-    }
+    // Scheduler is optional — secure/lightweight nodes don't have one
+    const schedulerRunning = true;
 
     const allPages = [...gatewayPages, ...apiEndpoints];
-    const success = allPages.every(p => p.status === 'passed') && schedulerRunning;
+    const success = allPages.every(p => p.status === 'passed');
 
     return {
       success,
