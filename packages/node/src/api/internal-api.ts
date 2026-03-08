@@ -9,6 +9,7 @@
  */
 
 import { verify } from '@pando/identity';
+import { fromString as uint8ArrayFromString } from 'uint8arrays';
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -46,13 +47,27 @@ async function verifyPeerSignature(
     return { valid: false, error: 'Timestamp expired or invalid', code: 401 };
   }
 
-  // Resolve public key — try peers map first, then capability registry
+  // Resolve public key — try header first (self-declared), then peers map, then capability registry
   let publicKey: Uint8Array | undefined;
 
-  const peer = deps.network.peers.get(peerId);
-  if (peer?.publicKey) {
-    publicKey = peer.publicKey;
-  } else {
+  // 1. Public key from header (sender includes it for verification)
+  const publicKeyHeader = request.headers['x-pando-publickey'] as string | undefined;
+  if (publicKeyHeader) {
+    try {
+      publicKey = uint8ArrayFromString(publicKeyHeader, 'base64');
+    } catch {}
+  }
+
+  // 2. Peers map (connected libp2p peers)
+  if (!publicKey) {
+    const peer = deps.network.peers.get(peerId);
+    if (peer?.publicKey) {
+      publicKey = peer.publicKey;
+    }
+  }
+
+  // 3. Capability registry profiles
+  if (!publicKey) {
     const profiles = deps.capabilityRegistry.getAllProfiles();
     const profile = profiles.find((p: any) => p.peerId === peerId);
     if (profile?.publicKey) {

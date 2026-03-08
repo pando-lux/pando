@@ -1,4 +1,5 @@
 import { sign } from '@pando/identity';
+import { toString as uint8ArrayToString } from 'uint8arrays';
 
 export class HttpPeerError extends Error {
   constructor(message: string) {
@@ -56,6 +57,7 @@ export class HttpPeerClient {
       'X-Pando-Signature': signature,
       'X-Pando-PeerId': this.identity.peerId,
       'X-Pando-Timestamp': timestamp,
+      'X-Pando-PublicKey': uint8ArrayToString(this.identity.publicKey, 'base64'),
     };
 
     const url = `http://${endpoint.host}:${endpoint.port}${path}`;
