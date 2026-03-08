@@ -121,6 +121,8 @@ export class PandoNetwork {
   private peerVersions: Map<string, { protocolVersion: number; capabilities: string[] }> = new Map();
   // Phase 54.2: Data directory for known-peers.json persistence
   private dataDir: string;
+  // Tick counter for periodic discovery sweep
+  private reconnectTick = 0;
 
   constructor(identity: NodeIdentity, config: NodeConfig) {
     this.identity = identity;
@@ -378,28 +380,37 @@ export class PandoNetwork {
   }
 
   /**
-   * If we have no peers and bootstrap addresses are configured, try to reconnect.
-   * Phase 54.2: Also dials known peers from previous sessions.
+   * If we have no peers, aggressively reconnect to bootstrap + known peers.
+   * If we have some peers, periodically sweep known-peers.json for new nodes
+   * that joined since our last check (every ~30s).
    */
   private async checkAndReconnect(): Promise<void> {
     if (this.stopped || !this.node) return;
-    if (this.peers.size > 0) return;
+    this.reconnectTick++;
 
-    console.log('[reconnect] No peers — attempting to re-dial bootstrap + known peers in parallel...');
-    // Dial all bootstrap peers concurrently with timeout
-    const bootstrapDials = this.config.bootstrapPeers.map(async (addr) => {
-      try {
-        const ac = new AbortController();
-        const timer = setTimeout(() => ac.abort(), 5_000);
-        await this.node!.dial(multiaddr(addr), { signal: ac.signal });
-        clearTimeout(timer);
-        console.log(`[reconnect] Dialed bootstrap ${addr.slice(0, 40)}...`);
-      } catch {
-        // Bootstrap peer may be offline — that's ok
-      }
-    });
-    // Also try known peers in parallel
-    await Promise.allSettled([...bootstrapDials, this.dialKnownPeers()]);
+    if (this.peers.size === 0) {
+      console.log('[reconnect] No peers — attempting to re-dial bootstrap + known peers in parallel...');
+      const bootstrapDials = this.config.bootstrapPeers.map(async (addr) => {
+        try {
+          const ac = new AbortController();
+          const timer = setTimeout(() => ac.abort(), 5_000);
+          await this.node!.dial(multiaddr(addr), { signal: ac.signal });
+          clearTimeout(timer);
+          console.log(`[reconnect] Dialed bootstrap ${addr.slice(0, 40)}...`);
+        } catch {
+          // Bootstrap peer may be offline — that's ok
+        }
+      });
+      await Promise.allSettled([...bootstrapDials, this.dialKnownPeers()]);
+      return;
+    }
+
+    // Periodic discovery sweep: every 30s (10s interval × 3), try dialing
+    // any known peers we're not yet connected to. This catches new nodes
+    // that were added to known-peers via peer exchange but not yet dialed.
+    if (this.reconnectTick % 3 === 0) {
+      this.dialKnownPeers().catch(() => {});
+    }
   }
 
   /**

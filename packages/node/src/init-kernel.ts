@@ -589,7 +589,7 @@ export async function initKernel(node: any): Promise<void> {
       }, 2_000);
 
       // Peer exchange: share our peer list so new nodes can form a full mesh.
-      // Delayed 1s to let the connection settle before sending.
+      // Delayed 500ms to let the connection settle before sending.
       setTimeout(async () => {
         try {
           if (!node.network) return;
@@ -604,7 +604,7 @@ export async function initKernel(node: any): Promise<void> {
           });
           console.log(`[peer-exchange] Shared ${peerAddrs.length} peer(s) with ${peerId.slice(0, 12)}`);
         } catch {}
-      }, 1_000);
+      }, 500);
 
       // Phase 69: Auto-wrap removed — credentials in MongoDB, not per-node.
 
@@ -803,9 +803,10 @@ export async function initKernel(node: any): Promise<void> {
         node.governance.requestSync(randomPeer.peerId).catch(() => {});
       }, 5 * 60 * 1000);
 
-      // Delayed peer re-exchange: 30s + 90s after boot, share full peer list with all peers.
-      // The per-connection exchange (5s) may miss peers that haven't connected yet.
-      for (const delay of [30_000, 90_000]) {
+      // Peer discovery sweep: share full peer list with all connected peers.
+      // Early sweeps (10s, 30s) catch peers that connected after initial exchange.
+      // Then periodic sweep every 60s to discover new nodes joining the network.
+      for (const delay of [10_000, 30_000]) {
         setTimeout(async () => {
           if (!node.network) return;
           const peers = node.network.getPeers();
@@ -826,6 +827,26 @@ export async function initKernel(node: any): Promise<void> {
           console.log(`[peer-exchange] Re-shared peers with ${peers.length} connected peer(s)`);
         }, delay);
       }
+
+      // Periodic peer exchange: every 60s, share peer lists to discover new nodes
+      setInterval(async () => {
+        if (!node.network) return;
+        const peers = node.network.getPeers();
+        const peerAddrs = await node.network.getConnectedPeerAddresses();
+        if (peers.length === 0 || peerAddrs.length === 0) return;
+        for (const peer of peers) {
+          const toShare = peerAddrs.filter((p: any) => p.peerId !== peer.peerId);
+          if (toShare.length === 0) continue;
+          try {
+            await node.network.sendMessage(peer.peerId, {
+              type: MessageType.PEER_EXCHANGE,
+              from: node.getIdentity()!.peerId,
+              timestamp: Date.now(),
+              payload: { peers: toShare },
+            });
+          } catch {}
+        }
+      }, 60_000);
 
       // Log if this is a post-upgrade restart
       const lastUpgradeFile = join(dataDir, 'last-upgrade.json');
