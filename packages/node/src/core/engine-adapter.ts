@@ -16,7 +16,7 @@
  */
 
 import { join as pathJoin } from 'node:path';
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { ResourceRegistry } from '../platform/resource-registry.js';
@@ -334,7 +334,8 @@ async function createManageTeamTool(
 
       switch (args.action) {
         case 'templates': {
-          const templates = BUILT_IN_TEMPLATES.map(t => ({
+          const allTemplates = adapter.getTemplates();
+          const templates = allTemplates.map(t => ({
             id: t.id, displayName: t.displayName, description: t.description, role: t.role,
           }));
           return ok({ templates });
@@ -346,7 +347,8 @@ async function createManageTeamTool(
         }
 
         case 'spawn': {
-          const template = args.template ? BUILT_IN_TEMPLATES.find((t: AgentTemplate) => t.id === args.template) : null;
+          const allTemplates = adapter.getTemplates();
+          const template = args.template ? allTemplates.find((t: AgentTemplate) => t.id === args.template) : null;
           let prompt = '';
           let role = 'worker';
           let model = 'claude-code';
@@ -491,6 +493,44 @@ export const BUILT_IN_TEMPLATES: AgentTemplate[] = [
     tickIntervalMs: 0,
   },
 ];
+
+/**
+ * Load custom agent templates from disk.
+ * Files: ~/.pando/teams/templates/*.json
+ * Each file is a single AgentTemplate JSON object.
+ */
+function loadCustomTemplates(): AgentTemplate[] {
+  try {
+    const dir = pathJoin(homedir(), '.pando', 'teams', 'templates');
+
+    if (!existsSync(dir)) return [];
+
+    const files = readdirSync(dir).filter((f: string) => f.endsWith('.json'));
+    const templates: AgentTemplate[] = [];
+
+    for (const file of files) {
+      try {
+        const content = readFileSync(pathJoin(dir, file), 'utf-8');
+        const parsed = JSON.parse(content);
+        // Validate required fields
+        if (parsed.id && parsed.role && parsed.promptSkeleton) {
+          templates.push({
+            id: parsed.id,
+            displayName: parsed.displayName || parsed.id,
+            description: parsed.description || '',
+            role: parsed.role,
+            promptSkeleton: parsed.promptSkeleton,
+            model: parsed.model || 'claude-code',
+            tickIntervalMs: parsed.tickIntervalMs || 0,
+          });
+        }
+      } catch { /* skip invalid files */ }
+    }
+    return templates;
+  } catch {
+    return [];
+  }
+}
 
 // ─── Seed Configs (pando-infra team prompts — parameterized) ──────────
 
@@ -972,9 +1012,13 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     return this.scheduler?.getAll() ?? [];
   }
 
-  /** Get available agent templates (built-in). */
+  /** Get available agent templates (built-in + custom from disk). */
   getTemplates(): AgentTemplate[] {
-    return BUILT_IN_TEMPLATES;
+    const custom = loadCustomTemplates();
+    // Custom templates override built-in if same ID
+    const customIds = new Set(custom.map(t => t.id));
+    const filtered = BUILT_IN_TEMPLATES.filter(t => !customIds.has(t.id));
+    return [...filtered, ...custom];
   }
 
   /**
@@ -1671,6 +1715,54 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   /** Get list of active team IDs. */
   getActiveTeamIds(): string[] {
     return [...this.activeTeams.keys()];
+  }
+
+  /** Get aggregate cost for a team from its PandoCode DB. */
+  getTeamCost(teamId: string): { totalTokens: number; totalCostLux: number; byAgent: Record<string, number> } {
+    const teamData = this.activeTeams.get(teamId);
+    if (!teamData?.dbPath || !this.Database) return { totalTokens: 0, totalCostLux: 0, byAgent: {} };
+    try {
+      const db = new this.Database(teamData.dbPath);
+      // Check if budget_usage table exists before querying
+      const tableCheck = db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='budget_usage'`
+      ).get();
+      if (!tableCheck) {
+        db.close();
+        return { totalTokens: 0, totalCostLux: 0, byAgent: {} };
+      }
+      // Discover columns dynamically — schema may vary across PandoCode versions
+      const cols = db.prepare(`PRAGMA table_info(budget_usage)`).all() as { name: string }[];
+      const colNames = new Set(cols.map(c => c.name));
+      const hasAgentId = colNames.has('agent_id');
+      const hasInputTokens = colNames.has('input_tokens');
+      const hasOutputTokens = colNames.has('output_tokens');
+      const hasCostLux = colNames.has('cost_lux');
+      const hasTokens = colNames.has('tokens');
+
+      // Build a safe query based on available columns
+      const agentCol = hasAgentId ? 'agent_id' : "'unknown'";
+      const tokenExpr = hasInputTokens && hasOutputTokens
+        ? 'SUM(input_tokens + output_tokens)'
+        : hasTokens ? 'SUM(tokens)' : '0';
+      const costExpr = hasCostLux ? 'SUM(cost_lux)' : '0';
+
+      const rows = db.prepare(
+        `SELECT ${agentCol} as agent_id, ${tokenExpr} as tokens, ${costExpr} as cost FROM budget_usage GROUP BY ${agentCol}`
+      ).all() as { agent_id: string; tokens: number; cost: number }[];
+      db.close();
+
+      const byAgent: Record<string, number> = {};
+      let totalTokens = 0, totalCostLux = 0;
+      for (const row of rows) {
+        byAgent[row.agent_id || 'unknown'] = row.cost || 0;
+        totalTokens += row.tokens || 0;
+        totalCostLux += row.cost || 0;
+      }
+      return { totalTokens, totalCostLux, byAgent };
+    } catch {
+      return { totalTokens: 0, totalCostLux: 0, byAgent: {} };
+    }
   }
 
   /**

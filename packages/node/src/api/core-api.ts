@@ -441,11 +441,23 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
 
     // ── Team API ──────────────────────────────────────────────────────────
 
-    // GET /teams — List all teams from registry
+    // GET /teams — List all teams from registry, enriched with active status
     fastify.get('/teams', async () => {
       const registry = node.getTeamRegistry();
+      const adapter = node.getEngineAdapter();
       if (!registry) return { teams: [] };
-      return { teams: registry.listTeams() };
+      const teams = registry.listTeams().map((t: any) => ({
+        ...t,
+        running: adapter?.isTeamActive(t.id) ?? false,
+      }));
+      // Also include any active teams not in the registry (edge case: started without registration)
+      const activeIds = adapter?.getActiveTeamIds?.() ?? [];
+      for (const activeId of activeIds) {
+        if (!teams.some((t: any) => t.id === activeId)) {
+          teams.push({ id: activeId, running: true, displayName: activeId, status: 'active' });
+        }
+      }
+      return { teams };
     });
 
     // GET /teams/:teamId — Team config + status
@@ -619,6 +631,47 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       return { status: 'stopped' };
     });
 
+    // GET /teams/:teamId/agents — List agents with details
+    fastify.get('/teams/:teamId/agents', async (request: any, reply: any) => {
+      try {
+        const teamId = (request.params as any).teamId;
+        const adapter = node.getEngineAdapter();
+        const agents = adapter?.getTeamAgents?.(teamId) ?? [];
+        return { teamId, agents };
+      } catch (err: any) {
+        return reply.status(500).send({ error: err.message });
+      }
+    });
+
+    // POST /teams/:teamId/agents/:agentId/trigger — Trigger a specific agent manually
+    fastify.post('/teams/:teamId/agents/:agentId/trigger', async (request: any, reply: any) => {
+      try {
+        const { teamId, agentId } = request.params as any;
+        const adapter = node.getEngineAdapter();
+        if (!adapter?.isTeamActive(teamId)) {
+          return reply.status(404).send({ error: 'Team not running' });
+        }
+        const message = (request.body as any)?.message || 'Manual trigger: check your inbox and process board tasks.';
+        // Run in background — return immediately
+        adapter.triggerTeamAgentBackground(teamId, agentId, message);
+        return { status: 'triggered', teamId, agentId };
+      } catch (err: any) {
+        return reply.status(500).send({ error: err.message });
+      }
+    });
+
+    // GET /teams/:teamId/cost — Team cost summary from PandoCode budget_usage table
+    fastify.get('/teams/:teamId/cost', async (request: any, reply: any) => {
+      try {
+        const teamId = (request.params as any).teamId;
+        const adapter = node.getEngineAdapter();
+        const cost = adapter?.getTeamCost?.(teamId) ?? { totalTokens: 0, totalCostLux: 0, byAgent: {} };
+        return { teamId, ...cost };
+      } catch (err: any) {
+        return reply.status(500).send({ error: err.message });
+      }
+    });
+
     // ── Agent Templates ──────────────────────────────────────────────────
     fastify.get('/templates', async (_request: any, reply: any) => {
       try {
@@ -627,6 +680,71 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         return { templates };
       } catch (err: any) {
         return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // POST /templates — create custom template
+    fastify.post('/templates', async (request: any, reply: any) => {
+      try {
+        const body = request.body;
+        if (!body?.id || !body?.role || !body?.promptSkeleton) {
+          return reply.status(400).send({ error: 'Required: id, role, promptSkeleton' });
+        }
+        // Validate ID is safe for filesystem
+        if (!/^[a-zA-Z0-9_-]+$/.test(body.id)) {
+          return reply.status(400).send({ error: 'Template ID must be alphanumeric with dashes/underscores' });
+        }
+        // Don't allow overwriting built-in templates
+        const builtIn = ['worker', 'builder', 'tester', 'observer', 'reviewer'];
+        if (builtIn.includes(body.id)) {
+          return reply.status(400).send({ error: 'Cannot overwrite built-in template' });
+        }
+
+        const { mkdirSync, writeFileSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const { homedir } = await import('node:os');
+        const dir = join(homedir(), '.pando', 'teams', 'templates');
+        mkdirSync(dir, { recursive: true });
+
+        const template = {
+          id: body.id,
+          displayName: body.displayName || body.id,
+          description: body.description || '',
+          role: body.role,
+          promptSkeleton: body.promptSkeleton,
+          model: body.model || 'claude-code',
+          tickIntervalMs: body.tickIntervalMs || 0,
+        };
+
+        writeFileSync(join(dir, `${body.id}.json`), JSON.stringify(template, null, 2));
+        return { status: 'created', template };
+      } catch (err: any) {
+        return reply.status(500).send({ error: err.message });
+      }
+    });
+
+    // DELETE /templates/:id — delete custom template
+    fastify.delete('/templates/:id', async (request: any, reply: any) => {
+      try {
+        const id = (request.params as any).id;
+        const builtIn = ['worker', 'builder', 'tester', 'observer', 'reviewer'];
+        if (builtIn.includes(id)) {
+          return reply.status(400).send({ error: 'Cannot delete built-in template' });
+        }
+
+        const { existsSync, unlinkSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const { homedir } = await import('node:os');
+        const filePath = join(homedir(), '.pando', 'teams', 'templates', `${id}.json`);
+
+        if (!existsSync(filePath)) {
+          return reply.status(404).send({ error: 'Template not found' });
+        }
+
+        unlinkSync(filePath);
+        return { status: 'deleted', id };
+      } catch (err: any) {
+        return reply.status(500).send({ error: err.message });
       }
     });
 
