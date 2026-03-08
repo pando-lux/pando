@@ -3,7 +3,7 @@
 //   type: module
 //   blueprint: NODE_CORE
 //   status: active
-//   auto-upgrade-verified: 2026-03-08
+//   auto-upgrade-verified: 2026-03-08 (EC2 + Windows)
 //   description: "Main PandoNode class that wires together all subsystems (kernel, core, platform layers), manages startup/shutdown lifecycle, and exposes getters for every subsystem."
 //   depends_on: [PandoNetwork, PandoLedger, ApiServer, LedgerSync, GovernanceSync, Orchestrator, Scheduler, HealthMonitor, Guardrails, EmissionWitness, SecurityMonitor, CapabilityRegistry, ResourceRegistry, StorageBackend]
 //   @gotcha("PandoNode is a GOD OBJECT with 50+ private fields — each subsystem is nullable and initialized conditionally during start(). Always null-check before use.")
