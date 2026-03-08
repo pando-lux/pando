@@ -292,6 +292,34 @@ For Claude Code agents, ALL operations must be done via `curl` to the node's HTT
 - Never reference PandoCode tools (manage_tasks, send_message) in Claude Code agent prompts. Use HTTP API curl commands instead.
 - The `manage_team` PandoCode tool is kept for API models but also has HTTP API equivalents for Claude Code.
 
+#### 3.2.11 PandoCode Web UI — Network Teams (Phase 4+5 COMPLETE)
+
+**Location:** `packages/web/src/views/NetworkTeamsView.tsx` in pando-code repo
+
+The pando-code web UI (port 4873) has a "Network" tab (sidebar "N" icon) that shows teams managed by pando-node:
+
+**Phase 4 — Network Teams Dashboard:**
+- Fetches teams from pando-node via `GET /v1/teams` (CORS enabled, no proxy needed)
+- Team cards: status, agent count, task count, governance badge, Lux cost
+- Expandable: agents list, board tasks (max 10), cost breakdown
+- Auto-refresh every 30s
+- "Not connected" state when no pando-node linked
+
+**Phase 5 — Agent Detail Panel:**
+- Clickable agent rows expand to show detail panel
+- Agent conversation history: `GET /v1/teams/:teamId/agents/:agentId/messages?limit=20`
+- Per-agent cost breakdown (Lux + tokens) from cost data
+- Model badge (purple pill) and status indicator on each agent row
+- Messages fetched on-demand (role-colored: blue=assistant, green=user)
+
+**Network linking detection:** PandoCode checks for `PANDO_PROJECT.json` in project dir or `~/.pando/projects/`. Config exposes `{ linked, nodeUrl, nodeId, projectId }` via `GET /v1/network`. The web UI reads nodeUrl and fetches directly from pando-node.
+
+**Key files (pando-code repo):**
+- `packages/web/src/views/NetworkTeamsView.tsx` — main view (507+ lines)
+- `packages/web/src/api.ts` — `fetchFromNode()`, `nodeTeams()`, `nodeAgentMessages()`, etc.
+- `packages/web/src/components/Sidebar.tsx` — "network" nav item
+- `packages/web/src/App.tsx` — route handler
+
 ### 3.3 @pando/tests (PHASE 4 COMPLETE)
 
 **Location:** `packages/tests/` in pando/node monorepo

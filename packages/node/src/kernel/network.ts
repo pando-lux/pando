@@ -218,19 +218,34 @@ export class PandoNetwork {
     const toDial = known.filter(p => !this.peers.has(p.peerId));
     if (toDial.length === 0) return;
     console.log(`[known-peers] Dialing ${toDial.length} known peers in parallel...`);
-    // Dial all known peers concurrently with a per-peer timeout
+    // Dial all known peers concurrently — race all addresses per peer for speed
     await Promise.allSettled(toDial.map(async (peer) => {
-      for (const addr of peer.addrs) {
+      if (peer.addrs.length === 1) {
+        // Single address: just dial it
         try {
           const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 5_000);
-          await this.node!.dial(multiaddr(addr), { signal: ac.signal });
+          const timer = setTimeout(() => ac.abort(), 3_000);
+          await this.node!.dial(multiaddr(peer.addrs[0]), { signal: ac.signal });
           clearTimeout(timer);
           console.log(`[known-peers] Connected to ${peer.peerId.slice(0, 16)}...`);
-          return; // connected via one addr, skip the rest
         } catch {
           // addr may be stale or timed out
         }
+        return;
+      }
+      // Multiple addresses: race them all — first success wins
+      const ac = new AbortController();
+      const timer = setTimeout(() => ac.abort(), 3_000);
+      try {
+        await Promise.any(peer.addrs.map(async (addr) => {
+          const conn = await this.node!.dial(multiaddr(addr), { signal: ac.signal });
+          console.log(`[known-peers] Connected to ${peer.peerId.slice(0, 16)}...`);
+          return conn;
+        }));
+      } catch {
+        // All addresses failed
+      } finally {
+        clearTimeout(timer);
       }
     }));
   }
@@ -370,6 +385,10 @@ export class PandoNetwork {
     // Phase 54.2: Dial known peers from previous sessions
     this.dialKnownPeers().catch(() => {});
 
+    // Early discovery: re-sweep known peers 2s after start (catches peers
+    // that weren't ready during the initial dialKnownPeers call)
+    setTimeout(() => this.dialKnownPeers().catch(() => {}), 2_000);
+
     // Auto-reconnect: if peer count drops to 0, re-dial bootstrap peers + known peers
     if (this.config.bootstrapPeers.length > 0) {
       this.reconnectTimer = setInterval(() => this.checkAndReconnect(), 10_000);
@@ -382,7 +401,7 @@ export class PandoNetwork {
   /**
    * If we have no peers, aggressively reconnect to bootstrap + known peers.
    * If we have some peers, periodically sweep known-peers.json for new nodes
-   * that joined since our last check (every ~30s).
+   * that joined since our last check (every ~10s).
    */
   private async checkAndReconnect(): Promise<void> {
     if (this.stopped || !this.node) return;
@@ -393,7 +412,7 @@ export class PandoNetwork {
       const bootstrapDials = this.config.bootstrapPeers.map(async (addr) => {
         try {
           const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 5_000);
+          const timer = setTimeout(() => ac.abort(), 3_000);
           await this.node!.dial(multiaddr(addr), { signal: ac.signal });
           clearTimeout(timer);
           console.log(`[reconnect] Dialed bootstrap ${addr.slice(0, 40)}...`);
@@ -405,12 +424,9 @@ export class PandoNetwork {
       return;
     }
 
-    // Periodic discovery sweep: every 20s (10s interval × 2), try dialing
-    // any known peers we're not yet connected to. This catches new nodes
-    // that were added to known-peers via peer exchange but not yet dialed.
-    if (this.reconnectTick % 2 === 0) {
-      this.dialKnownPeers().catch(() => {});
-    }
+    // Periodic discovery sweep: every 10s, try dialing any known peers
+    // we're not yet connected to. Catches new nodes added via peer exchange.
+    this.dialKnownPeers().catch(() => {});
   }
 
   /**

@@ -50,11 +50,13 @@ are exposed as HTTP API endpoints. Claude Code agents use curl. See BIBLE.md Sec
 - Board task CRUD (create, update via PATCH) ✅
 - `manage_team` PandoCode tool: NOT usable with Claude Code CLI (by design — use HTTP API instead) ✅
 
+- **Phase 4** (pando-code 0120cd2): Network Teams view — dashboard, team cards, agents, board, cost
+- **Phase 5** (pando-code 8c820cd, pando-node f8d0c5dd): Agent detail panel — messages, per-agent cost, model badges
+
 ### Still TODO
-- **Phase 4**: PandoCode web UI network projects (pando-code repo) ← NEXT
-- **Phase 5**: Agent visibility + cost in web UI (pando-code repo)
 - **Phase 6.2+**: Cross-node migration, graceful degradation
 - **Phase 8**: Gateway integration (full dashboard)
+- **E2E**: Playwright headed test run to verify all flows work as a user
 
 ---
 
