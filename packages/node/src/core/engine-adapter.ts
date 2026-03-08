@@ -1867,6 +1867,36 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   }
 
   /**
+   * Get recent messages from a team agent's sessions.
+   * Queries the team's .pando-code.db for messages belonging to sessions
+   * whose title contains the agentId (e.g. "pando-infra: lead").
+   */
+  getTeamAgentMessages(teamId: string, agentId: string, limit = 20): { role: string; content: string; createdAt: string }[] {
+    const teamData = this.activeTeams.get(teamId);
+    if (!teamData?.dbPath || !this.Database) return [];
+    try {
+      const db = new this.Database(teamData.dbPath);
+      // Check if messages and sessions tables exist
+      const hasMsgs = db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='messages'`
+      ).get();
+      const hasSessions = db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'`
+      ).get();
+      if (!hasMsgs || !hasSessions) { db.close(); return []; }
+
+      const rows = db.prepare(
+        `SELECT m.role, substr(m.content, 1, 500) as content, m.created_at
+         FROM messages m
+         WHERE m.session_id IN (SELECT id FROM sessions WHERE title LIKE ?)
+         ORDER BY m.created_at DESC LIMIT ?`
+      ).all(`%${agentId}%`, limit) as { role: string; content: string; created_at: string }[];
+      db.close();
+      return rows.map(r => ({ role: r.role, content: r.content, createdAt: r.created_at }));
+    } catch { return []; }
+  }
+
+  /**
    * On-demand team startup. Called when a request arrives for a team
    * that isn't running yet. Starts team with given agents.
    */

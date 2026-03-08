@@ -643,6 +643,20 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       }
     });
 
+    // GET /teams/:teamId/agents/:agentId/messages — Agent conversation history
+    fastify.get('/teams/:teamId/agents/:agentId/messages', async (request: any, reply: any) => {
+      try {
+        const { teamId, agentId } = request.params as any;
+        const limit = Math.min(parseInt((request.query as any)?.limit || '20', 10) || 20, 100);
+        const adapter = node.getEngineAdapter();
+        if (!adapter?.available) return { messages: [] };
+        const messages = adapter.getTeamAgentMessages(teamId, agentId, limit);
+        return { messages };
+      } catch (err: any) {
+        return reply.status(500).send({ error: err.message });
+      }
+    });
+
     // POST /teams/:teamId/message — Send a message between agents in a team
     fastify.post('/teams/:teamId/message', async (request: any, reply: any) => {
       try {
