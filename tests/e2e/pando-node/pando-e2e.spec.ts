@@ -653,3 +653,109 @@ test('Pipeline 4: User request → build → deploy → marketplace → update',
 
   console.log(`[pipeline4] PASS: User request → build → deploy → marketplace → update pipeline tested`);
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PIPELINE 5: Template System
+// list built-ins → create custom → verify → reject overwrite → delete →
+// reject built-in delete
+// ═══════════════════════════════════════════════════════════════════════════
+
+test('Pipeline 5: Template API — list, create, delete', async () => {
+  // ── Step 1: GET /templates — should return built-in templates ──
+  const listRes = await apiGet('/templates', token);
+  expect(listRes.ok).toBe(true);
+  const { templates } = await listRes.json() as any;
+  expect(templates.length).toBeGreaterThanOrEqual(5); // 5 built-in
+  const workerTemplate = templates.find((t: any) => t.id === 'worker');
+  expect(workerTemplate).toBeTruthy();
+  expect(workerTemplate.role).toBe('worker');
+  console.log(`[pipeline5] Listed: ${templates.length} templates (${templates.map((t: any) => t.id).join(', ')})`);
+
+  // ── Step 2: POST /templates — create custom template ──
+  const createRes = await apiPost('/templates', token, {
+    id: 'e2e-test-template',
+    role: 'worker',
+    promptSkeleton: 'You are an E2E test agent.',
+    displayName: 'E2E Test Agent',
+    description: 'Created by E2E test',
+  });
+  expect(createRes.ok).toBe(true);
+  const created = await createRes.json() as any;
+  expect(created.status).toBe('created');
+  console.log(`[pipeline5] Created: ${created.template.id}`);
+
+  // ── Step 3: GET /templates — should now include custom ──
+  const list2Res = await apiGet('/templates', token);
+  const { templates: t2 } = await list2Res.json() as any;
+  expect(t2.find((t: any) => t.id === 'e2e-test-template')).toBeTruthy();
+  console.log(`[pipeline5] After create: ${t2.length} templates`);
+
+  // ── Step 4: POST /templates — reject overwriting built-in ──
+  const rejectRes = await apiPost('/templates', token, {
+    id: 'worker',
+    role: 'worker',
+    promptSkeleton: 'hacked',
+  });
+  expect(rejectRes.ok).toBe(false);
+  console.log(`[pipeline5] Built-in overwrite rejected: ${rejectRes.status}`);
+
+  // ── Step 5: DELETE /templates/e2e-test-template — cleanup ──
+  const deleteRes = await apiDelete('/templates/e2e-test-template', token);
+  expect(deleteRes.ok).toBe(true);
+  console.log(`[pipeline5] Deleted: e2e-test-template`);
+
+  // ── Step 6: DELETE built-in should fail ──
+  const rejectDel = await apiDelete('/templates/worker', token);
+  expect(rejectDel.ok).toBe(false);
+  console.log(`[pipeline5] Built-in delete rejected: ${rejectDel.status}`);
+
+  console.log('[pipeline5] PASS: Template CRUD lifecycle complete');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PIPELINE 6: Team Status & Tasks API
+// list teams → status → tasks → agents → cost
+// ═══════════════════════════════════════════════════════════════════════════
+
+test('Pipeline 6: Team API — status, tasks, agents, cost', async () => {
+  // ── Step 1: GET /teams — list teams ──
+  const teamsRes = await apiGet('/teams', token);
+  expect(teamsRes.ok).toBe(true);
+  const teamsData = await teamsRes.json() as any;
+  const teams = teamsData.teams || teamsData;
+  console.log(`[pipeline6] Listed: ${Array.isArray(teams) ? teams.length : 'N/A'} teams`);
+
+  // If teams exist, test status/tasks/agents/cost on the first one
+  if (Array.isArray(teams) && teams.length > 0) {
+    const teamId = teams[0].id || teams[0].teamId || 'pando-infra';
+
+    // ── Step 2: GET /teams/:id — team status ──
+    const statusRes = await apiGet(`/teams/${teamId}`, token);
+    if (statusRes.ok) {
+      const status = await statusRes.json() as any;
+      console.log(`[pipeline6] Status for ${teamId}: running=${status.running}, status=${status.status}`);
+    } else {
+      console.log(`[pipeline6] Status for ${teamId}: ${statusRes.status} (team may not be running)`);
+    }
+
+    // ── Step 3: GET /teams/:id/tasks ──
+    const tasksRes = await apiGet(`/teams/${teamId}/tasks`, token);
+    expect(tasksRes.ok).toBe(true);
+    const tasksData = await tasksRes.json() as any;
+    console.log(`[pipeline6] Tasks for ${teamId}: ${tasksData.tasks?.length || 0} pending`);
+
+    // ── Step 4: GET /teams/:id/agents ──
+    const agentsRes = await apiGet(`/teams/${teamId}/agents`, token);
+    expect(agentsRes.ok).toBe(true);
+    const agentsData = await agentsRes.json() as any;
+    console.log(`[pipeline6] Agents for ${teamId}: ${agentsData.agents?.length || 0} agents`);
+
+    // ── Step 5: GET /teams/:id/cost ──
+    const costRes = await apiGet(`/teams/${teamId}/cost`, token);
+    expect(costRes.ok).toBe(true);
+    const costData = await costRes.json() as any;
+    console.log(`[pipeline6] Cost for ${teamId}: ${costData.totalCostLux || 0} Lux, ${costData.totalTokens || 0} tokens`);
+  }
+
+  console.log('[pipeline6] PASS: Team API lifecycle complete');
+});

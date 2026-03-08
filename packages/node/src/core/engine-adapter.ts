@@ -1381,16 +1381,44 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
     const intervals: any[] = [];
 
+    // Check for saved Claude CLI session IDs (for resume on restart)
+    const savedSessions = new Map<string, string>();
+    if (this.Database) {
+      try {
+        const db = new this.Database(teamDbPath);
+        // Ensure state table exists
+        db.prepare(`CREATE TABLE IF NOT EXISTS state (
+          key TEXT PRIMARY KEY,
+          value TEXT,
+          engine_id TEXT,
+          updated_at TEXT
+        )`).run();
+        const rows = db.prepare(
+          `SELECT key, value FROM state WHERE key LIKE 'cli-session:%'`
+        ).all() as { key: string; value: string }[];
+        for (const row of rows) {
+          const agentId = row.key.replace('cli-session:', '');
+          savedSessions.set(agentId, row.value);
+        }
+        db.close();
+        if (savedSessions.size > 0) {
+          console.log(`[team:${teamId}] Found ${savedSessions.size} saved session(s) — will attempt resume`);
+        }
+      } catch { /* ok — fresh start */ }
+    }
+
     // Create one engine per agent with shared DB
     for (const agent of agents) {
       const engineId = `${teamId}:${agent.id}`;
       const isLead = agent.role === 'lead';
+      const savedSession = savedSessions.get(agent.id);
       const engine = await this.pool.getOrCreate(engineId, {
         projectPath: isLead ? nodeRepoRoot : teamDir,
         dbPath: teamDbPath,
         role: agent.role,
         skipKnowledgeSync: true,
         ...(agent.model ? { model: agent.model } : {}),
+        ...(savedSession ? { claudeSessionId: savedSession } : {}),
       });
 
       // Log which model was actually resolved for this agent
@@ -1400,6 +1428,22 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       // CRITICAL: Start session BEFORE re-registering tools
       if (!engine.getSessionId()) {
         await engine.startSession(`${teamId}: ${agent.id}`);
+      }
+
+      // Save Claude CLI session ID for persistence across restarts
+      if (engine.getCliSessionId?.() && this.Database) {
+        try {
+          const db = new this.Database(teamDbPath);
+          db.prepare(
+            `INSERT OR REPLACE INTO state (key, value, engine_id, updated_at)
+             VALUES (?, ?, ?, datetime('now'))`
+          ).run(
+            `cli-session:${agent.id}`,
+            engine.getCliSessionId(),
+            engineId,
+          );
+          db.close();
+        } catch { /* state table may not exist yet */ }
       }
 
       // Re-register tools with correct agent IDs for message routing
@@ -1564,6 +1608,22 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     // Start session
     if (!engine.getSessionId()) {
       await engine.startSession(`${teamId}: ${agentConfig.id}`);
+    }
+
+    // Save Claude CLI session ID for persistence across restarts
+    if (engine.getCliSessionId?.() && this.Database) {
+      try {
+        const db = new this.Database(teamData.dbPath);
+        db.prepare(
+          `INSERT OR REPLACE INTO state (key, value, engine_id, updated_at)
+           VALUES (?, ?, ?, datetime('now'))`
+        ).run(
+          `cli-session:${agentConfig.id}`,
+          engine.getCliSessionId(),
+          engineId,
+        );
+        db.close();
+      } catch { /* state table may not exist yet */ }
     }
 
     // Re-register tools with correct agent ID
