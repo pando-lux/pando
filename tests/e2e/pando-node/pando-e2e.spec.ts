@@ -412,6 +412,7 @@ test('Pipeline 2: Governance upgrade lifecycle', async () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 test('Pipeline 3: WebSocket app deployment lifecycle', async () => {
+  test.setTimeout(120_000); // Deploy may forward to EC2 peers
   const WS_ID = `e2e-ws-${Date.now()}`;
 
   // ── Step 1: Register as Tier 2 (WebSocket = server process) ──
