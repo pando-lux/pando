@@ -1,5 +1,5 @@
 /**
- * Upgrade Protocol — Phase 82: Simple Git Pull + Hash Verification (E2E verified 2026-02-28)
+ * Upgrade Protocol — Git Pull + Hash Verification + Build Fallback (E2E verified 2026-03-08)
  *
  * Governance approves upgrade → broadcasts commit hash via GossipSub →
  * all nodes: git pull → verify hash → build → restart. That's it.
