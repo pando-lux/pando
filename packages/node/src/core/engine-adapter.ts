@@ -1038,11 +1038,12 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   }
 
   /**
-   * Get pending/in_progress tasks from a team's board.
+   * Get tasks from a team's board.
+   * @param includeDone If true, also returns 'done' tasks.
    */
-  getTeamBoard(teamId: string): any[] {
+  getTeamBoard(teamId: string, includeDone = false): any[] {
     const teamData = this.activeTeams.get(teamId);
-    return this.getBoardTasks(teamData?.dbPath ?? null);
+    return this.getBoardTasks(teamData?.dbPath ?? null, includeDone);
   }
 
   /**
@@ -1193,13 +1194,16 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   }
 
   /** Read board tasks from any PandoCode SQLite DB. */
-  private getBoardTasks(dbPath: string | null): any[] {
+  private getBoardTasks(dbPath: string | null, includeDone = false): any[] {
     if (!dbPath || !this.Database) return [];
     try {
       const db = new this.Database(dbPath);
+      const statusFilter = includeDone
+        ? `status IN ('pending', 'in_progress', 'in-progress', 'done')`
+        : `status IN ('pending', 'in_progress', 'in-progress')`;
       const tasks = db.prepare(
-        `SELECT id, title, status, created_at, progress FROM board_tasks
-         WHERE status IN ('pending', 'in_progress', 'in-progress')
+        `SELECT id, title, description, status, created_at, progress FROM board_tasks
+         WHERE ${statusFilter}
          ORDER BY created_at DESC LIMIT 50`
       ).all();
       db.close();
@@ -1739,7 +1743,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   /**
    * Get list of agents in a team (for manage_team list action).
    */
-  getTeamAgents(teamId: string): { id: string; role: string; displayName: string; status: string }[] {
+  getTeamAgents(teamId: string): { id: string; role: string; displayName: string; status: string; model: string }[] {
     const teamData = this.activeTeams.get(teamId);
     if (!teamData) return [];
     return teamData.agents.map(a => ({
@@ -1747,6 +1751,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       role: a.role,
       displayName: a.displayName,
       status: 'active',
+      model: a.model || 'default',
     }));
   }
 

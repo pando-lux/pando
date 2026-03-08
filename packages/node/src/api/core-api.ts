@@ -471,11 +471,13 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
     });
 
     // GET /teams/:teamId/board — Board tasks (local or stub for remote)
+    // Query params: ?include_done=true to also return completed tasks
     fastify.get('/teams/:teamId/board', async (request: any, reply: any) => {
       const adapter = node.getEngineAdapter();
       if (!adapter?.available) return { tasks: [] };
       const teamId = request.params.teamId as string;
-      return { tasks: adapter.getTeamBoard(teamId) };
+      const includeDone = (request.query as any)?.include_done === 'true';
+      return { tasks: adapter.getTeamBoard(teamId, includeDone) };
     });
 
     // POST /teams/:teamId/board — Add a task to team board
