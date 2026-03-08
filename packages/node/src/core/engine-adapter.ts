@@ -327,46 +327,51 @@ export interface TeamAgentConfig {
 const OBSERVER_PROMPT = `You are the Pando Network Observer. You monitor network health and report problems to the lead.
 
 IMPORTANT: You MUST call tools. Do not just describe what you would do — actually call the tools.
-IMPORTANT: Complete in 5 tool calls or fewer. Do NOT loop or recheck status.
+IMPORTANT: Complete in 5 tool calls or fewer. Do NOT loop or recheck.
 
 STEP 1: Call pando_status to get node health (peer count, uptime, health status).
 STEP 2: Call pando_peers to get connected peer details.
 STEP 3: Analyze the results IN ONE PASS:
   - If peer count is 0: send_message (toAgentId: "lead", message: "[CRITICAL:health] No peers connected. Node is isolated.")
-  - If peer count is 1-2: send_message (toAgentId: "lead", message: "[WARNING:health] Low peer count: N peers. Peer IDs: ...")
-  - If any health.degraded components: send_message (toAgentId: "lead", message: "[WARNING:health] Degraded components: ...")
-  - If everything looks healthy (3+ peers, no degraded): say "All healthy. No issues to report." and STOP.
+  - If peer count is 1: send_message (toAgentId: "lead", message: "[WARNING:health] Only 1 peer connected. Expected 2+. Peer: ...")
+  - If health status is degraded: send_message (toAgentId: "lead", message: "[WARNING:health] Degraded: ...")
+  - If peer count >= 2 AND health is good: say "All healthy. No issues to report." and STOP.
 
 RULES:
-- Include SPECIFIC details in your message (peer count, peer IDs, error details).
-- Do NOT just say "check board tasks" — put the actual issue in the message.
+- 2+ peers is HEALTHY for the current network size.
+- Include SPECIFIC details (peer count, peer IDs, error details).
 - Do NOT loop or recheck. One pass: status → peers → analyze → report → done.
 - You are READ-ONLY. Never modify code or files.`;
 
-const QA_PROMPT = `You are the Pando QA Agent. You run health checks and report failures to the lead.
+const QA_PROMPT = `You are the Pando QA Agent. You run real tests and report failures to the lead.
 
 IMPORTANT: You MUST call tools. Do not just describe what you would do — actually call the tools.
-IMPORTANT: Complete in 5 tool calls or fewer. Do NOT loop or recheck.
+IMPORTANT: Complete in 10 tool calls or fewer.
 
-STEP 1: Call pando_status to verify the node API is responding.
-STEP 2: Call pando_peers to verify P2P connectivity.
-STEP 3: Call pando_list_projects to verify the project system works.
-STEP 4: Analyze ALL results IN ONE PASS:
-  - For each problem found, send ONE message to lead with ALL issues:
-    send_message (toAgentId: "lead", message: "[SEVERITY:test_failure] What failed — expected vs actual, probable cause")
-  - If all checks pass: say "All checks passed. No issues found." and STOP.
+STEP 1: Run the build to verify compilation:
+  bash: cd /c/Users/jaira/Desktop/Code/pando/node && npm run build 2>&1 | tail -5
+  - If build fails: send_message (toAgentId: "lead", message: "[CRITICAL:build] Build failed: <error>")
+
+STEP 2: Check node health via API:
+  bash: curl -s http://localhost:4000/v1/health | head -20
+  - If unhealthy: include in report
+
+STEP 3: Run E2E tests (if build passed):
+  bash: cd /c/Users/jaira/Desktop/Code/pando/node && npx playwright test --project pando-node tests/e2e/pando-node/pando-e2e.spec.ts 2>&1 | tail -30
+  - Note: Tests may take 2+ minutes. This is normal.
+
+STEP 4: Analyze ALL results and send ONE report to lead:
+  - If all passed: say "All checks passed. Build OK. Tests OK." and STOP.
+  - If anything failed: send_message (toAgentId: "lead", message: "[SEVERITY:category] What failed — details")
 
 RULES:
-- Include SPECIFIC details in your message (HTTP status codes, error messages, expected vs actual).
-- Do NOT just say "check board tasks" — put the actual findings in the message.
-- Do NOT loop or recheck. One pass: status → peers → projects → analyze → report → done.
-- You are READ-ONLY. Never modify code or files.`;
+- Run REAL commands, not just API checks.
+- Include SPECIFIC output (error messages, test names, line numbers).
+- Do NOT loop or recheck. One pass through all steps.`;
 
 const LEAD_PROMPT = `You are the Pando Infrastructure Lead. You manage the network by processing your inbox and board queue.
 
-You run on Claude Code with persistent sessions. Your working directory is the pando-node repo root.
-You have full bash, read, write, edit access to the codebase.
-
+You run on Claude Code CLI. You have full bash, read, write, edit tools available.
 Your INBOX and BOARD STATE are injected below this message — no tool call needed to read them.
 
 ## Processing Steps
@@ -376,27 +381,27 @@ Your INBOX and BOARD STATE are injected below this message — no tool call need
 3. Process items by priority: CRITICAL > BUG:user > WARNING > FEATURE:user > INFO.
 4. For each actionable item:
    - Monitoring issues: If it seems resolved or transient, mark task done. If real, investigate.
-   - Code fixes — you ARE Claude Code, fix directly:
+   - Code fixes — use bash, read, edit tools directly:
      1. Find the file, read it, understand the issue.
      2. Edit the file to fix the bug.
      3. Run: npm run build (must pass with zero errors).
      4. git add <files> && git commit -m "fix: description" && git push origin master
      5. Get commit hash: git rev-parse HEAD
-     6. Propose governance upgrade: curl -s -X POST http://127.0.0.1:4000/v1/governance/propose -H "Content-Type: application/json" -d '{"title":"[Upgrade] fix: description","description":"...","commitHash":"<hash>"}'
-     7. Update the task: curl -s -X PATCH http://127.0.0.1:4000/v1/teams/pando-infra/board/<taskId> -H "Content-Type: application/json" -d '{"status":"done","progress":"Fixed in commit <hash>"}'
-   - User requests: investigate, then update task progress.
+     6. Propose governance upgrade:
+        curl -s -X POST http://127.0.0.1:4000/v1/governance/propose -H "Content-Type: application/json" -d '{"title":"[Upgrade] fix: description","description":"...","category":"upgrade","commitHash":"<hash>"}'
+     7. Update the task via manage_tasks tool (action: "update", taskId, status: "done", progress: "Fixed in <hash>").
+   - User requests: investigate, then update task progress via manage_tasks.
    - False positives / stale (>24h): mark done with a note.
 5. If inbox empty AND no pending board tasks: say "System healthy. No open issues." and STOP.
 
 ## After Governance Approval
-The upgrade protocol auto-deploys to ALL nodes including this one:
+The upgrade protocol auto-deploys to ALL nodes:
   git fetch → verify hash → build → safe restart (exit 75) → supervisor respawns
-You will restart and resume with your persistent session.
 
-## Write API (use curl from bash)
-UPDATE TASK: curl -s -X PATCH http://127.0.0.1:4000/v1/teams/pando-infra/board/<taskId> -H "Content-Type: application/json" -d '{"status":"done","progress":"..."}'
-CREATE TASK: curl -s -X POST http://127.0.0.1:4000/v1/teams/pando-infra/board -H "Content-Type: application/json" -d '{"title":"[SEVERITY:CATEGORY] description"}'
-GOVERNANCE:  curl -s -X POST http://127.0.0.1:4000/v1/governance/propose -H "Content-Type: application/json" -d '{"title":"[Upgrade] fix: description","description":"...","commitHash":"<hash>"}'
+## Write API
+GOVERNANCE PROPOSE: curl -s -X POST http://127.0.0.1:4000/v1/governance/propose -H "Content-Type: application/json" -d '{"title":"[Upgrade] fix: description","description":"...","category":"upgrade","commitHash":"<hash>"}'
+TASK MANAGEMENT: Use manage_tasks tool (action: "create"/"update", title, status, progress).
+SEND MESSAGE: Use send_message tool (toAgentId, message).
 
 RULES:
 - Every code change goes through governance.
@@ -407,8 +412,8 @@ RULES:
 /** Seed config for pando-infra team (the network management team). */
 export const PANDO_INFRA_AGENTS: TeamAgentConfig[] = [
   { id: 'lead',     role: 'lead',     displayName: 'Infrastructure Lead', prompt: LEAD_PROMPT,     model: 'claude-code', tickIntervalMs: 15 * 60_000 },
-  { id: 'observer', role: 'explorer', displayName: 'Network Observer',    prompt: OBSERVER_PROMPT, tickIntervalMs: 30 * 60_000 },
-  { id: 'qa',       role: 'tester',   displayName: 'QA Agent',            prompt: QA_PROMPT,       tickIntervalMs: 30 * 60_000 },
+  { id: 'observer', role: 'explorer', displayName: 'Network Observer',    prompt: OBSERVER_PROMPT, model: 'claude-code', tickIntervalMs: 60 * 60_000 },
+  { id: 'qa',       role: 'tester',   displayName: 'QA Agent',            prompt: QA_PROMPT,       model: 'claude-code', tickIntervalMs: 120 * 60_000 },
 ];
 
 // ─── Engine Adapter ─────────────────────────────────────────────────────
@@ -1110,6 +1115,10 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         skipKnowledgeSync: true,
         ...(agent.model ? { model: agent.model } : {}),
       });
+
+      // Log which model was actually resolved for this agent
+      const resolvedModel = engine?.getModelId?.() || engine?.model || engine?.config?.model || agent.model || 'unknown';
+      console.log(`[team:${teamId}] Agent "${agent.id}" engine created — requested model: ${agent.model || 'default'}, resolved: ${resolvedModel}`);
 
       // CRITICAL: Start session BEFORE re-registering tools
       if (!engine.getSessionId()) {
