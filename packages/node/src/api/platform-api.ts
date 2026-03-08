@@ -413,6 +413,14 @@ export async function registerPlatformRoutes(
       const meta = threadStore.getThread(id) || await threadStore.getThreadAsync(id);
       if (!meta) return reply.code(404).send({ error: 'Thread not found' });
 
+      // Ownership check: if thread has a userId, verify the requester matches
+      if (meta.userId) {
+        const requesterId = await deps.verifyUserJwt(request);
+        if (requesterId && requesterId !== meta.userId) {
+          return reply.code(403).send({ error: 'Not authorized to view this thread' });
+        }
+      }
+
       return { ...meta, messages: await threadStore.getMessagesAsync(id) };
     });
 
@@ -421,6 +429,17 @@ export async function registerPlatformRoutes(
       const threadStore = node.getThreadStore();
       if (!threadStore) return reply.code(503).send({ error: 'Thread store not initialized' });
       const { id } = request.params || {};
+      const meta = threadStore.getThread(id);
+      if (!meta) return reply.code(404).send({ error: 'Thread not found' });
+
+      // Ownership check
+      if (meta.userId) {
+        const requesterId = await deps.verifyUserJwt(request);
+        if (requesterId && requesterId !== meta.userId) {
+          return reply.code(403).send({ error: 'Not authorized to delete this thread' });
+        }
+      }
+
       const deleted = threadStore.deleteThread(id);
       if (!deleted) return reply.code(404).send({ error: 'Thread not found' });
       return { success: true, deleted: id };
@@ -431,6 +450,16 @@ export async function registerPlatformRoutes(
       const threadStore = node.getThreadStore();
       if (!threadStore) return reply.code(503).send({ error: 'Thread store not initialized' });
       const { id } = request.params || {};
+
+      // Ownership check
+      const meta = threadStore.getThread(id);
+      if (meta?.userId) {
+        const requesterId = await deps.verifyUserJwt(request);
+        if (requesterId && requesterId !== meta.userId) {
+          return reply.code(403).send({ error: 'Not authorized to modify this thread' });
+        }
+      }
+
       const body = request.body as any || {};
       const updates: any = {};
       if (body.title !== undefined) updates.title = body.title;
@@ -454,6 +483,13 @@ export async function registerPlatformRoutes(
       }
       const trimmed = message.trim();
       if (!trimmed) return reply.code(400).send({ error: 'message cannot be empty' });
+      if (trimmed.length > 10000) return reply.code(400).send({ error: 'message too long (max 10000 chars)' });
+
+      // Two Laws check — reject harmful messages before processing
+      const lawViolation = violatesTwoLaws(trimmed);
+      if (lawViolation) {
+        return { status: 'ok', threadId: id, reply: lawViolation, tier: 'simple' };
+      }
 
       // Phase 41.5: If message is encrypted, decrypt it server-side for processing.
       // The encrypted version is stored in the thread for at-rest protection.

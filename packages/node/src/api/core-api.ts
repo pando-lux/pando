@@ -486,13 +486,15 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
     fastify.post('/teams/:teamId/board', async (request: any, reply: any) => {
       const teamId = request.params.teamId as string;
       const body = request.body as any;
-      const title = body?.title?.trim();
+      const title = typeof body?.title === 'string' ? body.title.trim() : '';
       if (!title) return reply.code(400).send({ error: 'Title required' });
-      const lawViolation = violatesTwoLaws(`${title} ${body?.description || ''}`);
+      if (title.length > 200) return reply.code(400).send({ error: 'Title too long (max 200 chars)' });
+      const description = typeof body?.description === 'string' ? body.description.slice(0, 2000) : undefined;
+      const lawViolation = violatesTwoLaws(`${title} ${description || ''}`);
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
       const adapter = node.getEngineAdapter();
       if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
-      const taskId = adapter.addTeamBoardTask(teamId, title, body?.description);
+      const taskId = adapter.addTeamBoardTask(teamId, title, description);
       if (!taskId) return reply.code(500).send({ error: 'Failed to create task' });
       return { status: 'created', taskId };
     });
@@ -501,11 +503,17 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
     fastify.patch('/teams/:teamId/board/:taskId', async (request: any, reply: any) => {
       const { teamId, taskId } = request.params as any;
       const body = request.body as any;
+      if (body?.status && !['pending', 'in_progress', 'in-progress', 'done'].includes(body.status)) {
+        return reply.code(400).send({ error: 'Invalid status. Must be: pending, in_progress, or done' });
+      }
+      if (body?.progress !== undefined && typeof body.progress !== 'string') {
+        return reply.code(400).send({ error: 'Progress must be a string' });
+      }
       const adapter = node.getEngineAdapter();
       if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
       const ok = adapter.updateTeamBoardTask(teamId, taskId, {
         status: body?.status,
-        progress: body?.progress,
+        progress: typeof body?.progress === 'string' ? body.progress.slice(0, 1000) : undefined,
       });
       return ok ? { status: 'updated' } : reply.code(404).send({ error: 'Task not found or no changes' });
     });
