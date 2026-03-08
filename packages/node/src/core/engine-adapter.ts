@@ -139,13 +139,13 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
       name: 'pando_deploy',
       description: 'Deploy a project to hosting.',
       parameters: z.object({ projectId: z.string().describe('Project ID to deploy') }),
-      execute: async (args: any) => ok(await api('POST', `/v1/projects/${args.projectId}/deploy`, {})),
+      execute: async (args: any) => ok(await api('POST', `/v1/apps/${args.projectId}/deploy`, {})),
     },
     {
       name: 'pando_undeploy',
       description: 'Remove a deployed project.',
       parameters: z.object({ projectId: z.string().describe('Project ID to undeploy') }),
-      execute: async (args: any) => ok(await api('POST', `/v1/projects/${args.projectId}/undeploy`, {})),
+      execute: async (args: any) => ok(await api('DELETE', `/v1/apps/${args.projectId}`, {})),
     },
     {
       name: 'pando_create_project',
@@ -225,6 +225,11 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
 
         const repo: string = args.repo;
         const branch: string = args.branch || 'main';
+
+        // Validate inputs — prevent shell injection
+        const SAFE_REF = /^[a-zA-Z0-9._\/-]+$/;
+        if (!SAFE_REF.test(branch)) return { success: false, output: 'Invalid branch name' };
+        if (!SAFE_REF.test(repo)) return { success: false, output: 'Invalid repo name' };
 
         // 1. Check for known local repos first (no network needed).
         //    Detect pando-node repo from package.json location (works on any OS).
@@ -535,13 +540,19 @@ export class EngineAdapter {
       try {
         const project = await this.config.projectResolver(projectId);
         if (project?.repoUrl) {
+          // Validate repoUrl is a proper URL (prevent shell injection)
+          const urlSafe = /^https?:\/\/[a-zA-Z0-9._@:/-]+\.git$/.test(project.repoUrl) || /^https?:\/\/github\.com\//.test(project.repoUrl);
+          if (!urlSafe) {
+            console.warn(`[engine] Skipping workspace recovery — repoUrl looks unsafe: ${project.repoUrl.slice(0, 80)}`);
+          } else {
           console.log(`[engine] Workspace empty for ${projectId} — recovering from ${project.repoUrl}`);
           try {
             // Dir already exists — use git init + fetch + checkout (clone fails on non-empty dirs)
             const gitDir = pathJoin(projectDir, '.git');
             if (!fsExists(gitDir)) {
               execSync('git init', { cwd: projectDir, timeout: 10_000, stdio: 'pipe', windowsHide: true });
-              execSync(`git remote add origin "${project.repoUrl}"`, { cwd: projectDir, timeout: 10_000, stdio: 'pipe', windowsHide: true });
+              const { execFileSync: efs } = await import('node:child_process');
+              efs('git', ['remote', 'add', 'origin', project.repoUrl], { cwd: projectDir, timeout: 10_000, stdio: 'pipe', windowsHide: true });
             }
             execSync('git fetch origin', { cwd: projectDir, timeout: 60_000, stdio: 'pipe', windowsHide: true });
             // Try main branch first, fall back to master
@@ -555,6 +566,7 @@ export class EngineAdapter {
           } catch (gitErr: any) {
             console.warn(`[engine] Workspace recovery failed for ${projectId}: ${gitErr.message?.slice(0, 200)}`);
           }
+          } // close urlSafe else
         }
       } catch (err: any) {
         console.warn(`[engine] projectResolver failed for ${projectId}: ${err.message?.slice(0, 100)}`);

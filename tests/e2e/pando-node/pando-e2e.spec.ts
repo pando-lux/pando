@@ -4,7 +4,7 @@
  * Three pipeline scenarios that test full multi-step flows end-to-end.
  * No smoke tests, no page-load checks — every assertion validates a real pipeline step.
  *
- * Pipeline 1: App Deployment — register → deploy → update → rollback → health → webhook → cleanup
+ * Pipeline 1: App Deployment — register → deploy → update → rollback → health → stop → start → cleanup
  * Pipeline 2: Governance Upgrade — propose → auto-approve → broadcast → verify peers
  * Pipeline 3: WebSocket App — register WS app → deploy to EC2 → lifecycle → cleanup
  *
@@ -181,7 +181,7 @@ test('Infrastructure: node health + teams + engines + council + Two Laws + chat'
 // ═══════════════════════════════════════════════════════════════════════════
 // PIPELINE 1: App Deployment
 // register → validate → list → details → deploy → history → update →
-// rollback → health → stop → start → webhook → delete → verify cleanup
+// rollback → health → stop → start → delete → verify cleanup
 // ═══════════════════════════════════════════════════════════════════════════
 
 test('Pipeline 1: App deployment lifecycle', async () => {
@@ -280,35 +280,7 @@ test('Pipeline 1: App deployment lifecycle', async () => {
   const startRes = await apiPost(`/apps/${APP_ID}/start`, token);
   expect(startRes.ok).toBe(true);
 
-  // ── Step 12: Webhook — non-matching repo rejected, invalid payload rejected ──
-  const webhookRes = await fetch(`${NODE_API_URL}/v1/webhooks/github`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      repository: {
-        clone_url: 'https://github.com/nonexistent/repo.git',
-        html_url: 'https://github.com/nonexistent/repo',
-      },
-      ref: 'refs/heads/main',
-    }),
-  });
-  if (webhookRes.ok) {
-    const wh = await webhookRes.json() as any;
-    expect(wh.matched).toBe(false);
-  }
-
-  const badWebhookRes = await fetch(`${NODE_API_URL}/v1/webhooks/github`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ not: 'valid' }),
-  });
-  if (badWebhookRes.ok) {
-    const bw = await badWebhookRes.json() as any;
-    expect(bw.matched).toBe(false);
-  }
-  console.log(`[pipeline1] Webhooks: non-match=${webhookRes.status}, invalid=${badWebhookRes.status}`);
-
-  // ── Step 13: Status filter ──
+  // ── Step 12: Status filter ──
   const liveRes = await apiGet('/apps?status=live', token);
   expect(liveRes.ok).toBe(true);
   const liveData = await liveRes.json() as any;
@@ -332,7 +304,7 @@ test('Pipeline 1: App deployment lifecycle', async () => {
   expect(pandoStill.apps.find((a: any) => a.id === 'pando-node')).toBeTruthy();
   expect(pandoStill.apps.find((a: any) => a.id === APP_ID)).toBeFalsy();
 
-  console.log('[pipeline1] PASS: Full app deployment pipeline — register → deploy → update → rollback → health → stop → start → webhook → delete → verify');
+  console.log('[pipeline1] PASS: Full app deployment pipeline — register → deploy → update → rollback → health → stop → start → delete → verify');
 });
 
 // ═══════════════════════════════════════════════════════════════════════════

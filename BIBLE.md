@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-08 (Phase A complete: all inter-node unicast replaced with HTTP — see Section 4.5; restart architecture documented — see Section 10; team architecture replaces legacy council — see Section 5.10 + docs/TEAM-ARCHITECTURE.md). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-08 (Security hardening: all PM2/shell calls use execFileSync array args — no shell interpolation. Webhook endpoint removed. pando_deploy/undeploy tools fixed to call /v1/apps/* not /v1/projects/*. Workspace-based deploy + auto-recovery DONE. Line counts refreshed. Phase A complete: all inter-node unicast replaced with HTTP — see Section 4.5; restart architecture documented — see Section 10; team architecture replaces legacy council — see Section 5.10). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -53,7 +53,7 @@ shared < ledger < node
   Pure infrastructure. P2P networking. Identity. Economy. Governance. Storage. HTTP API.
   Has ZERO intelligence of its own. No orchestrator. No agent database. No message bus.
 
-engine-adapter.ts = THE NERVOUS SYSTEM (~968 lines)
+engine-adapter.ts = THE NERVOUS SYSTEM (~1,282 lines)
   The ONE file that connects brain to body.
   Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
   Starts teams (startTeam) using PandoCode's native agent/board system.
@@ -64,7 +64,7 @@ engine-adapter.ts = THE NERVOUS SYSTEM (~968 lines)
 ```
 The engine has 20+ built-in tools (read_file, write_file, bash, grep, spawn_agent, manage_tasks, etc.) plus MCP tools at runtime
 When inside a pando-node, it gets EXTRA tools:
-  pando_deploy       → POST /v1/projects/:id/deploy
+  pando_deploy       → POST /v1/apps/:id/deploy
   pando_transfer     → POST /v1/ledger/transfer
   pando_propose      → POST /v1/governance/propose
   pando_status       → GET  /v1/status
@@ -624,7 +624,7 @@ User → Gateway → Chat message "Build me a websocket server"
   → Update triggers re-deploy
 ```
 
-**Remaining gap:** Chat-created projects lack `repo_url` — they use workspace-based deploy (`workspaceDir`) instead of GitHub-based deploy. This means deploy dispatches to EC2 fail for workspace-only projects (EC2 needs a GitHub repo to clone). Fix is in progress — workspace-to-GitHub push before deploy dispatch.
+**Workspace-based deploy (DONE — commit 346cefd2):** Chat-created projects that lack `repo_url` use workspace-based deploy. `resolveWorkspace()` finds content at `~/.pando/projects/{projectId}/` and `copyWorkspaceToAppDir()` copies it to hosted-apps. Auto-recovery: if workspace is empty but project has `repoUrl` in ProjectStore, `ensureProjectWorkspace()` auto-clones from GitHub via `git init → fetch → checkout`. The `repoUrl` field is optional in app registration (POST /apps).
 
 #### Standalone PandoCode (direct, not through the network)
 
@@ -881,7 +881,7 @@ No tick loop. No orchestrator. No message bus. The engine runs when it has somet
 
 ### 5.8 App Lifecycle (AppManager) — Unified Deploy/Update/Monitor
 
-**AppManager replaces 3 separate systems** (DeployPipeline, HostingService, init-platform deploy handlers) with a single unified app lifecycle manager. SQLite `apps.db` is the single source of truth per node.
+**AppManager replaces 3 separate systems** (DeployPipeline, HostingService, init-platform deploy handlers) with a single unified app lifecycle manager. SQLite `apps.db` is the single source of truth per node. See `docs/APP-LIFECYCLE-ROADMAP.md` for detailed implementation phases, algorithms, and SQL schemas.
 
 **pando-node is app[0].** At boot, AppManager registers pando-node itself as the first app (`app_id: 'pando-node'`) with status `live`, current port, and commit hash. This means the same system that manages user apps also tracks the node itself.
 
@@ -983,7 +983,7 @@ Build completes → appMgr.update(projectId) awaited
 | Component | File | What it does |
 |---|---|---|
 | **AppManager** | `core/app-manager.ts` | Unified lifecycle: register, deploy, update (blue-green), rollback, health monitoring, P2P dispatch, SQLite registry |
-| **App API** | `api/app-api.ts` | REST endpoints: /v1/apps/* (13 routes), /v1/webhooks/github |
+| **App API** | `api/app-api.ts` | REST endpoints: /v1/apps/* (12 routes) — register, list, get, deploy, update, rollback, stop, start, delete, health, history, logs |
 | **Trigger** | `api/platform-api.ts` | `appManager.update(projectId)` awaited after build completion — result pushed to chat thread + SSE |
 | **Deploy handler** | `core/app-manager.ts` (internal) | Clone from GitHub, detect tier, deploy to S3 or PM2+nginx |
 | **Port registry** | `apps.db` (SQLite) | Persistent port allocation — per-app row in `apps` table |
@@ -996,6 +996,15 @@ Build completes → appMgr.update(projectId) awaited
 ```json
 { "accessKeyId": "...", "secretAccessKey": "...", "region": "us-east-1", "bucket": "pando-deployments" }
 ```
+
+**Security hardening (commit fb119513):**
+
+All shell command execution in app-manager.ts uses `execFileSync()` with array arguments — no string interpolation, no shell injection possible. Specifically:
+- PM2 commands: `execFileSync('pm2', ['start', mainFile, '--name', pm2Name], opts)` — not `execSync(\`pm2 start ${mainFile}\`)`
+- Env vars: passed via `env` option on the spawn options object — not concatenated into command string
+- App IDs: validated with `/^[a-zA-Z0-9_-]+$/` regex before use in any file path or command
+- Workspace paths: `path.relative()` guard prevents path traversal via crafted appId
+- PM2 logs endpoint (app-api.ts): uses `execFileSync('pm2', ['logs', ...])` with SAFE_ID validation and lines clamping (1-10000)
 
 ### 5.9 PandoCode Network Linking
 
@@ -1437,7 +1446,7 @@ No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoCode'
 
 ## 6. THE ENGINE ADAPTER (detailed spec)
 
-The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~968 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~1,282 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
 
 **Key principle:** PandoCode uses its OWN configured provider and model. The engine-adapter does NOT override the model. Contributors choose their provider (default: Google/gemini-2.5-flash).
 
@@ -1703,7 +1712,7 @@ npx playwright test --project pando-code
 
 ## 9. BRAIN-KILL MIGRATION (COMPLETED 2026-03-06)
 
-**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~968 with council agents + board operations + dedup + per-project boards + project ticks + pando_workspace tool).**
+**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~1,282 with council agents + board operations + dedup + per-project boards + project ticks + pando_workspace tool + workspace recovery).**
 
 The dual coordination system is dead. pando-node no longer has any intelligence of its own. All AI flows through EngineAdapter → @pando-code/core.
 
@@ -1711,7 +1720,7 @@ The dual coordination system is dead. pando-node no longer has any intelligence 
 orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), template-registry.ts (476), org-manager.ts (377), agent-tools.ts (373), orchestrator-manager.ts (333), engine-bridge.ts (283), worker-mcp.ts (274), orchestrator-process.ts (248), ai-backend-pandocode.ts (244), message-bus.ts (143), ai-backend-registry.ts (43), ai-backend.ts (37), context-api.ts (336).
 
 ### What replaced it
-`core/engine-adapter.ts` (~968 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL. Board operations (read/write/dedup) for user reports.
+`core/engine-adapter.ts` (~1,282 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL. Board operations (read/write/dedup) for user reports.
 
 ### API changes
 - **Removed:** `/v1/bridge/*`, `/v1/agents/*`, `/v1/context/*`
@@ -1721,6 +1730,8 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 ---
 
 ## 10. TECHNICAL DEBT (honest status)
+
+> **Detailed audits:** `docs/audit.md` (39 issues with file:line refs) and `docs/future-concerns-report.md` (21 unenforced features). Consult these before major feature work.
 
 ### Done (Phase 2 progress)
 
@@ -1793,7 +1804,7 @@ The `resourceId` is generated when a credential is contributed (via `/contribute
 
 | Issue | Why it's OK |
 |---|---|
-| ~~index.ts is a monolith~~ | **RESOLVED.** Extracted `_start()` into `init-kernel.ts` (793 lines), `init-core.ts` (154 lines), `init-platform.ts` (1,213 lines). index.ts is now 1,670 lines (class definition, lifecycle, getters, utilities). |
+| ~~index.ts is a monolith~~ | **RESOLVED.** Extracted `_start()` into `init-kernel.ts` (806 lines), `init-core.ts` (117 lines), `init-platform.ts` (921 lines). index.ts is now ~1,670 lines (class definition, lifecycle, getters, utilities). |
 | Agent identity is ephemeral | Ephemeral agents are sufficient for dev mode. |
 | Governance auto-approves (<=8 peers) | Dev mode only. Real voting kicks in with more peers. |
 
@@ -1943,9 +1954,9 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 | File | Purpose |
 |---|---|
 | `index.ts` | PandoNode class definition (1,670 lines). Lifecycle, getters, utilities. `_start()` delegates to init files. |
-| `init-kernel.ts` | Kernel init (793 lines): P2P, ledger, sync, governance, security, emission, upgrade, request-reply handlers. |
-| `init-core.ts` | Core init (154 lines): storage backends, credentials, app manager. |
-| `init-platform.ts` | Platform init (1,213 lines): API server, deploy handlers, resources, content, SSE, message handling. |
+| `init-kernel.ts` | Kernel init (806 lines): P2P, ledger, sync, governance, security, emission, upgrade, request-reply handlers. |
+| `init-core.ts` | Core init (117 lines): storage backends, credentials, app manager. |
+| `init-platform.ts` | Platform init (921 lines): API server, deploy handlers, resources, content, SSE, message handling. |
 | `cli.ts` | Non-interactive entry. Supervisor, crash guard (exit 78 for port conflict), circuit breaker auto-reset on successful boot, port check. |
 | `tui.ts` | Interactive terminal. 30+ slash commands. |
 
@@ -1988,7 +1999,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 | `api/kernel-api.ts` | Status, peers, tasks, governance, guardrails, monitoring, scheduler, reputation, admin, wallet, activity, search (~2,400 lines) |
 | `api/core-api.ts` | Upgrade, emissions, security, team routes (/v1/teams/* — board proxy, CRUD, trigger) (~485 lines) |
 | `api/platform-api.ts` | Projects, auth, chat, engines, content, marketplace, resources, testing, templates, per-project board/request, `findBestBuilder()` (~4,200 lines) |
-| `api/app-api.ts` | App lifecycle REST endpoints: /v1/apps/*, /v1/webhooks/github (13 routes) |
+| `api/app-api.ts` | App lifecycle REST endpoints: /v1/apps/* (12 routes) |
 | `api/testing-api.ts` | Testing dashboard routes (11 endpoints) |
 
 ---
@@ -2050,7 +2061,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 ## 14. THINGS THAT WILL CONFUSE YOU
 
-1. **Pando tools are just HTTP calls to 127.0.0.1.** The engine calls `pando_deploy` which does `POST http://127.0.0.1:4000/v1/projects/:id/deploy`. The engine doesn't import pando-node. The tools are the entire integration layer. (Must use `127.0.0.1`, not `localhost` — Node.js `fetch()` can fail silently with `localhost` on some platforms.)
+1. **Pando tools are just HTTP calls to 127.0.0.1.** The engine calls `pando_deploy` which does `POST http://127.0.0.1:4000/v1/apps/:id/deploy`. The engine doesn't import pando-node. The tools are the entire integration layer. (Must use `127.0.0.1`, not `localhost` — Node.js `fetch()` can fail silently with `localhost` on some platforms.)
 
 2. **Each project gets its own engine instance.** The adapter manages `Map<projectId, PandoCode>`. Engines don't know about each other. They communicate only through Pando tools (which call the shared HTTP API).
 

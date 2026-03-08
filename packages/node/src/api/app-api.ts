@@ -3,15 +3,10 @@
  *
  * Routes: /apps, /apps/:id, /apps/:id/deploy, /apps/:id/update,
  *         /apps/:id/rollback, /apps/:id/stop, /apps/:id/start,
- *         /apps/:id/health, /apps/:id/history, /apps/:id/logs,
- *         /webhooks/github
+ *         /apps/:id/health, /apps/:id/history, /apps/:id/logs
  *
- * All /apps/* endpoints require Bearer token auth.
- * /webhooks/github is unauthenticated (validated by signature).
- *
- * NOTE: The webhook POST at /webhooks/github needs to be added to the
- * auth skip list in api-server.ts setupAuth() so the global auth hook
- * does not reject it. Add: pathNoVersion.startsWith('/webhooks/')
+ * All /apps/* endpoints require Bearer token auth (POST/PUT/DELETE).
+ * GET endpoints are public (read-only).
  */
 
 import { execFileSync } from 'node:child_process';
@@ -224,31 +219,4 @@ export async function registerAppRoutes(
     }
   });
 
-  // ── POST /webhooks/github — GitHub push webhook receiver ─────────────
-  fastify.post('/webhooks/github', async (request: any, reply: any) => {
-    const appManager = (node as any).getAppManager?.();
-    if (!appManager) return reply.code(503).send({ error: 'AppManager not available' });
-
-    const payload = request.body as any;
-    if (!payload || !payload.repository) {
-      return { matched: false, reason: 'Not a repository event' };
-    }
-
-    const repoUrl = payload.repository.clone_url || payload.repository.html_url;
-    if (!repoUrl) {
-      return { matched: false, reason: 'No repository URL in payload' };
-    }
-
-    try {
-      const app = await appManager.findByRepoUrl(repoUrl);
-      if (!app) {
-        return { matched: false, reason: 'No app registered for this repository' };
-      }
-
-      const result = await appManager.update(app.id);
-      return { matched: true, appId: app.id, result };
-    } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
-    }
-  });
 }
