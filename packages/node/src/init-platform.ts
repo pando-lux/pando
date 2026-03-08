@@ -745,7 +745,7 @@ Be friendly and helpful. Keep answers short.`
     }
 
     // Handle messages and reward work
-    node.network.onMessage((message: any, from: any) => {
+    node.network.onMessage(async (message: any, from: any) => {
       // Security: ignore messages from quarantined peers
       if (node.securityMonitor?.isQuarantined(from)) {
         console.log(`[security] Ignoring message from quarantined peer: ${from.slice(0, 16)}`);
