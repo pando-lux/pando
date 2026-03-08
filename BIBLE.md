@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-08 (Phase A complete: all inter-node unicast replaced with HTTP — see Section 4.5; team architecture replaces legacy council — see Section 5.10 + docs/TEAM-ARCHITECTURE.md). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-08 (Phase A complete: all inter-node unicast replaced with HTTP — see Section 4.5; restart architecture documented — see Section 10; team architecture replaces legacy council — see Section 5.10 + docs/TEAM-ARCHITECTURE.md). Maintainer: Claude Code (CEO agent).
 
 ---
 
