@@ -193,7 +193,7 @@ export async function registerAppRoutes(
     if (!appManager) return reply.code(503).send({ error: 'AppManager not available' });
 
     const { id } = request.params;
-    const limit = parseInt((request.query as any)?.limit, 10) || 50;
+    const limit = Math.min(parseInt((request.query as any)?.limit, 10) || 50, 200);
 
     try {
       const history = await appManager.getHistory(id, limit);

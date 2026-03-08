@@ -288,7 +288,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       if (!ew) {
         return { history: [] };
       }
-      const limit = parseInt(request.query?.limit) || 50;
+      const limit = Math.min(parseInt(request.query?.limit) || 50, 200);
       return { history: ew.getHistory(limit) };
     });
 
@@ -315,7 +315,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       if (!sm) {
         return { alerts: [] };
       }
-      const limit = parseInt(request.query?.limit) || 100;
+      const limit = Math.min(parseInt(request.query?.limit) || 100, 200);
       const typeFilter = request.query?.type as string | undefined;
       const severityFilter = request.query?.severity as string | undefined;
       const activeFilter = request.query?.active as string | undefined;
@@ -602,10 +602,19 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       if (!body?.id || !body?.displayName) {
         return reply.code(400).send({ error: 'Required: id, displayName' });
       }
+      if (typeof body.id !== 'string' || body.id.length > 100) {
+        return reply.code(400).send({ error: 'id must be a string (max 100 chars)' });
+      }
+      if (typeof body.displayName !== 'string' || body.displayName.length > 200) {
+        return reply.code(400).send({ error: 'displayName must be a string (max 200 chars)' });
+      }
+      if (body.description !== undefined && (typeof body.description !== 'string' || body.description.length > 2000)) {
+        return reply.code(400).send({ error: 'description must be a string (max 2000 chars)' });
+      }
       try {
         const team = registry.createTeam({
-          id: body.id,
-          displayName: body.displayName,
+          id: body.id.trim(),
+          displayName: body.displayName.trim(),
           managingNode: node.getIdentity()?.peerId || null,
           lastHeartbeat: Date.now(),
           status: 'active',
@@ -715,6 +724,11 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
 
         const body = request.body as any || {};
         const { template, task, customPrompt, agentId: requestedAgentId } = body;
+
+        // Validate template ID type
+        if (template !== undefined && typeof template !== 'string') {
+          return reply.code(400).send({ error: 'template must be a string' });
+        }
 
         // Validate user-provided text against Two Laws
         if (task) {

@@ -378,7 +378,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       const identity = node.getIdentity();
       if (!ledger || !identity) return { transactions: [] };
 
-      const limit = parseInt(request.query?.limit) || 50;
+      const limit = Math.min(parseInt(request.query?.limit) || 50, 200);
       // If a user is authenticated, return their transactions; otherwise fall back to node identity
       const userPeerId = await deps.verifyUserJwt(request);
       const targetPeerId = userPeerId || identity.peerId;
@@ -513,7 +513,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
           status,
           priority: q.priority,
           assignedTo: q.assignedTo,
-          limit: q.limit ? parseInt(q.limit) : undefined,
+          limit: q.limit ? Math.min(parseInt(q.limit) || 50, 200) : undefined,
         }),
       };
     });
@@ -545,7 +545,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
     fastify.get('/tasks/archive', async (request: any) => {
       const tq = node.getActiveTaskQueue();
       if (!tq) return { tasks: [] };
-      const limit = request.query?.limit ? parseInt(request.query.limit) : 50;
+      const limit = Math.min(request.query?.limit ? parseInt(request.query.limit) || 50 : 50, 200);
       return { tasks: tq.getArchivedTasks(limit) };
     });
 
@@ -1888,7 +1888,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       const httpClient = (node as any).httpPeerClient;
       if (!httpClient) return reply.code(503).send({ error: 'HTTP peer client not available' });
       const { peerId } = request.params;
-      const limit = parseInt(request.query?.limit) || 50;
+      const limit = Math.min(parseInt(request.query?.limit) || 50, 200);
       try {
         const result = await httpClient.dispatchRequest(peerId, 'task_list', { limit }, 10000);
         if (!result.success) return reply.code(502).send({ error: result.error || 'Remote peer returned error' });
@@ -1920,7 +1920,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       const network = node.getNetwork();
       const identity = node.getIdentity();
       if (!network || !identity) return reply.code(503).send({ error: 'Node not ready' });
-      const limit = parseInt(request.query?.limit) || 50;
+      const limit = Math.min(parseInt(request.query?.limit) || 50, 200);
 
       // Local tasks
       const localTasks = scheduler
@@ -2399,7 +2399,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
     if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
     const { q, limit } = request.query as { q?: string; limit?: string };
     if (!q) return reply.code(400).send({ error: 'q required' });
-    const results = le.search(q, limit ? parseInt(limit) : 10);
+    const results = le.search(q, Math.min(limit ? parseInt(limit) || 10 : 10, 100));
     return { results, query: q };
   });
 

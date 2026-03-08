@@ -531,7 +531,7 @@ export class ApiServer {
           this.sseConnectionsPerIp.set(ip, next);
         }
       },
-      doormanClassify: (msg) => this.doormanClassify(msg),
+      doormanClassify: (msg, userPeerId) => this.doormanClassify(msg, userPeerId),
       doormanChat: (msg, history) => this.doormanChat(msg, history),
       decryptIncomingMessage: (ct, n, tm, etk) => this.decryptIncomingMessage(ct, n, tm, etk),
       encryptOutgoingMessage: (pt, tm, etk) => this.encryptOutgoingMessage(pt, tm, etk),
@@ -672,7 +672,7 @@ export class ApiServer {
    * - 'build' — "build me X" → create project + spawn manager
    * - 'project' — existing project message → route to project manager
    */
-  private async doormanClassify(message: string): Promise<{
+  private async doormanClassify(message: string, userPeerId?: string): Promise<{
     intent: 'simple' | 'question' | 'build' | 'project' | 'report';
     response?: string;
     tier?: number;
@@ -694,10 +694,10 @@ export class ApiServer {
     // ── Deterministic fast-path (zero cost, instant) ──────────────────────
     // Slash commands and obvious keyword matches
     if (/^\/?(status|s)$/i.test(lower) || /\b(node status|show status|system status)\b/.test(lower)) {
-      return { intent: 'simple', response: this.getNodeStatusText() };
+      return { intent: 'simple', response: this.getNodeStatusText(userPeerId) };
     }
     if (/^\/?(balance|b)$/i.test(lower) || /\b(balance|my balance|check balance|how much lux|lux balance)\b/.test(lower)) {
-      return { intent: 'simple', response: this.getBalanceText() };
+      return { intent: 'simple', response: this.getBalanceText(userPeerId) };
     }
     if (/^\/?(peers|p)$/i.test(lower) || /\b(peers|list peers|show peers|connected peers)\b/.test(lower)) {
       return { intent: 'simple', response: this.getPeersText() };
@@ -706,7 +706,7 @@ export class ApiServer {
       return { intent: 'simple', response: this.getHelpText() };
     }
     if (/^\/?(wallet|w)$/i.test(lower)) {
-      return { intent: 'simple', response: this.getBalanceText() };
+      return { intent: 'simple', response: this.getBalanceText(userPeerId) };
     }
     if (/\b(tasks|show tasks|list tasks|task queue)\b/.test(lower)) {
       return { intent: 'simple', response: this.getTasksText() };
@@ -930,28 +930,30 @@ Be friendly and helpful. Keep answers short.`
 
   // ── Doorman helper methods ──────
 
-  private getNodeStatusText(): string {
+  private getNodeStatusText(userPeerId?: string): string {
     const identity = this.node.getIdentity();
     const network = this.node.getNetwork();
     const ledger = this.node.getLedger();
     if (identity && network && ledger) {
       const peers = network.getPeerCount();
-      const bal = ledger.accounts.getBalance(identity.peerId);
+      const targetPeerId = userPeerId || identity.peerId;
+      const bal = ledger.accounts.getBalance(targetPeerId);
       const stats = ledger.getNetworkStats();
       const uptime = Math.floor(process.uptime());
       const mins = Math.floor(uptime / 60);
       const secs = uptime % 60;
-      return `**Node Status**\n- Peers: ${peers}\n- Balance: ${bal} Lux\n- Total Supply: ${stats.totalSupply} Lux\n- Uptime: ${mins}m ${secs}s\n- Peer ID: \`${identity.peerId}\``;
+      return `**Node Status**\n- Peers: ${peers}\n- Balance: ${bal} Lux\n- Total Supply: ${stats.totalSupply} Lux\n- Uptime: ${mins}m ${secs}s\n- Peer ID: \`${targetPeerId}\``;
     }
     return 'Node is starting up...';
   }
 
-  private getBalanceText(): string {
+  private getBalanceText(userPeerId?: string): string {
     const identity = this.node.getIdentity();
     const ledger = this.node.getLedger();
     if (identity && ledger) {
-      const bal = ledger.accounts.getBalance(identity.peerId);
-      return `Your balance is **${bal} Lux**.\n\nPeer ID: \`${identity.peerId}\``;
+      const targetPeerId = userPeerId || identity.peerId;
+      const bal = ledger.accounts.getBalance(targetPeerId);
+      return `Your balance is **${bal} Lux**.\n\nPeer ID: \`${targetPeerId}\``;
     }
     return 'Unable to check balance — node identity not loaded.';
   }

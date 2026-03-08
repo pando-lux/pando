@@ -87,10 +87,10 @@ export class LedgerSync {
     // When a new peer connects, request their recent transactions and activity.
     // Two attempts: immediate (5s) and retry (30s) to handle GossipSub mesh forming delay.
     this.network.onPeerConnect((peerId) => {
-      setTimeout(() => this.requestSync(peerId), 5000);
-      setTimeout(() => this.requestActivitySync(peerId), 5500);
+      setTimeout(() => this.requestSync(peerId).catch(err => console.error(`[p2p] requestSync error for ${peerId.slice(0, 16)}:`, err.message)), 5000);
+      setTimeout(() => this.requestActivitySync(peerId).catch(err => console.error(`[p2p] requestActivitySync error for ${peerId.slice(0, 16)}:`, err.message)), 5500);
       // Retry after 30s in case GossipSub mesh wasn't ready for the first attempt
-      setTimeout(() => this.requestSync(peerId), 30000);
+      setTimeout(() => this.requestSync(peerId).catch(err => console.error(`[p2p] requestSync retry error for ${peerId.slice(0, 16)}:`, err.message)), 30000);
     });
 
     // Start periodic sync health check to catch up if we fall behind
@@ -128,7 +128,7 @@ export class LedgerSync {
   startPeriodicSyncCheck(): void {
     if (this.syncCheckTimer) return; // Already running
     this.syncCheckTimer = setInterval(() => {
-      this.requestSyncFromPeers();
+      this.requestSyncFromPeers().catch(err => console.error('[p2p] periodic sync check error:', err.message));
     }, 60_000);
   }
 
@@ -216,9 +216,9 @@ export class LedgerSync {
    */
   private handleSyncMessage(message: PandoMessage): void {
     if (message.type === MessageType.SYNC_REQUEST) {
-      this.handleSyncRequest(message);
+      this.handleSyncRequest(message).catch(err => console.error('[p2p] handleSyncRequest error:', err.message));
     } else if (message.type === MessageType.SYNC_RESPONSE) {
-      this.handleSyncResponse(message);
+      this.handleSyncResponse(message).catch(err => console.error('[p2p] handleSyncResponse error:', err.message));
     } else if (message.type === MessageType.ACCOUNT_CLAIM) {
       this.handleIncomingClaim(message);
     }
@@ -547,7 +547,7 @@ export class LedgerSync {
     if (message.type === MessageType.ACTIVITY_BROADCAST) {
       this.handleIncomingActivity(message);
     } else if (message.type === MessageType.ACTIVITY_SYNC_REQUEST) {
-      this.handleActivitySyncRequest(message);
+      this.handleActivitySyncRequest(message).catch(err => console.error('[p2p] handleActivitySyncRequest error:', err.message));
     } else if (message.type === MessageType.ACTIVITY_SYNC_RESPONSE) {
       this.handleActivitySyncResponse(message);
     }

@@ -93,13 +93,14 @@ export function registerTestingRoutes(
     try {
       const query = request.query as Record<string, string>;
       const project = query.project || DEFAULT_PROJECT;
-      const limit = query.limit ? parseInt(query.limit, 10) : 20;
+      const parsedLimit = query.limit ? parseInt(query.limit, 10) : 20;
+      const limit = Math.min(isNaN(parsedLimit) || parsedLimit < 1 ? 20 : parsedLimit, 200);
       const mode = query.mode as TestMode | undefined;
       const scenarioId = query.scenarioId || undefined;
 
       const tester = getTester(project, opts);
       const runs = tester.history.getRuns({
-        limit: isNaN(limit) ? 20 : limit,
+        limit,
         mode: mode && (mode === 'scripted' || mode === 'live') ? mode : undefined,
         scenarioId,
       });

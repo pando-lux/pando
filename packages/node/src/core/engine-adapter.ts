@@ -1407,7 +1407,9 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     const intervals: any[] = [];
 
     // Check for saved Claude CLI session IDs (for resume on restart)
+    // Sessions older than 24 hours are considered stale and discarded.
     const savedSessions = new Map<string, string>();
+    const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
     if (this.Database) {
       try {
         const db = new this.Database(teamDbPath);
@@ -1419,11 +1421,27 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
           expires_at TEXT
         )`).run();
         const rows = db.prepare(
-          `SELECT key, value FROM state WHERE key LIKE 'cli-session:%'`
-        ).all() as { key: string; value: string }[];
+          `SELECT key, value, updated_at FROM state WHERE key LIKE 'cli-session:%'`
+        ).all() as { key: string; value: string; updated_at: string | null }[];
+        let staleCount = 0;
         for (const row of rows) {
+          // Filter stale sessions (older than 24h)
+          if (row.updated_at) {
+            const age = Date.now() - new Date(row.updated_at).getTime();
+            if (age > SESSION_TTL_MS) {
+              staleCount++;
+              continue;
+            }
+          }
           const agentId = row.key.replace('cli-session:', '');
           savedSessions.set(agentId, row.value);
+        }
+        // Clean up stale session entries
+        if (staleCount > 0) {
+          db.prepare(
+            `DELETE FROM state WHERE key LIKE 'cli-session:%' AND updated_at < datetime('now', '-1 day')`
+          ).run();
+          console.warn(`[team:${teamId}] Discarded ${staleCount} stale session(s) (>24h old) — agents will start fresh`);
         }
         db.close();
         if (savedSessions.size > 0) {
@@ -1552,15 +1570,24 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
         // Lead agent uses custom interval for dynamic data injection (inbox + board)
         if (agent.role === 'lead') {
+          let consecutiveFailures = 0;
           const interval = setInterval(async () => {
             try {
               const msg = 'Check your inbox and review board tasks now.';
               for await (const event of this.sendToTeamAgent(teamId, agent.id, msg)) {
                 logEvent(label)(event);
               }
+              consecutiveFailures = 0;
               console.log(`\n[${label}] Tick complete.`);
             } catch (err: any) {
-              console.warn(`[${label}] Tick error: ${err.message}`);
+              consecutiveFailures++;
+              const isFatal = /ENOENT|EPERM|spawn|session.*expired|not found|process.*exit/i.test(err.message);
+              if (isFatal || consecutiveFailures >= 3) {
+                console.error(`[${label}] CRITICAL: Engine appears dead (${consecutiveFailures} consecutive failures): ${err.message}`);
+                console.error(`[${label}] CRITICAL: Agent "${agent.id}" needs manual restart or node restart to recover.`);
+              } else {
+                console.warn(`[${label}] Tick error (${consecutiveFailures}/3): ${err.message}`);
+              }
             }
           }, tickMs);
           intervals.push(interval);

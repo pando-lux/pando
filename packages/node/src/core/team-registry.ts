@@ -11,7 +11,7 @@
  */
 
 import { createRequire } from 'module';
-import { existsSync, mkdirSync } from 'fs';
+import { existsSync, mkdirSync, unlinkSync } from 'fs';
 import { dirname } from 'path';
 
 const require = createRequire(import.meta.url);
@@ -77,11 +77,31 @@ export class TeamRegistry {
       mkdirSync(dir, { recursive: true });
     }
 
-    // Open SQLite (CJS module)
+    // Open SQLite (CJS module) with corruption recovery
     const Database = require('better-sqlite3');
-    this.db = new Database(dbPath);
-    this.db.pragma('journal_mode = WAL');
-    this.initSchema();
+    try {
+      this.db = new Database(dbPath);
+      this.db.pragma('journal_mode = WAL');
+      // Verify DB integrity on open
+      const integrity = this.db.pragma('integrity_check');
+      if (integrity[0]?.integrity_check !== 'ok') {
+        throw new Error(`integrity_check failed: ${JSON.stringify(integrity[0])}`);
+      }
+      this.initSchema();
+    } catch (err: any) {
+      console.error(`[team-registry] CRITICAL: DB corrupted or unreadable: ${err.message}`);
+      console.warn(`[team-registry] Recreating DB — team data will re-sync from P2P peers`);
+      try { this.db?.close(); } catch {}
+      // Delete corrupted DB + WAL/SHM files
+      for (const suffix of ['', '-wal', '-shm']) {
+        try { if (existsSync(dbPath + suffix)) unlinkSync(dbPath + suffix); } catch {}
+      }
+      // Recreate fresh
+      this.db = new Database(dbPath);
+      this.db.pragma('journal_mode = WAL');
+      this.initSchema();
+      console.log(`[team-registry] Fresh DB created. Teams will repopulate from P2P sync.`);
+    }
   }
 
   // -----------------------------------------------------------------------

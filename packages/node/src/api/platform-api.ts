@@ -191,8 +191,8 @@ export async function registerPlatformRoutes(
         return { status: 'ok', threadId, reply: 'PandoCode peer did not respond. Try again.', tier: 'simple' };
       }
 
-      // No projectId — doorman handles first contact
-      const classification = await deps.doormanClassify(trimmed);
+      // No projectId — doorman handles first contact (pass user peerId for balance queries)
+      const classification = await deps.doormanClassify(trimmed, peerId);
 
       if (classification.intent === 'simple' || classification.intent === 'question') {
         // Doorman answers directly — no PandoCode engine needed
@@ -477,6 +477,14 @@ export async function registerPlatformRoutes(
       if (!threadStore) return reply.code(503).send({ error: 'Thread store not initialized' });
 
       const { id } = request.params || {};
+      const threadUserPeerId = await deps.verifyUserJwt(request);
+
+      // Check thread exists before processing — don't auto-create on non-existent IDs
+      const existingThread = threadStore.getThread(id);
+      if (!existingThread) {
+        return reply.code(404).send({ error: 'Thread not found' });
+      }
+
       const { message, tier, encrypted: isEncrypted, nonce, encryptedThreadKey } = request.body || {};
       if (!message || typeof message !== 'string') {
         return reply.code(400).send({ error: 'message is required' });
@@ -586,7 +594,7 @@ export async function registerPlatformRoutes(
         return { status: 'ok', threadId: id, reply: smartReply, tier: 'medium' };
       }
 
-      const classification = await deps.doormanClassify(plaintextForProcessing);
+      const classification = await deps.doormanClassify(plaintextForProcessing, threadUserPeerId || undefined);
 
       if (classification.intent === 'simple' || classification.intent === 'question') {
         const doormanReply = classification.response || 'Try "build me a todo app" to get started!';
@@ -1446,14 +1454,14 @@ export async function registerPlatformRoutes(
 
       const { q, type, status, limit } = request.query || {};
       if (q) {
-        const results = registry.search(q, parseInt(limit) || 20);
+        const results = registry.search(q, Math.min(parseInt(limit) || 20, 100));
         return { content: results.map((r: any) => r.content), searchResults: results };
       }
 
       const content = registry.list({
         type: type || undefined,
         status: status || undefined,
-        limit: parseInt(limit) || 100,
+        limit: Math.min(parseInt(limit) || 100, 200),
       });
       return { content };
     });
@@ -1465,7 +1473,7 @@ export async function registerPlatformRoutes(
 
       const { q, limit } = request.query || {};
       if (!q) return { results: [] };
-      const results = registry.search(q, parseInt(limit) || 20);
+      const results = registry.search(q, Math.min(parseInt(limit) || 20, 100));
       return { results };
     });
 
@@ -2070,7 +2078,7 @@ export async function registerPlatformRoutes(
       const projects = await ps.listProjectsAsync({
         visibility: query.visibility || 'listed',
         status: 'active',
-        limit: parseInt(query.limit) || 50,
+        limit: Math.min(parseInt(query.limit) || 50, 200),
         offset: parseInt(query.offset) || 0,
       });
       return { projects };
@@ -2627,7 +2635,7 @@ export async function registerPlatformRoutes(
         category: query.category || undefined,
         sortBy: query.sort || undefined,
         search: query.search || undefined,
-        limit: query.limit ? parseInt(query.limit) : undefined,
+        limit: query.limit ? Math.min(parseInt(query.limit) || 50, 200) : undefined,
         offset: query.offset ? parseInt(query.offset) : undefined,
       });
 
@@ -2943,7 +2951,7 @@ export async function registerPlatformRoutes(
       }
 
       const query = request.query as any;
-      const limit = parseInt(query.limit) || 50;
+      const limit = Math.min(parseInt(query.limit) || 50, 200);
       const reports = await ps.getPendingReportsAsync(limit);
       return { reports };
     });
