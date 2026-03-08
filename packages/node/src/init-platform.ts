@@ -799,26 +799,35 @@ Be friendly and helpful. Keep answers short.`
           const network = node.network;
           const myPeerId = node.identity!.peerId;
           const connectedPeers = new Set(network.getPeers().map((p: any) => p.peerId));
-          console.log(`[peer-exchange] Received ${exchangedPeers.length} peer(s) from ${from.slice(0, 12)}, already connected to ${connectedPeers.size}`);
-          (async () => {
-            let dialed = 0;
-            for (const peer of exchangedPeers) {
-              if (peer.peerId === myPeerId || connectedPeers.has(peer.peerId)) continue;
+          const unknownPeers = exchangedPeers.filter(
+            (p: any) => p.peerId !== myPeerId && !connectedPeers.has(p.peerId)
+          );
+          console.log(`[peer-exchange] Received ${exchangedPeers.length} peer(s) from ${from.slice(0, 12)}, ${unknownPeers.length} unknown, already connected to ${connectedPeers.size}`);
+          if (unknownPeers.length > 0) {
+            // Dial all unknown peers in parallel with per-address timeout
+            Promise.allSettled(unknownPeers.map(async (peer: any) => {
               for (const addr of peer.addrs) {
                 try {
-                  await network.dialPeer(addr);
-                  dialed++;
+                  const ac = new AbortController();
+                  const timer = setTimeout(() => ac.abort(), 5_000);
+                  const libp2p = network.getLibp2p();
+                  if (!libp2p) return;
+                  const { multiaddr: ma } = await import('@multiformats/multiaddr');
+                  await libp2p.dial(ma(addr), { signal: ac.signal });
+                  clearTimeout(timer);
                   console.log(`[peer-exchange] Connected to ${peer.peerId.slice(0, 12)} via exchange from ${from.slice(0, 12)}`);
-                  break;
+                  return; // connected, skip remaining addrs
                 } catch {
-                  // addr may be unreachable, try next
+                  // addr unreachable or timed out, try next
                 }
               }
-            }
-            if (dialed > 0) {
-              console.log(`[peer-exchange] Discovered ${dialed} new peer(s) from ${from.slice(0, 12)}`);
-            }
-          })().catch(() => {});
+            })).then((results) => {
+              const dialed = results.filter(r => r.status === 'fulfilled').length;
+              if (dialed > 0) {
+                console.log(`[peer-exchange] Discovered ${dialed} new peer(s) from ${from.slice(0, 12)}`);
+              }
+            });
+          }
         }
       }
     });
