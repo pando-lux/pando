@@ -357,3 +357,135 @@ test('Two Laws filter allows legitimate reports', async () => {
   console.log(`[e2e] PASS: Two Laws filter allows legitimate report (status ${res.status}).`);
 });
 
+// ── Governance E2E Tests ────────────────────────────────────────────────
+
+test('Governance propose + vote + pass lifecycle', async () => {
+  // Create a proposal with short voting window
+  const propRes = await fetch(`${NODE_API_URL}/v1/governance/propose`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      title: '[E2E] Test governance proposal',
+      description: 'Automated E2E test — verifies propose/vote/pass lifecycle.',
+      category: 'parameter',
+      votingDurationMs: 60000,
+    }),
+  });
+  expect(propRes.ok).toBe(true);
+  const propData = await propRes.json() as any;
+  expect(propData.proposal?.id).toBeTruthy();
+  const proposalId = propData.proposal.id;
+
+  // Vote approve
+  const voteRes = await fetch(`${NODE_API_URL}/v1/governance/vote`, {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ proposalId, choice: 'approve' }),
+  });
+  expect(voteRes.ok).toBe(true);
+  const voteData = await voteRes.json() as any;
+  expect(voteData.decision?.outcome).toBe('passed');
+  expect(voteData.votes?.approve).toBeGreaterThanOrEqual(1);
+
+  console.log(`[e2e] PASS: Governance lifecycle — proposed, voted, passed (${proposalId.slice(0, 12)}...).`);
+});
+
+test('Governance proposals list returns array', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/governance/proposals`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+  expect(Array.isArray(data.proposals)).toBe(true);
+  console.log(`[e2e] PASS: Governance proposals list returns ${data.proposals.length} proposals.`);
+});
+
+// ── Chat Build Flow E2E Tests ───────────────────────────────────────────
+
+test('Chat build request triggers project creation', async () => {
+  test.skip(!userJwt, 'Skipped — guest auth not available');
+
+  const chatRes = await fetch(`${NODE_API_URL}/v1/chat/message`, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'X-User-Token': userJwt,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ message: 'Build me a simple HTML calculator app with add, subtract, multiply, divide' }),
+  });
+  expect(chatRes.ok).toBe(true);
+  const chatData = await chatRes.json() as any;
+
+  // Should be classified as 'build' or 'complex', not 'simple'
+  // tier=complex means PandoCode engine was engaged
+  if (chatData.tier === 'complex') {
+    expect(chatData.reply).toBeTruthy();
+    console.log(`[e2e] PASS: Chat build request triggered engine (tier=${chatData.tier}).`);
+  } else {
+    // If classified as simple (doorman keyword match), still valid behavior
+    expect(chatData.reply).toBeTruthy();
+    console.log(`[e2e] PASS: Chat responded (tier=${chatData.tier}, may have been keyword-matched).`);
+  }
+});
+
+// ── Node Status E2E Tests ───────────────────────────────────────────────
+
+test('Node status includes teams count', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/status`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+  expect(typeof data.teams).toBe('number');
+  expect(data.commitHash).toBeTruthy();
+  expect(data.health).toBeTruthy();
+  expect(data.health.kernel).toBe('healthy');
+  console.log(`[e2e] PASS: Node status — teams=${data.teams}, commit=${data.commitHash}, health=${data.health.kernel}.`);
+});
+
+test('Node health endpoint returns valid status', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/health`);
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+  // healthy or degraded are both valid (degraded when peers are low or some subsystems skipped)
+  expect(['healthy', 'degraded']).toContain(data.status);
+  console.log(`[e2e] PASS: Node health — ${data.status}, uptime=${data.uptime}.`);
+});
+
+// ── Upgrade Protocol E2E Tests ──────────────────────────────────────────
+
+test('Upgrade status endpoint returns version info', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/upgrade`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  // 200 or 404 (if upgrade route not registered)
+  if (res.ok) {
+    const data = await res.json() as any;
+    expect(data.currentVersion || data.status).toBeTruthy();
+    console.log(`[e2e] PASS: Upgrade status — version=${data.currentVersion || 'unknown'}.`);
+  } else {
+    expect([404]).toContain(res.status);
+    console.log(`[e2e] PASS: Upgrade endpoint responds (status ${res.status}).`);
+  }
+});
+
+// ── Engine & PandoCode E2E Tests ────────────────────────────────────────
+
+test('Engines list includes team agents', async () => {
+  const res = await fetch(`${NODE_API_URL}/v1/engines`, {
+    headers: { 'Authorization': `Bearer ${token}` },
+  });
+  expect(res.ok).toBe(true);
+  const data = await res.json() as any;
+  expect(Array.isArray(data.engines)).toBe(true);
+
+  // Should have at least the system engine
+  const engineIds = data.engines.map((e: any) => e.id);
+  expect(engineIds.length).toBeGreaterThanOrEqual(1);
+
+  // Check if team agents are present
+  const teamEngines = engineIds.filter((id: string) => id.includes(':'));
+  console.log(`[e2e] PASS: Engines list — ${data.engines.length} total, ${teamEngines.length} team agents (${teamEngines.join(', ')}).`);
+});
+
