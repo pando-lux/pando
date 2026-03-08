@@ -1957,6 +1957,15 @@ export class GovernanceSync {
    * Runs BEFORE auto-approve to catch security-sensitive changes, large unreviewed diffs, and build failures.
    */
   private async validateUpgradeProposal(proposal: GovernanceProposal): Promise<{ approved: boolean; reason: string; kernelDelay: boolean }> {
+    // Same-commit (no-op) proposals skip all validation — nothing to review
+    try {
+      const currentHead = execSync('git rev-parse HEAD', { encoding: 'utf-8', timeout: 5000 }).trim();
+      if (proposal.upgradePayload?.commitHash && currentHead.startsWith(proposal.upgradePayload.commitHash)) {
+        this.agentDb?.logGovernanceCheck(proposal.id, 'same_commit_check', 'pass', 'No-op upgrade (already at this commit)');
+        return { approved: true, reason: 'No-op upgrade — already at proposed commit', kernelDelay: false };
+      }
+    } catch { /* git unavailable — proceed with full validation */ }
+
     const SECURITY_FILES = [
       'credential-store.ts', 'credential-vault.ts', 'request-reply.ts',
       'guardrails.ts', 'security-monitor.ts', 'governance.ts',
