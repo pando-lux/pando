@@ -1139,9 +1139,9 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       if (updates.progress !== undefined && ALLOWED_COLUMNS.has('progress')) { sets.push('progress = ?'); vals.push(updates.progress); }
       if (sets.length === 0) { db.close(); return false; }
       vals.push(taskId);
-      db.prepare(`UPDATE board_tasks SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
+      const result = db.prepare(`UPDATE board_tasks SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
       db.close();
-      return true;
+      return result.changes > 0;
     } catch (err: any) {
       console.warn(`[EngineAdapter] updateTeamBoardTask failed: ${err.message}`);
       return false;

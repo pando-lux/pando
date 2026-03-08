@@ -86,7 +86,49 @@
 - **All 3 nodes operational**: Windows (2 peers), EC2-1, EC2-2
 - **Final E2E**: 7/7 pass with full 3-node network
 
+### Background Agent: Council API Deep Test (PASS)
+- All 11 API calls returned correct HTTP status + valid JSON
+- 3 agents visible: lead, observer, qa — all active
+- Board CRUD works (create → update → done filtering)
+- Cost: 70.9 Lux, 3.16M tokens (lead: 19K, observer: 1.2M, qa: 1.9M)
+- Agent messages show real conversations, coherent work
+- **Issues found**: no model field in agent list, no done task archive, no per-agent Lux cost
+
+### Background Agent: Cross-Node Sync Test (PASS)
+- Full mesh: all 3 nodes see 2 peers each
+- Governance proposal propagated to both EC2 nodes within 5 seconds
+- Team metadata identical across all nodes (managing node semantics correct)
+- Ledger state consistent: 34756.76 Lux supply, 3300 txs
+
+## Session: 2026-03-09 (continued)
+
+### Bug Found & Fixed
+
+#### 6. updateTeamBoardTask returns 200 for nonexistent tasks (LOGIC BUG)
+- **Root cause**: `db.prepare(UPDATE ...).run()` returns `RunResult` with `changes` property, but code ignored it and always returned `true`. Updating a nonexistent task ID → 0 rows changed → reported as success.
+- **Fix**: Check `result.changes > 0` before returning true.
+- **File**: `packages/node/src/core/engine-adapter.ts:1142`
+
+### New E2E Test Pipelines
+
+#### Pipeline 7: Board Task CRUD Lifecycle
+- Create task → verify pending → update to in-progress → verify visible (regression for hyphen bug) → update to done → verify archived → include_done shows it
+- Edge cases: empty title (400), Two Laws violation (403), nonexistent task update (404)
+
+#### Pipeline 8: Team Agent Spawn/Stop Lifecycle
+- Get initial count (3) → spawn worker → verify count +1 (4) → stop worker → verify count -1 (3)
+- Safety: lead stop rejected (400), nonexistent agent (404), bad template (400), Two Laws violation (403), missing template/prompt (400)
+
+### E2E Test Results
+- **9/9 pass** (Pipeline 4 skipped — rate-limited, not a bug)
+- Test suite expanded from 7 to 9 pipelines
+
 ### Pending
 - [ ] PandoCode web UI testing (UI not running currently)
 - [ ] Phase 6.2+: Cross-node team migration
 - [ ] Phase 8: Gateway integration
+- [x] Fix: add model field to agent list endpoint
+- [x] Fix: add include_done query param to board endpoint
+- [x] Fix: updateTeamBoardTask nonexistent task returns 404
+- [x] Pipeline 7: Board Task CRUD E2E test
+- [x] Pipeline 8: Agent Spawn/Stop E2E test

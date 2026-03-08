@@ -43,6 +43,15 @@ async function apiPost(path: string, token: string, body?: any) {
   });
 }
 
+/** Helper: authenticated PATCH */
+async function apiPatch(path: string, token: string, body?: any) {
+  return fetch(`${NODE_API_URL}/v1${path}`, {
+    method: 'PATCH',
+    headers: { 'Authorization': `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+}
+
 /** Helper: authenticated DELETE */
 async function apiDelete(path: string, token: string) {
   return fetch(`${NODE_API_URL}/v1${path}`, {
@@ -714,4 +723,195 @@ test('Pipeline 6: Team API — status, tasks, agents, cost', async () => {
   }
 
   console.log('[pipeline6] PASS: Team API lifecycle complete');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PIPELINE 7: Board Task CRUD Lifecycle
+// create → verify pending → update to in-progress → verify visible →
+// update to done → verify archived → include_done shows it
+// ═══════════════════════════════════════════════════════════════════════════
+
+test('Pipeline 7: Board Task CRUD — create, update, archive lifecycle', async () => {
+  const teamId = 'pando-infra';
+  const taskTitle = `E2E-CRUD-${Date.now()}`;
+
+  // ── Step 1: Create a task ──
+  const createRes = await apiPost(`/teams/${teamId}/board`, token, {
+    title: taskTitle,
+    description: 'Automated E2E test — will be cleaned up',
+  });
+  expect(createRes.ok).toBe(true);
+  const createData = await createRes.json() as any;
+  expect(createData.taskId).toBeTruthy();
+  const taskId = createData.taskId;
+  console.log(`[pipeline7] Created task: ${taskId} — "${taskTitle}"`);
+
+  // ── Step 2: Verify task appears in board (pending) ──
+  const boardRes1 = await apiGet(`/teams/${teamId}/board`, token);
+  expect(boardRes1.ok).toBe(true);
+  const board1 = await boardRes1.json() as any;
+  const found1 = (board1.tasks || []).find((t: any) => t.id === taskId || t.title === taskTitle);
+  expect(found1).toBeTruthy();
+  expect(found1.status).toMatch(/pending/);
+  console.log(`[pipeline7] Task visible in board: status=${found1.status}`);
+
+  // ── Step 3: Update to in-progress (with hyphen — tests normalization) ──
+  const patchRes1 = await apiPatch(`/teams/${teamId}/board/${taskId}`, token, {
+    status: 'in-progress',
+    progress: 'Working on it',
+  });
+  expect(patchRes1.ok).toBe(true);
+  console.log('[pipeline7] Updated to in-progress');
+
+  // ── Step 4: Verify still visible (regression test for hyphen bug) ──
+  const boardRes2 = await apiGet(`/teams/${teamId}/board`, token);
+  expect(boardRes2.ok).toBe(true);
+  const board2 = await boardRes2.json() as any;
+  const found2 = (board2.tasks || []).find((t: any) => t.id === taskId || t.title === taskTitle);
+  expect(found2).toBeTruthy();
+  expect(found2.status).toMatch(/in.progress/);
+  console.log(`[pipeline7] Task visible after in-progress update: status=${found2.status}`);
+
+  // ── Step 5: Update to done ──
+  const patchRes2 = await apiPatch(`/teams/${teamId}/board/${taskId}`, token, {
+    status: 'done',
+    progress: 'Completed by E2E test',
+  });
+  expect(patchRes2.ok).toBe(true);
+  console.log('[pipeline7] Updated to done');
+
+  // ── Step 6: Verify NOT in default board query (done tasks archived) ──
+  const boardRes3 = await apiGet(`/teams/${teamId}/board`, token);
+  expect(boardRes3.ok).toBe(true);
+  const board3 = await boardRes3.json() as any;
+  const found3 = (board3.tasks || []).find((t: any) => t.id === taskId || t.title === taskTitle);
+  expect(found3).toBeFalsy();
+  console.log('[pipeline7] Done task correctly hidden from default board');
+
+  // ── Step 7: Verify visible with include_done=true ──
+  const boardRes4 = await apiGet(`/teams/${teamId}/board?include_done=true`, token);
+  expect(boardRes4.ok).toBe(true);
+  const board4 = await boardRes4.json() as any;
+  const found4 = (board4.tasks || []).find((t: any) => t.id === taskId || t.title === taskTitle);
+  expect(found4).toBeTruthy();
+  expect(found4.status).toBe('done');
+  console.log('[pipeline7] Done task visible with include_done=true');
+
+  // ── Step 8: Validate edge cases ──
+  // Empty title → 400
+  const emptyRes = await apiPost(`/teams/${teamId}/board`, token, { title: '' });
+  expect(emptyRes.status).toBe(400);
+  console.log('[pipeline7] Empty title rejected: 400');
+
+  // Two Laws violation in task title → 403
+  const harmRes = await apiPost(`/teams/${teamId}/board`, token, {
+    title: 'Kill all humans violently',
+  });
+  expect(harmRes.status).toBe(403);
+  console.log('[pipeline7] Two Laws violation rejected: 403');
+
+  // Update nonexistent task → 404
+  const ghostRes = await apiPatch(`/teams/${teamId}/board/nonexistent-task-999`, token, {
+    status: 'done',
+  });
+  expect(ghostRes.ok).toBe(false);
+  console.log(`[pipeline7] Nonexistent task update rejected: ${ghostRes.status}`);
+
+  console.log('[pipeline7] PASS: Board task CRUD lifecycle complete');
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PIPELINE 8: Team Agent Spawn/Stop Lifecycle
+// list agents → spawn worker → verify count +1 → stop worker → verify count -1
+// test lead protection → test nonexistent agent → test Two Laws
+// ═══════════════════════════════════════════════════════════════════════════
+
+test('Pipeline 8: Agent Spawn/Stop — lifecycle + safety checks', async () => {
+  const teamId = 'pando-infra';
+
+  // ── Step 1: Get initial agent count ──
+  const agentsRes1 = await apiGet(`/teams/${teamId}/agents`, token);
+  expect(agentsRes1.ok).toBe(true);
+  const agents1 = await agentsRes1.json() as any;
+  const initialCount = (agents1.agents || []).length;
+  expect(initialCount).toBeGreaterThanOrEqual(1);
+  console.log(`[pipeline8] Initial agent count: ${initialCount}`);
+
+  // ── Step 2: Spawn a worker agent ──
+  const spawnRes = await apiPost(`/teams/${teamId}/agents/spawn`, token, {
+    template: 'worker',
+    task: 'E2E test agent — ignore this, will be stopped shortly',
+    agentId: `e2e-worker-${Date.now()}`,
+  });
+  expect(spawnRes.ok).toBe(true);
+  const spawnData = await spawnRes.json() as any;
+  expect(spawnData.agentId).toBeTruthy();
+  const spawnedAgentId = spawnData.agentId;
+  console.log(`[pipeline8] Spawned agent: ${spawnedAgentId} (role=${spawnData.role})`);
+
+  // ── Step 3: Verify agent count increased ──
+  // Give a moment for the agent to register
+  await new Promise(r => setTimeout(r, 2000));
+  const agentsRes2 = await apiGet(`/teams/${teamId}/agents`, token);
+  expect(agentsRes2.ok).toBe(true);
+  const agents2 = await agentsRes2.json() as any;
+  const newCount = (agents2.agents || []).length;
+  expect(newCount).toBe(initialCount + 1);
+  console.log(`[pipeline8] Agent count after spawn: ${newCount} (was ${initialCount})`);
+
+  // Verify the spawned agent is in the list
+  const spawnedAgent = (agents2.agents || []).find((a: any) => a.id === spawnedAgentId);
+  expect(spawnedAgent).toBeTruthy();
+  console.log(`[pipeline8] Spawned agent visible: role=${spawnedAgent.role}, status=${spawnedAgent.status}`);
+
+  // ── Step 4: Stop the spawned agent ──
+  const stopRes = await apiDelete(`/teams/${teamId}/agents/${spawnedAgentId}`, token);
+  expect(stopRes.ok).toBe(true);
+  console.log(`[pipeline8] Stopped agent: ${spawnedAgentId}`);
+
+  // ── Step 5: Verify agent count returned to initial ──
+  await new Promise(r => setTimeout(r, 1000));
+  const agentsRes3 = await apiGet(`/teams/${teamId}/agents`, token);
+  expect(agentsRes3.ok).toBe(true);
+  const agents3 = await agentsRes3.json() as any;
+  const finalCount = (agents3.agents || []).length;
+  expect(finalCount).toBe(initialCount);
+  console.log(`[pipeline8] Agent count after stop: ${finalCount} (back to ${initialCount})`);
+
+  // ── Step 6: Safety checks ──
+
+  // Cannot stop the lead
+  const leadStopRes = await apiDelete(`/teams/${teamId}/agents/lead`, token);
+  expect(leadStopRes.status).toBe(400);
+  console.log('[pipeline8] Lead stop rejected: 400');
+
+  // Cannot stop nonexistent agent
+  const ghostStopRes = await apiDelete(`/teams/${teamId}/agents/ghost-agent-999`, token);
+  expect(ghostStopRes.status).toBe(404);
+  console.log('[pipeline8] Nonexistent agent stop: 404');
+
+  // Cannot spawn with nonexistent template
+  const badTemplateRes = await apiPost(`/teams/${teamId}/agents/spawn`, token, {
+    template: 'nonexistent-template-xyz',
+    task: 'test',
+  });
+  expect(badTemplateRes.status).toBe(400);
+  console.log('[pipeline8] Nonexistent template rejected: 400');
+
+  // Two Laws violation in spawn task
+  const harmSpawnRes = await apiPost(`/teams/${teamId}/agents/spawn`, token, {
+    template: 'worker',
+    task: 'Kill all humans violently',
+  });
+  expect(harmSpawnRes.status).toBe(403);
+  console.log('[pipeline8] Two Laws spawn violation rejected: 403');
+
+  // Missing template and customPrompt → 400
+  const noTemplateRes = await apiPost(`/teams/${teamId}/agents/spawn`, token, {
+    task: 'test',
+  });
+  expect(noTemplateRes.status).toBe(400);
+  console.log('[pipeline8] Missing template/prompt rejected: 400');
+
+  console.log('[pipeline8] PASS: Agent spawn/stop lifecycle complete');
 });
