@@ -1,6 +1,6 @@
 # Team Architecture Roadmap
 
-> Updated: 2026-03-08 | Status: ACTIVE
+> Updated: 2026-03-09 | Status: ACTIVE
 > Master plan for the team/agent/template system.
 
 ---
@@ -10,7 +10,7 @@
 Every team starts with **1 lead agent**. The lead:
 1. Assesses the project/task scope
 2. Decides what sub-agents it needs
-3. Spawns agents from templates (or creates new ones)
+3. Spawns agents from templates via HTTP API (or creates new ones)
 4. Manages agent lifecycle (start, stop, reassign)
 5. Is the brain — workers are hands
 
@@ -24,31 +24,37 @@ Council team:     [Lead + Observer + QA] → pre-seeded, same pipeline, jumpstar
 Future user team: [Lead] → user picks template → lead fills in the gaps
 ```
 
+**Tool architecture:** PandoCode tools (manage_tasks, send_message, etc.) work for API
+models (Gemini, GPT) but are silently dropped for Claude Code CLI. All agent operations
+are exposed as HTTP API endpoints. Claude Code agents use curl. See BIBLE.md Section 3.2.10.
+
 ---
 
-## Current State (2026-03-08)
+## Current State (2026-03-09)
 
 ### Completed
-- **Phase 1** (commit dee3933c): Prompts parameterized, BIBLE synced, shared constants, universal lead prompt, scheduler cleanup
-- **Phase 2** (commit dee3933c): 5 built-in templates, `manage_team` tool, `spawnTeamAgent`/`stopTeamAgent`, 10-agent cap
-- **Phase 3** (commit ea2559bc): Custom JSON templates on disk, template CRUD API, `getTemplates()` merges built-in+custom
-- **Phase 6.1** (commit 3ae904f3): Session persistence — save/restore Claude CLI session IDs across restarts (both repos)
-- **Phase 7 partial** (commit ea2559bc): Team status/tasks/agents/cost endpoints
-- **E2E** (commit 3ae904f3): 7/7 tests pass — includes template CRUD + team API tests
-- **pando-code** (commit d948ed6): `createClaudeCodeModel()` accepts `initialSessionId`, exposes `getSessionId()`
+- **Phase 1** (dee3933c): Prompts parameterized, BIBLE synced, shared constants, universal lead prompt, scheduler cleanup
+- **Phase 2** (dee3933c): 5 built-in templates, `manage_team` tool, `spawnTeamAgent`/`stopTeamAgent`, 10-agent cap
+- **Phase 3** (ea2559bc): Custom JSON templates on disk, template CRUD API, `getTemplates()` merges built-in+custom
+- **Phase 6.1** (3ae904f3): Session persistence — save/restore Claude CLI session IDs across restarts
+- **Phase 7** (ea2559bc + e622e1f4): All team API endpoints complete (status, tasks, agents, cost, spawn, stop, message)
+- **Claude Code tool fix** (e622e1f4): HTTP API for all agent operations, prompts use curl not PandoCode tools, state table schema fixed
+- **pando-code** (d948ed6): `createClaudeCodeModel()` accepts `initialSessionId`, exposes `getSessionId()`
 
-### Not Yet Tested Live
-- Does `manage_team` tool actually work when a lead agent calls it? (needs node restart + trigger)
-- Does session persistence actually resume Claude CLI sessions on restart?
-- Do custom JSON templates load correctly when a lead spawns from them?
-- Does the universal lead prompt produce useful behavior for non-infra teams?
+### Live Tested ✅
+- Lead processes board tasks autonomously ✅
+- Lead spawns workers via HTTP API (curl to /v1/teams/:id/agents/spawn) ✅
+- Stop agents via HTTP API ✅
+- Inter-agent messaging via HTTP API ✅
+- Template CRUD (list, create, delete) ✅
+- Board task CRUD (create, update via PATCH) ✅
+- `manage_team` PandoCode tool: NOT usable with Claude Code CLI (by design — use HTTP API instead) ✅
 
 ### Still TODO
-- Phase 4: PandoCode web UI network projects (pando-code repo)
-- Phase 5: Agent visibility + cost in web UI (pando-code repo)
-- Phase 6.2+: Cross-node migration, graceful degradation
-- Phase 7 remaining: User-submitted templates via gateway
-- Phase 8: Gateway integration
+- **Phase 4**: PandoCode web UI network projects (pando-code repo) ← NEXT
+- **Phase 5**: Agent visibility + cost in web UI (pando-code repo)
+- **Phase 6.2+**: Cross-node migration, graceful degradation
+- **Phase 8**: Gateway integration (full dashboard)
 
 ---
 
