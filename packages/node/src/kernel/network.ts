@@ -213,19 +213,24 @@ export class PandoNetwork {
     if (!this.node) return;
     const known = this.loadKnownPeers();
     if (known.length === 0) return;
-    console.log(`[known-peers] Dialing ${known.length} known peers...`);
-    for (const peer of known) {
-      if (this.peers.has(peer.peerId)) continue; // already connected
+    const toDial = known.filter(p => !this.peers.has(p.peerId));
+    if (toDial.length === 0) return;
+    console.log(`[known-peers] Dialing ${toDial.length} known peers in parallel...`);
+    // Dial all known peers concurrently with a per-peer timeout
+    await Promise.allSettled(toDial.map(async (peer) => {
       for (const addr of peer.addrs) {
         try {
-          await this.node.dial(multiaddr(addr));
+          const ac = new AbortController();
+          const timer = setTimeout(() => ac.abort(), 5_000);
+          await this.node!.dial(multiaddr(addr), { signal: ac.signal });
+          clearTimeout(timer);
           console.log(`[known-peers] Connected to ${peer.peerId.slice(0, 16)}...`);
-          break; // connected via one addr, skip the rest
+          return; // connected via one addr, skip the rest
         } catch {
-          // addr may be stale
+          // addr may be stale or timed out
         }
       }
-    }
+    }));
   }
 
   async start(): Promise<void> {
@@ -365,7 +370,7 @@ export class PandoNetwork {
 
     // Auto-reconnect: if peer count drops to 0, re-dial bootstrap peers + known peers
     if (this.config.bootstrapPeers.length > 0) {
-      this.reconnectTimer = setInterval(() => this.checkAndReconnect(), 30_000);
+      this.reconnectTimer = setInterval(() => this.checkAndReconnect(), 10_000);
     }
 
     // Health check: remove stale peers every 60s
@@ -380,17 +385,21 @@ export class PandoNetwork {
     if (this.stopped || !this.node) return;
     if (this.peers.size > 0) return;
 
-    console.log('[reconnect] No peers — attempting to re-dial bootstrap + known peers...');
-    for (const addr of this.config.bootstrapPeers) {
+    console.log('[reconnect] No peers — attempting to re-dial bootstrap + known peers in parallel...');
+    // Dial all bootstrap peers concurrently with timeout
+    const bootstrapDials = this.config.bootstrapPeers.map(async (addr) => {
       try {
-        await this.node.dial(multiaddr(addr));
+        const ac = new AbortController();
+        const timer = setTimeout(() => ac.abort(), 5_000);
+        await this.node!.dial(multiaddr(addr), { signal: ac.signal });
+        clearTimeout(timer);
         console.log(`[reconnect] Dialed bootstrap ${addr.slice(0, 40)}...`);
       } catch {
         // Bootstrap peer may be offline — that's ok
       }
-    }
-    // Also try known peers
-    await this.dialKnownPeers();
+    });
+    // Also try known peers in parallel
+    await Promise.allSettled([...bootstrapDials, this.dialKnownPeers()]);
   }
 
   /**

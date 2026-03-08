@@ -584,7 +584,7 @@ export async function initKernel(node: any): Promise<void> {
       }, 2_000);
 
       // Peer exchange: share our peer list so new nodes can form a full mesh.
-      // Delayed 5s to let the connection settle and capability exchange finish first.
+      // Delayed 2s to let the connection settle and capability exchange finish first.
       setTimeout(async () => {
         try {
           if (!node.network) return;
@@ -599,7 +599,7 @@ export async function initKernel(node: any): Promise<void> {
           });
           console.log(`[peer-exchange] Shared ${peerAddrs.length} peer(s) with ${peerId.slice(0, 12)}`);
         } catch {}
-      }, 5_000);
+      }, 2_000);
 
       // Phase 69: Auto-wrap removed — credentials in MongoDB, not per-node.
 
