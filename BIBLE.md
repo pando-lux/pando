@@ -792,7 +792,7 @@ Trusted infrastructure. Stores network-level contributed credentials. **Deploys 
 - Has MongoDB + CredentialStore + CREDENTIAL_MASTER_KEY
 - Stores contributed API keys (encrypted AES-256-GCM)
 - Handles Path A (simple AI): decrypts contributed key → makes LLM call → returns response
-- **Handles deployment** (`pando/deploy-app`): clones from GitHub, deploys to S3 (Tier 1) or PM2+nginx (Tier 2)
+- **Handles deployment** (`pando/deploy-app`): clones from GitHub, deploys to S3 (Tier 1) or PM2+nginx (Tier 2 — PM2 here manages deployed USER APPS, not pando-node itself)
 - Could run PandoCode for builds if installed (not currently — EC2 nodes are secure-only)
 - Proxy: decrypts credentials for other node types on HTTP request (code_repository only)
 - Proxy: HTTP storage backend for non-MongoDB nodes (thread store, project store, etc.)
@@ -969,7 +969,7 @@ These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse 
 | **Trigger** | `api/platform-api.ts` `triggerDeployPipeline()` | Fire-and-forget after every `sendToEngine()` completion (4 call sites) |
 | **Deploy handler** | `init-platform.ts` handler for `pando/deploy-app` | Clone from GitHub, detect tier, deploy to S3 or PM2+nginx (dispatched via HTTP) |
 | **Tier 1 (S3)** | `init-platform.ts` (inside deploy-app handler) | S3Client + PutObjectCommand, HTML injection, MIME types |
-| **Tier 2 (PM2)** | `init-platform.ts` (inside deploy-app handler) | npm install, PM2, port registry, nginx config |
+| **Tier 2 (PM2)** | `init-platform.ts` (inside deploy-app handler) | npm install, PM2 (for user apps only), port registry, nginx config |
 | **Port registry** | `{dataDir}/app-ports.json` | Persistent port allocation — survives node restarts |
 | **S3 hosting service** | `platform/hosting-service.ts` | Standalone S3 service (pre-signed URLs for private projects) |
 | **GitHub push** | `api/platform-api.ts:3417-3499` | git add -A, commit, force push to origin/main |
@@ -1726,7 +1726,7 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | **Circuit breaker fix** | `cli.ts`, `supervisor.ts`, `kernel/` | DONE — Port-conflict exits use code 78 (supervisor won't respawn). Immediate circuit breaker reset on successful boot. Thresholds raised (crash-guard 3→6, circuit-breaker 3→5). |
 | **Deploy Pipeline** | `core/deploy-pipeline.ts` | DONE — Targets EC2 secure nodes (`credentialAccess + storageBackend='mongodb'`). GitHub push → HTTP `pando/deploy-app` to EC2 → S3 (Tier 1) or PM2+nginx (Tier 2) → update project metadata. Auto-triggers after every build completion. |
 
-### Restart Architecture (Investigated — Current Design is Appropriate)
+### Restart Architecture (Verified 2026-03-08)
 
 The codebase has multiple restart mechanisms, each serving a distinct purpose:
 
@@ -1767,14 +1767,36 @@ The `resourceId` is generated when a credential is contributed (via `/contribute
 
 ### App Lifecycle Gaps (Tier 2 deployed apps)
 
+**NOTE: PM2 in this section refers to deployed USER APPS (Express, WebSocket servers, etc.), NOT pando-node itself. pando-node is managed by systemd (EC2) or supervisor.ts (Windows).**
+
 Deployed backend apps (Tier 2 / PM2) have no:
+- **Auto-deploy from GitHub** — NO webhook/polling mechanism exists. Deployments are triggered manually via `/v1/projects/:id/deploy` or automatically after PandoCode builds. If someone pushes new code to the app's GitHub repo externally, the running deployment is NOT updated. There is no Vercel-like auto-deploy.
 - **Upgrade mechanism** — redeploy kills old process, starts new one (no blue-green)
 - **Graceful shutdown** — PM2 process terminated immediately, WebSocket connections severed
-- **Version tracking** — no commit history, no rollback capability
+- **Version tracking** — no commit history, no rollback capability per deploy
 - **Auto-recovery** — if PM2 fails to restart, Pando only logs a warning (no auto-fix)
 - **Health checks** — no liveness probing of deployed apps
+- **Network awareness** — no centralized registry of which app runs on which node. The project's `deployPeerId` in ProjectStore records where it was LAST deployed, but if that node dies, no other node picks it up.
 
-Pando node itself has a proper upgrade path (governance → git pull → build → safeRestart), but deployed user apps don't benefit from this. Future work: a unified AppManager that treats pando-node and deployed apps the same way.
+**How deploy currently works (no auto-redeploy):**
+```
+1. PandoCode builds app code → git push to pando-lux/{repo}
+2. DeployPipeline finds a secure EC2 node (has MongoDB + credentials)
+3. HTTP dispatch → EC2 clones repo, npm install, detects tier:
+   - Tier 1 (static): upload to S3 → public URL
+   - Tier 2 (backend): PM2 start on allocated port → nginx reverse proxy
+4. Project metadata updated with deployUrl + deployPeerId
+5. DONE — no ongoing monitoring or auto-redeploy
+```
+
+**What would be needed for Vercel-like auto-deploy:**
+- GitHub webhook receiver (POST endpoint) that fires on push events
+- Lookup which node runs the app (deployPeerId in ProjectStore)
+- HTTP dispatch to that node: git pull → npm install → PM2 restart
+- Health check after restart to confirm app is healthy
+- Fallback: if deploy node is down, find another secure node and redeploy
+
+Pando node itself has a proper auto-upgrade path (governance → git pull → build → safeRestart → all nodes), but deployed user apps don't benefit from this.
 
 ### Stubs
 
