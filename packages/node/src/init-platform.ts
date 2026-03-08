@@ -1274,7 +1274,7 @@ Be friendly and helpful. Keep answers short.`
               if (builtCommit !== initialCommit) {
                 console.log(`[self-restart] Build updated since startup (was=${initialCommit.slice(0, 8)}, now=${builtCommit.slice(0, 8)}) — restarting`);
                 clearInterval(selfRestartInterval);
-                node.selfRestart();
+                node.requestGracefulRestart('stale-build');
               }
               return;
             }
@@ -1296,12 +1296,12 @@ Be friendly and helpful. Keep answers short.`
             // Rebuild before restarting to ensure dist/ is fresh
             try {
               console.log('[self-restart] Running npm run build...');
-              execSync('npm run build', { cwd: process.cwd(), timeout: 180_000, stdio: 'pipe' });
+              execSync('npm run build', { cwd: process.cwd(), timeout: 180_000, stdio: 'pipe', windowsHide: true });
               console.log('[self-restart] Rebuild complete — restarting');
             } catch (buildErr: any) {
               console.warn(`[self-restart] Rebuild failed (restarting anyway): ${(buildErr as Error).message?.slice(0, 200)}`);
             }
-            node.selfRestart();
+            node.requestGracefulRestart('stale-build');
           } catch { /* git unavailable or cwd mismatch — skip silently */ }
         }, 60 * 1000);  // Check every 60s — fast restart after CEO commits
         selfRestartInterval.unref(); // don't prevent normal node exit

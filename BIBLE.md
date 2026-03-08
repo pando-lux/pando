@@ -1733,8 +1733,7 @@ The codebase has multiple restart mechanisms, each serving a distinct purpose:
 | Mechanism | File | When it fires | Exit code |
 |---|---|---|---|
 | **safeRestart()** | `core/upgrade-protocol.ts` | After governance-approved upgrade (git pull + build) | 75 |
-| **requestGracefulRestart()** | `index.ts` | General restart (waits for active workers + pending messages to drain) | 75 |
-| **selfRestart()** | `index.ts` / `init-platform.ts` | Emergency restart (spawns detached process, exits current) | — |
+| **requestGracefulRestart()** | `index.ts` | General restart (waits for active tasks to drain, then exits) | 75 |
 | **crash-guard** | `kernel/crash-guard.ts` | 6 crashes in 60s → rolls back dist/ | 75 |
 | **circuit breaker** | `kernel/startup-health.ts` | 5 consecutive boot failures → halt | 1 |
 | **supervisor.ts** | `supervisor.ts` | Watches exit codes, respawns child | — |

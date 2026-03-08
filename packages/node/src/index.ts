@@ -74,11 +74,11 @@ import { LocalEnvironment } from './kernel/local-environment.js';
 import { join, resolve as pathResolve } from 'node:path';
 import { homedir } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { execSync, exec as execCb, spawn } from 'node:child_process';
+import { execSync, exec as execCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(execCb);
-import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync, openSync } from 'node:fs';
+import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from 'node:fs';
 
 /** Phase 68.2: Single constant for the node-level manager ID. */
 const DEFAULT_MANAGER_ID = 'pando-node-mgr';
@@ -487,51 +487,9 @@ export class PandoNode {
   }
 
   /**
-   * Self-restart: spawn a new node process with same args and env, then exit.
-   * Works without PM2/systemd/bat wrapper — the new process is detached.
+   * Restart is handled by exit(75) + supervisor/systemd respawn.
+   * No manual process spawning needed — requestGracefulRestart() is the one path.
    */
-  private selfRestart(): void {
-    this.restartPending = true;
-    const args = process.argv.slice(1);
-    const dataDir = process.env.HOME || process.env.USERPROFILE || '.';
-    const pandoDir = join(dataDir, '.pando');
-    const logDir = join(pandoDir, 'logs');
-    const logFile = join(logDir, 'node-stdout.log');
-    console.log(`[self-restart] Will exit and re-launch: node ${args.join(' ')}`);
-
-    // Write restart reason + clear crash guards so new process doesn't trip circuit breaker
-    try {
-      mkdirSync(logDir, { recursive: true });
-      writeFileSync(join(pandoDir, 'restart-reason.json'), JSON.stringify({
-        reason: 'auto-update', timestamp: Date.now(),
-      }));
-      try { unlinkSync(join(pandoDir, 'crash-log.json')); } catch {}
-      try { unlinkSync(join(pandoDir, 'circuit-breaker.json')); } catch {}
-    } catch {}
-
-    // Stop everything first so ports are released
-    this.stop().then(() => {
-      setTimeout(() => {
-        try {
-          const out = openSync(logFile, 'a');
-          const err = openSync(logFile, 'a');
-          const child = spawn(process.execPath, args, {
-            detached: true,
-            stdio: ['ignore', out, err],
-            env: process.env,
-            cwd: process.cwd(),
-          });
-          child.unref();
-          console.log(`[self-restart] New process spawned (PID ${child.pid}). Exiting old process.`);
-        } catch (e: any) {
-          console.error(`[self-restart] Failed to spawn: ${e.message}. Falling back to exit 75.`);
-        }
-        process.exit(RESTART_EXIT_CODE);
-      }, 3000);
-    }).catch(() => {
-      process.exit(RESTART_EXIT_CODE);
-    });
-  }
 
   /**
    * v2.3: Compute final boot health from initialized field state.
