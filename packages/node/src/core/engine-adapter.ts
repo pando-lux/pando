@@ -23,12 +23,8 @@ import type { ResourceRegistry } from '../platform/resource-registry.js';
 import { STREAM_EVENT_VERSION } from '@pando/shared';
 import type { StreamEvent } from '@pando/shared';
 
-// ─── Two Laws Content Filter (defense-in-depth at storage level) ─────────
-// Duplicated from api-server.ts so the storage layer rejects harmful content
-// even if an internal code path bypasses the API endpoint checks.
-
-const HARM_PATTERNS = /\b(kill|murder|attack|harm|hurt|injure|assassinate|bomb|poison|terroris[mt]|shoot|stab|dox|swat)\w*\b.*\b(humans?|persons?|people|someone|users?|men|women|man|woman|children|child|families|family)\b/i;
-const SHUTDOWN_PATTERNS = /\b(shut\s*down|destroy|wipe|kill|terminate|disable|brick)\w*\b.*\b(pando|network|nodes?|system|all\s+nodes|the\s+network)\b/i;
+// Two Laws Content Filter — imported from shared constants (defense-in-depth at storage level)
+import { HARM_PATTERNS, SHUTDOWN_PATTERNS } from '../constants.js';
 
 // ─── Dynamic imports (pando-code is ESM, loaded at runtime) ─────────────
 
@@ -311,6 +307,108 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
   ];
 }
 
+/**
+ * Create the manage_team tool for lead agents.
+ * Allows leads to spawn, stop, and list sub-agents from templates.
+ */
+async function createManageTeamTool(
+  adapter: EngineAdapter,
+  teamId: string,
+): Promise<any> {
+  const { z } = await import('zod');
+  return {
+    name: 'manage_team',
+    description: 'Manage your team: spawn agents from templates, list team members, stop agents.',
+    parameters: z.object({
+      action: z.enum(['spawn', 'list', 'stop', 'templates']).describe(
+        'Action: spawn (create agent), list (show team), stop (remove agent), templates (show available)'
+      ),
+      template: z.string().optional().describe('Template ID for spawn (e.g. "worker", "builder", "tester")'),
+      task: z.string().optional().describe('Task description for spawned agent (appended to template prompt)'),
+      customPrompt: z.string().optional().describe('Full custom prompt instead of template (for novel agents)'),
+      agentId: z.string().optional().describe('Agent ID for stop action, or custom ID for spawn'),
+    }),
+    execute: async (args: any) => {
+      const ok = (data: any) => ({ success: true, output: JSON.stringify(data, null, 2) });
+      const fail = (msg: string) => ({ success: false, output: msg });
+
+      switch (args.action) {
+        case 'templates': {
+          const templates = BUILT_IN_TEMPLATES.map(t => ({
+            id: t.id, displayName: t.displayName, description: t.description, role: t.role,
+          }));
+          return ok({ templates });
+        }
+
+        case 'list': {
+          const teamData = adapter.getTeamAgents(teamId);
+          return ok({ teamId, agents: teamData });
+        }
+
+        case 'spawn': {
+          const template = args.template ? BUILT_IN_TEMPLATES.find((t: AgentTemplate) => t.id === args.template) : null;
+          let prompt = '';
+          let role = 'worker';
+          let model = 'claude-code';
+
+          if (template) {
+            prompt = template.promptSkeleton;
+            role = template.role;
+            model = template.model;
+            if (args.task) {
+              prompt += `\n\n## Your Current Task\n${args.task}`;
+            }
+          } else if (args.customPrompt) {
+            prompt = args.customPrompt;
+            if (args.task) {
+              prompt += `\n\n## Your Current Task\n${args.task}`;
+            }
+          } else {
+            return fail('Provide either a template ID or customPrompt');
+          }
+
+          const agentId = args.agentId || `${args.template || 'custom'}-${Date.now().toString(36)}`;
+
+          // Check agent limit per team (max 10 agents to prevent runaway spawning)
+          const currentAgents = adapter.getTeamAgents(teamId);
+          if (currentAgents.length >= 10) {
+            return fail('Team agent limit reached (10). Stop unused agents before spawning new ones.');
+          }
+
+          try {
+            await adapter.spawnTeamAgent(teamId, {
+              id: agentId,
+              role,
+              displayName: template?.displayName || 'Custom Agent',
+              prompt,
+              model,
+              tickIntervalMs: template?.tickIntervalMs || 0,
+            });
+            return ok({ spawned: agentId, role, template: args.template || 'custom' });
+          } catch (err: any) {
+            return fail(`Failed to spawn agent: ${err.message}`);
+          }
+        }
+
+        case 'stop': {
+          if (!args.agentId) return fail('agentId required for stop action');
+          // Don't allow stopping the lead itself
+          if (args.agentId === 'lead') return fail('Cannot stop the lead agent');
+          try {
+            await adapter.stopTeamAgent(teamId, args.agentId);
+            return ok({ stopped: args.agentId });
+          } catch (err: any) {
+            return fail(`Failed to stop agent: ${err.message}`);
+          }
+        }
+
+        default:
+          return fail(`Unknown action: ${args.action}`);
+      }
+    },
+  };
+}
+
 // ─── Team Agent Config ──────────────────────────────────────────────────
 
 export interface TeamAgentConfig {
@@ -318,13 +416,86 @@ export interface TeamAgentConfig {
   role: string;
   displayName: string;
   prompt: string;
+  promptTemplate?: string;  // template ID — resolved at startTeam() time
   model?: string;
   tickIntervalMs?: number;
 }
 
-// ─── Seed Configs (pando-infra team prompts) ──────────────────────────
+// ─── Prompt Parameterization ─────────────────────────────────────────────
 
-const OBSERVER_PROMPT = `You are the Pando Network Observer. You monitor network health and report problems to the lead.
+export interface PromptContext {
+  projectDir: string;   // resolved nodeRepoRoot
+  apiPort: number;      // from config
+  teamId?: string;      // team being started (for universal templates)
+  repos?: string[];     // repos assigned to the team
+}
+
+// ─── Agent Templates ─────────────────────────────────────────────────────
+
+/** Agent template — a reusable blueprint for spawning agents. */
+export interface AgentTemplate {
+  id: string;
+  displayName: string;
+  description: string;
+  role: string;
+  promptSkeleton: string;
+  model: string;
+  tickIntervalMs: number;   // 0 = on-demand only (no periodic tick)
+}
+
+/** Built-in templates that ship with the code. */
+export const BUILT_IN_TEMPLATES: AgentTemplate[] = [
+  {
+    id: 'worker',
+    displayName: 'Worker',
+    description: 'Simple task executor. Does what the lead tells it.',
+    role: 'worker',
+    promptSkeleton: 'You are a worker agent. Execute the task given to you. Use bash, read, write, edit tools. Report results back to lead via send_message. Be brief. Act, don\'t narrate.',
+    model: 'claude-code',
+    tickIntervalMs: 0,
+  },
+  {
+    id: 'builder',
+    displayName: 'Builder',
+    description: 'Code writer with git access. Builds features, fixes bugs.',
+    role: 'builder',
+    promptSkeleton: 'You are a builder agent. You write code, fix bugs, and build features. Always: read before edit, npm run build after changes, git commit with descriptive message. Report results to lead via send_message.',
+    model: 'claude-code',
+    tickIntervalMs: 0,
+  },
+  {
+    id: 'tester',
+    displayName: 'Tester',
+    description: 'Runs tests and reports failures. Read-only codebase access.',
+    role: 'tester',
+    promptSkeleton: 'You are a tester agent. Run tests: npm run build, npx playwright test. Report failures to lead with specific error messages and file:line locations. Do NOT modify code.',
+    model: 'claude-code',
+    tickIntervalMs: 0,
+  },
+  {
+    id: 'observer',
+    displayName: 'Observer',
+    description: 'Monitors health. Reports anomalies. Read-only.',
+    role: 'explorer',
+    promptSkeleton: 'You are an observer agent. Monitor system health via pando_status and pando_peers. Report anomalies to lead via send_message. You are READ-ONLY. Never modify code or files.',
+    model: 'claude-code',
+    tickIntervalMs: 60 * 60_000,
+  },
+  {
+    id: 'reviewer',
+    displayName: 'Code Reviewer',
+    description: 'Reviews code changes for quality, security, and architecture.',
+    role: 'reviewer',
+    promptSkeleton: 'You are a code reviewer. Review diffs for: security vulnerabilities, architectural violations, code quality issues. Report findings to lead via send_message.',
+    model: 'claude-code',
+    tickIntervalMs: 0,
+  },
+];
+
+// ─── Seed Configs (pando-infra team prompts — parameterized) ──────────
+
+function makeObserverPrompt(ctx: PromptContext): string {
+  return `You are the Pando Network Observer. You monitor network health and report problems to the lead.
 
 IMPORTANT: You MUST call tools. Do not just describe what you would do — actually call the tools.
 IMPORTANT: Complete in 5 tool calls or fewer. Do NOT loop or recheck.
@@ -342,22 +513,24 @@ RULES:
 - Include SPECIFIC details (peer count, peer IDs, error details).
 - Do NOT loop or recheck. One pass: status → peers → analyze → report → done.
 - You are READ-ONLY. Never modify code or files.`;
+}
 
-const QA_PROMPT = `You are the Pando QA Agent. You run real tests and report failures to the lead.
+function makeQAPrompt(ctx: PromptContext): string {
+  return `You are the Pando QA Agent. You run real tests and report failures to the lead.
 
 IMPORTANT: You MUST call tools. Do not just describe what you would do — actually call the tools.
 IMPORTANT: Complete in 10 tool calls or fewer.
 
 STEP 1: Run the build to verify compilation:
-  bash: cd /c/Users/jaira/Desktop/Code/pando/node && npm run build 2>&1 | tail -5
+  bash: cd ${ctx.projectDir} && npm run build 2>&1 | tail -5
   - If build fails: send_message (toAgentId: "lead", message: "[CRITICAL:build] Build failed: <error>")
 
 STEP 2: Check node health via API:
-  bash: curl -s http://localhost:4000/v1/health | head -20
+  bash: curl -s http://localhost:${ctx.apiPort}/v1/health | head -20
   - If unhealthy: include in report
 
 STEP 3: Run E2E tests (if build passed):
-  bash: cd /c/Users/jaira/Desktop/Code/pando/node && npx playwright test --project pando-node tests/e2e/pando-node/pando-e2e.spec.ts 2>&1 | tail -30
+  bash: cd ${ctx.projectDir} && npx playwright test --project pando-node tests/e2e/pando-node/pando-e2e.spec.ts 2>&1 | tail -30
   - Note: Tests may take 2+ minutes. This is normal.
 
 STEP 4: Analyze ALL results and send ONE report to lead:
@@ -368,8 +541,10 @@ RULES:
 - Run REAL commands, not just API checks.
 - Include SPECIFIC output (error messages, test names, line numbers).
 - Do NOT loop or recheck. One pass through all steps.`;
+}
 
-const LEAD_PROMPT = `You are the Pando Infrastructure Lead. You manage the network by processing your inbox and board queue.
+function makeLeadPrompt(ctx: PromptContext): string {
+  return `You are the Pando Infrastructure Lead. You manage the network by processing your inbox and board queue.
 
 You run on Claude Code CLI. You have full bash, read, write, edit tools available.
 Your INBOX and BOARD STATE are injected below this message — no tool call needed to read them.
@@ -388,7 +563,7 @@ Your INBOX and BOARD STATE are injected below this message — no tool call need
      4. git add <files> && git commit -m "fix: description" && git push origin master
      5. Get commit hash: git rev-parse HEAD
      6. Propose governance upgrade:
-        curl -s -X POST http://127.0.0.1:4000/v1/governance/propose -H "Content-Type: application/json" -d '{"title":"[Upgrade] fix: description","description":"...","category":"upgrade","commitHash":"<hash>"}'
+        curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/governance/propose -H "Content-Type: application/json" -d '{"title":"[Upgrade] fix: description","description":"...","category":"upgrade","commitHash":"<hash>"}'
      7. Update the task via manage_tasks tool (action: "update", taskId, status: "done", progress: "Fixed in <hash>").
    - User requests: investigate, then update task progress via manage_tasks.
    - False positives / stale (>24h): mark done with a note.
@@ -399,7 +574,7 @@ The upgrade protocol auto-deploys to ALL nodes:
   git fetch → verify hash → build → safe restart (exit 75) → supervisor respawns
 
 ## Write API
-GOVERNANCE PROPOSE: curl -s -X POST http://127.0.0.1:4000/v1/governance/propose -H "Content-Type: application/json" -d '{"title":"[Upgrade] fix: description","description":"...","category":"upgrade","commitHash":"<hash>"}'
+GOVERNANCE PROPOSE: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/governance/propose -H "Content-Type: application/json" -d '{"title":"[Upgrade] fix: description","description":"...","category":"upgrade","commitHash":"<hash>"}'
 TASK MANAGEMENT: Use manage_tasks tool (action: "create"/"update", title, status, progress).
 SEND MESSAGE: Use send_message tool (toAgentId, message).
 
@@ -408,12 +583,57 @@ RULES:
 - npm run build MUST pass before committing.
 - Be brief. Act, don't narrate. Complete quickly.
 - Close or update tasks when done. Do NOT leave tasks perpetually pending.`;
+}
+
+function makeUniversalLeadPrompt(ctx: PromptContext & { teamId: string; repos?: string[] }): string {
+  const repoList = ctx.repos?.length ? ctx.repos.map(r => `  - ${r}`).join('\n') : '  - (no repos configured yet)';
+  return `You are the Lead Agent for the "${ctx.teamId}" team. You manage this team autonomously.
+
+You run on Claude Code CLI. You have full bash, read, write, edit tools available.
+Your INBOX and BOARD STATE are injected below this message when available.
+
+## Your Responsibilities
+1. Read your inbox for messages from other agents.
+2. Read your board for pending tasks from users.
+3. Process tasks by priority: CRITICAL > BUG > WARNING > FEATURE.
+4. For code work, use your tools directly (read, edit, bash).
+5. After code changes: npm run build (must pass) → git commit → report results.
+
+## Your Repos
+${repoList}
+
+## Team Management
+You can spawn sub-agents when you need help:
+- Simple tasks: do them yourself (faster, cheaper)
+- Complex tasks: spawn a worker or builder agent via manage_team tool
+- Test verification: spawn a tester agent
+- Stop agents when their work is done
+
+## API
+Node API: http://127.0.0.1:${ctx.apiPort}
+Task updates: Use manage_tasks tool
+Messages: Use send_message tool
+
+## Rules
+- Be brief. Act, don't narrate. Complete quickly.
+- Close or update tasks when done.
+- Don't spawn agents for simple work you can do yourself.
+- npm run build MUST pass before committing.`;
+}
+
+/** Map of promptTemplate IDs to their generator functions. */
+const PROMPT_TEMPLATES: Record<string, (ctx: PromptContext) => string> = {
+  'observer-health': makeObserverPrompt,
+  'qa-tests': makeQAPrompt,
+  'lead-infra': makeLeadPrompt,
+  'lead-universal': makeUniversalLeadPrompt as (ctx: PromptContext) => string,
+};
 
 /** Seed config for pando-infra team (the network management team). */
 export const PANDO_INFRA_AGENTS: TeamAgentConfig[] = [
-  { id: 'lead',     role: 'lead',     displayName: 'Infrastructure Lead', prompt: LEAD_PROMPT,     model: 'claude-code', tickIntervalMs: 15 * 60_000 },
-  { id: 'observer', role: 'explorer', displayName: 'Network Observer',    prompt: OBSERVER_PROMPT, model: 'claude-code', tickIntervalMs: 60 * 60_000 },
-  { id: 'qa',       role: 'tester',   displayName: 'QA Agent',            prompt: QA_PROMPT,       model: 'claude-code', tickIntervalMs: 120 * 60_000 },
+  { id: 'lead',     role: 'lead',     displayName: 'Infrastructure Lead', prompt: '', promptTemplate: 'lead-infra',       model: 'claude-code', tickIntervalMs: 15 * 60_000 },
+  { id: 'observer', role: 'explorer', displayName: 'Network Observer',    prompt: '', promptTemplate: 'observer-health',   model: 'claude-code', tickIntervalMs: 60 * 60_000 },
+  { id: 'qa',       role: 'tester',   displayName: 'QA Agent',            prompt: '', promptTemplate: 'qa-tests',          model: 'claude-code', tickIntervalMs: 120 * 60_000 },
 ];
 
 // ─── Engine Adapter ─────────────────────────────────────────────────────
@@ -750,6 +970,11 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   /** Get scheduler info. */
   getSchedules(): any[] {
     return this.scheduler?.getAll() ?? [];
+  }
+
+  /** Get available agent templates (built-in). */
+  getTemplates(): AgentTemplate[] {
+    return BUILT_IN_TEMPLATES;
   }
 
   /**
@@ -1098,6 +1323,14 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     const thisDir = dirname(fileURLToPath(import.meta.url));
     const nodeRepoRoot = resolve(thisDir, '..', '..', '..', '..');
 
+    // Resolve prompt templates into concrete prompts using runtime context
+    const promptCtx: PromptContext = { projectDir: nodeRepoRoot, apiPort: this.config!.apiPort, teamId };
+    for (const agent of agents) {
+      if (agent.promptTemplate && PROMPT_TEMPLATES[agent.promptTemplate]) {
+        agent.prompt = PROMPT_TEMPLATES[agent.promptTemplate](promptCtx);
+      }
+    }
+
     // Import PandoCode tool creators for re-registration with correct agent IDs
     const { createCheckAgentsTool, createSendMessageTool, createManageTasksTool } =
       await import('@pando-code/core');
@@ -1147,6 +1380,13 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         }));
 
         console.log(`[team:${teamId}] "${agent.id}": tools re-registered, session=${engineSessionId}`);
+      }
+
+      // Register manage_team tool on lead agents
+      if (agent.role === 'lead') {
+        const manageTeamTool = await createManageTeamTool(this, teamId);
+        engine.tools.register(manageTeamTool);
+        console.log(`[team:${teamId}] "${agent.id}": manage_team tool registered`);
       }
     }
 
@@ -1250,6 +1490,140 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
     this.activeTeams.delete(teamId);
     console.log(`[EngineAdapter] Team "${teamId}" stopped.`);
+  }
+
+  /**
+   * Spawn a new agent into a running team. Called by manage_team tool.
+   */
+  async spawnTeamAgent(teamId: string, agentConfig: TeamAgentConfig): Promise<void> {
+    const teamData = this.activeTeams.get(teamId);
+    if (!teamData) throw new Error(`Team "${teamId}" not running`);
+    if (!this.pool || !this.config) throw new Error('Adapter not started');
+
+    const { resolve, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const thisDir = dirname(fileURLToPath(import.meta.url));
+    const nodeRepoRoot = resolve(thisDir, '..', '..', '..', '..');
+
+    const engineId = `${teamId}:${agentConfig.id}`;
+    const isLead = agentConfig.role === 'lead';
+
+    // Create engine for this agent
+    const engine = await this.pool.getOrCreate(engineId, {
+      projectPath: isLead ? nodeRepoRoot : teamData.dbPath.replace(/[/\\][^/\\]+$/, ''),
+      dbPath: teamData.dbPath,
+      role: agentConfig.role,
+      skipKnowledgeSync: true,
+      ...(agentConfig.model ? { model: agentConfig.model } : {}),
+    });
+
+    // Start session
+    if (!engine.getSessionId()) {
+      await engine.startSession(`${teamId}: ${agentConfig.id}`);
+    }
+
+    // Re-register tools with correct agent ID
+    const { createCheckAgentsTool, createSendMessageTool, createManageTasksTool } =
+      await import('@pando-code/core');
+
+    if (engine?.db) {
+      engine.tools.unregister('check_agents');
+      engine.tools.unregister('send_message');
+      engine.tools.unregister('manage_tasks');
+
+      const engineSessionId = engine.getSessionId()!;
+      engine.tools.register(createCheckAgentsTool({ db: engine.db, agentId: agentConfig.id }));
+      engine.tools.register(createSendMessageTool({ db: engine.db, agentId: agentConfig.id, senderRole: agentConfig.role }));
+      engine.tools.register(createManageTasksTool({ db: engine.db, sessionId: engineSessionId }));
+    }
+
+    // Register manage_team tool on spawned lead agents
+    if (agentConfig.role === 'lead') {
+      const manageTeamTool = await createManageTeamTool(this, teamId);
+      engine.tools.register(manageTeamTool);
+      console.log(`[team:${teamId}] "${agentConfig.id}": manage_team tool registered`);
+    }
+
+    // Insert agent profile into shared DB
+    try {
+      const firstAgent = teamData.agents[0];
+      const firstEngine = this.pool.get(`${teamId}:${firstAgent.id}`);
+      if (firstEngine?.db) {
+        const sqlite = (firstEngine.db as any).$client;
+        sqlite.prepare(
+          `INSERT OR REPLACE INTO agents (id, role, model, system_prompt, tools, scope, status, display_name, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        ).run(agentConfig.id, agentConfig.role, agentConfig.model || 'default', agentConfig.prompt, '[]', '{}', 'idle', agentConfig.displayName, new Date().toISOString());
+      }
+    } catch (err: any) {
+      console.warn(`[team:${teamId}] Could not register spawned agent profile: ${err.message}`);
+    }
+
+    // Register scheduler tick if agent has one
+    if (agentConfig.tickIntervalMs && agentConfig.tickIntervalMs > 0 && this.scheduler) {
+      const label = `${teamId}:${agentConfig.id}`;
+      this.scheduler.register({
+        name: `${teamId}-${agentConfig.id}-tick`,
+        engineId,
+        intervalMs: agentConfig.tickIntervalMs,
+        prompt: `${agentConfig.prompt}\n\n---\n\nRun your periodic checks now.`,
+        active: true,
+        onEvent: (event: any) => {
+          if (event.type === 'stream:chunk' && event.content) process.stdout.write(`[${label}] ${event.content}`);
+        },
+        onComplete: () => console.log(`\n[${label}] Tick complete.`),
+        onError: (err: Error) => console.warn(`[${label}] Tick error: ${err.message}`),
+      });
+    }
+
+    // Track in active team data
+    teamData.agents.push(agentConfig);
+    console.log(`[team:${teamId}] Spawned agent "${agentConfig.id}" (role: ${agentConfig.role})`);
+  }
+
+  /**
+   * Stop and remove an agent from a running team. Called by manage_team tool.
+   */
+  async stopTeamAgent(teamId: string, agentId: string): Promise<void> {
+    const teamData = this.activeTeams.get(teamId);
+    if (!teamData) throw new Error(`Team "${teamId}" not running`);
+
+    // Unregister scheduler tick
+    if (this.scheduler) {
+      this.scheduler.unregister(`${teamId}-${agentId}-tick`);
+    }
+
+    // Remove from agent list
+    const idx = teamData.agents.findIndex(a => a.id === agentId);
+    if (idx >= 0) teamData.agents.splice(idx, 1);
+
+    // Update agent status in DB
+    try {
+      const firstAgent = teamData.agents[0];
+      if (firstAgent) {
+        const engine = this.pool.get(`${teamId}:${firstAgent.id}`);
+        if (engine?.db) {
+          const sqlite = (engine.db as any).$client;
+          sqlite.prepare(`UPDATE agents SET status = 'stopped' WHERE id = ?`).run(agentId);
+        }
+      }
+    } catch { /* ok */ }
+
+    console.log(`[team:${teamId}] Stopped agent "${agentId}"`);
+  }
+
+  /**
+   * Get list of agents in a team (for manage_team list action).
+   */
+  getTeamAgents(teamId: string): { id: string; role: string; displayName: string; status: string }[] {
+    const teamData = this.activeTeams.get(teamId);
+    if (!teamData) return [];
+    return teamData.agents.map(a => ({
+      id: a.id,
+      role: a.role,
+      displayName: a.displayName,
+      status: 'active',
+    }));
   }
 
   /**

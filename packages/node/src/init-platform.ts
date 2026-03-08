@@ -688,7 +688,7 @@ Be friendly and helpful. Keep answers short.`
         if (claimed) {
           // For pando-infra, use seed agents. For others, use a single default agent.
           const agents = team.id === 'pando-infra' ? PANDO_INFRA_AGENTS : [
-            { id: 'lead', role: 'lead', displayName: `${team.displayName} Lead`, prompt: `You manage the ${team.displayName} team.` },
+            { id: 'lead', role: 'lead', displayName: `${team.displayName} Lead`, prompt: '', promptTemplate: 'lead-universal', model: 'claude-code', tickIntervalMs: 15 * 60_000 },
           ];
           adapter.startTeam(team.id, agents).catch((err: any) =>
             console.warn(`[team-registry] Failed to start claimed team ${team.id}: ${err.message}`)

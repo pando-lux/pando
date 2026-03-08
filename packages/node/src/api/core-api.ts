@@ -619,6 +619,61 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       return { status: 'stopped' };
     });
 
+    // ── Agent Templates ──────────────────────────────────────────────────
+    fastify.get('/templates', async (_request: any, reply: any) => {
+      try {
+        const adapter = node.getEngineAdapter();
+        const templates = adapter?.getTemplates?.() ?? [];
+        return { templates };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // ── Team Task Progress ──────────────────────────────────────────────
+    fastify.get('/teams/:teamId/tasks', async (request: any, reply: any) => {
+      try {
+        const adapter = node.getEngineAdapter();
+        const tasks = adapter?.getTeamBoard(request.params.teamId) ?? [];
+        return { tasks };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    fastify.get('/teams/:teamId/tasks/:taskId', async (request: any, reply: any) => {
+      try {
+        const adapter = node.getEngineAdapter();
+        const tasks = adapter?.getTeamBoard(request.params.teamId) ?? [];
+        const task = tasks.find((t: any) => t.id === request.params.taskId);
+        if (!task) return reply.code(404).send({ error: 'Task not found' });
+        return task;
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // ── Team Status ─────────────────────────────────────────────────────
+    fastify.get('/teams/:teamId/status', async (request: any, reply: any) => {
+      try {
+        const teamId = request.params.teamId as string;
+        const adapter = node.getEngineAdapter();
+        const isActive = adapter?.isTeamActive(teamId) ?? false;
+        const agents = adapter?.getTeamAgents?.(teamId) ?? [];
+        const tasks = adapter?.getTeamBoard(teamId) ?? [];
+        return {
+          teamId,
+          active: isActive,
+          agentCount: agents.length,
+          agents: agents.map((a: any) => ({ id: a.id, role: a.role, displayName: a.displayName, status: a.status })),
+          pendingTasks: tasks.length,
+          managingNode: node.getIdentity?.()?.peerId || 'unknown',
+        };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
     // ── Legacy /council/* compatibility routes (delegate to /teams/pando-infra) ──
 
     fastify.get('/council/status', async () => {

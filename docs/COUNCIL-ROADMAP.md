@@ -1,165 +1,474 @@
-# Council & Team Architecture Roadmap
+# Team Architecture Roadmap
 
-> Generated: 2026-03-08 | Status: ACTIVE
-> This is the working plan for making the council/team system functional.
-
----
-
-## Current State (Broken)
-
-- Council runs 3 agents: lead (claude-code), observer (gemini), qa (gemini)
-- **Lead has 0 tool calls ever** — may not be spawning Claude Code CLI correctly
-- **Observer always reports false positives** — threshold expects >2 peers, only 3 nodes exist
-- **QA runs 3 API checks** that a shell script could do — never runs actual tests
-- **$60/day burn for zero actionable output**
-- Total: 49 sessions, 444 messages, 0 code changes, 0 governance proposals by agents
+> Updated: 2026-03-08 | Status: ACTIVE
+> Master plan for the team/agent/template system.
 
 ---
 
-## Phase 1: Fix Council to Actually Work
+## Core Design Principle: Lead-First Teams
 
-### 1.1 Verify Claude Code CLI Spawns for Lead
-- **Problem**: Lead is configured as `model: 'claude-code'` but audit shows budget entries with `model: "google"`. Either CLI isn't available or model routing fails silently.
-- **Investigation**: Check `isClaudeCodeAvailable()` on Windows. Check if `claude` CLI is on PATH. Check if the provider fallback silently drops to Gemini.
-- **Fix**: Add logging when Claude Code CLI spawn succeeds/fails. If CLI not available, log CRITICAL error instead of silently falling back. Ensure `claude -p` works from the engine-adapter context.
+Every team starts with **1 lead agent**. The lead:
+1. Assesses the project/task scope
+2. Decides what sub-agents it needs
+3. Spawns agents from templates (or creates new ones)
+4. Manages agent lifecycle (start, stop, reassign)
+5. Is the brain — workers are hands
 
-### 1.2 All 3 Agents Should Use Claude Code CLI (Default)
-- **Current**: Only lead has `model: 'claude-code'`. Observer/QA default to `gemini-2.5-flash`.
-- **Change**: Set `model: 'claude-code'` on ALL three agents in `PANDO_INFRA_AGENTS`.
-- **Why**: Claude Code CLI has bash, read, write, edit access. Observer can actually inspect files. QA can actually run tests. Gemini can only call PandoCode tools (which are just HTTP calls).
-- **Future**: Model selection will be configurable per-team from the gateway UI.
+**pando-infra (council) is a special case**: jumpstarted with 3 pre-seeded agents
+(lead + observer + qa) because we know exactly what infrastructure management needs.
+Same pipeline, just pre-populated. All other teams start with 1 lead.
 
-### 1.3 Fix Observer Threshold
-- **Current prompt**: Reports warning when peer count < 3. But network only has 3 nodes.
-- **Fix**: Change threshold to report CRITICAL at 0 peers, WARNING at 1 peer, HEALTHY at 2+.
-- **Also**: Observer should check actual node health indicators (CPU, memory, disk) not just peer count.
-
-### 1.4 Make QA Run Actual Tests
-- **Current**: Calls `pando_status`, `pando_peers`, `pando_list_projects` and analyzes JSON.
-- **Fix**: QA prompt should instruct it to run `npx playwright test --project pando-node` and report results. Since it will run on Claude Code CLI, it has bash access.
-- **Also**: QA should run `npm run build` to verify compilation. This is real QA, not API polling.
-
-### 1.5 Lead Must Actually Execute Actions
-- **Problem**: Lead prompt says "you ARE Claude Code, fix directly" but if it's running on Gemini, it can't.
-- **Fix**: Once 1.1/1.2 are done, the lead will have full Claude Code capabilities. Verify by triggering it with a real task and confirming tool calls appear.
-- **Test**: Create a board task "[BUG:user] Fix typo in README" and verify the lead actually edits the file, builds, commits, and proposes governance.
+```
+Default team:     [Lead] → lead assesses → spawns worker/tester/observer as needed
+Council team:     [Lead + Observer + QA] → pre-seeded, same pipeline, jumpstarted once
+Future user team: [Lead] → user picks template → lead fills in the gaps
+```
 
 ---
 
-## Phase 2: PandoCode Web UI — Network Projects
+## Current State (Commit 89028820 + audit fixes)
 
-### 2.1 Linked Workspaces Config
-- **In pando-code repo**: Add to `PandoCodeConfig`:
-  ```typescript
-  network?: {
-    enabled: boolean;           // toggle for pando-node link
-    autoDiscover: boolean;      // scan ~/.pando/teams/ for team DBs
-    workspaces?: Array<{
-      path: string;             // path to .pando-code.db
-      label: string;            // display name
-    }>;
-  }
-  ```
-- **pando-code stays standalone** — if network.enabled is false (default), nothing changes.
-- **Auto-discovery**: When enabled, scan `~/.pando/teams/*/` for `.pando-code.db` files. Read `~/.pando/teams/teams.db` for team metadata (name, repos, status).
-
-### 2.2 Project Hub — Network Projects Section
-- **In pando-code web UI**: Add a "Network Projects" section below local projects on ProjectHub.
-- **Each card shows**: Project name (from team repos), team name, agent count, status.
-- **Click**: Opens that team's `.pando-code.db` as the active project context.
-- **Two projects, one team**: pando-infra manages `pando-lux/node` and `pando-lux/code`. Show as 2 cards, both labeled "Council (pando-infra)".
-
-### 2.3 Settings — Network Toggle
-- **In pando-code web UI Settings page**: Add "Pando Node" section.
-- **Controls**: On/Off toggle, node URL display, connection status indicator.
-- **When ON**: Auto-discover teams, show network projects.
-- **When OFF**: Hide network section, don't scan for team DBs.
+- All 3 council agents on `model: 'claude-code'` (was gemini for observer/qa)
+- Observer threshold fixed: 2+ peers = healthy
+- QA prompt rewritten: runs `npm run build` + `npx playwright test`
+- Lead prompt updated: uses manage_tasks/send_message tools
+- Model resolution logging in startTeam()
+- Tick intervals tuned: lead 15min, observer 1hr, QA 2hr
+- **QA prompt hardcodes Windows path** — needs parameterization (Phase 1.1)
+- **BIBLE.md out of sync** — 7 stale items (Phase 1.2)
 
 ---
 
-## Phase 3: Agent History & Visibility
+## Phase 1: Foundation Cleanup (NOW)
 
-### 3.1 Per-Agent Conversation History
-- **Data exists**: `.pando-code.db` `messages` table has `agent_id` column.
-- **Need**: API endpoint `GET /v1/agents/:id/messages?limit=100` that returns full conversation history filtered by agent_id.
-- **Web UI**: Agent detail → new "History" tab showing full conversation with tool calls inline.
+### 1.1 Parameterize Prompts
+- **Problem**: QA prompt has `/c/Users/jaira/Desktop/Code/pando/node` — won't work on EC2
+- **Fix**: Convert `OBSERVER_PROMPT`, `QA_PROMPT`, `LEAD_PROMPT` from const strings to
+  template functions that take `{ projectDir, apiPort, repos }` context
+- **Where**: engine-adapter.ts — prompts become `makeQAPrompt(ctx)` etc.
+- **When called**: In `startTeam()`, where `nodeRepoRoot` and `apiPort` are already known
 
-### 3.2 Per-Agent Cost Breakdown
-- **Data exists**: `budget_usage` table has per-call token/cost data. `sessions` table has agent linkage.
-- **Need**: Aggregate cost per agent across sessions.
-- **Web UI**: Show cost badge on each agent card (e.g., "$15.14 total").
+### 1.2 BIBLE.md Sync
+Fix 7 stale items:
+1. Observer/QA model: `gemini-2.5-flash` → `claude-code`
+2. Tick intervals: 30min → 60min (observer), 120min (QA)
+3. Method names: `getCouncilBoard()` → `getTeamBoard()`
+4. `enableCouncil` flag: not removed, still checked in init-platform.ts
+5. Lead vs non-lead tick asymmetry: document custom interval + inbox injection
+6. Board snapshot format: document the `getBoardSnapshot()` output
+7. Team inbox key structure: `msg:{agentId}:{uuid}` in state table
 
-### 3.3 Model Indicator
-- **Data exists**: Each engine has a `modelId`. Agent profiles have `model` field.
-- **Web UI**: Show model badge on agent cards (e.g., "claude-code" or "gemini-2.5-flash").
+### 1.3 Legacy Cleanup
+- Extract `HARM_PATTERNS`/`SHUTDOWN_PATTERNS` to shared constants (duplicated in api-server.ts + engine-adapter.ts)
+- Remove unused `claudePath` parameter from Scheduler constructor
+- Clean up stale index.ts exports from deleted ai-backend files
 
-### 3.4 Team Hierarchy View
-- **Extend Agents view**: Show team name as header, agents as children.
-- **Show**: Team → Lead, Observer, QA with roles, models, costs, last active time.
-- **Click agent**: See full detail with history/frames/sessions tabs.
+### 1.4 Default Team = 1 Lead
+- **Current**: Non-infra teams get useless stub: `{ prompt: 'You manage the X team.' }`
+- **Fix**: Give the default lead a real prompt — a **universal lead template** that:
+  - Reads its project context (what repo, what stack)
+  - Checks its board for pending tasks
+  - Decides if it needs sub-agents for the current workload
+  - Has access to `manage_team` tool for spawning agents
+- **pando-infra**: Unchanged — still jumpstarted with 3 agents
+
+### TEST MILESTONE 1
+```
+✓ npm run build passes
+✓ Start node on Windows → prompts use correct dynamic paths
+✓ Start node on EC2 → prompts use EC2 paths (no /c/Users/jaira)
+✓ Create a non-infra team → lead gets real universal prompt, not stub
+✓ E2E: existing 71 tests still pass
+```
 
 ---
 
-## Phase 4: Future — User-Configurable Teams
+## Phase 2: Template System
 
-### 4.1 Model Selection per Team
-- Users can select which model their team agents use from the gateway.
-- Options: Claude Code CLI (if available), or any LLM provider configured in PandoCode.
-- Default: Claude Code CLI for lead, configurable for observer/QA.
+### 2.1 Built-in Templates (TypeScript)
+Templates are just data — role + prompt skeleton + defaults:
 
-### 4.2 Team Creation from Gateway
-- Users can create new teams from the public gateway UI.
-- Select projects to manage, configure agents (roles, models, prompts).
-- Team gets assigned to a node with PandoCode capability.
+```typescript
+// Built-in templates (ship with code, versioned)
+const BUILT_IN_TEMPLATES: AgentTemplate[] = [
+  {
+    id: 'worker',
+    displayName: 'Worker',
+    description: 'Simple task executor. Does what the lead tells it.',
+    role: 'worker',
+    promptSkeleton: 'You are a worker agent. Execute the task given to you. Use bash, read, write, edit tools. Report results back to lead via send_message. Be brief. Act, don\'t narrate.',
+    model: 'claude-code',
+    tickIntervalMs: 0,   // no tick — runs on demand only
+  },
+  {
+    id: 'builder',
+    displayName: 'Builder',
+    description: 'Code writer with git access. Builds features, fixes bugs.',
+    role: 'builder',
+    promptSkeleton: 'You are a builder agent. You write code, fix bugs, and build features. Always: read before edit, npm run build after changes, git commit with descriptive message. Report results to lead.',
+    model: 'claude-code',
+    tickIntervalMs: 0,
+  },
+  {
+    id: 'tester',
+    displayName: 'Tester',
+    description: 'Runs tests and reports failures. Read-only codebase access.',
+    role: 'tester',
+    promptSkeleton: 'You are a tester agent. Run tests: npm run build, npx playwright test. Report failures to lead with specific error messages and file:line locations. Do NOT modify code.',
+    model: 'claude-code',
+    tickIntervalMs: 0,
+  },
+  {
+    id: 'observer',
+    displayName: 'Observer',
+    description: 'Monitors health. Reports anomalies. Read-only.',
+    role: 'explorer',
+    promptSkeleton: 'You are an observer agent. Monitor system health via pando_status and pando_peers. Report anomalies to lead. You are READ-ONLY. Never modify code or files.',
+    model: 'claude-code',
+    tickIntervalMs: 60 * 60_000, // 1 hour default
+  },
+  {
+    id: 'reviewer',
+    displayName: 'Code Reviewer',
+    description: 'Reviews code changes for quality, security, and architecture.',
+    role: 'reviewer',
+    promptSkeleton: 'You are a code reviewer. Review diffs for: security vulnerabilities, architectural violations, code quality issues. Report findings to lead.',
+    model: 'claude-code',
+    tickIntervalMs: 0,
+  },
+];
+```
 
-### 4.3 Team Dashboard in Gateway
-- Separate from pando-code web UI — the gateway shows aggregate team data across all nodes.
-- Node-level detail delegated to pando-code web UI on the managing node.
+**Key design**: Templates are intentionally simple. The lead customizes them per-task
+by appending context when spawning: `spawn_agent(template: 'builder', task: 'Fix the login bug in auth.ts')`.
+
+### 2.2 Template Interface
+```typescript
+interface AgentTemplate {
+  id: string;
+  displayName: string;
+  description: string;
+  role: string;
+  promptSkeleton: string;       // base prompt — lead appends task-specific context
+  model: string;                // default model
+  tickIntervalMs: number;       // 0 = on-demand only (no periodic tick)
+  // Future:
+  // tools?: string[];          // restrict which tools this agent can use
+  // maxTokens?: number;        // budget cap per invocation
+  // scope?: string[];          // file/dir access restrictions
+}
+```
+
+### 2.3 `manage_team` Tool for Leads
+Give lead agents a tool to manage their team:
+
+```typescript
+manage_team({
+  action: 'spawn',              // spawn | stop | list | update
+  template: 'builder',          // template ID
+  task: 'Fix the login bug',    // task context (appended to template prompt)
+  agentId: 'builder-1',         // optional custom ID (auto-generated if omitted)
+})
+// → Creates persistent agent in team, registers in shared DB
+// → Returns { agentId, status: 'spawned' }
+
+manage_team({
+  action: 'list',               // list all agents in this team
+})
+// → Returns [{ id, role, status, lastActive }]
+
+manage_team({
+  action: 'stop',
+  agentId: 'builder-1',
+})
+// → Stops agent, removes from active team, keeps history in DB
+```
+
+### 2.4 Lead Decides, Not Humans
+The universal lead prompt includes:
+```
+You have access to `manage_team` tool. When you need help:
+- For code fixes: spawn a 'builder' agent
+- For test verification: spawn a 'tester' agent
+- For code review: spawn a 'reviewer' agent
+- For monitoring: spawn an 'observer' agent
+- For simple tasks: spawn a 'worker' agent
+
+You can also create CUSTOM agents by providing a full prompt instead of a template.
+Agents you spawn share your team's database. Communicate via send_message.
+
+Rules:
+- Don't spawn agents you don't need. A simple task doesn't need a team.
+- Stop agents when their work is done. Don't leave idle agents running.
+- Workers are disposable. Spawn for a task, get result, stop.
+```
+
+### TEST MILESTONE 2
+```
+✓ Lead agent can call manage_team(action: 'list') and see team members
+✓ Lead agent spawns a 'worker' for a simple task → worker executes → lead gets result
+✓ Lead agent spawns a 'builder' for a code fix → builder edits file → build passes
+✓ Lead agent stops a worker after task completion
+✓ Council lead (pando-infra) still works with pre-seeded 3 agents
+✓ Template catalog accessible via GET /v1/templates
+```
+
+---
+
+## Phase 3: Custom Templates
+
+### 3.1 JSON Template Files
+```
+~/.pando/teams/templates/
+  worker.json        → built-in (shipped with code, can be overridden)
+  builder.json       → built-in
+  council.json       → pre-seeded 3-agent team template
+  my-custom.json     → user-created
+```
+
+### 3.2 Lead Creates Templates
+When a lead creates a custom agent with a novel prompt, it can save it as a template:
+```
+manage_team({
+  action: 'spawn',
+  customPrompt: 'You are a documentation agent. Read code, generate JSDoc comments...',
+  saveAsTemplate: 'doc-writer',  // optional: saves for reuse
+})
+```
+
+### 3.3 Template API
+```
+GET    /v1/templates                    → list all templates (built-in + custom)
+GET    /v1/templates/:id               → get template details
+POST   /v1/templates                    → create custom template
+PATCH  /v1/templates/:id               → update template
+DELETE /v1/templates/:id               → delete custom template (can't delete built-in)
+```
+
+### 3.4 User-Submitted Templates (FUTURE)
+- Users submit templates via gateway UI
+- Templates reviewed (governance? lead review?)
+- Approved templates available to all teams on the network
+- Versioned: v1.0, v1.1, etc.
+
+### TEST MILESTONE 3
+```
+✓ Custom template JSON file created → lead can spawn agent from it
+✓ Lead creates agent with custom prompt → template saved to disk
+✓ GET /v1/templates returns built-in + custom templates
+✓ Custom template overrides built-in (same ID)
+```
+
+---
+
+## Phase 4: PandoCode Web UI — Network Projects
+
+### 4.1 Linked Workspaces Config
+- **In pando-code repo**: `PandoCodeConfig.network` option
+- `network.enabled: boolean` — toggle pando-node link
+- `network.autoDiscover: boolean` — scan `~/.pando/teams/` for team DBs
+- pando-code stays standalone when disabled (default)
+
+### 4.2 Project Hub — Network Projects Section
+- "Network Projects" section below local projects
+- Each card: project name, team name, agent count, status
+- Click: opens team's `.pando-code.db` as active project
+
+### 4.3 Settings — Network Toggle
+- Settings page "Pando Node" section
+- On/Off toggle, node URL, connection status
+
+### TEST MILESTONE 4
+```
+✓ pando-code web UI shows network projects when enabled
+✓ Click project → loads team DB → shows agents, board, history
+✓ Settings toggle ON/OFF works
+✓ Auto-discovery finds team DBs in ~/.pando/teams/
+```
+
+---
+
+## Phase 5: Agent Visibility & Cost
+
+### 5.1 Per-Agent Conversation History
+- API: `GET /v1/agents/:id/messages?limit=100`
+- Web UI: Agent detail "History" tab
+
+### 5.2 Per-Agent Cost Breakdown
+- Aggregate cost per agent across sessions from `budget_usage` table
+- Web UI: cost badge on agent cards
+
+### 5.3 Model Indicator
+- Show model badge on agent cards
+
+### 5.4 Team Hierarchy View
+- Team name as header, agents as children
+- Click agent: full detail with history/sessions tabs
+
+### TEST MILESTONE 5
+```
+✓ GET /v1/agents/:id/messages returns conversation history
+✓ Per-agent cost calculation works
+✓ Team hierarchy visible in web UI
+```
+
+---
+
+## Phase 6: Session Persistence & Recovery
+
+### Research Findings (Completed 2026-03-08)
+
+**Where sessions live:**
+- Claude Code CLI sessions: `~/.claude/` (filesystem, managed by Claude)
+- PandoCode sessions: `.pando-code.db` `sessions` table
+- Claude CLI session ID: **closure variable** in `createClaudeCodeModel()` — NOT persisted
+
+**What survives restart:**
+- `.pando-code.db`: board_tasks, memories, messages, agent profiles ✓
+- Claude CLI session files in `~/.claude/` ✓
+- **LOST**: Closure variable linking engine to CLI session → every restart = fresh session
+
+**Cross-node migration:**
+- Team metadata synced via GossipSub `pando:teams` topic
+- `.pando-code.db` local-only → new node starts fresh
+- Acceptable: board + memories provide enough context to continue
+
+### 6.1 Session ID Persistence
+
+**pando-code changes (claude-code.ts):**
+1. `createClaudeCodeModel({ initialSessionId? })` — resume previous session
+2. `model.getSessionId()` — expose current session ID
+3. Validate session before `--resume` (may be cleaned up)
+
+**pando-node changes (engine-adapter.ts):**
+1. Save session ID to `state` table after first tick: `claude-cli-session:{agentId}`
+2. Read saved session ID in `startTeam()` and pass to engine
+3. If `--resume` fails → start fresh, log warning
+
+### 6.2 Graceful Degradation
+- Claude Code CLI not available → CRITICAL log, don't start agent
+- Team DB corrupted → recreate from template, log what was lost
+- Saved session stale → fresh start, log "[team] Session expired"
+
+### 6.3 Recovery Priority
+```
+1. Board tasks     — always persisted
+2. Memories        — always persisted
+3. Agent profiles  — always persisted
+4. CLI session     — resume if available, fresh if not
+5. Conversation    — nice-to-have, not critical
+```
+
+### TEST MILESTONE 6
+```
+✓ Stop node → restart → agents resume previous Claude CLI sessions
+✓ Delete ~/.claude/ sessions → agents start fresh without crashing
+✓ Cross-node: team orphaned → new node claims → lead starts with board context
+```
+
+---
+
+## Phase 7: User-Facing API Gaps
+
+### 7.1 Task Progress Tracking (CRITICAL)
+- `GET /v1/teams/:teamId/tasks` — list team tasks with status
+- `GET /v1/teams/:teamId/tasks/:taskId` — detailed task with progress history
+- Users can submit bugs and track resolution
+
+### 7.2 Team Status Endpoint
+- `GET /v1/teams/:teamId/status` — managing node, agent count, health, last active
+- Shows which node is running the team
+
+### 7.3 Cost Visibility
+- `GET /v1/teams/:teamId/cost` — total Lux spent, per-agent breakdown
+- Budget alerts when approaching limits
+
+### 7.4 Team Configuration API
+- `PATCH /v1/teams/:teamId/config` — model, tick intervals, active/paused
+- Users can tune their team without code changes
+
+### TEST MILESTONE 7
+```
+✓ Submit bug → GET tasks → see status updates over time
+✓ GET /v1/teams/:teamId/status returns real health data
+✓ PATCH config changes take effect on running team
+```
+
+---
+
+## Phase 8: Future — Gateway Integration
+
+### 8.1 Model Selection per Team
+- Users select model from gateway UI
+- Options depend on managing node capabilities
+
+### 8.2 Team Creation from Gateway
+- Create team, select template, assign to node
+- Auto-provision workspace and lead agent
+
+### 8.3 Team Dashboard
+- Aggregate team data across all nodes
+- Detail delegated to pando-code web UI
 
 ---
 
 ## BIBLE Updates Needed
 
-### Section 3.2.10: Network Integration (TODO)
-Add to BIBLE documenting:
-- Linked workspaces concept (generic, filesystem-based)
-- Auto-discovery mechanism for team DBs
-- Project Hub showing network-managed projects
-- Settings toggle for network link
-- No @pando/* imports — discovery is config-driven
+### Section 5.10: Team Architecture
+- All agents → `claude-code` model
+- Correct tick intervals (15m / 60m / 120m)
+- Lead-first design: default = 1 lead, council = jumpstarted 3
+- Template system overview
+- Lead agent's `manage_team` tool
+- Lead vs non-lead tick asymmetry
 
-### Section 5.10: Council/Team Updates
-Update to reflect:
-- All agents default to Claude Code CLI
-- Observer/QA thresholds fixed
-- QA runs real tests (Playwright + build)
-- Lead executes real actions (edit, build, commit, govern)
+### Section 3.2.10: Network Integration
+- Linked workspaces concept
+- Auto-discovery mechanism
+- Settings toggle
+
+### Section 6: Engine Adapter
+- Correct method names: `getTeamBoard()`, `getTeamInbox()`, etc.
+- Board snapshot format
+- Team inbox key structure: `msg:{agentId}:{uuid}`
 
 ---
 
-## Implementation Priority
+## Implementation Order
 
 ```
-NOW (Phase 1):
-  1.1  Verify Claude Code CLI spawning        ← diagnostic first
-  1.2  All 3 agents → claude-code model       ← config change
-  1.3  Fix observer threshold                 ← prompt fix
-  1.4  QA runs real tests                     ← prompt fix
-  1.5  Verify lead executes actions           ← integration test
+PHASE 1 — Foundation Cleanup (NOW):
+  1.1  Parameterize prompts                    ← engine-adapter.ts
+  1.2  BIBLE.md sync (7 items)                 ← BIBLE.md
+  1.3  Legacy cleanup (shared constants, etc.) ← multiple files
+  1.4  Universal lead prompt for non-infra     ← engine-adapter.ts
+  → TEST MILESTONE 1
 
-NEXT (Phase 2):
-  2.1  Linked workspaces config               ← pando-code repo
-  2.2  Network projects in Project Hub        ← pando-code repo
-  2.3  Settings network toggle                ← pando-code repo
+PHASE 2 — Template System:
+  2.1  Built-in templates (TypeScript)         ← engine-adapter.ts
+  2.2  AgentTemplate interface                 ← engine-adapter.ts
+  2.3  manage_team tool for leads              ← engine-adapter.ts + pando-code
+  2.4  Lead autonomous team management         ← prompt engineering
+  → TEST MILESTONE 2
 
-LATER (Phase 3):
-  3.1  Per-agent history API + UI             ← pando-code repo
-  3.2  Per-agent cost breakdown               ← pando-code repo
-  3.3  Model indicator in UI                  ← pando-code repo
-  3.4  Team hierarchy view                    ← pando-code repo
+PHASE 3 — Custom Templates:
+  3.1  JSON template files                     ← filesystem
+  3.2  Lead creates templates                  ← manage_team tool
+  3.3  Template CRUD API                       ← core-api.ts
+  3.4  User-submitted templates (future)       ← gateway
+  → TEST MILESTONE 3
 
-FUTURE (Phase 4):
-  4.1  Model selection per team               ← both repos
-  4.2  Team creation from gateway             ← gateway + node
-  4.3  Team dashboard in gateway              ← gateway
+PHASE 4 — PandoCode Web UI:                   ← pando-code repo
+  → TEST MILESTONE 4
+
+PHASE 5 — Agent Visibility:                   ← pando-code repo
+  → TEST MILESTONE 5
+
+PHASE 6 — Session Persistence:                ← both repos
+  → TEST MILESTONE 6
+
+PHASE 7 — User-Facing APIs:                   ← core-api.ts
+  → TEST MILESTONE 7
+
+PHASE 8 — Gateway Integration:                ← gateway + node
 ```

@@ -1032,7 +1032,6 @@ export class PandoNode {
     this.scheduler = new Scheduler(
       { apiPort: this.config.apiPort },
       taskQueue,
-      undefined,    // claudePath
       dataDir,
       rewardForTask,
     );

@@ -93,7 +93,6 @@ export class Scheduler extends EventEmitter {
   private taskQueue: TaskQueue;
   private fileRegistry: FileRegistry | null = null;
   // Task results flow via EventEmitter events (task:completed, task:failed)
-  private claudePath: string;
   private dataDir: string;
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
@@ -139,7 +138,6 @@ export class Scheduler extends EventEmitter {
   constructor(
     config: Partial<SchedulerConfig>,
     taskQueue: TaskQueue,
-    claudePath?: string,
     dataDir?: string,
     private rewardWork?: (workType: string, workProof: string) => void,
   ) {
@@ -147,8 +145,6 @@ export class Scheduler extends EventEmitter {
     this.config = { ...DEFAULT_CONFIG, ...config };
     this.taskQueue = taskQueue;
     this.dataDir = dataDir || join(homedir(), '.pando');
-    // claudePath kept for reference but no longer used for spawning
-    this.claudePath = claudePath || 'claude';
     if (rewardWork) this.rewardWork = rewardWork;
   }
 

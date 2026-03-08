@@ -893,8 +893,8 @@ No tick loop. No orchestrator. No message bus. The engine runs when it has somet
 | Actor | How it works | Triggered by |
 |---|---|---|
 | **Council Lead** | Long-running engine. Reads inbox + board snapshot, acts on issues + user requests, spawns builders, submits through governance. | Scheduler tick (every 15 min) |
-| **Observer** | Long-running engine. Read-only. Monitors network health, peer status. Sends issues to council via send_message. | Scheduler tick (every 30 min) |
-| **QA** | Long-running engine. Runs health checks, API validation. Sends findings to council via send_message. | Scheduler tick (every 30 min) |
+| **Observer** | Long-running engine. Read-only. Monitors network health, peer status. Sends issues to council via send_message. | Scheduler tick (every 60 min) |
+| **QA** | Long-running engine. Runs health checks, API validation. Sends findings to council via send_message. | Scheduler tick (every 120 min) |
 
 ### 5.8 App Lifecycle (AppManager) — Unified Deploy/Update/Monitor
 
@@ -1256,9 +1256,9 @@ Node starts with PandoCode available:
 
 **Seed config for pando-infra (3 agents):**
 ```
-Lead   — role: lead,     model: claude-code,       tick: 15min, ALL pando_* tools
-Observer — role: explorer, model: gemini-2.5-flash, tick: 30min, read-only pando_* tools
-QA     — role: tester,   model: gemini-2.5-flash,  tick: 30min, pando_status + pando_test_run
+Lead     — role: lead,     model: claude-code, tick: 15min,  ALL pando_* tools
+Observer — role: explorer, model: claude-code, tick: 60min,  read-only pando_* tools
+QA       — role: tester,   model: claude-code, tick: 120min, pando_status + pando_test_run
 ```
 
 Agent configs are stored LOCALLY on the managing node (not in the P2P registry). The registry only knows `agentCount: 3`.
@@ -1317,6 +1317,25 @@ Each agent gets a system prompt via `agentOverride` on `engine.send()`. Prompts 
 **Frame behavior with agentOverride:** The override replaces only the stable layer (L0-2). All dynamic layers still flow: knowledge (L3 — memories), situation (L5b — team awareness, budget), goals (L5), conversation history. Board is NOT in the frame (PandoCode Option B) — pando-node injects it in the tick message instead.
 
 **Board snapshot injection:** pando-node reads the board from the team's PandoCode DB and includes it in the scheduler tick message. This is pando-node's responsibility (engine-adapter.ts), not PandoCode's.
+
+**Board snapshot format:** `getBoardSnapshot(dbPath)` returns a formatted string:
+```
+BOARD STATE (N active tasks):
+  [status] Task title — Xh ago
+  [status] Task title — Xd ago
+```
+Priority ordering: CRITICAL > BUG:user > WARNING > FEATURE:user > other. Limit 20 tasks.
+
+**Lead vs non-lead tick asymmetry (by design):**
+- **Lead agents** use a **custom setInterval** (not the PandoCode Scheduler) because they need dynamic inbox+board injection into every tick message. The lead tick reads `getTeamInbox()` + `getBoardSnapshot()` fresh and wraps the tick prompt with this live state data.
+- **Non-lead agents** (observer, QA) use the **PandoCode Scheduler** with static prompts — their tick message is the same every time (e.g., "Check network health and report issues").
+- This asymmetry is intentional: leads need fresh state data per tick to make triage decisions, while observers/QA just need their base prompt to perform their fixed role.
+
+**Team inbox key structure:** Messages between agents are stored in the `.pando-code.db` `state` table:
+- Key: `msg:{toAgentId}:{uuid}`
+- Value: JSON `{ from: agentId, message: string, timestamp: ISO8601 }`
+- TTL: 1 hour
+- Consumed (deleted) on read by `getTeamInbox()`
 
 **Engine lifecycle:**
 ```
@@ -1379,10 +1398,10 @@ All board endpoints follow the same pattern:
 The following legacy code is being removed:
 - `core/council-prompts.ts` — prompts move to seed config constants in engine-adapter.ts
 - `startCouncilAgents()` in engine-adapter.ts — replaced by generic `startTeam(teamId)`
-- `isCouncilActive()`, `ensureCouncilStarted()`, `sendToCouncilAgent()` — replaced by team-level equivalents
-- `getCouncilBoard()`, `getCouncilInbox()`, `sendCouncilMessage()` — replaced by generic team board/message methods
+- `isCouncilActive()`, `ensureCouncilStarted()`, `sendToCouncilAgent()` — replaced by `isTeamActive(teamId)`, `getActiveTeamIds()`, `triggerTeamAgentBackground(teamId, agentId, message)`
+- `getCouncilBoard()`, `getCouncilInbox()`, `sendCouncilMessage()` — replaced by `getTeamBoard(teamId)`, `getTeamInbox(teamId, agentId)`, `sendTeamMessage(teamId, fromAgentId, toAgentId, message)`, `addTeamBoardTask(teamId, title, description?)`, `updateTeamBoardTask(teamId, taskId, updates)`
 - `/v1/council/*` API endpoints — replaced by `/v1/teams/*`
-- `config.enableCouncil` flag — teams auto-bootstrap based on registry state
+- `config.enableCouncil` flag — still checked in init-platform.ts (line ~668), controls whether teams auto-bootstrap on startup
 - `--council` / `--no-council` CLI flags — removed
 
 See `docs/TEAM-ARCHITECTURE.md` Section 17 for the complete legacy code audit (120+ references across 11 files).
@@ -1493,16 +1512,19 @@ class EngineAdapter {
   // Governance hook
   async reviewDiff(diff: string, description: string): Promise<ReviewResult>
 
-  // Council board operations
-  getCouncilBoard(): any[]                               // Read pending/in_progress tasks
-  addBoardTask(title: string, description?: string): string | null  // Insert or dedup board task (returns existing ID if title matches pending task)
+  // Team board operations (generic — works for any team)
+  getTeamBoard(teamId: string): any[]                    // Read pending/in_progress tasks
+  addTeamBoardTask(teamId: string, title: string, description?: string): string | null  // Insert or dedup board task (returns existing ID if title matches pending task)
+  updateTeamBoardTask(teamId: string, taskId: string, updates: object): void  // Update task status/progress
 
-  // Per-project board operations
-  getProjectBoard(projectId: string): any[]              // Read pending/in_progress tasks from project DB
-  addProjectBoardTask(projectId: string, title: string, description?: string): string | null  // Insert or dedup on project board (registers scheduler tick on first report)
+  // Team messaging
+  getTeamInbox(teamId: string, agentId: string): any[]   // Read + consume messages for agent
+  sendTeamMessage(teamId: string, fromAgentId: string, toAgentId: string, message: string): void  // Inter-agent message
 
-  // Council status
-  isCouncilActive(): boolean                             // True if observer + qa + council engines all exist
+  // Team status
+  isTeamActive(teamId: string): boolean                  // True if team engines exist and are running
+  getActiveTeamIds(): string[]                           // All teams currently running on this node
+  triggerTeamAgentBackground(teamId: string, agentId: string, message: string): void  // Trigger agent tick immediately
 
   // Management
   get available(): boolean
@@ -1864,14 +1886,14 @@ The pando-infra lead agent uses Claude Code as its model inside PandoCode. This 
 - **Full codebase access** — can read, understand, and modify any file in pando-node or pando-code
 - **Tool chaining** — can run tests, check build output, iterate on fixes
 
-Observer and QA agents remain on fast/cheap models (gemini-2.5-flash) since they only need to call pando_* tools and report. User project leads can use any model — PandoCode handles provider selection.
+Observer and QA agents also use claude-code — all 3 pando-infra agents run on the same model. User project leads can use any model — PandoCode handles provider selection.
 
 ### The Self-Sustaining Loop (pando-infra team)
 
 ```
 1. DETECT
-   Observer tick (30min) → pando_status + pando_peers → reports issues to lead
-   QA tick (30min) → health checks → reports failures to lead
+   Observer tick (60min) → pando_status + pando_peers → reports issues to lead
+   QA tick (120min) → health checks → reports failures to lead
    Users → gateway "Report Bug" → routed to team → board task created
 
 2. TRIAGE
