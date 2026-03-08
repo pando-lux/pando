@@ -1639,12 +1639,11 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       try {
         const db = new this.Database(teamData.dbPath);
         db.prepare(
-          `INSERT OR REPLACE INTO state (key, value, engine_id, updated_at)
-           VALUES (?, ?, ?, datetime('now'))`
+          `INSERT OR REPLACE INTO state (key, value, updated_at)
+           VALUES (?, ?, datetime('now'))`
         ).run(
           `cli-session:${agentConfig.id}`,
           engine.getCliSessionId(),
-          engineId,
         );
         db.close();
       } catch { /* state table may not exist yet */ }
