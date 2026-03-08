@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-08 (team architecture replaces legacy council — see Section 5.10 + docs/TEAM-ARCHITECTURE.md). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-08 (Phase A complete: all inter-node unicast replaced with HTTP — see Section 4.5; team architecture replaces legacy council — see Section 5.10 + docs/TEAM-ARCHITECTURE.md). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -353,14 +353,15 @@ Reads from @pando/node HTTP API. No direct database access.
 | Component | File | Status | What it does |
 |---|---|---|---|
 | **EngineAdapter** | `core/engine-adapter.ts` | DONE | The ONE pando-code integration point. PandoCode contributor nodes only. Multi-engine, routing, Pando tools, Lux budget. |
-| **DeployPipeline** | `core/deploy-pipeline.ts` | DONE | Auto-triggers after build: GitHub push → find EC2 secure node → P2P deploy → update metadata. |
+| **DeployPipeline** | `core/deploy-pipeline.ts` | DONE | Auto-triggers after build: GitHub push → find EC2 secure node → HTTP deploy → update metadata. |
 | **CredentialStore** | `core/credential-store.ts` | DONE | AES-256-GCM encrypt/decrypt. Secure compute nodes (EC2) only. |
-| **StorageBackend** | `core/storage-backend.ts` | DONE | MongoDB direct or P2P proxy to compute nodes |
+| **StorageBackend** | `core/storage-backend.ts` | DONE | MongoDB direct or HTTP proxy to compute nodes |
 | **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Git pull + build + restart. GossipSub broadcast. |
 | **GatewayDeployPool** | `core/gateway-deploy-pool.ts` | DONE | Deploy gateway to all contributed hosting accounts |
 | **PaymentGate** | `core/payment-gate.ts` | DONE | Lux escrow for task execution |
 | **CouncilPrompts** | `core/council-prompts.ts` | DONE | System prompts for observer/qa/council. No TOOL_SETS — PandoCode roles handle tool filtering. |
-| **RequestReply** | `core/request-reply.ts` | DONE | P2P unicast calls (TCP + GossipSub fallback) |
+| **RequestReply** | `core/request-reply.ts` | DONE | Handler registry + broadcast queries only. Unicast removed (Phase A). |
+| **HttpPeerClient** | `core/http-peer-client.ts` | DONE | Direct HTTP for all inter-node operations. Ed25519-signed requests. See Section 4.5. |
 | **HostingAdapters** | `core/hosting-adapters.ts` | DONE | Provider-agnostic deployment (Vercel, Netlify) |
 
 ### 4.3 Platform Layer (non-brain services)
@@ -370,7 +371,7 @@ Reads from @pando/node HTTP API. No direct database access.
 | **CapabilityDetector** | `platform/capability-detector.ts` | DONE | Auto-detect: PandoCode, storage, compute, hosting |
 | **ResourceMarketplace** | `platform/resource-marketplace.ts` | DONE | GossipSub price broadcasting, resource discovery, metering |
 | **ContentRegistry** | `platform/content-registry.ts` | DONE | Content management |
-| **ThreadStore** | `platform/thread-store.ts` | DONE | Chat thread persistence. Non-blocking writes (local cache immediate, P2P storage async). Requires MongoDB (EC2) or P2P proxy for persistence. |
+| **ThreadStore** | `platform/thread-store.ts` | DONE | Chat thread persistence. Non-blocking writes (local cache immediate, HTTP storage async). Requires MongoDB (EC2) or HTTP proxy for persistence. |
 
 ### 4.4 HTTP API
 
@@ -395,7 +396,7 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 | Capabilities | `/v1/capabilities` | Node capability profile |
 | Admin | `/v1/admin/shutdown` | Graceful shutdown (exit 0) |
 
-**P2P request-reply handlers** (node-to-node, not HTTP):
+**Inter-node handler registry** (dispatched via HTTP — see Section 4.5):
 | Handler | Where it runs | What it does |
 |---|---|---|
 | `pando/doorman-classify` | EC2 (secure) | Classify chat intent via contributed OpenAI key. Returns `{intent, response/description}`. |
@@ -406,6 +407,122 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 | `pando/storage-proxy` | EC2 (secure) | Proxy MongoDB CRUD for non-MongoDB nodes. |
 | `pando/upgrade-node` | Any | Trigger git pull + build + restart. |
 | `chat_proxy` | PandoCode nodes | Forward chat message for engine processing. |
+
+**How inter-node dispatch works:** Caller uses `httpPeerClient.dispatchRequest(peerId, handlerType, payload)` → HTTP POST to peer's `/v1/internal/dispatch` → peer's `RequestReplyManager.getHandler(type)` looks up handler → executes → returns result. All requests are Ed25519-signed with 60s replay protection. See Section 4.5 for full details.
+
+### 4.5 Inter-Node Communication (HTTP replaces P2P unicast — Phase A)
+
+**All point-to-point operations between nodes now use HTTP.** P2P (GossipSub) is retained ONLY for broadcast operations (peer discovery, ledger sync, governance proposals, capability exchange, team registry sync, upgrade broadcasts).
+
+#### The Split
+
+```
+BROADCAST (GossipSub — unchanged)          UNICAST (HTTP — all new)
+──────────────────────────                 ──────────────────────────
+Peer discovery                             Deploy app to EC2
+Ledger sync (transactions)                 Storage proxy (MongoDB CRUD)
+Governance proposals + votes               Credential proxy (decrypt key)
+Capability profile exchange                Doorman classify/chat proxy
+Team registry sync + heartbeat             Resource proof challenges
+Upgrade broadcast                          Task forwarding
+                                           Reputation queries
+                                           Chat proxy to PandoCode node
+                                           Upgrade trigger (node-to-node)
+                                           Any registered handler dispatch
+```
+
+#### Architecture
+
+```
+Node A                                    Node B
+──────                                    ──────
+httpPeerClient.dispatchRequest(           Fastify API server
+  peerId,                                   │
+  handlerType,        ─── HTTP POST ───→  /v1/internal/dispatch
+  payload                                   │
+)                                         getHandler(type) lookup
+  │                                         │
+  ├─ Resolve peer HTTP address            handler(request) executes
+  │  (CapabilityRegistry profiles)          │
+  │                                       return { success, payload }
+  ├─ Sign request body                      │
+  │  Ed25519: sign(body + timestamp)      ◄── HTTP response ───
+  │  Headers: X-Pando-Signature,
+  │           X-Pando-Timestamp,
+  │           X-Pando-PeerId
+  │
+  ├─ Verify response
+  │
+  └─ Return result
+```
+
+#### Key Components
+
+| Component | File | Role |
+|---|---|---|
+| **HttpPeerClient** | `core/http-peer-client.ts` | Outbound HTTP to peers. Signed requests. Methods: `storageProxy()`, `deployApp()`, `getCredential()`, `chatProxy()`, `sendRequest()`, `dispatchRequest()`. |
+| **Internal API** | `api/internal-api.ts` | Inbound HTTP from peers. `/v1/internal/dispatch` endpoint. Verifies signatures, looks up handler, executes. |
+| **RequestReplyManager** | `core/request-reply.ts` | Handler registry (`registerHandler()`, `getHandler()`) + broadcast queries (`query()` via GossipSub). No unicast. |
+
+#### Auth: Ed25519 Signed HTTP
+
+Every inter-node HTTP request is signed:
+
+```
+Outbound (HttpPeerClient):
+  body = JSON.stringify(payload)
+  timestamp = Date.now().toString()
+  message = body + timestamp
+  signature = sign(message, privateKey)    // Ed25519 from @pando/identity
+  Headers:
+    X-Pando-Signature: <hex signature>
+    X-Pando-Timestamp: <timestamp>
+    X-Pando-PeerId: <sender peerId>
+
+Inbound (internal-api.ts middleware):
+  Verify: verify(body + timestamp, signature, senderPublicKey)
+  Replay protection: reject if |now - timestamp| > 60 seconds
+  Peer lookup: resolve publicKey from CapabilityRegistry by peerId
+```
+
+#### Generic Handler Dispatch
+
+The `/v1/internal/dispatch` endpoint is the universal entry point for all inter-node operations:
+
+```typescript
+// Caller side (any node)
+const result = await httpPeerClient.dispatchRequest(
+  peerId,           // target node
+  'pando/deploy-app', // handler type (matches registerHandler() key)
+  { repoUrl, ... },   // payload
+  300_000              // timeout ms
+);
+
+// Receiver side (internal-api.ts)
+POST /v1/internal/dispatch
+Body: { type: "pando/deploy-app", payload: { repoUrl, ... } }
+→ handler = getHandler("pando/deploy-app")
+→ result = await handler(wrappedRequest)
+→ Response: { success: true, payload: result }
+```
+
+#### Peer Address Resolution
+
+`getPeerHttpEndpoint(peerId)` resolves a peer's HTTP address from CapabilityRegistry profiles:
+1. Look up peer's capability profile
+2. Prefer `publicAddress` (explicit public IP/hostname)
+3. Fall back to `httpApi.host` (but skip `0.0.0.0` — common misconfiguration)
+4. Use `httpApi.port` (default 4000)
+
+#### Why HTTP Instead of P2P for Unicast
+
+The root cause: GossipSub is a broadcast protocol designed for thousands of peers. Using it for point-to-point calls between 2-3 known servers was fundamentally wrong. GossipSub mesh formation doesn't work reliably with small networks — the TCP connection shows alive (peers: 1), but the message channel inside it goes dead. Messages go into a black hole, timeout after 30s, and everything downstream fails. Additionally, `handleIncomingStream()` in network.ts swallowed ALL stream errors silently — no logging, no retry, no circuit breaker.
+
+- **Reliability:** HTTP is request-response with timeouts. P2P unicast required GossipSub fallback and direct TCP streams — fragile, hard to debug.
+- **Simplicity:** One code path (fetch + sign) instead of three (direct TCP → GossipSub → fallback).
+- **Debugging:** Standard HTTP status codes, curl-testable, standard logging.
+- **Auth:** Ed25519 signatures + replay protection built in. P2P relied on libp2p noise for transport, but had no application-level auth.
+- **NAT traversal:** HTTP works through standard infrastructure (load balancers, reverse proxies). P2P unicast required circuit relay for NAT'd peers.
 
 ---
 
@@ -429,7 +546,7 @@ POST /v1/chat/message → any node receives it
 Doorman classifies intent:
   1. Regex fast-path (zero cost): /status, /balance, /help → instant response
   2. Local OpenAI key available (contributor node)? → classify locally
-  3. No local key → route to EC2 proxy via P2P → EC2 decrypts contributed key → classifies
+  3. No local key → route to EC2 proxy via HTTP → EC2 decrypts contributed key → classifies
   4. No peers available → fallback keyword matching
   |
   v
@@ -484,7 +601,7 @@ SSE streams progress back → to user
 User sees: "Your bakery website is live at https://..."
 ```
 
-**Key routing principle:** The receiving node does NOT assume it will process the build. It calls `findBestBuilder()` which queries the capability registry for all PandoCode peers (including self). If self has a local engine, it processes locally; otherwise it routes to the best remote peer via `routeChatProxyP2P()`. This is critical because the public gateway connects to a random node — that node is a router, not necessarily a builder. The legacy `hasClaudeCodeAuth()` check (Anthropic-only) has been removed — routing is now fully provider-agnostic.
+**Key routing principle:** The receiving node does NOT assume it will process the build. It calls `findBestBuilder()` which queries the capability registry for all PandoCode peers (including self). If self has a local engine, it processes locally; otherwise it routes to the best remote peer via HTTP (`routeChatProxyP2P()` uses `httpPeerClient.dispatchRequest()` under the hood). This is critical because the public gateway connects to a random node — that node is a router, not necessarily a builder. The legacy `hasClaudeCodeAuth()` check (Anthropic-only) has been removed — routing is now fully provider-agnostic.
 
 **PandoCode contributor's keys stay LOCAL.** They never leave the contributor's machine. The network routes work TO the compute, not keys FROM storage.
 
@@ -654,13 +771,13 @@ A regular user with PandoCode installed. The backbone of network intelligence.
 - Has their OWN API keys locally (PandoCode `.env` or env vars — default: Google/Gemini)
 - Keys **NEVER leave** the machine — work comes TO them
 - Advertises capability: `pando-code: true` in capability profile
-- Network routes build jobs to them via P2P
+- Network routes build jobs to them via HTTP (HttpPeerClient)
 - Can set limits: max requests/day, budget caps, model preferences (NOT YET BUILT)
 - Earns Lux per job completed (BUILT — `WorkType.COMPUTE_CONTRIBUTED`, daily cap: 50 jobs/day via `PANDO_DAILY_COMPUTE_CAP`)
 - Claude Code CLI as persistent agent runtime (DONE — see Section 3.2.9)
 
 ```
-Build request arrives via P2P (routed by any node that received user's message)
+Build request arrives via HTTP (routed by any node that received user's message)
   → Engine Adapter creates project engine
   → PandoCode builds using LOCAL keys (contributor's configured provider)
   → Code committed to GitHub (checkpoint)
@@ -677,8 +794,8 @@ Trusted infrastructure. Stores network-level contributed credentials. **Deploys 
 - Handles Path A (simple AI): decrypts contributed key → makes LLM call → returns response
 - **Handles deployment** (`pando/deploy-app`): clones from GitHub, deploys to S3 (Tier 1) or PM2+nginx (Tier 2)
 - Could run PandoCode for builds if installed (not currently — EC2 nodes are secure-only)
-- Proxy: decrypts credentials for other node types on P2P request (code_repository only)
-- Proxy: P2P storage backend for non-MongoDB nodes (thread store, project store, etc.)
+- Proxy: decrypts credentials for other node types on HTTP request (code_repository only)
+- Proxy: HTTP storage backend for non-MongoDB nodes (thread store, project store, etc.)
 
 **Capability profile broadcasts:** `credentialAccess: true`, `storageBackend: 'mongodb'`. These are the fields the deploy pipeline uses to find deploy targets — NOT `shareCompute`/`compute_cpu` (those identify PandoCode builders).
 
@@ -697,8 +814,8 @@ Developer's machine. PandoCode + local MongoDB for full self-sufficiency.
 
 ```
 Routing priority for AI work:
-1. Path A (questions): local OpenAI key → CredentialStore → EC2 proxy via P2P
-2. Path B (builds): find best PandoCode peer on network (could be self) → route via P2P
+1. Path A (questions): local OpenAI key → CredentialStore → EC2 proxy via HTTP
+2. Path B (builds): find best PandoCode peer on network (could be self) → route via HTTP
 3. No capable peers available → degrade gracefully (canned doorman response)
 ```
 
@@ -765,7 +882,7 @@ PandoCode Contributor Node              EC2 Secure Node
       └─ git add -A
       └─ git commit "Deploy {ISO timestamp}"
       └─ git push -u origin HEAD:main --force
-      └─ GitHub token decrypted via P2P credential proxy to EC2
+      └─ GitHub token decrypted via HTTP credential proxy to EC2
       └─ Repo created if new: pando-lux/app-{8chars}-{slug}
                 │
    Step 2: Find deploy target
@@ -774,7 +891,7 @@ PandoCode Contributor Node              EC2 Secure Node
       └─ This finds EC2 SECURE nodes (NOT PandoCode builders)
       └─ Self-deploy fallback only if local node has credentialAccess
                 │
-   Step 3: P2P deploy ──────────────────→ Receives pando/deploy-app
+   Step 3: HTTP deploy ─────────────────→ Receives pando/deploy-app
                                           │
                                           ├─ git clone {repoUrl} (from GitHub)
                                           │   OR git pull origin main (if re-deploy)
@@ -801,7 +918,7 @@ PandoCode Contributor Node              EC2 Secure Node
    Step 4: Update project metadata
       └─ repoUrl, deploymentUrl, deployPeerId
       └─ deploymentStatus → 'live'
-      └─ Persisted to MongoDB via P2P storage proxy
+      └─ Persisted to MongoDB via HTTP storage proxy
                 │
 5. Project appears in marketplace (GET /v1/marketplace)
    User sees: "Your app is live at https://..."
@@ -824,7 +941,7 @@ These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse 
 **Security model:**
 - **Credentials (AWS S3, GitHub) ONLY exist on EC2 secure nodes** — decrypted in-memory via `CREDENTIAL_MASTER_KEY`
 - **PandoCode contributor nodes NEVER touch deployment credentials** — they only build code
-- **GitHub is the handoff point** — PandoCode pushes code to GitHub, EC2 clones from GitHub. No workspace transfer over P2P.
+- **GitHub is the handoff point** — PandoCode pushes code to GitHub, EC2 clones from GitHub. No workspace transfer over HTTP.
 - **EC2 tripwire** — any SSH/SSM/debugger detected → wipe credentials + shutdown immediately
 
 **Workspace directories:**
@@ -833,10 +950,10 @@ These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse 
 - PandoCode database: `.pando-code.db` inside the project workspace
 
 **Timeout chain (production-tuned):**
-- P2P credential proxy: 30s (decrypting GitHub token via EC2)
+- HTTP credential proxy: 30s (decrypting GitHub token via EC2)
 - GitHub repo creation inner call: 45s (includes credential decrypt + GitHub API)
 - Deploy pipeline GitHub push: 120s (AbortSignal.timeout)
-- P2P deploy request: 300s (5 min — includes git clone + S3 upload or npm install + PM2)
+- HTTP deploy request: 300s (5 min — includes git clone + S3 upload or npm install + PM2)
 
 **Marketplace visibility:**
 - New projects start with `visibility: 'listed'`
@@ -848,9 +965,9 @@ These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse 
 **Where deploy code lives (all working):**
 | Component | File | What it does |
 |---|---|---|
-| **DeployPipeline** | `core/deploy-pipeline.ts` | Orchestrator — 4 steps: GitHub push → find EC2 → P2P deploy → update metadata |
+| **DeployPipeline** | `core/deploy-pipeline.ts` | Orchestrator — 4 steps: GitHub push → find EC2 → HTTP deploy → update metadata |
 | **Trigger** | `api/platform-api.ts` `triggerDeployPipeline()` | Fire-and-forget after every `sendToEngine()` completion (4 call sites) |
-| **P2P handler** | `init-platform.ts` handler for `pando/deploy-app` | Clone from GitHub, detect tier, deploy to S3 or PM2+nginx |
+| **Deploy handler** | `init-platform.ts` handler for `pando/deploy-app` | Clone from GitHub, detect tier, deploy to S3 or PM2+nginx (dispatched via HTTP) |
 | **Tier 1 (S3)** | `init-platform.ts` (inside deploy-app handler) | S3Client + PutObjectCommand, HTML injection, MIME types |
 | **Tier 2 (PM2)** | `init-platform.ts` (inside deploy-app handler) | npm install, PM2, port registry, nginx config |
 | **Port registry** | `{dataDir}/app-ports.json` | Persistent port allocation — survives node restarts |
@@ -941,7 +1058,7 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 │  - heartbeat (alive?)       │  - sessions, memory                   │
 │  - repos managed            │                                       │
 │  - agent count              │ WHERE: managing node ONLY             │
-│  - governance flag           │ ACCESS: P2P request-reply on demand   │
+│  - governance flag           │ ACCESS: HTTP request on demand         │
 │                             │ BACKUP: .pando/team-state.json in repo│
 │ WHERE: ALL nodes (synced)   │ SYNC: NONE (local only)              │
 │ SYNC: GossipSub pando/teams │                                       │
@@ -955,7 +1072,7 @@ LAYER 3: Git Repo (.pando/team-state.json)
   - On node death: this is the durable backup (git survives everything)
 ```
 
-**Why NOT sync boards via P2P?** At scale (1000 teams, 50 tasks each, updating), board sync would flood the network with thousands of messages. The registry-only approach means P2P carries ~200 bytes per team. Board data stays local and is accessed on-demand via P2P request-reply (point-to-point, not broadcast).
+**Why NOT sync boards via P2P?** At scale (1000 teams, 50 tasks each, updating), board sync would flood the network with thousands of messages. The registry-only approach means P2P carries ~200 bytes per team. Board data stays local and is accessed on-demand via HTTP (point-to-point, Ed25519-signed).
 
 #### 5.10.3 Team Registry
 
@@ -1021,7 +1138,7 @@ User message arrives at POST /v1/chat/message
   │   1. Check team registry: which team manages this project?
   │   2. Is managingNode == self?
   │      YES → add task to local board
-  │      NO  → P2P request-reply to managing node
+  │      NO  → HTTP request to managing node
   │   3. If managing node offline → team handoff (Section 5.10.9)
   │
   └─ Board task created on managing node:
@@ -1060,7 +1177,7 @@ Validation:
 ```
 1. User → gateway: "wallet shows wrong balance"
 2. Node checks team registry: team "pando-infra" manages pando-lux/node
-3. Routes to managing node (P2P request-reply or local)
+3. Routes to managing node (HTTP request or local)
 4. Lead reads board → spawns builder → fix → governance propose → upgrade
 5. All nodes: pullAndUpgrade → build → safe restart (exit 75)
 ```
@@ -1149,7 +1266,7 @@ CLAIMING:
   4. Spawn team per Section 5.10.7 step 4
 
 BOARD RECOVERY (three sources, in priority order):
-  1. P2P peer cache (best effort — peers may have cached board from previous queries)
+  1. HTTP peer cache (best effort — peers may have cached board from previous queries)
   2. Git repo: clone/pull → read .pando/team-state.json (always available)
   3. Fresh start: empty board, lead reads repo state from commit history
 ```
@@ -1201,9 +1318,9 @@ GOTCHAS:
 ```
 GET  /v1/teams                        — List all teams (from local registry)
 GET  /v1/teams/:teamId                — Team config + status
-GET  /v1/teams/:teamId/board          — Board tasks (local or P2P proxy)
-POST /v1/teams/:teamId/board          — Add task (local or P2P proxy)
-PATCH /v1/teams/:teamId/board/:taskId — Update task (local or P2P proxy)
+GET  /v1/teams/:teamId/board          — Board tasks (local or HTTP proxy)
+POST /v1/teams/:teamId/board          — Add task (local or HTTP proxy)
+PATCH /v1/teams/:teamId/board/:taskId — Update task (local or HTTP proxy)
 POST /v1/teams/:teamId/trigger        — Trigger team lead immediately
 POST /v1/teams/:teamId/request        — Submit user request (adds to board)
 PATCH /v1/teams/:teamId               — Update team config
@@ -1214,7 +1331,7 @@ DELETE /v1/teams/:teamId              — Stop team, mark orphaned
 All board endpoints follow the same pattern:
 1. Check registry: is managing node == self?
 2. YES → operate on local PandoCode SQLite
-3. NO → P2P request-reply to managing node
+3. NO → HTTP request to managing node
 
 **Legacy endpoints** (`/v1/council/*`) will be removed after migration. Do NOT build on them.
 
@@ -1242,7 +1359,7 @@ See `docs/TEAM-ARCHITECTURE.md` Section 17 for the complete legacy code audit (1
 | Bad code proposed | Governance Layer 5 (AI review). QA catches regressions post-deploy. |
 | Two nodes claim same team | Race resolution: latest `claimedAt` wins, loser backs off. |
 | Team spam (fake teams flooding registry) | Team creation costs 1 Lux. P2P only accepts heartbeats from `msg.from === team.managing_node`. |
-| Board data poisoning | Board stays local (not synced via P2P). P2P request-reply is signed. |
+| Board data poisoning | Board stays local (not synced via P2P). HTTP requests are Ed25519-signed. |
 
 ### 5.11 Pando Login (Agent Identity)
 
@@ -1290,14 +1407,14 @@ Contributor's machine:
   OR Claude Code CLI authenticated (DONE — see Section 3.2.9)
   → PandoCode uses local keys directly
   → Keys NEVER leave the machine
-  → Work comes TO the contributor via P2P
+  → Work comes TO the contributor via HTTP
   → Contributor earns Lux for compute
 ```
 
 No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoCode's `.env` file or local env vars on the contributor's own machine.
 
 **IMMUTABLE RULES (both models):**
-- NEVER transmit raw API keys over P2P
+- NEVER transmit raw API keys over the network (P2P or HTTP)
 - NEVER log, print, or output credential values
 - NEVER store keys in docs, code, comments, agent reports
 - Contributed keys: ONLY decrypted and used on EC2 (server-side)
@@ -1562,17 +1679,44 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | Issue | Location | Status |
 |---|---|---|
 | **engine-adapter injectApiKeys** | `core/engine-adapter.ts` | DONE — loads PandoCode's `.env` first, then checks local env, then CredentialStore fallback for EC2. Clear warning if no keys. |
-| **Doorman AI classification** | `api/api-server.ts` | DONE — 3-level priority: local OPENAI_API_KEY → CredentialStore → P2P proxy to EC2 peer. |
-| **Doorman P2P proxy** | `index.ts` + `api-server.ts` | DONE — `pando/doorman-classify` and `pando/doorman-chat` handlers on EC2. Windows routes to EC2 via requestReply. Tested live: "What is machine learning?" → AI answer via P2P. |
+| **Doorman AI classification** | `api/api-server.ts` | DONE — 3-level priority: local OPENAI_API_KEY → CredentialStore → HTTP proxy to EC2 peer. |
+| **Doorman HTTP proxy** | `api-server.ts` | DONE — `pando/doorman-classify` and `pando/doorman-chat` handlers on EC2. All nodes route to EC2 via `httpPeerClient.dispatchRequest()`. Tested live: "What is machine learning?" → AI answer via HTTP. |
 | **PandoCode provider-agnostic** | `core/engine-adapter.ts` | DONE — Adapter no longer forces `claude-sonnet-4-6`. PandoCode uses its own configured provider (default: Google/gemini-2.5-flash). Contributors choose their own provider+model. Gemini pricing added to Lux table. |
 | **PandoCode .env auto-load** | `core/engine-adapter.ts` | DONE — Resolves `@pando-code/core` package path, loads `.env` from pando-code repo root. Handles Windows CRLF. Keys available to PandoCode engines without manual env setup. |
-| **Thread store non-blocking** | `platform/thread-store.ts` | DONE — `addMessage()` updates local cache immediately, persists to P2P storage backend async. Eliminated 15s+ blocking on storage timeouts per chat message. |
+| **Thread store non-blocking** | `platform/thread-store.ts` | DONE — `addMessage()` updates local cache immediately, persists to HTTP storage backend async. Eliminated 15s+ blocking on storage timeouts per chat message. |
 | **Async build routing** | `api/platform-api.ts` | DONE — Build requests return immediately with project+thread ID. PandoCode engine runs in background. Results arrive via SSE + thread store. No more 120s HTTP timeouts. |
 | **Dev auth bypass** | `api/api-server.ts` | DONE — `API_AUTH_DISABLED=true` now also bypasses JWT verification for chat endpoints (uses node's peerId as dev identity). |
-| **Path B end-to-end** | Full pipeline | TESTED LIVE — "build me a portfolio website" → doorman classifies (P2P to EC2) → project created → PandoCode builds → DeployPipeline → GitHub push → P2P deploy to EC2 → S3 upload → live URL returned → marketplace listing. Full pipeline proven. |
+| **Path B end-to-end** | Full pipeline | TESTED LIVE — "build me a portfolio website" → doorman classifies (HTTP to EC2) → project created → PandoCode builds → DeployPipeline → GitHub push → HTTP deploy to EC2 → S3 upload → live URL returned → marketplace listing. Full pipeline proven. |
 | **Unified build routing** | `api/platform-api.ts` | DONE — `findBestBuilder()` replaces the split `hasClaudeCodeAuth` logic. All 4 build handlers use unified flow: create project → find best PandoCode peer (including self) → route. `hasClaudeCodeAuth()` removed from routing (was Anthropic-only, broken for Gemini). |
 | **Circuit breaker fix** | `cli.ts`, `supervisor.ts`, `kernel/` | DONE — Port-conflict exits use code 78 (supervisor won't respawn). Immediate circuit breaker reset on successful boot. Thresholds raised (crash-guard 3→6, circuit-breaker 3→5). |
-| **Deploy Pipeline** | `core/deploy-pipeline.ts` | DONE — Targets EC2 secure nodes (`credentialAccess + storageBackend='mongodb'`). GitHub push → P2P `pando/deploy-app` to EC2 → S3 (Tier 1) or PM2+nginx (Tier 2) → update project metadata. Auto-triggers after every build completion. |
+| **Deploy Pipeline** | `core/deploy-pipeline.ts` | DONE — Targets EC2 secure nodes (`credentialAccess + storageBackend='mongodb'`). GitHub push → HTTP `pando/deploy-app` to EC2 → S3 (Tier 1) or PM2+nginx (Tier 2) → update project metadata. Auto-triggers after every build completion. |
+
+### Restart Architecture (Investigated — Current Design is Appropriate)
+
+The codebase has multiple restart mechanisms, each serving a distinct purpose:
+
+| Mechanism | File | When it fires | Exit code |
+|---|---|---|---|
+| **safeRestart()** | `core/upgrade-protocol.ts` | After governance-approved upgrade (git pull + build) | 75 |
+| **requestGracefulRestart()** | `index.ts` | General restart (waits for active workers + pending messages to drain) | 75 |
+| **selfRestart()** | `index.ts` / `init-platform.ts` | Emergency restart (spawns detached process, exits current) | — |
+| **crash-guard** | `kernel/crash-guard.ts` | 6 crashes in 60s → rolls back dist/ | 75 |
+| **circuit breaker** | `kernel/startup-health.ts` | 5 consecutive boot failures → halt | 1 |
+| **supervisor.ts** | `supervisor.ts` | Watches exit codes, respawns child | — |
+| **PM2** | `ecosystem.config.cjs` | External process manager (EC2) | — |
+| **port pre-check** | `cli.ts` | Kills old process if port in use | 78 |
+
+**Exit code convention:** 0 = stop, 75 = restart (supervisor/PM2respawns), 78 = port conflict (don't respawn), 1 = fatal.
+
+**PM2 detection:** When PM2 is detected (`process.env.PM2_HOME`), supervisor.ts is skipped (cli.ts runs node directly). PM2 is the restart authority on EC2.
+
+**No RestartController needed.** Investigation found these mechanisms serve different roles and don't conflict in practice. The main pattern: upgrade-protocol.ts calls `safeRestart()` which calls `requestGracefulRestart()` which waits for drain then exits with 75.
+
+### Credential Storage Uses resourceId, NOT peerId
+
+**Credentials are keyed by `resourceId` (UUID), not by peerId.** This means credential persistence survives node identity changes (e.g., deleting `identity.json`). The roadmap originally identified "credentials tied to peerId" as a root cause of deployment failures — this was a misdiagnosis. No machine-bound credential anchor is needed.
+
+The `resourceId` is generated when a credential is contributed (via `/contribute`) and stored in MongoDB alongside the encrypted credential. The ResourceRegistry syncs metadata (type + status) via GossipSub, but never the credential value itself.
 
 ### Needs Work
 
@@ -1584,8 +1728,19 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | ~~**Node mode CLI flag**~~ | `cli.ts` | **FIXED.** Modes: `contributor|secure|lightweight|full`. Legacy `compute|relay` kept as aliases. |
 | ~~**S3 upload awaiting**~~ | `index.ts` | **FIXED.** Uses `Promise.all(uploadPromises)` instead of 2s sleep. Upload errors surfaced in console. |
 | ~~**Tier 2 PM2 persistence**~~ | `init-platform.ts` | **ALREADY HANDLED.** `pm2 save` is called after every deploy. Port registry also persists. |
-| **Deploy pipeline logging** | `core/deploy-pipeline.ts` | Pipeline step errors captured in step.detail but not persisted to project metadata. Low priority. |
+| **Deploy pipeline resilience** | `core/deploy-pipeline.ts` | No retry on GitHub API timeout (full pipeline failure). S3 partial upload = broken deployment (no rollback). PM2 port collision silently kills existing app. Error messages truncated. Pipeline step errors captured but not persisted to project metadata. |
 | ~~**deployPeerId not persisting**~~ | `platform-api.ts:3685` | **ALREADY HANDLED.** Saved to both ProjectStore (MongoDB) and ProjectRegistry (local). |
+
+### App Lifecycle Gaps (Tier 2 deployed apps)
+
+Deployed backend apps (Tier 2 / PM2) have no:
+- **Upgrade mechanism** — redeploy kills old process, starts new one (no blue-green)
+- **Graceful shutdown** — PM2 process terminated immediately, WebSocket connections severed
+- **Version tracking** — no commit history, no rollback capability
+- **Auto-recovery** — if PM2 fails to restart, Pando only logs a warning (no auto-fix)
+- **Health checks** — no liveness probing of deployed apps
+
+Pando node itself has a proper upgrade path (governance → git pull → build → safeRestart), but deployed user apps don't benefit from this. Future work: a unified AppManager that treats pando-node and deployed apps the same way.
 
 ### Stubs
 
@@ -1774,7 +1929,8 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 | `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. Team agent setup via startTeam(). Does NOT handle model selection — that's PandoCode's job. |
 | `core/deploy-pipeline.ts` | Build → GitHub → EC2 deploy → metadata. Auto-triggers after sendToEngine(). |
 | `core/credential-store.ts` | AES-256-GCM encrypt/decrypt |
-| `core/storage-backend.ts` | MongoDB or P2P proxy |
+| `core/http-peer-client.ts` | Direct HTTP for all inter-node operations. Ed25519-signed. See Section 4.5. |
+| `core/storage-backend.ts` | MongoDB or HTTP proxy |
 | `core/upgrade-protocol.ts` | Git pull + build + restart + broadcast |
 | `core/gateway-deploy-pool.ts` | Multi-account gateway deployment |
 | `core/payment-gate.ts` | Lux escrow |
@@ -1879,7 +2035,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 12. **`_start()` is a thin coordinator.** It calls `initKernel(this)`, `initCore(this)`, `initPlatform(this)` via dynamic `await import()`. Each init file is a standalone function that sets up its layer. This pattern was chosen to break the 3,772-line monolith while keeping the PandoNode class interface unchanged.
 
-13. **Keys don't travel. Work travels.** Contributed API keys stay on EC2 (Path A — simple AI). PandoCode contributor keys stay on their machine (Path B — builds). The network routes WORK to where the keys are, never the other way around. `injectApiKeys()` loads: (1) PandoCode's `.env` file, (2) local env vars, (3) CredentialStore fallback (EC2 only). It does NOT pull keys over P2P.
+13. **Keys don't travel. Work travels.** Contributed API keys stay on EC2 (Path A — simple AI). PandoCode contributor keys stay on their machine (Path B — builds). The network routes WORK to where the keys are, never the other way around. `injectApiKeys()` loads: (1) PandoCode's `.env` file, (2) local env vars, (3) CredentialStore fallback (EC2 only). It does NOT pull keys over the network.
 
 14. **Two kinds of "contribute."** `/contribute openai sk-xxx` donates a key to the network (encrypted on EC2, used server-side for Path A). Running PandoCode on your node contributes your COMPUTE (your local keys, your machine, you earn Lux for builds).
 
@@ -1899,7 +2055,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 22. **Doorman severity classification uses word-variant regex.** `crash(es|ed|ing)`, `bug`, `error`, `fail(s|ed|ing)` all match as BUG. Without the variant suffixes, "crashes" would be classified as FEATURE (word boundary `\bcrash\b` doesn't match "crashes"). This was a real production bug found in E2E testing.
 
-23. **P2P credential proxy has a timeout chain.** GitHub repo creation requires: P2P credential decrypt (30s timeout) + GitHub API call (45s inner timeout). If EC2 nodes are slow or offline, the credential proxy times out and GitHub operations fail. The timeouts were tuned for production latency on 2026-03-06.
+23. **HTTP credential proxy has a timeout chain.** GitHub repo creation requires: HTTP credential decrypt (30s timeout) + GitHub API call (45s inner timeout). If EC2 nodes are slow or offline, the credential proxy times out and GitHub operations fail. The timeouts were tuned for production latency on 2026-03-06.
 
 24. ~~**S3 uploads are fire-and-forget with a 2s wait.**~~ **FIXED.** S3 uploads now use `Promise.all(uploadPromises)` and surface errors. No more 2s sleep.
 

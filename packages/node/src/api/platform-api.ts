@@ -90,12 +90,11 @@ export async function registerPlatformRoutes(
     try {
       const { DeployPipeline } = await import('../core/deploy-pipeline.js');
       const projectStore = node.getProjectStore?.();
-      const requestReply = node.getRequestReply?.();
       const capRegistry = node.getCapabilityRegistry();
       const selfPeerId = node.getIdentity()?.peerId;
 
-      if (!projectStore || !requestReply || !selfPeerId) {
-        console.log(`[deploy-pipeline] Skipping — missing dependencies (projectStore=${!!projectStore}, requestReply=${!!requestReply})`);
+      if (!projectStore || !selfPeerId) {
+        console.log(`[deploy-pipeline] Skipping — missing dependencies (projectStore=${!!projectStore})`);
         return;
       }
 
@@ -103,7 +102,8 @@ export async function registerPlatformRoutes(
         apiPort: (fastify.server.address() as any)?.port || 4000,
         apiToken: deps.apiToken,
         projectStore,
-        requestReply,
+        httpPeerClient: (node as any).httpPeerClient || undefined,
+        requestReply: node.getRequestReply() || undefined,
         capabilityRegistry: capRegistry || undefined,
         localPeerId: selfPeerId,
         pushEvent: deps.pushEvent,
@@ -3638,8 +3638,15 @@ export async function registerPlatformRoutes(
               continue;
             }
           } else {
-            console.log(`[deploy] Sending P2P deploy to ${profile.peerId} — tier ${tier}`);
-            response = await requestReply.request(profile.peerId, 'pando/deploy-app', deployPayload, 300_000);
+            console.log(`[deploy] Sending HTTP deploy to ${profile.peerId} — tier ${tier}`);
+            const httpClient = (deps.node as any).httpPeerClient;
+            if (httpClient) {
+              const result = await httpClient.deployApp(profile.peerId, deployPayload);
+              response = { success: true, payload: result };
+            } else {
+              lastError = 'HTTP peer client not available';
+              continue;
+            }
           }
 
           if (response?.success && response.payload) {
@@ -3761,14 +3768,15 @@ export async function registerPlatformRoutes(
           const requestReply = node.getRequestReply?.();
           const deployPeerId = (project as any).deployPeerId;
 
-          if (deployPeerId && requestReply) {
-            const response = await requestReply.request(deployPeerId, 'pando/undeploy-app', {
+          const httpClient = (node as any).httpPeerClient;
+          if (deployPeerId && httpClient) {
+            const response = await httpClient.sendRequest(deployPeerId, '/v1/internal/undeploy', {
               projectId: id,
               deleteFiles,
             }, 60_000);
 
-            if (!response?.success || response.payload?.status === 'failed') {
-              return reply.code(502).send({ error: response?.payload?.error || 'Undeploy failed on compute node' });
+            if (response?.status === 'failed') {
+              return reply.code(502).send({ error: response?.error || 'Undeploy failed on compute node' });
             }
           }
         } else if (tier === 1) {

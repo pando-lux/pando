@@ -46,6 +46,9 @@ export { GatewayDeployPool, TOPIC_GATEWAYS } from './gateway-deploy-pool.js';
 export { getHostingAdapter, registerHostingAdapter } from './hosting-adapters.js';
 export type { HostingAdapter } from './hosting-adapters.js';
 
-// P2P request/reply
+// HTTP peer client — direct HTTP for inter-node operations (replaces P2P unicast)
+export { HttpPeerClient, HttpPeerError } from './http-peer-client.js';
+
+// Request/Reply — handler registry + broadcast queries (unicast removed in Phase A)
 export { RequestReplyManager } from './request-reply.js';
 export type { RequestHandler, RequestReplyStats } from './request-reply.js';

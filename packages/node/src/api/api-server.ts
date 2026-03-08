@@ -362,6 +362,34 @@ export class ApiServer {
   private async setupRoutes(): Promise<void> {
     const deps = this.buildRouteDeps();
 
+    // Phase A: Register internal peer-to-peer HTTP routes (storage, deploy, credential, chat proxy)
+    {
+      const { registerInternalRoutes } = await import('./internal-api.js');
+      const node = this.node as any;
+      registerInternalRoutes(this.fastify, {
+        network: node.network || { peers: new Map() },
+        capabilityRegistry: node.capabilityRegistry || { getAllProfiles: () => [] },
+        storageBackend: node.storageBackend,
+        credentialStore: node._credentialStore,
+        // Lazy lookup: handlers may be registered after this code runs
+        deployHandler: async (payload: any) => {
+          const handler = node.requestReply?.getHandler?.('pando/deploy-app');
+          if (!handler) throw new Error('Deploy handler not registered');
+          return handler({ payload });
+        },
+        chatProxyHandler: async (payload: any) => {
+          const handler = node.requestReply?.getHandler?.('chat_proxy');
+          if (!handler) throw new Error('Chat proxy handler not registered');
+          return handler({ payload: payload, from: 'http-peer' });
+        },
+        onStorageWrite: () => {
+          try { node.threadStore?.loadFromBackend?.(); } catch {}
+          try { node.projectStore?.loadFromBackend?.(); } catch {}
+        },
+        getHandler: (type: string) => node.requestReply?.getHandler?.(type),
+      });
+    }
+
     // All routes are versioned under /v1/.
     // v2.2: No unversioned aliases — consumers must use /v1/* paths.
     await this.fastify.register(async (v1: any) => {
@@ -744,9 +772,9 @@ Be friendly and helpful. Keep answers short.`
   // ── Doorman P2P proxy methods (route to EC2 peers with contributed keys) ──────
 
   private async proxyDoormanClassify(message: string): Promise<{ intent: 'question' | 'build'; response?: string; description?: string; tier?: number } | null> {
-    const requestReply = this.node.getRequestReply();
+    const httpClient = (this.node as any).httpPeerClient;
     const capabilityRegistry = this.node.getCapabilityRegistry();
-    if (!requestReply || !capabilityRegistry) return null;
+    if (!httpClient || !capabilityRegistry) return null;
 
     const allProfiles = capabilityRegistry.getAllProfiles();
     const credentialPeers = allProfiles.filter((p: any) =>
@@ -755,9 +783,9 @@ Be friendly and helpful. Keep answers short.`
 
     for (const peer of credentialPeers.slice(0, 3)) {
       try {
-        const resp = await requestReply.request(peer.peerId, 'pando/doorman-classify', { message }, 10_000);
+        const resp = await httpClient.dispatchRequest(peer.peerId, 'pando/doorman-classify', { message }, 10_000);
         if (resp?.success && resp.payload && !resp.payload.error) {
-          console.log(`[doorman] P2P classify via ${peer.peerId.slice(0, 12)}`);
+          console.log(`[doorman] HTTP classify via ${peer.peerId.slice(0, 12)}`);
           const p = resp.payload;
           if (p.intent === 'question' && p.response) return { intent: 'question', response: p.response };
           if (p.intent === 'build' && p.description) return { intent: 'build', description: p.description, tier: p.tier || 1 };
@@ -768,9 +796,9 @@ Be friendly and helpful. Keep answers short.`
   }
 
   private async proxyDoormanChat(message: string, history: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<string | null> {
-    const requestReply = this.node.getRequestReply();
+    const httpClient = (this.node as any).httpPeerClient;
     const capabilityRegistry = this.node.getCapabilityRegistry();
-    if (!requestReply || !capabilityRegistry) return null;
+    if (!httpClient || !capabilityRegistry) return null;
 
     const allProfiles = capabilityRegistry.getAllProfiles();
     const credentialPeers = allProfiles.filter((p: any) =>
@@ -779,9 +807,9 @@ Be friendly and helpful. Keep answers short.`
 
     for (const peer of credentialPeers.slice(0, 3)) {
       try {
-        const resp = await requestReply.request(peer.peerId, 'pando/doorman-chat', { message, history }, 15_000);
+        const resp = await httpClient.dispatchRequest(peer.peerId, 'pando/doorman-chat', { message, history }, 15_000);
         if (resp?.success && resp.payload?.reply) {
-          console.log(`[doorman] P2P chat via ${peer.peerId.slice(0, 12)}`);
+          console.log(`[doorman] HTTP chat via ${peer.peerId.slice(0, 12)}`);
           return resp.payload.reply;
         }
       } catch { /* try next peer */ }

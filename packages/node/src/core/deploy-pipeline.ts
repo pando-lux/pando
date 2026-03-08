@@ -20,8 +20,10 @@ export interface DeployPipelineConfig {
   apiToken?: string;
   /** Project store instance */
   projectStore: ProjectStoreLike;
-  /** RequestReply for P2P deploy to secure nodes */
-  requestReply: RequestReplyLike;
+  /** HTTP client for direct peer communication */
+  httpPeerClient?: HttpPeerClientLike;
+  /** RequestReply — only used for local self-deploy handler lookup */
+  requestReply?: RequestReplyLike;
   /** Capability registry for finding secure/compute nodes */
   capabilityRegistry?: CapabilityRegistryLike;
   /** Local peerId */
@@ -53,8 +55,11 @@ interface ProjectStoreLike {
 }
 
 interface RequestReplyLike {
-  request(peerId: string, protocol: string, payload: any, timeoutMs?: number): Promise<any>;
   getHandler?(protocol: string): any;
+}
+
+interface HttpPeerClientLike {
+  deployApp(peerId: string, payload: any): Promise<any>;
 }
 
 interface CapabilityRegistryLike {
@@ -269,18 +274,19 @@ export class DeployPipeline {
 
       if (isLocal) {
         // Self-deploy: invoke handler directly
-        const handler = this.config.requestReply.getHandler?.('pando/deploy-app');
+        const handler = this.config.requestReply?.getHandler?.('pando/deploy-app');
         if (handler) {
           const result = await handler({ payload: deployPayload });
           response = { success: true, payload: result };
         } else {
           return { name, status: 'failed', durationMs: Date.now() - start, detail: 'Local deploy handler not registered' };
         }
+      } else if (this.config.httpPeerClient) {
+        // Remote deploy via HTTP
+        const result = await this.config.httpPeerClient.deployApp(targetPeerId, deployPayload);
+        response = { success: true, payload: result };
       } else {
-        // Remote deploy via P2P
-        response = await this.config.requestReply.request(
-          targetPeerId, 'pando/deploy-app', deployPayload, 300_000
-        );
+        return { name, status: 'failed', durationMs: Date.now() - start, detail: 'No HTTP peer client available for remote deploy' };
       }
 
       if (response?.success && response.payload) {

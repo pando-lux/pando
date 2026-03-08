@@ -120,6 +120,8 @@ export class PandoNode {
   private monitor: HealthMonitor | null = null;
   private guardrails: Guardrails | null = null;
   private requestReply: RequestReplyManager | null = null;
+  // Phase A: Direct HTTP client for peer-to-peer operations (replaces P2P request-reply for unicast)
+  public httpPeerClient: import('./core/http-peer-client.js').HttpPeerClient | null = null;
   private reputation: ReputationManager | null = null;
   private engineAdapter: EngineAdapter | null = null;
   private emissionWitness: EmissionWitness | null = null;
@@ -364,8 +366,8 @@ export class PandoNode {
       }
     }
 
-    // Phase 69: Route to a compute node with credentialAccess via P2P
-    if (this.capabilityRegistry && this.requestReply) {
+    // Phase 69: Route to a compute node with credentialAccess via HTTP
+    if (this.capabilityRegistry && this.httpPeerClient) {
       const allProfiles = this.capabilityRegistry.getAllProfiles();
       const credentialProfiles = allProfiles.filter(p =>
         p.credentialAccess === true && p.peerId !== this.identity?.peerId
@@ -373,12 +375,12 @@ export class PandoNode {
 
       for (const profile of credentialProfiles) {
         try {
-          const response = await this.requestReply.request(profile.peerId, 'pando/ai-query', { query }, 30_000);
-          if (response?.success && response.payload?.answer) {
+          const response = await this.httpPeerClient.sendRequest(profile.peerId, '/v1/internal/ai-query', { query }, 30_000);
+          if (response?.answer) {
             return {
-              answer: response.payload.answer,
-              sources: response.payload.sources || [],
-              confidence: response.payload.confidence || 'medium',
+              answer: response.answer,
+              sources: response.sources || [],
+              confidence: response.confidence || 'medium',
               respondedBy: profile.peerId,
             };
           }
@@ -545,7 +547,7 @@ export class PandoNode {
     s['security']   = this.securityMonitor ? 'ok' : 'skipped';
 
     // Core (Layer 1): business logic
-    s['request-reply']    = this.requestReply    ? 'ok' : 'failed';
+    s['request-reply']    = this.requestReply    ? 'ok' : 'skipped';
     s['storage']          = this.storageBackend  ? 'ok' : 'degraded';
     s['resource-registry']= this.resourceRegistry ? 'ok' : 'skipped';
     s['upgrade-protocol'] = this.upgradeProtocol ? 'ok' : 'skipped';
@@ -563,10 +565,8 @@ export class PandoNode {
     const kernelFailed = ['ledger', 'network', 'sync', 'governance'].some(k => s[k] === 'failed');
     this.nodeHealth.kernel = kernelFailed ? 'failed' : 'healthy';
 
-    // Core health: storage degraded or request-reply failed → degraded
-    if (s['request-reply'] === 'failed') {
-      this.nodeHealth.core = 'failed';
-    } else if (s['storage'] === 'degraded') {
+    // Core health: storage degraded → degraded
+    if (s['storage'] === 'degraded') {
       this.nodeHealth.core = 'degraded';
     } else {
       this.nodeHealth.core = 'healthy';
@@ -1193,25 +1193,22 @@ export class PandoNode {
    * Returns immediately with queued status. Results come back via SSE/thread.
    */
   async routeChatProxyP2P(message: string, threadId?: string, tier?: string): Promise<{ status: string; projectId?: string; executedBy: string } | null> {
-    if (!this.requestReply) return null;
+    if (!this.httpPeerClient) return null;
     const candidates = this.capabilityRegistry.getAllProfiles().filter(p =>
       p.shareCompute === true &&
       p.capabilities.compute_cpu === true &&
-      p.peerId !== this.identity?.peerId  // remote only — local routing handled by caller
+      p.peerId !== this.identity?.peerId
     );
     if (candidates.length === 0) return null;
     const peer = candidates[0];
     try {
-      const result = await this.requestReply.request(
-        peer.peerId,
-        'chat_proxy',
-        { message, threadId, tier },
-        30_000  // 30s timeout — just queuing, not waiting for build
+      const result = await this.httpPeerClient.chatProxy(
+        peer.peerId, message, threadId || '', tier
       ) as any;
-      if (result?.error || result?.payload?.error) return null;
+      if (result?.error) return null;
       return {
-        status: result.payload?.status || 'queued',
-        projectId: result.payload?.projectId,
+        status: result?.status || 'queued',
+        projectId: result?.projectId,
         executedBy: peer.peerId,
       };
     } catch {

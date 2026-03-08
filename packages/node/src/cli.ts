@@ -138,7 +138,8 @@ async function main() {
   // Supervisor bootstrap: if not already launched through the supervisor,
   // re-spawn via supervisor.js so that the node benefits from auto-restart.
   // The --supervised flag is added by supervisor.ts to prevent infinite loops.
-  if (!args.includes('--supervised')) {
+  // Auto-detect PM2: skip supervisor since PM2 already manages restarts.
+  if (!args.includes('--supervised') && !process.env.PM2_HOME && !process.env.pm_id) {
     const __dir = dirname(fileURLToPath(import.meta.url));
     const supervisorPath = join(__dir, 'supervisor.js');
     const sup = spawnProc(process.execPath, [supervisorPath, ...args], { stdio: 'inherit', detached: false });

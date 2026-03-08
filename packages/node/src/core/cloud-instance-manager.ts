@@ -396,12 +396,12 @@ export class CloudInstanceManager {
     }
 
     try {
-      // Use request-reply to get confirmation from compute node
-      const requestReply = this.node.getRequestReply();
-      if (!requestReply) throw new Error('RequestReply not available — cannot deploy via P2P');
+      // Use HTTP peer client for deploy request
+      const httpClient = (this.node as any).httpPeerClient;
+      if (!httpClient) throw new Error('HTTP peer client not available — cannot deploy');
 
       // 5 min timeout — git clone + npm install can take a while
-      const response = await requestReply.request(record.peerId, 'pando/deploy-app', deployPayload, 300_000);
+      const response = await httpClient.deployApp(record.peerId, deployPayload);
       this.addApp(instanceId, projectId);
 
       // Phase 70: Construct correct URL from deploy response
@@ -435,13 +435,13 @@ export class CloudInstanceManager {
     if (!record.peerId) throw new Error(`Instance ${instanceId} has no peerId — not connected to P2P yet`);
     if (record.status !== 'running') throw new Error(`Instance ${instanceId} is ${record.status}, not running`);
 
-    const requestReply = this.node.getRequestReply();
-    if (!requestReply) throw new Error('RequestReply not available');
+    const httpClient = (this.node as any).httpPeerClient;
+    if (!httpClient) throw new Error('HTTP peer client not available');
 
-    console.log(`[cloud] Upgrading instance ${instanceId} (peer ${record.peerId.slice(0, 12)}) via P2P...`);
+    console.log(`[cloud] Upgrading instance ${instanceId} (peer ${record.peerId.slice(0, 12)}) via HTTP...`);
 
     // 5 min timeout — git pull + npm run build can take a while
-    const response = await requestReply.request(record.peerId, 'pando/upgrade-node', {}, 300_000);
+    const response = await httpClient.dispatchRequest(record.peerId, 'pando/upgrade-node', {}, 300_000);
     if (!response.success) {
       throw new Error(`Upgrade failed: ${response.error || 'unknown error'}`);
     }

@@ -44,11 +44,11 @@ export async function initCore(node: any): Promise<void> {
       }
     }
 
-    // Phase 83: If no MongoDB, create P2PStorageBackend to proxy storage to compute nodes
+    // Phase 83: If no MongoDB, create P2PStorageBackend to proxy storage to compute nodes via HTTP
     if (!node.storageBackend) {
       try {
         const { P2PStorageBackend } = await import('./core/p2p-storage-backend.js');
-        const p2pBackend = new P2PStorageBackend(node.requestReply, node.capabilityRegistry, node.identity.peerId);
+        const p2pBackend = new P2PStorageBackend(node.httpPeerClient, node.capabilityRegistry, node.identity.peerId);
         await p2pBackend.init();
         node.setStorageBackend(p2pBackend);
         // Update capability profile to reflect P2P storage
@@ -87,27 +87,27 @@ export async function initCore(node: any): Promise<void> {
       }
     }
 
-    // Phase 69 (follow-up): Wire P2P credential proxy for non-secure nodes.
+    // Phase 69 (follow-up): Wire credential proxy for non-secure nodes via HTTP.
     // If this node has no decryption capability, proxy code_repository credential requests to compute peers.
     {
       const credStore = (node as any)._credentialStore as import('./core/credential-store.js').CredentialStore | undefined;
       if (!credStore?.hasDecryptionCapability()) {
         node.resourceRegistry.setP2PCredentialProxy(async (resourceId: string, type: string) => {
-          if (!node.requestReply || !node.capabilityRegistry) return null;
+          if (!node.httpPeerClient || !node.capabilityRegistry) return null;
           const allProfiles = node.capabilityRegistry.getAllProfiles();
           const computePeers = allProfiles.filter((p: any) =>
             p.storageBackend === 'mongodb' && p.peerId !== node.identity?.peerId
           );
           for (const peer of computePeers.slice(0, 3)) {
             try {
-              const resp = await node.requestReply.request(peer.peerId, 'pando/get-credential', { resourceId, type }, 30_000);
-              if (resp?.success && resp.payload?.credential) {
-                console.log(`[resources] P2P credential proxy: got ${type} from ${peer.peerId.slice(0, 12)}`);
-                return resp.payload.credential;
+              const credential = await node.httpPeerClient.getCredential(peer.peerId, resourceId, type);
+              if (credential) {
+                console.log(`[resources] HTTP credential proxy: got ${type} from ${peer.peerId.slice(0, 12)}`);
+                return credential;
               }
             } catch { /* try next peer */ }
           }
-          console.warn(`[resources] P2P credential proxy: no compute peer could decrypt ${resourceId.slice(0, 8)}`);
+          console.warn(`[resources] HTTP credential proxy: no compute peer could decrypt ${resourceId.slice(0, 8)}`);
           return null;
         });
       }

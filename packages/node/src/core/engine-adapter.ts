@@ -763,7 +763,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   private getBoardTasks(dbPath: string | null): any[] {
     if (!dbPath || !this.Database) return [];
     try {
-      const db = new this.Database(dbPath, { readonly: true });
+      const db = new this.Database(dbPath);
       const tasks = db.prepare(
         `SELECT id, title, status, created_at, progress FROM board_tasks
          WHERE status IN ('pending', 'in_progress')
@@ -865,7 +865,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   private getBoardSnapshot(dbPath: string): string {
     if (!this.Database) return 'BOARD STATE: Database not available.';
     try {
-      const db = new this.Database(dbPath, { readonly: true });
+      const db = new this.Database(dbPath);
       const tasks = db.prepare(
         `SELECT title, status, created_at FROM board_tasks
          WHERE status IN ('pending', 'in_progress')

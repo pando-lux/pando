@@ -162,13 +162,14 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
 
       for (const project of deadProjects) {
         try {
-          if (!requestReply || !project.githubRepo) {
-            results.push({ projectId: project.id, status: 'skipped', reason: 'No requestReply or githubRepo' });
+          const httpClient = (deps.node as any).httpPeerClient;
+          if (!httpClient || !project.githubRepo) {
+            results.push({ projectId: project.id, status: 'skipped', reason: 'No httpPeerClient or githubRepo' });
             continue;
           }
 
           const repoUrl = `https://github.com/${project.githubRepo}.git`;
-          const response = await requestReply.request(targetInstance.peerId!, 'pando/deploy-app', {
+          const response = await httpClient.deployApp(targetInstance.peerId!, {
             projectId: project.id,
             repoUrl,
             tier: 2,
@@ -177,10 +178,10 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
               PANDO_PROJECT_ID: project.id,
               PANDO_PROJECT_API_KEY: (project as any).apiKey || '',
             },
-          }, 300_000);
+          });
 
-          if (response?.success && response.payload?.status === 'deployed') {
-            const payload = response.payload as any;
+          if (response?.status === 'deployed') {
+            const payload = response as any;
             const liveUrl = `http://${targetInstance.publicIp}/apps/${project.id}/`;
             await ps.updateProject(project.id, {
               deploymentUrl: liveUrl,
@@ -1795,14 +1796,14 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       return taskQueue.getCostStats();
     });
 
-    // GET /scheduler/remote/:peerId/tasks — Query a remote peer's task list via P2P
+    // GET /scheduler/remote/:peerId/tasks — Query a remote peer's task list via HTTP
     fastify.get('/scheduler/remote/:peerId/tasks', async (request: any, reply: any) => {
-      const rr = node.getRequestReply();
-      if (!rr) return reply.code(503).send({ error: 'Request-reply not available' });
+      const httpClient = (node as any).httpPeerClient;
+      if (!httpClient) return reply.code(503).send({ error: 'HTTP peer client not available' });
       const { peerId } = request.params;
       const limit = parseInt(request.query?.limit) || 50;
       try {
-        const result = await rr.request(peerId, 'task_list', { limit }, 10000);
+        const result = await httpClient.dispatchRequest(peerId, 'task_list', { limit }, 10000);
         if (!result.success) return reply.code(502).send({ error: result.error || 'Remote peer returned error' });
         return result.payload;
       } catch (err: any) {
@@ -1812,11 +1813,11 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
 
     // GET /scheduler/remote/:peerId/tasks/:taskId — Query a specific task from a remote peer
     fastify.get('/scheduler/remote/:peerId/tasks/:taskId', async (request: any, reply: any) => {
-      const rr = node.getRequestReply();
-      if (!rr) return reply.code(503).send({ error: 'Request-reply not available' });
+      const httpClient = (node as any).httpPeerClient;
+      if (!httpClient) return reply.code(503).send({ error: 'HTTP peer client not available' });
       const { peerId, taskId } = request.params;
       try {
-        const result = await rr.request(peerId, 'task_detail', { taskId }, 10000);
+        const result = await httpClient.dispatchRequest(peerId, 'task_detail', { taskId }, 10000);
         if (!result.success) return reply.code(502).send({ error: result.error || 'Remote peer returned error' });
         if (result.payload?.error) return reply.code(404).send({ error: result.payload.error });
         return result.payload;
@@ -1827,7 +1828,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
 
     // GET /scheduler/network/tasks — Aggregate tasks from all connected peers + local
     fastify.get('/scheduler/network/tasks', async (request: any, reply: any) => {
-      const rr = node.getRequestReply();
+      const httpClient = (node as any).httpPeerClient;
       const scheduler = node.getScheduler();
       const network = node.getNetwork();
       const identity = node.getIdentity();
@@ -1847,9 +1848,9 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       const peers = network.getPeers();
       const remoteResults = await Promise.allSettled(
         peers.map(async (p: any) => {
-          if (!rr) return [];
+          if (!httpClient) return [];
           try {
-            const result = await rr.request(p.peerId, 'task_list', { limit }, 8000);
+            const result = await httpClient.dispatchRequest(p.peerId, 'task_list', { limit }, 8000);
             if (result.success && Array.isArray(result.payload)) {
               return result.payload.map((t: any) => ({
                 ...t, sourceNode: p.peerId, isLocal: false,
@@ -2183,16 +2184,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       return { success: true, change };
     });
 
-    // ── Request/Reply Routes (Phase 10.1) ───────────────────────────────────────
-
-    // GET /request-reply/stats — Request/reply statistics
-    fastify.get('/request-reply/stats', async (request: any, reply: any) => {
-      const rr = node.getRequestReply();
-      if (!rr) {
-        return reply.code(503).send({ error: 'Request/reply manager not initialized.' });
-      }
-      return rr.getStats();
-    });
+    // ── Request/Reply Routes ───────────────────────────────────────
 
     // GET /request-reply/handlers — List registered handler types
     fastify.get('/request-reply/handlers', async (request: any, reply: any) => {
@@ -2203,11 +2195,11 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       return { handlers: rr.getHandlerTypes() };
     });
 
-    // POST /request-reply/send — Send a request and return the reply
+    // POST /request-reply/send — Dispatch a request to a peer via HTTP
     fastify.post('/request-reply/send', async (request: any, reply: any) => {
-      const rr = node.getRequestReply();
-      if (!rr) {
-        return reply.code(503).send({ error: 'Request/reply manager not initialized.' });
+      const httpClient = (node as any).httpPeerClient;
+      if (!httpClient) {
+        return reply.code(503).send({ error: 'HTTP peer client not initialized.' });
       }
       const { to, type, payload, timeout } = request.body || {};
       if (!to || typeof to !== 'string') {
@@ -2218,16 +2210,13 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       }
       const timeoutMs = typeof timeout === 'number' && timeout > 0
         ? Math.min(timeout, 120_000)
-        : undefined;
+        : 30_000;
 
       try {
-        const result = await rr.request(to, type, payload ?? {}, timeoutMs);
+        const result = await httpClient.dispatchRequest(to, type, payload ?? {}, timeoutMs);
         return { success: true, reply: result };
       } catch (err: any) {
         const msg = err.message || 'Request failed';
-        if (msg.includes('Rate limited')) {
-          return reply.code(429).send({ error: msg });
-        }
         if (msg.includes('timed out')) {
           return reply.code(504).send({ error: msg });
         }

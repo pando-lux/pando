@@ -16,6 +16,7 @@ import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import type { RequestReplyManager } from '../core/request-reply.js';
+import type { HttpPeerClient } from '../core/http-peer-client.js';
 import type { PandoNetwork } from '../kernel/network.js';
 import type { ProofResult, ProofScore } from '@pando/shared';
 
@@ -34,6 +35,7 @@ const SCORE_DECAY_FACTOR = 0.95;                   // Recent challenges matter m
 
 export class ResourceProofChallenger {
   private requestReply: RequestReplyManager;
+  private httpPeerClient: HttpPeerClient | null;
   private network: PandoNetwork;
   private localPeerId: string;
   private dataDir: string;
@@ -56,8 +58,10 @@ export class ResourceProofChallenger {
     network: PandoNetwork,
     localPeerId: string,
     dataDir: string,
+    httpPeerClient?: HttpPeerClient | null,
   ) {
     this.requestReply = requestReply;
+    this.httpPeerClient = httpPeerClient ?? null;
     this.network = network;
     this.localPeerId = localPeerId;
     this.dataDir = dataDir;
@@ -84,11 +88,9 @@ export class ResourceProofChallenger {
     const startTime = Date.now();
 
     try {
-      const reply = await this.requestReply.request(
-        peerId,
-        'storage_challenge',
-        { payload: payload.toString('hex') },
-        STORAGE_TIMEOUT_MS,
+      if (!this.httpPeerClient) throw new Error('No HTTP peer client available');
+      const reply = await this.httpPeerClient.dispatchRequest(
+        peerId, 'storage_challenge', { payload: payload.toString('hex') }, STORAGE_TIMEOUT_MS,
       );
 
       const responseTimeMs = Date.now() - startTime;
@@ -139,11 +141,9 @@ export class ResourceProofChallenger {
     const startTime = Date.now();
 
     try {
-      const reply = await this.requestReply.request(
-        peerId,
-        'compute_challenge',
-        { seed, iterations },
-        COMPUTE_TIMEOUT_MS,
+      if (!this.httpPeerClient) throw new Error('No HTTP peer client available');
+      const reply = await this.httpPeerClient.dispatchRequest(
+        peerId, 'compute_challenge', { seed, iterations }, COMPUTE_TIMEOUT_MS,
       );
 
       const responseTimeMs = Date.now() - startTime;
@@ -185,11 +185,9 @@ export class ResourceProofChallenger {
     const startTime = Date.now();
 
     try {
-      const reply = await this.requestReply.request(
-        peerId,
-        'bandwidth_challenge',
-        { nonce, timestamp: Date.now() },
-        BANDWIDTH_TIMEOUT_MS,
+      if (!this.httpPeerClient) throw new Error('No HTTP peer client available');
+      const reply = await this.httpPeerClient.dispatchRequest(
+        peerId, 'bandwidth_challenge', { nonce, timestamp: Date.now() }, BANDWIDTH_TIMEOUT_MS,
       );
 
       const responseTimeMs = Date.now() - startTime;

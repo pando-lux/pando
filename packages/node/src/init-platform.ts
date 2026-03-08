@@ -32,7 +32,7 @@ export async function initPlatform(node: any): Promise<void> {
     const dataDir = node.config.dataDir || join(homedir(), '.pando');
 
     // Phase B: Initialize ResourceRouter — smart task routing + error correction
-    node.resourceRouter = new ResourceRouter(node.capabilityRegistry, node.requestReply);
+    node.resourceRouter = new ResourceRouter(node.capabilityRegistry, node.requestReply, node.httpPeerClient);
     if (node.reputation) {
       node.resourceRouter.setReputationManager(node.reputation);
     }
@@ -179,11 +179,21 @@ export async function initPlatform(node: any): Promise<void> {
           const s3Cred = await registry.getCredential(s3Resources[0].resourceId);
           if (!s3Cred) return { status: 'failed', error: 'Could not decrypt S3 credential' };
 
-          // Parse S3 credential — expect JSON with accessKeyId, secretAccessKey, region, bucket
+          // Parse S3 credential — JSON or simple accessKeyId:secretAccessKey format
           let s3Config: any;
           try { s3Config = JSON.parse(s3Cred); } catch {
-            // Try as simple format: accessKeyId:secretAccessKey
-            return { status: 'failed', error: 'S3 credential not in expected JSON format' };
+            // Fallback: accessKeyId:secretAccessKey
+            const parts = s3Cred.split(':');
+            if (parts.length >= 2) {
+              s3Config = {
+                accessKeyId: parts[0],
+                secretAccessKey: parts.slice(1).join(':'),
+                region: s3Resources[0].metadata?.region || 'us-east-1',
+                bucket: s3Resources[0].metadata?.bucket || 'pando-deployments',
+              };
+            } else {
+              return { status: 'failed', error: 'S3 credential not in expected JSON or key:secret format' };
+            }
           }
 
           // Upload files to S3
@@ -1168,13 +1178,7 @@ Be friendly and helpful. Keep answers short.`
         }).catch(() => {});
       }
 
-      // Phase 93: Direct TCP stream request/reply (replaces GossipSub for unicast P2P calls)
-      if (message.type === MessageType.REQUEST_REPLY_REQUEST || message.type === MessageType.REQUEST_REPLY_REPLY) {
-        console.log(`[request-reply] Direct TCP ${message.type} from ${from.slice(0, 16)}, payload keys: ${Object.keys(message.payload || {}).join(',')}`);
-        node.requestReply?.handleDirectMessage(message, from).catch((err: any) => {
-          console.error(`[request-reply] handleDirectMessage error from ${from.slice(0, 16)}: ${err.message}`);
-        });
-      }
+      // Phase A: Direct TCP request/reply removed — unicast uses HTTP (HttpPeerClient)
 
       // Phase 92: Direct TCP stream capability profile exchange
       // Fallback for GossipSub mesh failures (small networks where mesh doesn't form)

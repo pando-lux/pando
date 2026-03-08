@@ -21,7 +21,10 @@ import type { PandoNetwork } from './network.js';
 /** Minimal interface — avoids importing core/ from kernel/ */
 interface RequestReplyLike {
   registerHandler(type: string, handler: (req: any) => Promise<any>): void;
-  request(peerId: string, type: string, payload: any, timeoutMs?: number): Promise<any>;
+}
+/** Minimal interface for HTTP peer client */
+interface HttpPeerClientLike {
+  dispatchRequest(peerId: string, type: string, payload: any, timeoutMs?: number): Promise<any>;
 }
 
 // ── Interfaces ──────────────────────────────────────────────────────────────
@@ -61,6 +64,7 @@ export class ReputationManager {
   private dataDir: string;
   private network: PandoNetwork;
   private requestReply: RequestReplyLike;
+  private httpPeerClient: HttpPeerClientLike | null;
   private localRecord: ReputationRecord;
   private peerRecords: Map<string, ReputationRecord> = new Map();
   private localPath: string;
@@ -68,10 +72,11 @@ export class ReputationManager {
   private lastBroadcastScore: number = 0;
   private pruneInterval: ReturnType<typeof setInterval> | null = null;
 
-  constructor(dataDir: string, network: PandoNetwork, requestReply: RequestReplyLike) {
+  constructor(dataDir: string, network: PandoNetwork, requestReply: RequestReplyLike, httpPeerClient?: HttpPeerClientLike | null) {
     this.dataDir = dataDir;
     this.network = network;
     this.requestReply = requestReply;
+    this.httpPeerClient = httpPeerClient ?? null;
     this.localPath = join(dataDir, 'reputation.json');
     this.peersPath = join(dataDir, 'reputation-peers.json');
 
@@ -100,11 +105,12 @@ export class ReputationManager {
       return this.getLocalReputation();
     });
 
-    // On peer connect, request their reputation (5s delay for protocol setup)
+    // On peer connect, request their reputation via HTTP (5s delay for protocol setup)
     this.network.onPeerConnect((peerId: string) => {
       setTimeout(() => {
-        this.requestReply.request(peerId, 'reputation_query', {}, 15_000)
-          .then((reply) => {
+        if (!this.httpPeerClient) return;
+        this.httpPeerClient.dispatchRequest(peerId, 'reputation_query', {}, 15_000)
+          .then((reply: any) => {
             if (reply.success && reply.payload) {
               this.handleRemoteUpdate(reply.payload, peerId);
             }

@@ -9,6 +9,7 @@
 
 import type { CapabilityRegistry } from './capability-registry.js';
 import type { RequestReplyManager } from '../core/request-reply.js';
+import type { HttpPeerClient } from '../core/http-peer-client.js';
 import type { ReputationManager } from '../kernel/reputation.js';
 import type {
   ResourceType,
@@ -38,6 +39,7 @@ const DISABLE_THRESHOLD = 5;
 export class ResourceRouter {
   private registry: CapabilityRegistry;
   private requestReply: RequestReplyManager;
+  private httpPeerClient: HttpPeerClient | null = null;
   private reputationManager: ReputationManager | null = null;
 
   // Failure tracking: peerId -> resourceType -> FailureRecord
@@ -53,9 +55,11 @@ export class ResourceRouter {
   constructor(
     registry: CapabilityRegistry,
     requestReply: RequestReplyManager,
+    httpPeerClient?: HttpPeerClient | null,
   ) {
     this.registry = registry;
     this.requestReply = requestReply;
+    this.httpPeerClient = httpPeerClient ?? null;
   }
 
   /** Attach the reputation manager for scoring nodes. */
@@ -176,7 +180,8 @@ export class ResourceRouter {
    */
   async forwardTask(task: any, targetPeerId: string): Promise<ForwardResult> {
     try {
-      const reply = await this.requestReply.request(targetPeerId, 'task_forward', {
+      if (!this.httpPeerClient) throw new Error('No HTTP peer client available');
+      const reply = await this.httpPeerClient.dispatchRequest(targetPeerId, 'task_forward', {
         task: {
           id: task.id,
           title: task.title,

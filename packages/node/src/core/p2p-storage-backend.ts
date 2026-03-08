@@ -1,12 +1,7 @@
 /**
- * P2PStorageBackend — Phase 83: Storage proxy for untrusted nodes.
+ * P2PStorageBackend — Storage proxy for untrusted nodes.
  *
- * Implements the StorageBackend interface by forwarding all CRUD operations
- * via P2P request-reply to compute nodes that have MongoDB (MongoStorageBackend).
- *
- * Used on nodes without PANDO_STORAGE_URL. Compute nodes register a
- * `pando/storage-proxy` handler that executes operations against their
- * local MongoStorageBackend.
+ * Forwards all CRUD operations via HTTP to compute nodes that have MongoDB.
  *
  * Security:
  * - Does NOT expose getDb() — CredentialStore only initializes on compute nodes
@@ -15,32 +10,28 @@
  */
 
 import type { StorageBackend } from './storage-backend.js';
-import type { RequestReplyManager } from './request-reply.js';
-/** Minimal interface — avoids importing platform/ from core/ */
+import type { HttpPeerClient } from './http-peer-client.js';
+
 interface CapabilityRegistryLike {
   getAllProfiles(): import('@pando/shared').CapabilityProfile[];
 }
 
-const PROXY_TIMEOUT_MS = 5_000;
 const MAX_ATTEMPTS = 3;
-const PEER_WAIT_TIMEOUT_MS = 30_000;  // Wait up to 30s for compute peers on first call
-const PEER_POLL_INTERVAL_MS = 1_000;  // Poll every 1s
-const UNHEALTHY_TTL_MS = 2 * 60 * 1_000;  // 2 minutes
+const PEER_WAIT_TIMEOUT_MS = 30_000;
+const PEER_POLL_INTERVAL_MS = 1_000;
+const UNHEALTHY_TTL_MS = 30_000;
 
 export class P2PStorageBackend implements StorageBackend {
   private preferredPeerId: string | null = null;
-  /** Peers that recently failed — skip until TTL expires */
-  private unhealthyPeers = new Map<string, number>();  // peerId → expiryTimestamp
+  private unhealthyPeers = new Map<string, number>();
 
   constructor(
-    private requestReply: RequestReplyManager,
+    private httpPeerClient: HttpPeerClient,
     private capabilityRegistry: CapabilityRegistryLike,
     private localPeerId: string,
   ) {}
 
-  async init(): Promise<void> {
-    // No-op — P2P network is already connected by the time this is created
-  }
+  async init(): Promise<void> {}
 
   async close(): Promise<void> {
     this.preferredPeerId = null;
@@ -77,8 +68,6 @@ export class P2PStorageBackend implements StorageBackend {
     await this.proxy('pushToArray', { collection, key, field, value });
   }
 
-  // ─── Core proxy logic ────────────────────────────────────────────────
-
   private async proxy(method: string, args: Record<string, any>): Promise<any> {
     let computePeers = this.getComputePeers();
 
@@ -95,39 +84,29 @@ export class P2PStorageBackend implements StorageBackend {
       console.log(`[P2PStorageBackend] Found ${computePeers.length} compute peer(s) after waiting`);
     }
 
-    // Try preferred peer first (sticky affinity), then others — skipping unhealthy peers
     const ordered = this.orderPeers(computePeers);
     const healthy = ordered.filter(p => !this.isUnhealthy(p));
-    const candidates = healthy.length > 0 ? healthy : ordered;  // Fall back to all peers if all are marked unhealthy
+    const candidates = healthy.length > 0 ? healthy : ordered;
     let lastError: Error | null = null;
 
     for (let i = 0; i < Math.min(MAX_ATTEMPTS, candidates.length); i++) {
       const peerId = candidates[i];
       try {
-        const reply = await this.requestReply.request(
-          peerId,
-          'pando/storage-proxy',
-          { method, args },
-          PROXY_TIMEOUT_MS,
-        );
+        const response = await this.httpPeerClient.storageProxy(peerId, method, args);
 
-        const payload = reply.payload;
-        if (payload?.error) {
-          throw new Error(`Storage proxy error: ${payload.error}`);
+        if (response?.error) {
+          throw new Error(`Storage proxy error: ${response.error}`);
         }
 
-        // Success — set sticky affinity
         this.preferredPeerId = peerId;
-        return payload?.result;
+        return response?.result;
       } catch (err) {
         lastError = err as Error;
-        // Mark peer unhealthy for 2 minutes so we skip it on next calls
         this.unhealthyPeers.set(peerId, Date.now() + UNHEALTHY_TTL_MS);
-        // Clear affinity on failure so we try a different peer next
         if (this.preferredPeerId === peerId) {
           this.preferredPeerId = null;
         }
-        console.log(`[P2PStorageBackend] ${method} failed on ${peerId.slice(0, 12)}: ${(err as Error).message} — marked unhealthy for 2min`);
+        console.log(`[P2PStorageBackend] ${method} failed on ${peerId.slice(0, 12)}: ${(err as Error).message}`);
       }
     }
 
@@ -138,7 +117,7 @@ export class P2PStorageBackend implements StorageBackend {
     const expiry = this.unhealthyPeers.get(peerId);
     if (expiry === undefined) return false;
     if (Date.now() > expiry) {
-      this.unhealthyPeers.delete(peerId);  // TTL expired — remove and treat as healthy
+      this.unhealthyPeers.delete(peerId);
       return false;
     }
     return true;
@@ -158,7 +137,6 @@ export class P2PStorageBackend implements StorageBackend {
     if (!this.preferredPeerId || !peers.includes(this.preferredPeerId)) {
       return peers;
     }
-    // Move preferred to front
     return [
       this.preferredPeerId,
       ...peers.filter(p => p !== this.preferredPeerId),
