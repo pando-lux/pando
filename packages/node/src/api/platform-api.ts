@@ -125,10 +125,29 @@ export async function registerPlatformRoutes(
                 await threadStore.addMessage(threadId, { role: 'assistant', content: result.response, timestamp: Date.now(), tier: 'complex' as any });
               }
               deps.pushEvent('chat_message', { threadId, projectId, role: 'assistant', content: result.response || 'Build complete.', timestamp: Date.now(), tier: 'complex' });
-              // Trigger app-manager update after build
+              // Trigger app-manager update after build — push deploy result back to thread
               const appMgr = node.getAppManager?.();
               if (appMgr && projectId) {
-                appMgr.update(projectId).catch((e: any) => console.warn('[app-manager] Auto-update failed:', e.message));
+                try {
+                  const deployResult = await appMgr.update(projectId);
+                  if (deployResult.success) {
+                    const app = appMgr.get(projectId);
+                    const deployMsg = `App deployed successfully.${app?.deploy_url ? ` URL: ${app.deploy_url}` : ''}${app?.port ? ` Port: ${app.port}` : ''}`;
+                    if (threadStore && threadId) {
+                      await threadStore.addMessage(threadId, { role: 'assistant', content: deployMsg, timestamp: Date.now(), tier: 'complex' as any });
+                    }
+                    deps.pushEvent('app_deployed', { threadId, projectId, deployUrl: app?.deploy_url, port: app?.port, status: 'live' });
+                    console.log(`[app-manager] Auto-deploy succeeded for ${projectId}`);
+                  } else {
+                    const failMsg = `Deploy attempted: ${deployResult.error || 'pending remote deployment'}`;
+                    if (threadStore && threadId) {
+                      await threadStore.addMessage(threadId, { role: 'assistant', content: failMsg, timestamp: Date.now(), tier: 'complex' as any });
+                    }
+                    deps.pushEvent('app_deploy_status', { threadId, projectId, status: 'failed', error: deployResult.error });
+                  }
+                } catch (e: any) {
+                  console.warn('[app-manager] Auto-update failed:', e.message);
+                }
               }
             } catch (err) {
               console.error('[chat] sendToEngine failed:', (err as Error).message);
@@ -257,10 +276,29 @@ export async function registerPlatformRoutes(
               await threadStore.addMessage(threadId, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' as any });
             }
             deps.pushEvent('chat_message', { threadId, projectId: newProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
-            // Trigger app-manager update after build
+            // Trigger app-manager update after build — push deploy result back to thread
             const appMgr = node.getAppManager?.();
             if (appMgr && newProjectId) {
-              appMgr.update(newProjectId).catch((e: any) => console.warn('[app-manager] Auto-update failed:', e.message));
+              try {
+                const deployResult = await appMgr.update(newProjectId);
+                if (deployResult.success) {
+                  const app = appMgr.get(newProjectId);
+                  const deployMsg = `App deployed successfully.${app?.deploy_url ? ` URL: ${app.deploy_url}` : ''}${app?.port ? ` Port: ${app.port}` : ''}`;
+                  if (threadStore && threadId) {
+                    await threadStore.addMessage(threadId, { role: 'assistant', content: deployMsg, timestamp: Date.now(), tier: 'complex' as any });
+                  }
+                  deps.pushEvent('app_deployed', { threadId, projectId: newProjectId, deployUrl: app?.deploy_url, port: app?.port, status: 'live' });
+                  console.log(`[app-manager] Auto-deploy succeeded for ${newProjectId}`);
+                } else {
+                  const failMsg = `Deploy attempted: ${deployResult.error || 'pending remote deployment'}`;
+                  if (threadStore && threadId) {
+                    await threadStore.addMessage(threadId, { role: 'assistant', content: failMsg, timestamp: Date.now(), tier: 'complex' as any });
+                  }
+                  deps.pushEvent('app_deploy_status', { threadId, projectId: newProjectId, status: 'failed', error: deployResult.error });
+                }
+              } catch (e: any) {
+                console.warn('[app-manager] Auto-update failed:', e.message);
+              }
             }
           } catch (err) {
             console.error('[router] Local engine failed:', (err as Error).message);
@@ -2507,7 +2545,7 @@ export async function registerPlatformRoutes(
 
     // ── Phase 31.8: Project Marketplace ───────────────────────────────────
 
-    // GET /marketplace — Public marketplace listing
+    // GET /marketplace — Public marketplace listing (enriched with deployment info)
     fastify.get('/marketplace', async (request: any, reply: any) => {
       const ps = node.getProjectStore();
       if (!ps) return reply.code(503).send({ error: 'Project store not available' });
@@ -2520,6 +2558,24 @@ export async function registerPlatformRoutes(
         limit: query.limit ? parseInt(query.limit) : undefined,
         offset: query.offset ? parseInt(query.offset) : undefined,
       });
+
+      // Enrich with AppManager deployment data (deploy_url, status, tier)
+      const appMgr = node.getAppManager?.();
+      if (appMgr && result.projects) {
+        for (const proj of result.projects) {
+          const app = appMgr.get(proj.id);
+          if (app) {
+            (proj as any).deployment = {
+              status: app.status,
+              url: app.deploy_url,
+              port: app.port,
+              tier: app.tier,
+              commit: app.current_commit,
+              deployedAt: app.deployed_at,
+            };
+          }
+        }
+      }
 
       return result;
     });
@@ -2539,7 +2595,20 @@ export async function registerPlatformRoutes(
 
       const collaborators = await ps.getCollaboratorsAsync(id);
       const ratingsSummary = await ps.getProjectRatingsAsync(id);
-      return { project, collaborators, ratings: ratingsSummary };
+
+      // Enrich with AppManager deployment data
+      const appMgr = node.getAppManager?.();
+      const app = appMgr?.get(id);
+      const deployment = app ? {
+        status: app.status,
+        url: app.deploy_url,
+        port: app.port,
+        tier: app.tier,
+        commit: app.current_commit,
+        deployedAt: app.deployed_at,
+      } : undefined;
+
+      return { project, collaborators, ratings: ratingsSummary, deployment };
     });
 
     // POST /projects/:id/rate — Rate a project (user token required)
