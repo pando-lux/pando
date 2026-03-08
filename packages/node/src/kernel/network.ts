@@ -363,10 +363,9 @@ export class PandoNetwork {
         connectedAt: Date.now(),
         lastSeen: Date.now(),
       });
-      // Phase 54.2: Persist known peer — delay 3s to allow identify protocol to populate
-      // peerStore with announce addresses (public IPs). Without delay, saved addresses
-      // may be incomplete, causing stale reconnection attempts.
-      setTimeout(() => this.updateKnownPeer(peerId).catch(() => {}), 3_000);
+      // Phase 54.2: Persist known peer — delay 1.5s to allow identify protocol to populate
+      // peerStore with announce addresses (public IPs). Identify typically completes in <1s.
+      setTimeout(() => this.updateKnownPeer(peerId).catch(() => {}), 1_500);
       // Notify handlers
       for (const handler of this.peerConnectHandlers) {
         try { handler(peerId); } catch {}
@@ -385,13 +384,14 @@ export class PandoNetwork {
     // Phase 54.2: Dial known peers from previous sessions
     this.dialKnownPeers().catch(() => {});
 
-    // Early discovery: re-sweep known peers 2s after start (catches peers
+    // Early discovery: re-sweep known peers 1s after start (catches peers
     // that weren't ready during the initial dialKnownPeers call)
-    setTimeout(() => this.dialKnownPeers().catch(() => {}), 2_000);
+    setTimeout(() => this.dialKnownPeers().catch(() => {}), 1_000);
 
-    // Auto-reconnect: if peer count drops to 0, re-dial bootstrap peers + known peers
+    // Auto-reconnect and discovery sweep: dial bootstrap + known peers every 5s
+    // (reduced from 10s for faster new-node discovery)
     if (this.config.bootstrapPeers.length > 0) {
-      this.reconnectTimer = setInterval(() => this.checkAndReconnect(), 10_000);
+      this.reconnectTimer = setInterval(() => this.checkAndReconnect(), 5_000);
     }
 
     // Health check: remove stale peers every 60s

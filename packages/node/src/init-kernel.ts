@@ -589,7 +589,7 @@ export async function initKernel(node: any): Promise<void> {
       }, 2_000);
 
       // Peer exchange: share our peer list so new nodes can form a full mesh.
-      // Delayed 500ms to let the connection settle before sending.
+      // Delayed 200ms to let the connection settle before sending.
       setTimeout(async () => {
         try {
           if (!node.network) return;
@@ -604,7 +604,7 @@ export async function initKernel(node: any): Promise<void> {
           });
           console.log(`[peer-exchange] Shared ${peerAddrs.length} peer(s) with ${peerId.slice(0, 12)}`);
         } catch {}
-      }, 500);
+      }, 200);
 
       // Phase 69: Auto-wrap removed — credentials in MongoDB, not per-node.
 
@@ -804,9 +804,9 @@ export async function initKernel(node: any): Promise<void> {
       }, 5 * 60 * 1000);
 
       // Peer discovery sweep: share full peer list with all connected peers.
-      // Early sweeps (10s, 30s) catch peers that connected after initial exchange.
-      // Then periodic sweep every 60s to discover new nodes joining the network.
-      for (const delay of [10_000, 30_000]) {
+      // Early sweeps (3s, 10s) catch peers that connected after initial exchange.
+      // Faster sweeps accelerate new-node mesh formation.
+      for (const delay of [3_000, 10_000]) {
         setTimeout(async () => {
           if (!node.network) return;
           const peers = node.network.getPeers();
