@@ -1778,9 +1778,9 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   }
 
   /** Get aggregate cost for a team from its PandoCode DB. */
-  getTeamCost(teamId: string): { totalTokens: number; totalCostLux: number; byAgent: Record<string, number> } {
+  getTeamCost(teamId: string): { totalTokens: number; totalCostUsd: number; totalCostLux: number; byAgent: Record<string, number> } {
     const teamData = this.activeTeams.get(teamId);
-    if (!teamData?.dbPath || !this.Database) return { totalTokens: 0, totalCostLux: 0, byAgent: {} };
+    if (!teamData?.dbPath || !this.Database) return { totalTokens: 0, totalCostUsd: 0, totalCostLux: 0, byAgent: {} };
     try {
       const db = new this.Database(teamData.dbPath);
       // Check if budget_usage table exists before querying
@@ -1789,39 +1789,60 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       ).get();
       if (!tableCheck) {
         db.close();
-        return { totalTokens: 0, totalCostLux: 0, byAgent: {} };
+        return { totalTokens: 0, totalCostUsd: 0, totalCostLux: 0, byAgent: {} };
       }
       // Discover columns dynamically — schema may vary across PandoCode versions
       const cols = db.prepare(`PRAGMA table_info(budget_usage)`).all() as { name: string }[];
       const colNames = new Set(cols.map(c => c.name));
-      const hasAgentId = colNames.has('agent_id');
       const hasInputTokens = colNames.has('input_tokens');
       const hasOutputTokens = colNames.has('output_tokens');
-      const hasCostLux = colNames.has('cost_lux');
+      const hasEstimatedCostUsd = colNames.has('estimated_cost_usd');
       const hasTokens = colNames.has('tokens');
 
-      // Build a safe query based on available columns
-      const agentCol = hasAgentId ? 'agent_id' : "'unknown'";
+      // Build token and cost expressions based on available columns
       const tokenExpr = hasInputTokens && hasOutputTokens
-        ? 'SUM(input_tokens + output_tokens)'
-        : hasTokens ? 'SUM(tokens)' : '0';
-      const costExpr = hasCostLux ? 'SUM(cost_lux)' : '0';
+        ? 'SUM(b.input_tokens + b.output_tokens)'
+        : hasTokens ? 'SUM(b.tokens)' : '0';
+      const costExpr = hasEstimatedCostUsd ? 'SUM(b.estimated_cost_usd)' : '0';
 
-      const rows = db.prepare(
-        `SELECT ${agentCol} as agent_id, ${tokenExpr} as tokens, ${costExpr} as cost FROM budget_usage GROUP BY ${agentCol}`
-      ).all() as { agent_id: string; tokens: number; cost: number }[];
+      // Per-agent attribution: join budget_usage with sessions table.
+      // PandoCode session titles follow the format "teamId: agentRole",
+      // which lets us extract the agent name from the session title.
+      const hasSessionsTable = db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'`
+      ).get();
+      const hasSessionId = colNames.has('session_id');
+
+      let rows: { agent_name: string; tokens: number; cost: number }[];
+      if (hasSessionsTable && hasSessionId) {
+        rows = db.prepare(
+          `SELECT COALESCE(s.title, 'unknown') as agent_name, ${tokenExpr} as tokens, ${costExpr} as cost
+           FROM budget_usage b
+           LEFT JOIN sessions s ON b.session_id = s.id
+           GROUP BY agent_name`
+        ).all() as { agent_name: string; tokens: number; cost: number }[];
+      } else {
+        // Fallback: no sessions table, aggregate without per-agent breakdown
+        rows = db.prepare(
+          `SELECT 'unknown' as agent_name, ${tokenExpr} as tokens, ${costExpr} as cost FROM budget_usage b`
+        ).all() as { agent_name: string; tokens: number; cost: number }[];
+      }
       db.close();
 
       const byAgent: Record<string, number> = {};
-      let totalTokens = 0, totalCostLux = 0;
+      let totalTokens = 0, totalCostUsd = 0;
       for (const row of rows) {
-        byAgent[row.agent_id || 'unknown'] = row.cost || 0;
+        // Extract agent role from session title (e.g., "pando-infra: lead" → "lead")
+        const colonIdx = row.agent_name.indexOf(': ');
+        const agentKey = colonIdx >= 0 ? row.agent_name.slice(colonIdx + 2) : row.agent_name;
+        // Accumulate in case multiple session titles map to the same agent role
+        byAgent[agentKey] = (byAgent[agentKey] || 0) + (row.tokens || 0);
         totalTokens += row.tokens || 0;
-        totalCostLux += row.cost || 0;
+        totalCostUsd += row.cost || 0;
       }
-      return { totalTokens, totalCostLux, byAgent };
+      return { totalTokens, totalCostUsd, totalCostLux: totalCostUsd, byAgent };
     } catch {
-      return { totalTokens: 0, totalCostLux: 0, byAgent: {} };
+      return { totalTokens: 0, totalCostUsd: 0, totalCostLux: 0, byAgent: {} };
     }
   }
 

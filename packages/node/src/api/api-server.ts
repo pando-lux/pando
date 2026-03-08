@@ -235,10 +235,13 @@ export class ApiServer {
     this.node = node;
     this.fastify = Fastify({ logger: false });
     this.fastify.register(cors, { origin: true });
-    // Allow empty bodies with Content-Type: application/json (Fastify rejects them by default)
-    this.fastify.addContentTypeParser('application/json', { parseAs: 'string' }, (req: any, body: string, done: any) => {
+    // Allow empty bodies with Content-Type: application/json (Fastify rejects them by default).
+    // parseAs:'buffer' avoids Content-Length vs string-length mismatch on multi-byte UTF-8
+    // characters (e.g. em dash —). Buffer byte length always matches Content-Length.
+    this.fastify.addContentTypeParser('application/json', { parseAs: 'buffer' }, (req: any, body: Buffer, done: any) => {
       try {
-        const json = body && body.length > 0 ? JSON.parse(body) : {};
+        const str = body.length > 0 ? body.toString('utf-8') : '';
+        const json = str.length > 0 ? JSON.parse(str) : {};
         done(null, json);
       } catch (err: any) {
         const badRequest: any = new Error('Invalid JSON body');
