@@ -92,7 +92,7 @@ export class Scheduler extends EventEmitter {
   private config: SchedulerConfig;
   private taskQueue: TaskQueue;
   private fileRegistry: FileRegistry | null = null;
-  // bridgeQueue removed — task results flow via EventEmitter → MessageBus
+  // Task results flow via EventEmitter events (task:completed, task:failed)
   private claudePath: string;
   private dataDir: string;
 

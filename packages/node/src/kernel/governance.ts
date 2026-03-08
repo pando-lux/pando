@@ -28,9 +28,6 @@ interface PaymentGateLike {
   refundPayment(holdId: string): boolean;
   releasePayment(holdId: string, recipient: string): boolean;
 }
-interface AgentManagerLike {
-  spawnAgent(opts: any): Promise<string | null>;
-}
 interface AgentDbLike {
   logGovernanceCheck(proposalId: string, checkName: string, result: string, reason?: string, changedFiles?: number, linesChanged?: number): void;
 }
@@ -198,9 +195,6 @@ export class GovernanceSync {
   // Phase 30: Callback when reviewers are selected for a proposal
   private onReviewersSelectedCallback: ((proposalId: string, reviewers: string[]) => void) | null = null;
 
-  // Phase 30.2: AgentManagerLike for spawning reviewer agents
-  private agentManager: AgentManagerLike | null = null;
-
   // Governance audit logging (optional — set via setAgentDb)
   private agentDb: AgentDbLike | null = null;
 
@@ -262,12 +256,6 @@ export class GovernanceSync {
   setPaymentGate(pg: PaymentGateLike): void {
     this.paymentGate = pg;
     console.log('[governance] PaymentGate connected — proposal staking enabled');
-  }
-
-  /** Set the AgentManager for spawning reviewer agents (Phase 30.2). */
-  setAgentManager(am: AgentManagerLike): void {
-    this.agentManager = am;
-    console.log('[governance] AgentManager connected — reviewer agent spawning enabled');
   }
 
   /** Set the AgentDatabase for governance audit logging. */
@@ -1186,92 +1174,12 @@ export class GovernanceSync {
     }, REVIEW_TIMEOUT_MS);
     this.reviewTimers.set(proposalId, reviewTimer);
 
-    // Spawn reviewer agents for any selected peers owned by this node
-    for (const peerId of selectedPeerIds) {
-      if (peerId === this.localPeerId) {
-        this.spawnReviewerAgent(proposalId, peerId).catch((err: any) => {
-          console.warn(`[governance] Failed to spawn reviewer agent for ${peerId.slice(0, 16)}...: ${err.message}`);
-        });
-      }
-    }
-
-    // Notify callback (AgentManager uses this to spawn reviewer agents)
+    // Notify callback for reviewer selection
     this.onReviewersSelectedCallback?.(proposalId, selectedPeerIds);
 
     // Cleanup candidacy tracking
     this.candidacyTimers.delete(proposalId);
     this.reviewerCandidacies.delete(proposalId);
-  }
-
-  // ── Phase 30.2: Reviewer Agent Spawning ──
-
-  /**
-   * Spawn a reviewer agent to evaluate a governance proposal (Phase 30.2).
-   *
-   * Uses AgentManager to spawn a reviewer agent (role: 'reviewer') with the
-   * proposal details as context. Each reviewer has a budget limit of 5 Lux.
-   */
-  async spawnReviewerAgent(proposalId: string, reviewerId: string): Promise<string | null> {
-    if (!this.agentManager) {
-      console.warn(`[governance] Cannot spawn reviewer agent — AgentManager not connected`);
-      return null;
-    }
-
-    const proposal = this.proposals.get(proposalId);
-    if (!proposal) {
-      console.warn(`[governance] Cannot spawn reviewer agent — proposal ${proposalId.slice(0, 16)}... not found`);
-      return null;
-    }
-
-    // Build the review context for the agent's CLAUDE.md
-    const reviewContext = [
-      `# Governance Proposal Review`,
-      ``,
-      `You are assigned to review the following governance proposal. Evaluate it carefully and submit your review.`,
-      ``,
-      `## Proposal Details`,
-      `- **Proposal ID:** ${proposalId}`,
-      `- **Title:** ${proposal.title}`,
-      `- **Description:** ${proposal.description}`,
-      `- **Category:** ${proposal.category || 'unclassified'}`,
-      `- **Proposer:** ${proposal.proposedBy}`,
-      `- **Created:** ${new Date(proposal.createdAt).toISOString()}`,
-      `- **Stake:** ${proposal.stakeAmount ?? 0} Lux`,
-      ``,
-      `## Your Task`,
-      `1. Analyze the proposal for risks, feasibility, and alignment with project goals.`,
-      `2. Assign a risk score from 1 (low risk) to 5 (high risk).`,
-      `3. Provide clear reasoning for your assessment.`,
-      `4. Make a recommendation: 'approve', 'reject', or 'revise'.`,
-      `5. Submit your review by calling: POST /governance/reviews with your findings.`,
-      ``,
-      `## Budget`,
-      `Your review budget is ${REVIEWER_BUDGET_LUX} Lux. Complete your review within this budget.`,
-    ].join('\n');
-
-    try {
-      const agentId = await this.agentManager.spawnAgent({
-        role: 'reviewer',
-        parentId: null,
-        projectId: `gov-review-${proposalId.slice(0, 16)}`,
-        description: `Review proposal: "${proposal.title.slice(0, 50)}"`,
-        taskContext: reviewContext,
-      });
-
-      if (agentId) {
-        // Update reviewer assignment with agent ID
-        this.stmtUpdateReviewerStatus.run('reviewing', '', 0, 0, proposalId, reviewerId);
-        this.db.prepare('UPDATE governance_reviewers SET agent_id = ? WHERE proposal_id = ? AND peer_id = ?')
-          .run(agentId, proposalId, reviewerId);
-
-        console.log(`[governance] Spawned reviewer agent ${agentId} for proposal "${proposal.title.slice(0, 40)}" (reviewer: ${reviewerId.slice(0, 16)}...)`);
-      }
-
-      return agentId;
-    } catch (err: any) {
-      console.warn(`[governance] Failed to spawn reviewer agent: ${err.message}`);
-      return null;
-    }
   }
 
   // ── Phase 30.3: Review Workflow ──
@@ -1529,13 +1437,6 @@ export class GovernanceSync {
           this.stmtInsertReviewer.run(proposalId, fallbackPeerId, '', 'pending', '', 0, 0);
 
           console.log(`[governance] Fallback reviewer ${fallbackPeerId.slice(0, 16)}... assigned for proposal "${proposal.title}" (replacing ${timedOutPeerId.slice(0, 16)}..., attempt ${attempts + 1}/${MAX_FALLBACK_ATTEMPTS})`);
-
-          // Spawn reviewer agent if this is our local peer
-          if (fallbackPeerId === this.localPeerId) {
-            this.spawnReviewerAgent(proposalId, fallbackPeerId).catch((err: any) => {
-              console.warn(`[governance] Failed to spawn fallback reviewer agent for ${fallbackPeerId.slice(0, 16)}...: ${err.message}`);
-            });
-          }
 
           fallbackUsed = true;
         }

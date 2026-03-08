@@ -5,9 +5,9 @@
 //   status: active
 //   auto-upgrade-verified: 2026-03-08 (EC2 auto + Windows supervisor, selfRestart removed)
 //   description: "Main PandoNode class that wires together all subsystems (kernel, core, platform layers), manages startup/shutdown lifecycle, and exposes getters for every subsystem."
-//   depends_on: [PandoNetwork, PandoLedger, ApiServer, LedgerSync, GovernanceSync, Orchestrator, Scheduler, HealthMonitor, Guardrails, EmissionWitness, SecurityMonitor, CapabilityRegistry, ResourceRegistry, StorageBackend]
+//   depends_on: [PandoNetwork, PandoLedger, ApiServer, LedgerSync, GovernanceSync, Scheduler, HealthMonitor, Guardrails, EmissionWitness, SecurityMonitor, CapabilityRegistry, ResourceRegistry, StorageBackend, EngineAdapter]
 //   @gotcha("PandoNode is a GOD OBJECT with 50+ private fields — each subsystem is nullable and initialized conditionally during start(). Always null-check before use.")
-//   @gotcha("detectClaudeCode() has a 3-second timeout — on slow systems (Windows especially) this can delay startup.")
+//   @gotcha("detectClaudeCode() (from capability-detector.ts) detects Claude Code binary + auth — can delay startup on slow systems.")
 //   @gotcha("Daily emission cap (500 Lux) is tracked in-memory (dailyEmissions) and reset by date string comparison — restarting the node resets the counter.")
 //   @gotcha("Peer exchange runs at 5s after each peer connect, plus 30s and 90s after boot. It shares addresses from getConnectedPeerAddresses() which includes peerStore announce addresses for NAT/VPC traversal.")
 //   @gotcha("Governance re-sync runs every 5 min to catch missed votes/decisions in thin GossipSub meshes (<6 peers).")
@@ -82,23 +82,8 @@ import { readFileSync, writeFileSync, unlinkSync, existsSync, mkdirSync } from '
 /** Phase 68.2: Single constant for the node-level manager ID. */
 const DEFAULT_MANAGER_ID = 'pando-node-mgr';
 
-/**
- * Phase 52.3: Detect if PandoCode engine / Claude Code CLI is available.
- * Used to auto-enable the scheduler when AI capability is present.
- * Has a 10-second timeout to handle slow Windows startup.
- */
-export function detectClaudeCode(): boolean {
-  try {
-    if (process.platform === 'win32') {
-      execSync('where claude', { stdio: 'ignore', timeout: 10000 });
-    } else {
-      execSync('which claude', { stdio: 'ignore', timeout: 10000 });
-    }
-    return true;
-  } catch {
-    return false;
-  }
-}
+// detectClaudeCode is imported from platform/capability-detector.ts and re-exported
+export { detectClaudeCode } from './platform/capability-detector.js';
 
 const SYSTEM_PROMPT = 'You are Pando, a helpful AI search assistant on a decentralized open network. Answer the following question clearly and concisely. If you\'re not sure, say so.';
 
@@ -947,7 +932,7 @@ export class PandoNode {
 
   /**
    * Start the EngineAdapter — connects pando-node to @pando-code/core.
-   * Replaces the old agent system (Orchestrator/MessageBus/WorkerPool/OrgManager).
+   * Connects pando-node to @pando-code/core for AI processing.
    */
   async startEngine(): Promise<void> {
     if (this.engineAdapter?.available) return;

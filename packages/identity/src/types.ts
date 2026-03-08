@@ -105,7 +105,7 @@ export interface AgentScope {
   network?: boolean;
 }
 
-export type AgentStatus = 'pending' | 'active' | 'idle' | 'done' | 'failed' | 'terminated';
+export type AgentStatus = 'pending' | 'active' | 'working' | 'idle' | 'done' | 'failed' | 'terminated';
 
 /**
  * Minimal interface for @pando/code structural typing.

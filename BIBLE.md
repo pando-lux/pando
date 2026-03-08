@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-08 (Security hardening: all PM2/shell calls use execFileSync array args — no shell interpolation. Webhook endpoint removed. pando_deploy/undeploy tools fixed to call /v1/apps/* not /v1/projects/*. Workspace-based deploy + auto-recovery DONE. Line counts refreshed. Phase A complete: all inter-node unicast replaced with HTTP — see Section 4.5; restart architecture documented — see Section 10; team architecture replaces legacy council — see Section 5.10). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-08 (Comprehensive audit: line counts refreshed across all files, tool endpoint table corrected, missing components added to Sections 4.1-4.3 and API, CLI flags updated, security/operational hardening features documented, council-prompts.ts removed from component table, internal consistency verified). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -53,7 +53,7 @@ shared < ledger < node
   Pure infrastructure. P2P networking. Identity. Economy. Governance. Storage. HTTP API.
   Has ZERO intelligence of its own. No orchestrator. No agent database. No message bus.
 
-engine-adapter.ts = THE NERVOUS SYSTEM (~1,282 lines)
+engine-adapter.ts = THE NERVOUS SYSTEM (~1,393 lines)
   The ONE file that connects brain to body.
   Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
   Starts teams (startTeam) using PandoCode's native agent/board system.
@@ -65,7 +65,7 @@ engine-adapter.ts = THE NERVOUS SYSTEM (~1,282 lines)
 The engine has 20+ built-in tools (read_file, write_file, bash, grep, spawn_agent, manage_tasks, etc.) plus MCP tools at runtime
 When inside a pando-node, it gets EXTRA tools:
   pando_deploy       → POST /v1/apps/:id/deploy
-  pando_transfer     → POST /v1/ledger/transfer
+  pando_transfer     → POST /v1/transfer
   pando_propose      → POST /v1/governance/propose
   pando_status       → GET  /v1/status
   pando_peers        → GET  /v1/peers
@@ -347,6 +347,9 @@ Reads from @pando/node HTTP API. No direct database access.
 | **ReputationManager** | `kernel/reputation.ts` | DONE | Performance tracking + weighted governance votes |
 | **EmissionWitness** | `kernel/emission-witness.ts` | DONE | Witness-based Lux emission |
 | **CrashGuard** | `kernel/crash-guard.ts` | DONE | Crash loop detection + circuit breaker. Port conflict exits use code 78 (supervisor won't respawn). Circuit breaker resets on successful boot. Thresholds: 6 crashes/60s (guard), 5 consecutive (breaker). |
+| **LocalEnvironment** | `kernel/local-environment.ts` | DONE | Local environment detection (~326 lines) |
+| **NetworkState** | `kernel/network-state.ts` | DONE | Network state tracking (~409 lines) |
+| **StartupHealth** | `kernel/startup-health.ts` | DONE | Startup health validation (~231 lines) |
 
 ### 4.2 Core Layer (services + engine adapter)
 
@@ -358,9 +361,13 @@ Reads from @pando/node HTTP API. No direct database access.
 | **StorageBackend** | `core/storage-backend.ts` | DONE | MongoDB direct or HTTP proxy to compute nodes |
 | **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Git pull + build + restart. GossipSub broadcast. |
 | **PaymentGate** | `core/payment-gate.ts` | DONE | Lux escrow for task execution |
-| **CouncilPrompts** | `core/council-prompts.ts` | DONE | System prompts for observer/qa/council. No TOOL_SETS — PandoCode roles handle tool filtering. |
 | **RequestReply** | `core/request-reply.ts` | DONE | Handler registry + broadcast queries only. Unicast removed (Phase A). |
 | **HttpPeerClient** | `core/http-peer-client.ts` | DONE | Direct HTTP for all inter-node operations. Ed25519-signed requests. See Section 4.5. |
+| **CloudInstanceManager** | `core/cloud-instance-manager.ts` | DONE | EC2 instance provisioning, security groups, IP polling (~961 lines) |
+| **DeployManager** | `core/deploy-manager.ts` | DONE | Deployment coordination (~433 lines) |
+| **VersionProtocol** | `core/version-protocol.ts` | DONE | Version negotiation between nodes (~222 lines) |
+| **MongoBackend** | `core/mongo-backend.ts` | DONE | MongoDB storage backend implementation (~239 lines) |
+| **P2PStorageBackend** | `core/p2p-storage-backend.ts` | DONE | P2P storage proxy for non-MongoDB nodes (~171 lines) |
 
 ### 4.3 Platform Layer (non-brain services)
 
@@ -370,6 +377,15 @@ Reads from @pando/node HTTP API. No direct database access.
 | **ResourceMarketplace** | `platform/resource-marketplace.ts` | DONE | GossipSub price broadcasting, resource discovery, metering |
 | **ContentRegistry** | `platform/content-registry.ts` | DONE | Content management |
 | **ThreadStore** | `platform/thread-store.ts` | DONE | Chat thread persistence. Non-blocking writes (local cache immediate, HTTP storage async). Requires MongoDB (EC2) or HTTP proxy for persistence. |
+| **ProjectStore** | `platform/project-store.ts` | DONE | Project persistence, CRUD, collaborators, reports (~2,328 lines) |
+| **TaskQueue** | `platform/task-queue.ts` | DONE | Task queue, hashing, distribution (~1,056 lines) |
+| **TaskDatabase** | `platform/task-database.ts` | DONE | Task SQLite persistence (~911 lines) |
+| **Scheduler** | `platform/scheduler.ts` | DONE | Task scheduling, polling, capacity management (~855 lines) |
+| **PipelineRunner** | `platform/pipeline-runner.ts` | DONE | Code pipeline execution (~724 lines) |
+| **QARunner** | `platform/qa-runner.ts` | DONE | QA test execution (~743 lines) |
+| **UserAccounts** | `platform/user-accounts.ts` | DONE | Guest/claim auth, ban checking (~617 lines) |
+| **ContributionTracker** | `platform/contribution-tracker.ts` | DONE | Contribution tracking (~522 lines) |
+| **ResourceRegistry** | `platform/resource-registry.ts` | DONE | Credential metadata, usage tracking (~439 lines) |
 
 ### 4.4 HTTP API
 
@@ -386,7 +402,8 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 | Core | `/v1/upgrade/*`, `/v1/emissions/*`, `/v1/security/*` | Upgrade, emissions, security monitoring |
 | Chat | `/v1/chat/*` | Message → doorman → Path A (question) or Path B (build) or report (board task). |
 | Engines | `/v1/engines/*` | List active engines, board snapshots, memory |
-| Projects | `/v1/projects/*` | Create, deploy, undeploy, `board` (per-project tasks), `request` (submit bug/feature) |
+| Projects | `/v1/projects/*` | Create, list, `board` (per-project tasks), `request` (submit bug/feature) |
+| Apps | `/v1/apps/*` | Deploy, undeploy, update, rollback, health, history, logs (12 routes) |
 | Auth | `/v1/auth/*` | Challenge, verify (Pando Login), me, refresh |
 | Testing | `/v1/testing/*` | Status, runs, findings, scenarios, playbooks, specs, stats |
 | Council | `/v1/council/*` | `status`, `trigger/:agent`, `board` (public task view), `request` (user reports → board task). |
@@ -1446,7 +1463,7 @@ No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoCode'
 
 ## 6. THE ENGINE ADAPTER (detailed spec)
 
-The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~1,282 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~1,393 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
 
 **Key principle:** PandoCode uses its OWN configured provider and model. The engine-adapter does NOT override the model. Contributors choose their provider (default: Google/gemini-2.5-flash).
 
@@ -1504,16 +1521,15 @@ These tools call the node's own HTTP API. The engine doesn't import pando-node.
 | `pando_status` | Node health, peers, uptime | GET /v1/status |
 | `pando_peers` | List connected P2P peers | GET /v1/peers |
 | `pando_capabilities` | Network capabilities | GET /v1/network/capabilities |
-| `pando_balance` | Check Lux balance | GET /v1/ledger/balance |
-| `pando_transfer` | Send Lux to peer | POST /v1/ledger/transfer |
-| `pando_deploy` | Deploy a project | POST /v1/projects/:id/deploy |
-| `pando_undeploy` | Remove deployment | POST /v1/projects/:id/undeploy |
+| `pando_balance` | Check Lux balance | GET /v1/balance/:peerId or GET /v1/wallet |
+| `pando_transfer` | Send Lux to peer | POST /v1/transfer |
+| `pando_deploy` | Deploy a project | POST /v1/apps/:id/deploy |
+| `pando_undeploy` | Remove deployment | DELETE /v1/apps/:id |
 | `pando_create_project` | Create a new project | POST /v1/projects |
 | `pando_list_projects` | List all projects | GET /v1/projects |
 | `pando_governance_propose` | Create upgrade proposal | POST /v1/governance/propose |
 | `pando_governance_vote` | Vote on proposal | POST /v1/governance/vote |
-| `pando_broadcast` | Send P2P GossipSub message | POST /v1/broadcast |
-| `pando_test_run` | Trigger test run | POST /v1/testing/run |
+| `pando_test_run` | Trigger test run | POST /v1/testing/run/scripted or POST /v1/testing/run/live |
 | `pando_test_status` | Get test results | GET /v1/testing/status |
 | `pando_workspace` | Get local workspace for any repo (clone/pull) | Local git ops |
 
@@ -1697,6 +1713,10 @@ npx playwright test --project pando-code
 | `--bootstrap <multiaddr>` | EC2 nodes | Known peer to connect to |
 | `--data-dir <path>` | `~/.pando` | Data directory |
 | `--mode <contributor\|secure\|lightweight\|full>` | full | Node type. Legacy aliases: `compute` → `secure`, `relay` → `lightweight`. |
+| `--ledger-mode <full\|light>` | full | Ledger sync mode |
+| `--public` | false | Advertise as public node |
+| `--relay` | false | Enable circuit relay |
+| `--no-bootstrap` | false | Skip bootstrap peer connections |
 
 **Environment variables:**
 - `PANDO_STORAGE_URL` — MongoDB connection URL (secure compute nodes only)
@@ -1712,7 +1732,7 @@ npx playwright test --project pando-code
 
 ## 9. BRAIN-KILL MIGRATION (COMPLETED 2026-03-06)
 
-**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~1,282 with council agents + board operations + dedup + per-project boards + project ticks + pando_workspace tool + workspace recovery).**
+**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~1,393 with council agents + board operations + dedup + per-project boards + project ticks + pando_workspace tool + workspace recovery).**
 
 The dual coordination system is dead. pando-node no longer has any intelligence of its own. All AI flows through EngineAdapter → @pando-code/core.
 
@@ -1720,7 +1740,7 @@ The dual coordination system is dead. pando-node no longer has any intelligence 
 orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), template-registry.ts (476), org-manager.ts (377), agent-tools.ts (373), orchestrator-manager.ts (333), engine-bridge.ts (283), worker-mcp.ts (274), orchestrator-process.ts (248), ai-backend-pandocode.ts (244), message-bus.ts (143), ai-backend-registry.ts (43), ai-backend.ts (37), context-api.ts (336).
 
 ### What replaced it
-`core/engine-adapter.ts` (~1,282 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL. Board operations (read/write/dedup) for user reports.
+`core/engine-adapter.ts` (~1,393 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL. Board operations (read/write/dedup) for user reports.
 
 ### API changes
 - **Removed:** `/v1/bridge/*`, `/v1/agents/*`, `/v1/context/*`
@@ -1772,6 +1792,26 @@ The codebase has multiple restart mechanisms, each serving a distinct purpose:
 
 **No RestartController needed.** Investigation found these mechanisms serve different roles and don't conflict in practice. The main pattern: upgrade-protocol.ts calls `safeRestart()` which calls `requestGracefulRestart()` which waits for drain then exits with 75.
 
+### Security & Operational Hardening (Audit Fixes)
+
+| Feature | Details |
+|---|---|
+| **User ban mechanism** | `ledger.banAccount(peerId)` / `isBanned()` enforced in api-server.ts — banned users receive 403 on all requests |
+| **JWT revocation** | `revokeToken(jti)` / `isRevoked(jti)` in @pando/identity — in-memory blacklist for invalidated tokens |
+| **Emission cap enforcement** | Daily tracking in emission-witness.ts, `DAILY_EMISSION_CAP=500`, bootstrap emission cap=50 |
+| **Credential selection** | LRU selection, `maxUsagePerDay` enforcement, health-based failover, `grantedTo` checking in ResourceRegistry |
+| **Quarantine escalation** | Duration doubles per repeat offense, no auto-release after 3rd quarantine |
+| **Health summary** | `monitor.getHealthSummary()` exposed via `/health` — includes subsystem-level health |
+| **/health during init** | Returns 503 `{ status: 'initializing' }` until all init phases complete |
+| **Admin auth** | All `/admin/*` routes require operator-level auth |
+| **Upload validation** | 50MB per file, 200MB total, blocked extensions (.exe, .bat, .dll, .sh, .cmd, etc.) |
+| **SSE limits** | 10 connections per IP |
+| **Stream event versioning** | `STREAM_EVENT_VERSION=1` on all SSE events |
+| **Capability verification** | `verified` flag on capability profiles |
+| **Shutdown improvements** | P2P request drain, WAL checkpoint, 30s timeout |
+| **Double-spend prevention** | Balance validation on remote transactions |
+| **Weighted governance** | Reputation-weighted vote counting |
+
 ### Credential Storage Uses resourceId, NOT peerId
 
 **Credentials are keyed by `resourceId` (UUID), not by peerId.** This means credential persistence survives node identity changes (e.g., deleting `identity.json`). The roadmap originally identified "credentials tied to peerId" as a root cause of deployment failures — this was a misdiagnosis. No machine-bound credential anchor is needed.
@@ -1804,7 +1844,7 @@ The `resourceId` is generated when a credential is contributed (via `/contribute
 
 | Issue | Why it's OK |
 |---|---|
-| ~~index.ts is a monolith~~ | **RESOLVED.** Extracted `_start()` into `init-kernel.ts` (806 lines), `init-core.ts` (117 lines), `init-platform.ts` (921 lines). index.ts is now ~1,670 lines (class definition, lifecycle, getters, utilities). |
+| ~~index.ts is a monolith~~ | **RESOLVED.** Extracted `_start()` into `init-kernel.ts` (850 lines), `init-core.ts` (117 lines), `init-platform.ts` (951 lines). index.ts is now ~1,726 lines (class definition, lifecycle, getters, utilities). |
 | Agent identity is ephemeral | Ephemeral agents are sufficient for dev mode. |
 | Governance auto-approves (<=8 peers) | Dev mode only. Real voting kicks in with more peers. |
 
@@ -1953,10 +1993,10 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 ### Entry Points
 | File | Purpose |
 |---|---|
-| `index.ts` | PandoNode class definition (1,670 lines). Lifecycle, getters, utilities. `_start()` delegates to init files. |
-| `init-kernel.ts` | Kernel init (806 lines): P2P, ledger, sync, governance, security, emission, upgrade, request-reply handlers. |
+| `index.ts` | PandoNode class definition (1,726 lines). Lifecycle, getters, utilities. `_start()` delegates to init files. |
+| `init-kernel.ts` | Kernel init (850 lines): P2P, ledger, sync, governance, security, emission, upgrade, request-reply handlers. |
 | `init-core.ts` | Core init (117 lines): storage backends, credentials, app manager. |
-| `init-platform.ts` | Platform init (921 lines): API server, deploy handlers, resources, content, SSE, message handling. |
+| `init-platform.ts` | Platform init (951 lines): API server, deploy handlers, resources, content, SSE, message handling. |
 | `cli.ts` | Non-interactive entry. Supervisor, crash guard (exit 78 for port conflict), circuit breaker auto-reset on successful boot, port check. |
 | `tui.ts` | Interactive terminal. 30+ slash commands. |
 
@@ -1971,6 +2011,9 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 | `kernel/security-monitor.ts` | 5 threat detectors |
 | `kernel/reputation.ts` | Performance scoring, weighted votes |
 | `kernel/emission-witness.ts` | Witness-based Lux minting |
+| `kernel/local-environment.ts` | Local environment detection (~326 lines) |
+| `kernel/network-state.ts` | Network state tracking (~409 lines) |
+| `kernel/startup-health.ts` | Startup health validation (~231 lines) |
 
 ### Core (Layer 1)
 | File | Purpose |
@@ -1983,6 +2026,11 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 | `core/storage-backend.ts` | MongoDB or HTTP proxy |
 | `core/upgrade-protocol.ts` | Git pull + build + restart + broadcast |
 | `core/payment-gate.ts` | Lux escrow |
+| `core/cloud-instance-manager.ts` | EC2 instance provisioning, security groups, IP polling (~961 lines) |
+| `core/deploy-manager.ts` | Deployment coordination (~433 lines) |
+| `core/version-protocol.ts` | Version negotiation (~222 lines) |
+| `core/mongo-backend.ts` | MongoDB storage backend (~239 lines) |
+| `core/p2p-storage-backend.ts` | P2P storage proxy (~171 lines) |
 
 ### Platform (Layer 2)
 | File | Purpose |
@@ -1991,15 +2039,25 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 | `platform/resource-marketplace.ts` | Resource discovery + pricing |
 | `platform/content-registry.ts` | Content management |
 | `platform/thread-store.ts` | Chat persistence (MongoDB) |
+| `platform/project-store.ts` | Project persistence, CRUD, collaborators, reports (~2,328 lines) |
+| `platform/task-queue.ts` | Task queue, hashing, distribution (~1,056 lines) |
+| `platform/task-database.ts` | Task SQLite persistence (~911 lines) |
+| `platform/scheduler.ts` | Task scheduling, polling, capacity management (~855 lines) |
+| `platform/pipeline-runner.ts` | Code pipeline execution (~724 lines) |
+| `platform/qa-runner.ts` | QA test execution (~743 lines) |
+| `platform/user-accounts.ts` | Guest/claim auth, ban checking (~617 lines) |
+| `platform/contribution-tracker.ts` | Contribution tracking (~522 lines) |
+| `platform/resource-registry.ts` | Credential metadata, usage tracking (~439 lines) |
 
 ### API
 | File | Purpose |
 |---|---|
 | `api/api-server.ts` | Fastify server setup, doorman classification (simple/question/build/report intents) |
-| `api/kernel-api.ts` | Status, peers, tasks, governance, guardrails, monitoring, scheduler, reputation, admin, wallet, activity, search (~2,400 lines) |
-| `api/core-api.ts` | Upgrade, emissions, security, team routes (/v1/teams/* — board proxy, CRUD, trigger) (~485 lines) |
-| `api/platform-api.ts` | Projects, auth, chat, engines, content, marketplace, resources, testing, templates, per-project board/request, `findBestBuilder()` (~4,200 lines) |
-| `api/app-api.ts` | App lifecycle REST endpoints: /v1/apps/* (12 routes) |
+| `api/kernel-api.ts` | Status, peers, tasks, governance, guardrails, monitoring, scheduler, reputation, admin, wallet, activity, search (~2,500 lines) |
+| `api/core-api.ts` | Upgrade, emissions, security, team routes (/v1/teams/* — board proxy, CRUD, trigger) (~710 lines) |
+| `api/platform-api.ts` | Projects, auth, chat, engines, content, marketplace, resources, testing, templates, per-project board/request, `findBestBuilder()` (~3,696 lines) |
+| `api/app-api.ts` | App lifecycle REST endpoints: /v1/apps/* (12 routes) (~222 lines) |
+| `api/internal-api.ts` | Ed25519-signed inter-node dispatch, storage proxy, credential proxy |
 | `api/testing-api.ts` | Testing dashboard routes (11 endpoints) |
 
 ---

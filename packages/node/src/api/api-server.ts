@@ -5,7 +5,7 @@
  * and other tools can interact with the node without reading
  * the DB directly.
  *
- * Phase 27+: Uses Orchestrator/MessageBus for agent/chat routing.
+ * Routes requests through EngineAdapter to @pando-code/core for AI processing.
  */
 
 import Fastify from 'fastify';

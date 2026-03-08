@@ -11,13 +11,11 @@ import {
   // Core keypair operations
   generate as _generate,
   save as _save,
-  load as _load,
   loadOrCreate as _loadOrCreate,
   isEncrypted as _isEncrypted,
   loadRaw as _loadRaw,
   encrypt as _encrypt,
   decrypt as _decrypt,
-  saveEncrypted as _saveEncrypted,
   saveSession as _saveSession,
   loadSession as _loadSession,
   clearSession as _clearSession,
@@ -30,18 +28,11 @@ import {
   verify as _verify,
   // Core hashing
   hashTransaction as _hashTransaction,
-  // Constants
-  DEFAULT_PANDO_DIR,
 } from '@pando/identity';
 import type {
   NodeIdentity,
-  SerializedIdentity,
-  EncryptedSerializedIdentity,
   IdentityInfo,
 } from '@pando/identity';
-import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
-import { join } from 'node:path';
 import type { PandoMessage, GovernanceProposal } from './types.js';
 
 // ── Re-exports: identity operations ──
@@ -49,13 +40,11 @@ import type { PandoMessage, GovernanceProposal } from './types.js';
 
 export const generateIdentity = _generate;
 export const saveIdentity = _save;
-export const loadIdentity = _load;
 export const loadOrCreateIdentity = _loadOrCreate;
 export const isEncryptedIdentity = _isEncrypted;
 export const loadRawIdentityFile = _loadRaw;
 export const encryptIdentity = _encrypt;
 export const decryptIdentity = _decrypt;
-export const saveEncryptedIdentity = _saveEncrypted;
 export const saveSession = _saveSession;
 export const loadSession = _loadSession;
 export const clearSession = _clearSession;
@@ -63,38 +52,11 @@ export const listIdentities = _list;
 export const loadIdentityFile = _loadFile;
 export const getPrivateKeyFromIdentity = _getPrivateKey;
 
-export function getPandoDir(dataDir?: string): string {
-  return dataDir || DEFAULT_PANDO_DIR;
-}
-
 /**
  * Save an unencrypted identity to the identities/ directory.
  */
 export async function saveIdentityToDir(identity: NodeIdentity, dataDir?: string): Promise<void> {
   return _saveToDir(identity, dataDir);
-}
-
-/**
- * Save an encrypted identity to the identities/ directory.
- */
-export async function saveEncryptedIdentityToDir(
-  data: EncryptedSerializedIdentity,
-  dataDir?: string
-): Promise<void> {
-  const dir = await ensureIdentitiesDir(dataDir);
-  const { writeFile } = await import('node:fs/promises');
-  await writeFile(join(dir, `${data.peerId}.json`), JSON.stringify(data, null, 2), 'utf-8');
-}
-
-/**
- * Ensure identities/ directory exists and return its path.
- */
-export async function ensureIdentitiesDir(dataDir?: string): Promise<string> {
-  const dir = join(dataDir || DEFAULT_PANDO_DIR, 'identities');
-  if (!existsSync(dir)) {
-    await mkdir(dir, { recursive: true });
-  }
-  return dir;
 }
 
 // Re-export the IdentityInfo type (used by TUI)

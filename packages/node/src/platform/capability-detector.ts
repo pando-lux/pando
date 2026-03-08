@@ -76,7 +76,7 @@ export function detectCapabilities(manualOverrides?: string[]): DetectionResult 
   return { capabilities: caps, detectedAt };
 }
 
-function detectClaudeCode(): boolean {
+export function detectClaudeCode(): boolean {
   try {
     const cmd = platform() === 'win32' ? 'where claude' : 'which claude';
     execSync(cmd, { encoding: 'utf-8', stdio: 'pipe', windowsHide: true });

@@ -137,7 +137,7 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
       name: 'pando_balance',
       description: 'Check Lux balance for a peer.',
       parameters: z.object({ peerId: z.string().optional().describe('Peer ID (default: this node)') }),
-      execute: async (args: any) => ok(await api('GET', args.peerId ? `/v1/ledger/balance/${args.peerId}` : '/v1/ledger/balance')),
+      execute: async (args: any) => ok(await api('GET', args.peerId ? `/v1/balance/${args.peerId}` : '/v1/wallet')),
     },
     {
       name: 'pando_transfer',
@@ -147,7 +147,7 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
         amount: z.number().positive().describe('Amount of Lux'),
         memo: z.string().optional().describe('Transfer memo'),
       }),
-      execute: async (args: any) => ok(await api('POST', '/v1/ledger/transfer', args)),
+      execute: async (args: any) => ok(await api('POST', '/v1/transfer', args)),
     },
     {
       name: 'pando_deploy',
@@ -183,9 +183,15 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
         title: z.string().describe('Proposal title'),
         description: z.string().describe('Proposal description'),
         type: z.enum(['upgrade', 'policy', 'budget']).default('upgrade'),
+        commitHash: z.string().optional().describe('Git commit hash for upgrade proposals'),
       }),
       execute: async (args: any) => {
-        const data = await api('POST', '/v1/governance/propose', args);
+        const data = await api('POST', '/v1/governance/propose', {
+          title: args.title,
+          description: args.description,
+          category: args.type,
+          ...(args.commitHash ? { commitHash: args.commitHash } : {}),
+        });
         return { success: !!data.id, output: JSON.stringify(data) };
       },
     },
@@ -196,16 +202,10 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
         proposalId: z.string().describe('Proposal ID'),
         vote: z.enum(['approve', 'reject']).describe('Your vote'),
       }),
-      execute: async (args: any) => ok(await api('POST', '/v1/governance/vote', args)),
-    },
-    {
-      name: 'pando_broadcast',
-      description: 'Broadcast a message via P2P GossipSub.',
-      parameters: z.object({
-        topic: z.string().describe('GossipSub topic'),
-        message: z.string().describe('Message to broadcast'),
-      }),
-      execute: async (args: any) => ok(await api('POST', '/v1/broadcast', args)),
+      execute: async (args: any) => ok(await api('POST', '/v1/governance/vote', {
+        proposalId: args.proposalId,
+        choice: args.vote,
+      })),
     },
     {
       name: 'pando_test_run',
@@ -213,8 +213,14 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
       parameters: z.object({
         project: z.string().optional().describe('Project to test'),
         spec: z.string().optional().describe('Specific spec file'),
+        mode: z.enum(['scripted', 'live']).optional().default('scripted').describe('Test mode: scripted (Playwright) or live (playbook)'),
       }),
-      execute: async (args: any) => ok(await api('POST', '/v1/testing/run', args)),
+      execute: async (args: any) => {
+        const route = (args.mode === 'live' || args.type === 'live')
+          ? '/v1/testing/run/live'
+          : '/v1/testing/run/scripted';
+        return ok(await api('POST', route, args));
+      },
     },
     {
       name: 'pando_test_status',
@@ -568,7 +574,7 @@ export class EngineAdapter {
       if (result.done) {
         done = true;
       } else {
-        yield result.value;
+        yield EngineAdapter.normalizeStreamEvent(result.value);
         // If we yielded a timeout error, stop the iteration
         if (result.value?.type === 'error' && done) {
           // Try to clean up the source iterator
@@ -1052,7 +1058,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       for (const interval of teamData.intervals) clearInterval(interval);
     }
     this.activeTeams.clear();
-    for (const interval of ((this as any)._projectIntervals || [])) clearInterval(interval);
+    this.stopProjectTicks();
     this.scheduler?.stop();
     await this.pool?.shutdown();
 

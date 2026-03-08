@@ -115,13 +115,13 @@ export async function registerPlatformRoutes(
       // Resolve user identity so threads are owned by the authenticated user
       const chatUserId = peerId || undefined;
 
-      // If projectId is provided, skip doorman — route directly to existing project orchestrator
+      // If projectId is provided, skip doorman — route directly to project engine
       if (projectId && typeof projectId === 'string') {
         if (threadStore) {
           threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'project', '', chatUserId);
           threadStore.updateThread(threadId, { projectId });
-          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
+          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' });
         }
 
         // Unified routing — find best PandoCode peer (including self)
@@ -129,7 +129,7 @@ export async function registerPlatformRoutes(
         if (!builder) {
           const noBuilderReply = 'No PandoCode-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.';
           if (threadStore && threadId) {
-            await threadStore.addMessage(threadId, { role: 'assistant', content: noBuilderReply, timestamp: Date.now(), tier: 'simple' as any });
+            await threadStore.addMessage(threadId, { role: 'assistant', content: noBuilderReply, timestamp: Date.now(), tier: 'simple' });
           }
           return { status: 'ok', threadId, reply: noBuilderReply, tier: 'simple' };
         }
@@ -140,7 +140,7 @@ export async function registerPlatformRoutes(
             try {
               const result = await sendToEngine(trimmed, projectId);
               if (threadStore && threadId && result.response) {
-                await threadStore.addMessage(threadId, { role: 'assistant', content: result.response, timestamp: Date.now(), tier: 'complex' as any });
+                await threadStore.addMessage(threadId, { role: 'assistant', content: result.response, timestamp: Date.now(), tier: 'complex' });
               }
               deps.pushEvent('chat_message', { threadId, projectId, role: 'assistant', content: result.response || 'Build complete.', timestamp: Date.now(), tier: 'complex' });
               // Trigger app-manager update after build — push deploy result back to thread
@@ -152,14 +152,14 @@ export async function registerPlatformRoutes(
                     const app = appMgr.get(projectId);
                     const deployMsg = `App deployed successfully.${app?.deploy_url ? ` URL: ${app.deploy_url}` : ''}${app?.port ? ` Port: ${app.port}` : ''}`;
                     if (threadStore && threadId) {
-                      await threadStore.addMessage(threadId, { role: 'assistant', content: deployMsg, timestamp: Date.now(), tier: 'complex' as any });
+                      await threadStore.addMessage(threadId, { role: 'assistant', content: deployMsg, timestamp: Date.now(), tier: 'complex' });
                     }
                     deps.pushEvent('app_deployed', { threadId, projectId, deployUrl: app?.deploy_url, port: app?.port, status: 'live' });
                     console.log(`[app-manager] Auto-deploy succeeded for ${projectId}`);
                   } else {
                     const failMsg = `Deploy attempted: ${deployResult.error || 'pending remote deployment'}`;
                     if (threadStore && threadId) {
-                      await threadStore.addMessage(threadId, { role: 'assistant', content: failMsg, timestamp: Date.now(), tier: 'complex' as any });
+                      await threadStore.addMessage(threadId, { role: 'assistant', content: failMsg, timestamp: Date.now(), tier: 'complex' });
                     }
                     deps.pushEvent('app_deploy_status', { threadId, projectId, status: 'failed', error: deployResult.error });
                   }
@@ -170,7 +170,7 @@ export async function registerPlatformRoutes(
             } catch (err) {
               console.error('[chat] sendToEngine failed:', (err as Error).message);
               if (threadStore && threadId) {
-                await threadStore.addMessage(threadId, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' as any });
+                await threadStore.addMessage(threadId, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' });
               }
             }
           })();
@@ -194,8 +194,8 @@ export async function registerPlatformRoutes(
         if (threadStore) {
           threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
-          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
-          await threadStore.addMessage(threadId, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' as any });
+          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' });
+          await threadStore.addMessage(threadId, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' });
         }
         return { status: 'ok', threadId, reply: doormanReply, tier: 'simple' };
       }
@@ -217,8 +217,8 @@ export async function registerPlatformRoutes(
         threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         if (threadStore) {
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
-          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' as any });
-          await threadStore.addMessage(threadId, { role: 'assistant', content: reply, timestamp: Date.now(), tier: 'simple' as any });
+          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' });
+          await threadStore.addMessage(threadId, { role: 'assistant', content: reply, timestamp: Date.now(), tier: 'simple' });
         }
         return { status: 'ok', threadId, reply, tier: 'simple' };
       }
@@ -229,8 +229,8 @@ export async function registerPlatformRoutes(
         threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         if (threadStore) {
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
-          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
-          await threadStore.addMessage(threadId, { role: 'assistant', content: 'No PandoCode-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.', timestamp: Date.now(), tier: 'simple' as any });
+          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' });
+          await threadStore.addMessage(threadId, { role: 'assistant', content: 'No PandoCode-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.', timestamp: Date.now(), tier: 'simple' });
         }
         return { status: 'ok', threadId, reply: 'No PandoCode-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.', tier: 'simple' };
       }
@@ -280,7 +280,7 @@ export async function registerPlatformRoutes(
         threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
         threadStore.createThread(threadId, trimmed.slice(0, 50), 'project', '', chatUserId);
         if (newProjectId) threadStore.updateThread(threadId, { projectId: newProjectId });
-        await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' as any });
+        await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' });
       }
 
       // Route to best builder
@@ -291,7 +291,7 @@ export async function registerPlatformRoutes(
             const result = await sendToEngine(trimmed, newProjectId);
             const engineReply = result.response || 'Build complete.';
             if (threadStore && threadId) {
-              await threadStore.addMessage(threadId, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' as any });
+              await threadStore.addMessage(threadId, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
             }
             deps.pushEvent('chat_message', { threadId, projectId: newProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
             // Trigger app-manager update after build — push deploy result back to thread
@@ -303,14 +303,14 @@ export async function registerPlatformRoutes(
                   const app = appMgr.get(newProjectId);
                   const deployMsg = `App deployed successfully.${app?.deploy_url ? ` URL: ${app.deploy_url}` : ''}${app?.port ? ` Port: ${app.port}` : ''}`;
                   if (threadStore && threadId) {
-                    await threadStore.addMessage(threadId, { role: 'assistant', content: deployMsg, timestamp: Date.now(), tier: 'complex' as any });
+                    await threadStore.addMessage(threadId, { role: 'assistant', content: deployMsg, timestamp: Date.now(), tier: 'complex' });
                   }
                   deps.pushEvent('app_deployed', { threadId, projectId: newProjectId, deployUrl: app?.deploy_url, port: app?.port, status: 'live' });
                   console.log(`[app-manager] Auto-deploy succeeded for ${newProjectId}`);
                 } else {
                   const failMsg = `Deploy attempted: ${deployResult.error || 'pending remote deployment'}`;
                   if (threadStore && threadId) {
-                    await threadStore.addMessage(threadId, { role: 'assistant', content: failMsg, timestamp: Date.now(), tier: 'complex' as any });
+                    await threadStore.addMessage(threadId, { role: 'assistant', content: failMsg, timestamp: Date.now(), tier: 'complex' });
                   }
                   deps.pushEvent('app_deploy_status', { threadId, projectId: newProjectId, status: 'failed', error: deployResult.error });
                 }
@@ -321,7 +321,7 @@ export async function registerPlatformRoutes(
           } catch (err) {
             console.error('[router] Local engine failed:', (err as Error).message);
             if (threadStore && threadId) {
-              await threadStore.addMessage(threadId, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' as any });
+              await threadStore.addMessage(threadId, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' });
             }
           }
         })();
@@ -330,7 +330,7 @@ export async function registerPlatformRoutes(
         node.routeChatProxyP2P?.(trimmed, threadId, String(classification.tier || 1)).catch((err: Error) => {
           console.error('[router] P2P routing failed:', err.message);
           if (threadStore && threadId) {
-            threadStore.addMessage(threadId, { role: 'assistant', content: 'P2P routing failed. Try again.', timestamp: Date.now(), tier: 'simple' as any });
+            threadStore.addMessage(threadId, { role: 'assistant', content: 'P2P routing failed. Try again.', timestamp: Date.now(), tier: 'simple' });
           }
         });
       }
@@ -471,7 +471,7 @@ export async function registerPlatformRoutes(
       // D#177: Guard against sending ciphertext to AI when decryption fails or is skipped
       if (isEncrypted && plaintextForProcessing === trimmed) {
         const errReply = 'Unable to decrypt your message. Please refresh the page to re-establish encryption.';
-        await threadStore.addMessage(id, { role: 'assistant', content: errReply, timestamp: Date.now(), tier: 'simple' as any });
+        await threadStore.addMessage(id, { role: 'assistant', content: errReply, timestamp: Date.now(), tier: 'simple' });
         return { status: 'ok', threadId: id, reply: errReply, tier: 'simple' };
       }
 
@@ -501,7 +501,7 @@ export async function registerPlatformRoutes(
             try {
               const engineResult = await sendToEngine(plaintextForProcessing, threadMeta.projectId!);
               if (engineResult.response) {
-                await threadStore.addMessage(id, { role: 'assistant', content: engineResult.response, timestamp: Date.now(), tier: 'complex' as any });
+                await threadStore.addMessage(id, { role: 'assistant', content: engineResult.response, timestamp: Date.now(), tier: 'complex' });
               }
               deps.pushEvent('chat_message', { threadId: id, projectId: threadMeta.projectId, role: 'assistant', content: engineResult.response || 'Done.', timestamp: Date.now(), tier: 'complex' });
               // Trigger app-manager update after build
@@ -511,7 +511,7 @@ export async function registerPlatformRoutes(
               }
             } catch (err) {
               console.error('[router] Engine failed:', (err as Error).message);
-              await threadStore.addMessage(id, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' as any });
+              await threadStore.addMessage(id, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' });
             }
           })();
           return { status: 'ok', threadId: id, reply: 'Processing — check thread for updates.', tier: 'complex', routedTo: builder.peerId };
@@ -620,7 +620,7 @@ export async function registerPlatformRoutes(
           try {
             const result = await sendToEngine(plaintextForProcessing, targetProjectId);
             const engineReply = result.response || 'Build complete.';
-            await threadStore.addMessage(id, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' as any });
+            await threadStore.addMessage(id, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
             deps.pushEvent('chat_message', { threadId: id, projectId: targetProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
             // Trigger app-manager update after build
             const appMgr = node.getAppManager?.();
@@ -629,7 +629,7 @@ export async function registerPlatformRoutes(
             }
           } catch (err) {
             console.error('[router] Local engine failed:', (err as Error).message);
-            await threadStore.addMessage(id, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' as any });
+            await threadStore.addMessage(id, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' });
           }
         })();
       } else if (!builder.isLocal) {

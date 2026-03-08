@@ -13,6 +13,9 @@ export type { DetectionResult } from './capability-detector.js';
 
 export { CapabilityRegistry } from './capability-registry.js';
 
+export { LocalCapabilityStore } from './local-capability-store.js';
+export type { LocalCapabilityData } from './local-capability-store.js';
+
 export { CodePipeline } from './code-pipeline.js';
 
 export { ContentRegistry, TOPIC_CONTENT } from './content-registry.js';
@@ -44,6 +47,9 @@ export { ResourceMeter } from './resource-meter.js';
 export { ResourceProofChallenger } from './resource-proof.js';
 export { ResourceRegistry, TOPIC_RESOURCES } from './resource-registry.js';
 export { ResourceRouter } from './resource-router.js';
+
+export { ResourceHealthChecker } from './resource-health.js';
+export type { HealthResult } from './resource-health.js';
 
 export { RevenueEngine } from './revenue-engine.js';
 

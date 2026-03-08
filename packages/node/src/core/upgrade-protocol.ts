@@ -182,7 +182,7 @@ export class UpgradeProtocol {
   /**
    * Attempt a safe restart. Exits with RESTART_EXIT_CODE (75) only when:
    * - 0 active workers (no PandoCode sessions in progress)
-   * - 0 unread messages in MessageBus (no requests in-flight)
+   * - No pending requests in-flight
    *
    * If not safe, logs a warning and returns — the next upgrade cycle will retry.
    * NEVER call process.exit() if workers are active: kills running PandoCode sessions.
