@@ -643,6 +643,141 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       }
     });
 
+    // POST /teams/:teamId/message — Send a message between agents in a team
+    fastify.post('/teams/:teamId/message', async (request: any, reply: any) => {
+      try {
+        const teamId = request.params.teamId as string;
+        const adapter = node.getEngineAdapter();
+        if (!adapter?.available) {
+          return reply.code(503).send({ error: 'PandoCode not available on this node' });
+        }
+        if (!adapter.isTeamActive(teamId)) {
+          return reply.code(404).send({ error: `Team "${teamId}" is not running on this node` });
+        }
+        const body = request.body as any || {};
+        const { from, to, message } = body;
+        if (!from || !to || !message) {
+          return reply.code(400).send({ error: 'Required fields: from, to, message' });
+        }
+        if (typeof message !== 'string' || message.length < 1 || message.length > 2000) {
+          return reply.code(400).send({ error: 'Message must be 1-2000 chars' });
+        }
+        const lawViolation = violatesTwoLaws(message);
+        if (lawViolation) return reply.code(403).send({ error: lawViolation });
+        const ok = adapter.sendTeamMessage(teamId, from, to, message);
+        return ok ? { status: 'sent', from, to } : reply.code(500).send({ error: 'Failed to send message' });
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // POST /teams/:teamId/agents/spawn — Spawn a new agent on a team
+    fastify.post('/teams/:teamId/agents/spawn', async (request: any, reply: any) => {
+      try {
+        const teamId = request.params.teamId as string;
+        const adapter = node.getEngineAdapter();
+        if (!adapter?.available) {
+          return reply.code(503).send({ error: 'PandoCode not available on this node' });
+        }
+        if (!adapter.isTeamActive(teamId)) {
+          return reply.code(404).send({ error: `Team "${teamId}" is not running on this node` });
+        }
+
+        const body = request.body as any || {};
+        const { template, task, customPrompt, agentId: requestedAgentId } = body;
+
+        // Validate user-provided text against Two Laws
+        if (task) {
+          const lawViolation = violatesTwoLaws(task);
+          if (lawViolation) return reply.code(403).send({ error: lawViolation });
+        }
+        if (customPrompt) {
+          const lawViolation = violatesTwoLaws(customPrompt);
+          if (lawViolation) return reply.code(403).send({ error: lawViolation });
+        }
+
+        // Check agent limit (max 10)
+        const currentAgents = adapter.getTeamAgents(teamId);
+        if (currentAgents.length >= 10) {
+          return reply.code(400).send({ error: 'Team agent limit reached (10). Stop unused agents before spawning new ones.' });
+        }
+
+        // Resolve template and prompt
+        const allTemplates = adapter.getTemplates();
+        let prompt = '';
+        let role = 'worker';
+        let model = 'claude-code';
+        let displayName = 'Custom Agent';
+
+        if (template) {
+          const tpl = allTemplates.find((t: any) => t.id === template);
+          if (!tpl) {
+            return reply.code(400).send({ error: `Template "${template}" not found. Use GET /v1/templates to list available templates.` });
+          }
+          prompt = tpl.promptSkeleton;
+          role = tpl.role;
+          model = tpl.model;
+          displayName = tpl.displayName;
+          if (task) {
+            prompt += `\n\n## Your Current Task\n${task}`;
+          }
+        } else if (customPrompt) {
+          prompt = customPrompt;
+          if (task) {
+            prompt += `\n\n## Your Current Task\n${task}`;
+          }
+        } else {
+          return reply.code(400).send({ error: 'Provide either a template ID or customPrompt' });
+        }
+
+        const agentId = requestedAgentId || `${template || 'custom'}-${Date.now().toString(36)}`;
+
+        await adapter.spawnTeamAgent(teamId, {
+          id: agentId,
+          role,
+          displayName,
+          prompt,
+          model,
+          tickIntervalMs: 0,
+        });
+
+        return { status: 'spawned', agentId, role, displayName };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
+    // DELETE /teams/:teamId/agents/:agentId — Stop and remove an agent
+    fastify.delete('/teams/:teamId/agents/:agentId', async (request: any, reply: any) => {
+      try {
+        const { teamId, agentId } = request.params as any;
+        const adapter = node.getEngineAdapter();
+        if (!adapter?.available) {
+          return reply.code(503).send({ error: 'PandoCode not available on this node' });
+        }
+        if (!adapter.isTeamActive(teamId)) {
+          return reply.code(404).send({ error: `Team "${teamId}" is not running on this node` });
+        }
+
+        // Don't allow stopping the lead
+        if (agentId === 'lead') {
+          return reply.code(400).send({ error: 'Cannot stop the lead agent. Stop the entire team instead.' });
+        }
+
+        // Check that agent exists
+        const agents = adapter.getTeamAgents(teamId);
+        const agent = agents.find((a: any) => a.id === agentId);
+        if (!agent) {
+          return reply.code(404).send({ error: `Agent "${agentId}" not found in team "${teamId}"` });
+        }
+
+        await adapter.stopTeamAgent(teamId, agentId);
+        return { status: 'stopped', agentId };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
     // POST /teams/:teamId/agents/:agentId/trigger — Trigger a specific agent manually
     fastify.post('/teams/:teamId/agents/:agentId/trigger', async (request: any, reply: any) => {
       try {

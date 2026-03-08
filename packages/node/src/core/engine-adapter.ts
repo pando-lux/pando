@@ -430,6 +430,7 @@ export interface PromptContext {
   apiPort: number;      // from config
   teamId?: string;      // team being started (for universal templates)
   repos?: string[];     // repos assigned to the team
+  model?: string;       // 'claude-code' | 'gemini-*' | 'gpt-*' etc — for model-specific prompts
 }
 
 // ─── Agent Templates ─────────────────────────────────────────────────────
@@ -452,7 +453,7 @@ export const BUILT_IN_TEMPLATES: AgentTemplate[] = [
     displayName: 'Worker',
     description: 'Simple task executor. Does what the lead tells it.',
     role: 'worker',
-    promptSkeleton: 'You are a worker agent. Execute the task given to you. Use bash, read, write, edit tools. Report results back to lead via send_message. Be brief. Act, don\'t narrate.',
+    promptSkeleton: 'You are a worker agent. Execute the task given to you. Use bash, read, write, edit tools. When done, report results by printing a clear summary. Be brief. Act, don\'t narrate.',
     model: 'claude-code',
     tickIntervalMs: 0,
   },
@@ -461,7 +462,7 @@ export const BUILT_IN_TEMPLATES: AgentTemplate[] = [
     displayName: 'Builder',
     description: 'Code writer with git access. Builds features, fixes bugs.',
     role: 'builder',
-    promptSkeleton: 'You are a builder agent. You write code, fix bugs, and build features. Always: read before edit, npm run build after changes, git commit with descriptive message. Report results to lead via send_message.',
+    promptSkeleton: 'You are a builder agent. You write code, fix bugs, and build features. Always: read before edit, npm run build after changes, git commit with descriptive message. When done, print a clear summary of what you changed.',
     model: 'claude-code',
     tickIntervalMs: 0,
   },
@@ -479,7 +480,7 @@ export const BUILT_IN_TEMPLATES: AgentTemplate[] = [
     displayName: 'Observer',
     description: 'Monitors health. Reports anomalies. Read-only.',
     role: 'explorer',
-    promptSkeleton: 'You are an observer agent. Monitor system health via pando_status and pando_peers. Report anomalies to lead via send_message. You are READ-ONLY. Never modify code or files.',
+    promptSkeleton: 'You are an observer agent. Monitor system health via curl to /v1/health and /v1/status. Report anomalies by printing findings. You are READ-ONLY. Never modify code or files.',
     model: 'claude-code',
     tickIntervalMs: 60 * 60_000,
   },
@@ -488,7 +489,7 @@ export const BUILT_IN_TEMPLATES: AgentTemplate[] = [
     displayName: 'Code Reviewer',
     description: 'Reviews code changes for quality, security, and architecture.',
     role: 'reviewer',
-    promptSkeleton: 'You are a code reviewer. Review diffs for: security vulnerabilities, architectural violations, code quality issues. Report findings to lead via send_message.',
+    promptSkeleton: 'You are a code reviewer. Review diffs for: security vulnerabilities, architectural violations, code quality issues. Print a clear report of findings.',
     model: 'claude-code',
     tickIntervalMs: 0,
   },
@@ -543,16 +544,19 @@ IMPORTANT: Complete in 5 tool calls or fewer. Do NOT loop or recheck.
 STEP 1: Call pando_status to get node health (peer count, uptime, health status).
 STEP 2: Call pando_peers to get connected peer details.
 STEP 3: Analyze the results IN ONE PASS:
-  - If peer count is 0: send_message (toAgentId: "lead", message: "[CRITICAL:health] No peers connected. Node is isolated.")
-  - If peer count is 1: send_message (toAgentId: "lead", message: "[WARNING:health] Only 1 peer connected. Expected 2+. Peer: ...")
-  - If health status is degraded: send_message (toAgentId: "lead", message: "[WARNING:health] Degraded: ...")
+  - If peer count is 0: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"observer","to":"lead","message":"[CRITICAL:health] No peers connected. Node is isolated."}'
+  - If peer count is 1: send message to lead: "[WARNING:health] Only 1 peer connected. Expected 2+. Peer: ..."
+  - If health status is degraded: send message to lead: "[WARNING:health] Degraded: ..."
   - If peer count >= 2 AND health is good: say "All healthy. No issues to report." and STOP.
+
+SEND MESSAGE TO LEAD: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"observer","to":"lead","message":"<your report>"}'
 
 RULES:
 - 2+ peers is HEALTHY for the current network size.
 - Include SPECIFIC details (peer count, peer IDs, error details).
 - Do NOT loop or recheck. One pass: status → peers → analyze → report → done.
-- You are READ-ONLY. Never modify code or files.`;
+- You are READ-ONLY. Never modify code or files.
+- You do NOT have PandoCode tools. Use bash (curl) for API calls and bash for commands.`;
 }
 
 function makeQAPrompt(ctx: PromptContext): string {
@@ -575,12 +579,14 @@ STEP 3: Run E2E tests (if build passed):
 
 STEP 4: Analyze ALL results and send ONE report to lead:
   - If all passed: say "All checks passed. Build OK. Tests OK." and STOP.
-  - If anything failed: send_message (toAgentId: "lead", message: "[SEVERITY:category] What failed — details")
+  - If anything failed: send report to lead:
+    curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"qa","to":"lead","message":"[SEVERITY:category] What failed — details"}'
 
 RULES:
 - Run REAL commands, not just API checks.
 - Include SPECIFIC output (error messages, test names, line numbers).
-- Do NOT loop or recheck. One pass through all steps.`;
+- Do NOT loop or recheck. One pass through all steps.
+- You do NOT have PandoCode tools. Use bash (curl) for API calls.`;
 }
 
 function makeLeadPrompt(ctx: PromptContext): string {
@@ -604,8 +610,9 @@ Your INBOX and BOARD STATE are injected below this message — no tool call need
      5. Get commit hash: git rev-parse HEAD
      6. Propose governance upgrade:
         curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/governance/propose -H "Content-Type: application/json" -d '{"title":"[Upgrade] fix: description","description":"...","category":"upgrade","commitHash":"<hash>"}'
-     7. Update the task via manage_tasks tool (action: "update", taskId, status: "done", progress: "Fixed in <hash>").
-   - User requests: investigate, then update task progress via manage_tasks.
+     7. Update the task:
+        curl -s -X PATCH http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/board/<taskId> -H "Content-Type: application/json" -d '{"status":"done","progress":"Fixed in <hash>"}'
+   - User requests: investigate, then update task progress via PATCH.
    - False positives / stale (>24h): mark done with a note.
 5. If inbox empty AND no pending board tasks: say "System healthy. No open issues." and STOP.
 
@@ -613,10 +620,15 @@ Your INBOX and BOARD STATE are injected below this message — no tool call need
 The upgrade protocol auto-deploys to ALL nodes:
   git fetch → verify hash → build → safe restart (exit 75) → supervisor respawns
 
-## Write API
+## HTTP API (use curl for ALL operations — you do NOT have PandoCode tools, only bash/read/write/edit)
 GOVERNANCE PROPOSE: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/governance/propose -H "Content-Type: application/json" -d '{"title":"[Upgrade] fix: description","description":"...","category":"upgrade","commitHash":"<hash>"}'
-TASK MANAGEMENT: Use manage_tasks tool (action: "create"/"update", title, status, progress).
-SEND MESSAGE: Use send_message tool (toAgentId, message).
+UPDATE TASK: curl -s -X PATCH http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/board/<taskId> -H "Content-Type: application/json" -d '{"status":"done","progress":"<notes>"}'
+CREATE TASK: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/board -H "Content-Type: application/json" -d '{"title":"<title>","description":"<desc>"}'
+SEND MESSAGE: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"lead","to":"<agentId>","message":"<text>"}'
+SPAWN AGENT: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/agents/spawn -H "Content-Type: application/json" -d '{"template":"worker","task":"<description>"}'
+STOP AGENT: curl -s -X DELETE http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/agents/<agentId>
+LIST AGENTS: curl -s http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/agents
+LIST TEMPLATES: curl -s http://127.0.0.1:${ctx.apiPort}/v1/templates
 
 RULES:
 - Every code change goes through governance.
@@ -645,14 +657,18 @@ ${repoList}
 ## Team Management
 You can spawn sub-agents when you need help:
 - Simple tasks: do them yourself (faster, cheaper)
-- Complex tasks: spawn a worker or builder agent via manage_team tool
+- Complex tasks: spawn a worker or builder agent
 - Test verification: spawn a tester agent
 - Stop agents when their work is done
 
-## API
-Node API: http://127.0.0.1:${ctx.apiPort}
-Task updates: Use manage_tasks tool
-Messages: Use send_message tool
+## HTTP API (use curl for ALL operations — you do NOT have PandoCode tools, only bash/read/write/edit)
+UPDATE TASK: curl -s -X PATCH http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/board/<taskId> -H "Content-Type: application/json" -d '{"status":"done","progress":"<notes>"}'
+CREATE TASK: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/board -H "Content-Type: application/json" -d '{"title":"<title>","description":"<desc>"}'
+SEND MESSAGE: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/message -H "Content-Type: application/json" -d '{"from":"lead","to":"<agentId>","message":"<text>"}'
+SPAWN AGENT: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/agents/spawn -H "Content-Type: application/json" -d '{"template":"worker","task":"<description>"}'
+STOP AGENT: curl -s -X DELETE http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/agents/<agentId>
+LIST AGENTS: curl -s http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/agents
+LIST TEMPLATES: curl -s http://127.0.0.1:${ctx.apiPort}/v1/templates
 
 ## Rules
 - Be brief. Act, don't narrate. Complete quickly.
@@ -1096,8 +1112,8 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       const value = JSON.stringify({ from: fromAgentId, message, timestamp: new Date().toISOString() });
       const ttl = new Date(Date.now() + 3600_000).toISOString(); // 1 hour
       db.prepare(
-        `INSERT OR REPLACE INTO state (key, value, engine_id, updated_at) VALUES (?, ?, ?, ?)`
-      ).run(key, value, fromAgentId, ttl);
+        `INSERT OR REPLACE INTO state (key, value, updated_at, expires_at) VALUES (?, ?, datetime('now'), ?)`
+      ).run(key, value, ttl);
       db.close();
       return true;
     } catch (err: any) {
@@ -1368,9 +1384,14 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     const nodeRepoRoot = resolve(thisDir, '..', '..', '..', '..');
 
     // Resolve prompt templates into concrete prompts using runtime context
-    const promptCtx: PromptContext = { projectDir: nodeRepoRoot, apiPort: this.config!.apiPort, teamId };
     for (const agent of agents) {
       if (agent.promptTemplate && PROMPT_TEMPLATES[agent.promptTemplate]) {
+        const promptCtx: PromptContext = {
+          projectDir: nodeRepoRoot,
+          apiPort: this.config!.apiPort,
+          teamId,
+          model: agent.model,
+        };
         agent.prompt = PROMPT_TEMPLATES[agent.promptTemplate](promptCtx);
       }
     }
@@ -1386,12 +1407,12 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     if (this.Database) {
       try {
         const db = new this.Database(teamDbPath);
-        // Ensure state table exists
+        // Ensure state table exists (schema must match PandoCode's state table)
         db.prepare(`CREATE TABLE IF NOT EXISTS state (
           key TEXT PRIMARY KEY,
           value TEXT,
-          engine_id TEXT,
-          updated_at TEXT
+          updated_at TEXT,
+          expires_at TEXT
         )`).run();
         const rows = db.prepare(
           `SELECT key, value FROM state WHERE key LIKE 'cli-session:%'`
@@ -1435,12 +1456,11 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         try {
           const db = new this.Database(teamDbPath);
           db.prepare(
-            `INSERT OR REPLACE INTO state (key, value, engine_id, updated_at)
-             VALUES (?, ?, ?, datetime('now'))`
+            `INSERT OR REPLACE INTO state (key, value, updated_at)
+             VALUES (?, ?, datetime('now'))`
           ).run(
             `cli-session:${agent.id}`,
             engine.getCliSessionId(),
-            engineId,
           );
           db.close();
         } catch { /* state table may not exist yet */ }

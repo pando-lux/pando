@@ -246,16 +246,51 @@ Claude Code is NOT a dumb model API. It is a **persistent agent runtime** with i
 | Frame layers | System messages via FrameBuilder | Board/Goals/Situation in input message wrapper |
 | Memory | Injected into L3 system message | Agent-pulled via HTTP API |
 | Reflection | Engine's reflection pipeline (callReflectionModel) | Post-response follow-up → Claude Code calls POST /v1/memories |
-| Tools | PandoCode's tool system | Claude Code's own tools (Read, Edit, Bash) |
+| Tools | PandoCode's tool registry (injected into LLM API call) | Claude Code's own tools (Read, Edit, Bash, Grep, Glob) + curl to HTTP API |
+| Custom tools | `engine.tools.register()` → model sees them natively | **SILENTLY DROPPED** by claude-code.ts → must use HTTP API endpoints instead |
 | Session | PandoCode manages conversation history | Claude Code manages via --session-id |
 | Process | N/A (API call) | Spawn-per-turn with session resume (persistent process is Phase 6) |
 | Concurrency | Parallel OK | Sequential via lock (single Claude Code session) |
+
+#### 3.2.10 Tool Architecture: API Models vs Claude Code (CRITICAL)
+
+**The tool gap:** PandoCode registers tools via `engine.tools.register()` and passes them to `model.doStream({tools})`. API models (Gemini, GPT, Anthropic direct) receive and use these tools natively. **Claude Code CLI ignores the `tools` parameter entirely** — `claude-code.ts` never passes tools to the CLI process. Tools are silently dropped.
+
+**Why:** Claude Code CLI has its own fixed toolset (Bash, Read, Write, Edit, Grep, Glob, Agent) and MCP support. It doesn't accept custom tools via command-line args. PandoCode's tool registry was designed for API models.
+
+**The solution — HTTP API as universal tool interface:**
+
+For Claude Code agents, ALL operations must be done via `curl` to the node's HTTP API. The agent prompts include curl commands, not tool references. This is injected via `--append-system-prompt` on every turn (agent can't forget it).
+
+**Agent prompt reference (for Claude Code model):**
+
+| Operation | HTTP API Endpoint |
+|---|---|
+| Update board task | `PATCH /v1/teams/:teamId/board/:taskId` with `{status, progress}` |
+| Create board task | `POST /v1/teams/:teamId/board` with `{title, description}` |
+| Send message to agent | `POST /v1/teams/:teamId/message` with `{from, to, message}` |
+| Spawn sub-agent | `POST /v1/teams/:teamId/agents/spawn` with `{template, task}` |
+| Stop sub-agent | `DELETE /v1/teams/:teamId/agents/:agentId` |
+| List agents | `GET /v1/teams/:teamId/agents` |
+| List templates | `GET /v1/templates` |
+| Propose governance | `POST /v1/governance/propose` with `{title, description, category, commitHash}` |
+
+**For API models:** PandoCode tools (`manage_tasks`, `send_message`, `check_agents`, `manage_team`) work natively via `engine.tools.register()`. No curl needed.
+
+**PromptContext.model field:** `PromptContext` includes `model?: string` so prompt template functions can differentiate behavior if needed. Currently all agents use `claude-code` so prompts contain curl commands.
+
+**What goes where:**
+- **System prompt** (via `--append-system-prompt`): Agent identity, role, responsibilities, API reference, rules. Stable across turns. Can't be forgotten.
+- **User message** (per-turn injection): Board state, inbox messages, goals, situation. Dynamic. Injected by `sendToTeamAgent()` before each turn.
+- **Claude Code's own context**: Its built-in tools, CLAUDE.md, memory files. We don't control this — it's additive to our system prompt.
 
 **CRITICAL RULES:**
 - Never put model/provider logic in pando-node. Model selection is a brain (PandoCode) decision.
 - Claude Code cannot be launched inside another Claude Code session. Provider deletes `CLAUDECODE` env var.
 - API-path models are UNCHANGED by this architecture. Only Claude Code gets the new treatment.
 - Reflection messages MUST skip conversation DB persistence to avoid history pollution.
+- Never reference PandoCode tools (manage_tasks, send_message) in Claude Code agent prompts. Use HTTP API curl commands instead.
+- The `manage_team` PandoCode tool is kept for API models but also has HTTP API equivalents for Claude Code.
 
 ### 3.3 @pando/tests (PHASE 4 COMPLETE)
 
@@ -1332,10 +1367,13 @@ Priority ordering: CRITICAL > BUG:user > WARNING > FEATURE:user > other. Limit 2
 - This asymmetry is intentional: leads need fresh state data per tick to make triage decisions, while observers/QA just need their base prompt to perform their fixed role.
 
 **Team inbox key structure:** Messages between agents are stored in the `.pando-code.db` `state` table:
+- Schema: `state(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT, expires_at TEXT)` — NOTE: NO `engine_id` column (was a bug, fixed)
 - Key: `msg:{toAgentId}:{uuid}`
 - Value: JSON `{ from: agentId, message: string, timestamp: ISO8601 }`
-- TTL: 1 hour
+- TTL: 1 hour (stored in `expires_at`)
 - Consumed (deleted) on read by `getTeamInbox()`
+- Also stores `cli-session:{agentId}` entries for session persistence across restarts
+- HTTP API: `POST /v1/teams/:teamId/message` with `{from, to, message}` — used by Claude Code agents
 
 **Engine lifecycle:**
 ```

@@ -405,10 +405,10 @@ export class PandoNetwork {
       return;
     }
 
-    // Periodic discovery sweep: every 30s (10s interval × 3), try dialing
+    // Periodic discovery sweep: every 20s (10s interval × 2), try dialing
     // any known peers we're not yet connected to. This catches new nodes
     // that were added to known-peers via peer exchange but not yet dialed.
-    if (this.reconnectTick % 3 === 0) {
+    if (this.reconnectTick % 2 === 0) {
       this.dialKnownPeers().catch(() => {});
     }
   }

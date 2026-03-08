@@ -554,20 +554,20 @@ export async function initKernel(node: any): Promise<void> {
         await node.broadcastCapabilities();
         await node.broadcastCapabilityProfile();
       } catch {}
-      // Delayed rebroadcast after mesh formation
+      // Delayed rebroadcast after mesh formation (reduced from 10s for faster discovery)
+      setTimeout(async () => {
+        try {
+          await node.broadcastCapabilities();
+          await node.broadcastCapabilityProfile();
+        } catch {}
+      }, 3_000);
+      // Final safety net for slow mesh formation (reduced from 30s)
       setTimeout(async () => {
         try {
           await node.broadcastCapabilities();
           await node.broadcastCapabilityProfile();
         } catch {}
       }, 10_000);
-      // Final safety net for slow mesh formation
-      setTimeout(async () => {
-        try {
-          await node.broadcastCapabilities();
-          await node.broadcastCapabilityProfile();
-        } catch {}
-      }, 30_000);
 
       // Phase 92: Direct TCP stream fallback for GossipSub mesh failures.
       // GossipSub requires min D=6 peers in mesh to reliably propagate.
