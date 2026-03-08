@@ -333,7 +333,12 @@ export class UserAccountStore {
     }
 
     try {
-      const passwordHash = await this.hashPassword(password);
+      // M2-6: 15s timeout for scrypt hashing on slow machines
+      const passwordHash = await withTimeout(
+        this.hashPassword(password),
+        15000,
+        'Password hashing timed out'
+      );
 
       const keyRow = this.localDb.prepare('SELECT * FROM key_store WHERE peer_id = ?').get(peerId) as any;
       if (keyRow && keyRow.enc_type === 'node' && keyRow.private_key_enc) {
@@ -412,9 +417,10 @@ export class UserAccountStore {
       }
 
       // Verify password
+      // M2-6: Increased timeout from 10s to 15s for scrypt on slow machines
       const valid = await withTimeout(
         this.verifyPassword(password, passwordHash),
-        10000,
+        15000,
         'Password verification timed out'
       );
       if (!valid) {

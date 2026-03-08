@@ -2,7 +2,7 @@
  * CapabilityRegistry — Network-wide capability map (Phase A).
  *
  * Stores capability profiles received from peers via GossipSub.
- * Each profile has a 15-minute TTL. Queryable by capability type.
+ * Each profile has a 5-minute TTL. Queryable by capability type.
  *
  * Used by the Scheduler to check whether the local node can execute
  * a task before claiming it, and by the API to expose the network's
@@ -17,13 +17,15 @@ interface StoredProfile {
   receivedAt: number;
 }
 
-const TTL_MS = 15 * 60 * 1000; // 15 minutes
+const TTL_MS = 5 * 60 * 1000; // 5 minutes — shorter TTL reduces wasted routing when peers lose capabilities
 
 export class CapabilityRegistry {
   private profiles: Map<string, StoredProfile> = new Map();
   private localProfile: CapabilityProfile | null = null;
   // Phase 96: LocalCapabilityStore for own-task routing (never filters by sharing prefs)
   private localCapStore: LocalCapabilityStore | null = null;
+  // #74: Track capability verification status per peer
+  private verificationStatus: Map<string, { verified: boolean; verifiedAt: number }> = new Map();
 
   /** Set the local node's profile */
   setLocalProfile(profile: CapabilityProfile): void {
@@ -38,7 +40,45 @@ export class CapabilityRegistry {
 
   /** Store a profile received from a peer */
   updatePeerProfile(profile: CapabilityProfile): void {
+    // #74: Preserve verification status across profile updates
+    const existing = this.verificationStatus.get(profile.peerId);
+    if (existing) {
+      profile.verified = existing.verified;
+      profile.verifiedAt = existing.verifiedAt;
+    }
     this.profiles.set(profile.peerId, { profile, receivedAt: Date.now() });
+  }
+
+  /**
+   * #74: Mark a peer's capabilities as verified (e.g. after successful challenge-response).
+   */
+  markVerified(peerId: string): void {
+    const now = Date.now();
+    this.verificationStatus.set(peerId, { verified: true, verifiedAt: now });
+    const stored = this.profiles.get(peerId);
+    if (stored) {
+      stored.profile.verified = true;
+      stored.profile.verifiedAt = now;
+    }
+  }
+
+  /**
+   * #74: Mark a peer's capabilities as unverified (e.g. after failed challenge).
+   */
+  markUnverified(peerId: string): void {
+    this.verificationStatus.delete(peerId);
+    const stored = this.profiles.get(peerId);
+    if (stored) {
+      stored.profile.verified = false;
+      stored.profile.verifiedAt = undefined;
+    }
+  }
+
+  /**
+   * #74: Check if a peer has been verified.
+   */
+  isVerified(peerId: string): boolean {
+    return this.verificationStatus.get(peerId)?.verified ?? false;
   }
 
   /** Get a specific peer's profile */

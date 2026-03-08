@@ -284,12 +284,35 @@ export class PandoNode {
 
   private async _start(): Promise<void> {
     if (!this.identity) throw new Error('No identity loaded');
+    (this as any)._initializing = true;
     const { initKernel } = await import('./init-kernel.js');
     const { initCore } = await import('./init-core.js');
     const { initPlatform } = await import('./init-platform.js');
-    await initKernel(this);
-    await initCore(this);
-    await initPlatform(this);
+    let initPhase = 'kernel';
+    try {
+      await initKernel(this);
+      initPhase = 'core';
+      await initCore(this);
+      initPhase = 'platform';
+      await initPlatform(this);
+    } catch (err: any) {
+      console.error(`[node] FATAL: Initialization failed during '${initPhase}' phase: ${err.message}`);
+      // Attempt to stop any already-initialized subsystems to avoid zombie state
+      try {
+        if (initPhase === 'platform' || initPhase === 'core') {
+          // kernel was initialized — try stopping network, ledger, etc.
+          if (this.apiServer) { try { await (this.apiServer as any).stop?.(); } catch {} }
+          if (this.scheduler) { try { this.scheduler.stop(); } catch {} }
+          if (this.monitor) { try { this.monitor.stop(); } catch {} }
+          if (this.network) { try { await (this.network as any).stop?.(); } catch {} }
+        }
+      } catch (cleanupErr: any) {
+        console.error(`[node] Cleanup after init failure also failed: ${cleanupErr.message}`);
+      }
+      (this as any)._initializing = false;
+      throw new Error(`Node initialization failed in '${initPhase}' phase: ${err.message}`);
+    }
+    (this as any)._initializing = false;
 
     // Initialize AppManager
     this.appManager = new AppManager(this);
@@ -1024,8 +1047,6 @@ export class PandoNode {
     this.scheduler = new Scheduler(
       { apiPort: this.config.apiPort },
       taskQueue,
-      null as any,  // profileCache — removed (agents manage own profiles)
-      null as any,  // workspaceManager — removed (agents own their workspaces)
       undefined,    // claudePath
       dataDir,
       rewardForTask,
@@ -1216,6 +1237,14 @@ export class PandoNode {
 
   isMonitorEnabled(): boolean {
     return this.monitorEnabled;
+  }
+
+  /**
+   * Returns true while the node is still initializing (kernel/core/platform phases).
+   * Used by /health endpoint to return 'initializing' instead of 'healthy'.
+   */
+  isInitializing(): boolean {
+    return !!(this as any)._initializing;
   }
 
   /**
@@ -1412,6 +1441,18 @@ export class PandoNode {
     return emitter;
   }
 
+  /**
+   * #86: Clean up a remote task emitter when it has no remaining listeners.
+   * Called from SSE stream cleanup to prevent memory leaks.
+   */
+  cleanupRemoteTaskEmitter(taskId: string): void {
+    const emitter = this.remoteTaskEmitters.get(taskId);
+    if (emitter && emitter.listenerCount('output') === 0) {
+      this.remoteTaskEmitters.delete(taskId);
+      emitter.removeAllListeners();
+    }
+  }
+
   // Phase 11: Content Layer getters
 
   getNetworkState(): NetworkState | null {
@@ -1481,6 +1522,24 @@ export class PandoNode {
    * Zero out private key in memory and clear identity reference.
    */
   async stop(): Promise<void> {
+    // #68: Add 30-second overall shutdown timeout to prevent hanging
+    const SHUTDOWN_TIMEOUT_MS = 30_000;
+    const shutdownPromise = this.performStop();
+    const timeoutPromise = new Promise<void>((_, reject) => {
+      setTimeout(() => reject(new Error('shutdown_timeout')), SHUTDOWN_TIMEOUT_MS);
+    });
+    try {
+      await Promise.race([shutdownPromise, timeoutPromise]);
+    } catch (err: any) {
+      if (err?.message === 'shutdown_timeout') {
+        console.error(`[shutdown] Timed out after ${SHUTDOWN_TIMEOUT_MS / 1000}s — force exiting.`);
+        process.exit(1);
+      }
+      throw err;
+    }
+  }
+
+  private async performStop(): Promise<void> {
     if (this.networkState) {
       this.networkState.stop();
       this.networkState = null;
@@ -1518,6 +1577,11 @@ export class PandoNode {
     if (this.capabilityBroadcastTimer) {
       clearInterval(this.capabilityBroadcastTimer);
       this.capabilityBroadcastTimer = null;
+    }
+    // #69: Clear guest reclaim timer created in init-platform
+    if ((this as any)._guestReclaimTimer) {
+      clearInterval((this as any)._guestReclaimTimer);
+      (this as any)._guestReclaimTimer = null;
     }
     if (this.governance) {
       this.governance.stopArchiveInterval();
@@ -1575,7 +1639,11 @@ export class PandoNode {
     this.regressionSuite = null;
 
     this.taskQueue = null;
-    this.requestReply = null;
+    // #66: Drain pending P2P requests before nulling RequestReply
+    if (this.requestReply) {
+      this.requestReply.drain();
+      this.requestReply = null;
+    }
     this.reputation = null;
     // Engine cleanup handled by stopEngine() via stopScheduler()
     if (this.apiServer) {
@@ -1590,6 +1658,12 @@ export class PandoNode {
       if (this.identity) {
         const balance = this.ledger.accounts.getBalance(this.identity.peerId);
         console.log(`Balance: ${balance} Lux`);
+      }
+      // #67: Flush WAL before closing ledger to ensure all pending writes are persisted
+      try {
+        this.ledger.getDatabase().pragma('wal_checkpoint(TRUNCATE)');
+      } catch (err: any) {
+        console.warn(`[shutdown] WAL checkpoint failed: ${err.message}`);
       }
       this.ledger.close();
     }

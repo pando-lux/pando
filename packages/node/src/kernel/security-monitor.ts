@@ -58,6 +58,7 @@ export interface QuarantineEntry {
   level: QuarantineLevel;      // Phase 12.6: quarantine severity level
   appealReason?: string;       // Phase 12.6: appeal reason if appealed
   appealedAt?: number;         // Phase 12.6: when appeal was submitted
+  quarantineCount?: number;    // #30: number of times this peer has been quarantined (for escalation)
 }
 
 export interface SecurityStats {
@@ -394,6 +395,8 @@ export class SecurityMonitor extends EventEmitter {
   private network: PandoNetwork | null = null;
   private ledger: PandoLedger | null = null;
   private emissionWitness: EmissionWitness | null = null;
+  // #32: Tripwire — auto-wipe credential key on critical local threats
+  private credentialWiper: (() => void) | null = null;
 
   // Detectors
   private messageRateMonitor: MessageRateMonitor;
@@ -460,6 +463,11 @@ export class SecurityMonitor extends EventEmitter {
 
   setEmissionWitness(ew: EmissionWitness): void {
     this.emissionWitness = ew;
+  }
+
+  /** #32: Set tripwire callback — called to wipe credentials on critical local threats. */
+  setCredentialWiper(wiper: () => void): void {
+    this.credentialWiper = wiper;
   }
 
   // ── Lifecycle ──────────────────────────────────────────────
@@ -548,24 +556,33 @@ export class SecurityMonitor extends EventEmitter {
     this.saveState();
   }
 
-  /** Auto-release quarantined peers whose quarantine duration has expired. */
+  /** Auto-release quarantined peers whose quarantine duration has expired.
+   *  #30: Repeat offenders get escalating durations. Only auto-release if quarantineCount <= 2. */
   private releaseExpiredQuarantines(): void {
     const now = Date.now();
     for (const entry of this.quarantine) {
-      if (entry.active && (now - entry.quarantinedAt) >= QUARANTINE_DURATION_MS) {
-        entry.active = false;
-        entry.releasedAt = now;
-
-        // Resolve associated alert
-        const alert = this.alerts.find(a => a.id === entry.alertId && !a.resolved);
-        if (alert) {
-          alert.resolved = true;
-          alert.resolvedAt = now;
-        }
-
-        console.log(`[security] Auto-released quarantined peer: ${entry.peerId.slice(0, 12)} (1 hour expired)`);
-        this.emit('security:release', entry);
+      if (!entry.active) continue;
+      const count = entry.quarantineCount || 1;
+      // #30: Double the quarantine duration for each repeat offense
+      const effectiveDuration = QUARANTINE_DURATION_MS * Math.pow(2, count - 1);
+      if ((now - entry.quarantinedAt) < effectiveDuration) continue;
+      // #30: Only auto-release if quarantine count <= 2; repeat offenders require manual review
+      if (count > 2) {
+        console.log(`[security] Quarantine expired for repeat offender ${entry.peerId.slice(0, 12)} (count=${count}) — requires manual review, not auto-releasing`);
+        continue;
       }
+      entry.active = false;
+      entry.releasedAt = now;
+
+      // Resolve associated alert
+      const alert = this.alerts.find(a => a.id === entry.alertId && !a.resolved);
+      if (alert) {
+        alert.resolved = true;
+        alert.resolvedAt = now;
+      }
+
+      console.log(`[security] Auto-released quarantined peer: ${entry.peerId.slice(0, 12)} (duration=${Math.round(effectiveDuration / 60000)}min, count=${count})`);
+      this.emit('security:release', entry);
     }
   }
 
@@ -598,6 +615,12 @@ export class SecurityMonitor extends EventEmitter {
     // Auto-quarantine on critical alerts
     if (alert.severity === 'critical') {
       this.quarantinePeer(alert.source, alert.description, alert.id);
+
+      // #32: Tripwire — auto-wipe credential key on critical threats
+      if (this.credentialWiper) {
+        console.warn(`[security] TRIPWIRE: Critical threat detected — wiping credential key`);
+        try { this.credentialWiper(); } catch { /* wipe best-effort */ }
+      }
     }
   }
 
@@ -620,6 +643,8 @@ export class SecurityMonitor extends EventEmitter {
       return;
     }
 
+    // #30: Count previous quarantines for this peer to escalate duration
+    const previousCount = this.quarantine.filter(q => q.peerId === peerId && !q.active).length;
     const entry: QuarantineEntry = {
       peerId,
       reason,
@@ -627,6 +652,7 @@ export class SecurityMonitor extends EventEmitter {
       quarantinedAt: Date.now(),
       active: true,
       level,
+      quarantineCount: previousCount + 1,
     };
 
     this.quarantine.unshift(entry);

@@ -177,6 +177,11 @@ export function openDatabase(dataDir?: string): Database.Database {
     db.exec("CREATE UNIQUE INDEX IF NOT EXISTS idx_accounts_username ON accounts(username) WHERE username IS NOT NULL");
   }
 
+  // Migration: add banned column to accounts table (security — ban mechanism)
+  if (!accountCols.some((c: any) => c.name === 'banned')) {
+    db.exec("ALTER TABLE accounts ADD COLUMN banned INTEGER DEFAULT 0");
+  }
+
   // Initialize network stats if needed
   const initStats = db.prepare(
     'INSERT OR IGNORE INTO network_stats (key, value, updated_at) VALUES (?, ?, ?)'

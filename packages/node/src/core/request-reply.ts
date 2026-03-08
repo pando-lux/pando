@@ -134,6 +134,20 @@ export class RequestReplyManager {
     return { sent: 0, received: 0, timeouts: 0, avgLatencyMs: 0 };
   }
 
+  /**
+   * Drain all pending queries — resolve them with a shutdown error.
+   * Must be called before nulling RequestReply during shutdown.
+   */
+  drain(): void {
+    for (const [id, query] of this.pendingQueries) {
+      clearTimeout(query.timer);
+      query.resolve(query.replies);
+    }
+    this.pendingQueries.clear();
+    this.handlers.clear();
+    this.subscribed = false;
+  }
+
   // ── Internal ──
 
   private async handleIncomingRequest(req: PandoRequest, _fromPeerId: string): Promise<void> {

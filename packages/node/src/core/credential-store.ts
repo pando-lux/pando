@@ -35,6 +35,14 @@ export class CredentialStore {
   private db: Db;
   private masterKey: Uint8Array | null;
   private collection: Collection | null = null;
+  /** Track last usage time per credential for LRU selection */
+  private lastUsedAt: Map<string, number> = new Map();
+  /** Track consecutive health check failures per credential */
+  private healthFailures: Map<string, number> = new Map();
+  /** Credentials marked unhealthy after consecutive failures */
+  private unhealthyCredentials: Set<string> = new Set();
+  /** Daily usage counts per credential (keyed by `credId:YYYY-MM-DD`) */
+  private dailyUsageCounts: Map<string, number> = new Map();
 
   constructor(db: Db, masterKeyHex?: string) {
     this.db = db;
@@ -138,8 +146,9 @@ export class CredentialStore {
     };
   }
 
-  /** Decrypt and return a credential by resource ID */
-  async getCredential(resourceId: string): Promise<string | null> {
+  /** Decrypt and return a credential by resource ID.
+   *  @param requestingPeerId — If provided, checks grantedTo permissions. */
+  async getCredential(resourceId: string, requestingPeerId?: string): Promise<string | null> {
     if (!this.masterKey) return null;
     if (!this.collection) return null;
 
@@ -153,6 +162,33 @@ export class CredentialStore {
         return null;
       }
 
+      // #6: Check grantedTo permissions
+      if (requestingPeerId && doc.grantedTo) {
+        const granted = doc.grantedTo as string[];
+        if (!granted.includes('*') && !granted.includes(requestingPeerId)) {
+          return null;
+        }
+      }
+
+      // #3: Skip unhealthy credentials
+      if (this.unhealthyCredentials.has(resourceId)) {
+        return null;
+      }
+
+      // #2: Check daily usage cap
+      if (doc.maxUsagePerDay && doc.maxUsagePerDay > 0) {
+        const today = new Date().toISOString().slice(0, 10);
+        const usageKey = `${resourceId}:${today}`;
+        const currentUsage = this.dailyUsageCounts.get(usageKey) || 0;
+        if (currentUsage >= doc.maxUsagePerDay) {
+          return null;
+        }
+        this.dailyUsageCounts.set(usageKey, currentUsage + 1);
+      }
+
+      // #1: Track last usage for LRU
+      this.lastUsedAt.set(resourceId, Date.now());
+
       return decryptCredential(doc.encryptedCredential, doc.nonce, this.masterKey);
     } catch (err: any) {
       console.error(`[credential-store] Failed to decrypt ${resourceId.slice(0, 8)}: ${err.message}`);
@@ -160,8 +196,11 @@ export class CredentialStore {
     }
   }
 
-  /** Get first active credential of a given type, decrypted */
-  async getActiveByType(type: ResourceCredentialType): Promise<{
+  /** Get the least-recently-used active credential of a given type, decrypted.
+   *  Sorts by lastUsedAt ascending (#1), skips unhealthy (#3), daily-capped (#2),
+   *  and permission-restricted (#6) credentials.
+   *  @param requestingPeerId — If provided, checks grantedTo permissions. */
+  async getActiveByType(type: ResourceCredentialType, requestingPeerId?: string): Promise<{
     credential: string;
     resourceId: string;
     metadata: Record<string, any> | null;
@@ -171,11 +210,49 @@ export class CredentialStore {
 
     try {
       const docs = await this.collection.find({ type, status: 'active' }).toArray();
+      const now = Date.now();
+      const today = new Date().toISOString().slice(0, 10);
+
+      // #1: Sort by lastUsedAt ascending (least recently used first)
+      docs.sort((a: any, b: any) => {
+        const aTime = this.lastUsedAt.get(a._id) || 0;
+        const bTime = this.lastUsedAt.get(b._id) || 0;
+        return aTime - bTime;
+      });
+
       for (const doc of docs) {
         // Skip expired
-        if (doc.expiresAt && doc.expiresAt < Date.now()) continue;
+        if (doc.expiresAt && doc.expiresAt < now) continue;
+
+        // #3: Skip unhealthy credentials
+        if (this.unhealthyCredentials.has(doc._id)) continue;
+
+        // #6: Check grantedTo permissions
+        if (requestingPeerId && doc.grantedTo) {
+          const granted = doc.grantedTo as string[];
+          if (!granted.includes('*') && !granted.includes(requestingPeerId)) continue;
+        }
+
+        // #2: Check daily usage cap
+        if (doc.maxUsagePerDay && doc.maxUsagePerDay > 0) {
+          const usageKey = `${doc._id}:${today}`;
+          const currentUsage = this.dailyUsageCounts.get(usageKey) || 0;
+          if (currentUsage >= doc.maxUsagePerDay) continue;
+        }
+
         try {
           const credential = decryptCredential(doc.encryptedCredential, doc.nonce, this.masterKey);
+
+          // #1: Update last usage time
+          this.lastUsedAt.set(doc._id, now);
+
+          // #2: Increment daily usage count
+          if (doc.maxUsagePerDay && doc.maxUsagePerDay > 0) {
+            const usageKey = `${doc._id}:${today}`;
+            const currentUsage = this.dailyUsageCounts.get(usageKey) || 0;
+            this.dailyUsageCounts.set(usageKey, currentUsage + 1);
+          }
+
           return { credential, resourceId: doc._id, metadata: doc.metadata };
         } catch {
           continue; // Try next if decryption fails
@@ -186,6 +263,28 @@ export class CredentialStore {
       console.error(`[credential-store] Failed to get active ${type}: ${err.message}`);
       return null;
     }
+  }
+
+  /** #3: Mark a credential as healthy or unhealthy based on health check results.
+   *  Called by ResourceHealthChecker. After 3 consecutive failures, credential
+   *  is marked unhealthy and skipped by getActiveByType() / getCredential(). */
+  markHealthStatus(resourceId: string, healthy: boolean): void {
+    if (healthy) {
+      this.healthFailures.delete(resourceId);
+      this.unhealthyCredentials.delete(resourceId);
+    } else {
+      const failures = (this.healthFailures.get(resourceId) || 0) + 1;
+      this.healthFailures.set(resourceId, failures);
+      if (failures >= 3) {
+        this.unhealthyCredentials.add(resourceId);
+        console.warn(`[credential-store] Credential ${resourceId.slice(0, 8)} marked unhealthy after ${failures} consecutive failures`);
+      }
+    }
+  }
+
+  /** Check if a credential is marked unhealthy. */
+  isUnhealthy(resourceId: string): boolean {
+    return this.unhealthyCredentials.has(resourceId);
   }
 
   /** Revoke a credential */

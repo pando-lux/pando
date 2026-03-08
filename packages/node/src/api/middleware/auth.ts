@@ -23,6 +23,10 @@ export interface RouteHelpers {
   getAvailableApiKeys(): Record<string, boolean>;
   addSSEClient(reply: any): void;
   removeSSEClient(reply: any): void;
+  /** #85: Check if an IP has reached the SSE connection limit. Returns true if allowed. */
+  checkSSELimit(ip: string): boolean;
+  /** #85: Track SSE connection open/close per IP. */
+  trackSSEConnection(ip: string, delta: 1 | -1): void;
   doormanClassify(message: string): Promise<{
     intent: 'simple' | 'question' | 'build' | 'project' | 'report';
     response?: string;

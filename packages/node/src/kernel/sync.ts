@@ -16,6 +16,23 @@ interface ProjectRegistryLike {
   getAllProjects(): ProjectRegistryRecord[];
 }
 import { fromString as uint8ArrayFromString } from 'uint8arrays';
+import { peerIdFromString } from '@libp2p/peer-id';
+
+/**
+ * Extract the base64-encoded public key from a peerId string.
+ * Returns null if extraction fails (e.g., RSA peerIds without inline keys).
+ */
+function extractPublicKey(peerId: string): string | null {
+  try {
+    const peerIdObj = peerIdFromString(peerId);
+    if (peerIdObj.publicKey?.raw) {
+      return Buffer.from(peerIdObj.publicKey.raw).toString('base64');
+    }
+  } catch {
+    // Extraction failed — return null
+  }
+  return null;
+}
 
 export const TOPIC_TRANSACTIONS = 'pando/transactions';
 export const TOPIC_SYNC = 'pando/sync';
@@ -161,14 +178,16 @@ export class LedgerSync {
   async broadcastClaim(claim: { peerId: string; username: string | null; displayName: string | null; passwordHash: string; claimedAt: number; balance?: number }): Promise<void> {
     const id = `claim:${claim.peerId}:${claim.claimedAt}`;
     this.processedClaims.add(id);
+    // #40: Strip balance from broadcasted claims — balance must only change via validated transactions
+    const { balance: _stripped, ...safeClaim } = claim;
     const message: PandoMessage = {
       type: MessageType.ACCOUNT_CLAIM,
       from: this.localPeerId,
       timestamp: claim.claimedAt,
-      payload: claim,
+      payload: safeClaim,
     };
     await this.network.publishToTopic(TOPIC_SYNC, message);
-    console.log(`[sync] Broadcast account claim: ${claim.username || claim.peerId.slice(0, 16)}... (balance: ${claim.balance ?? 'n/a'})`);
+    console.log(`[sync] Broadcast account claim: ${claim.username || claim.peerId.slice(0, 16)}...`);
   }
 
   /**
@@ -227,7 +246,10 @@ export class LedgerSync {
     }
 
     const transactions = this.ledger.getTransactionsSince(effectiveSince, limit);
-    const claimedAccounts = this.ledger.accounts.getClaimedAccounts();
+    // #40: Strip balance from claimed accounts — balance must only change via validated transactions
+    const claimedAccounts = this.ledger.accounts.getClaimedAccounts().map(
+      ({ balance: _b, ...rest }) => rest
+    );
     const projects = this.projectRegistry?.getAllProjects() ?? [];
 
     if (transactions.length === 0 && claimedAccounts.length === 0 && projects.length === 0) return;
@@ -276,12 +298,23 @@ export class LedgerSync {
       }
 
       try {
-        // Ensure accounts exist
+        // Ensure accounts exist — extract real public key from peerId, fall back to 'unknown'
         if (!this.ledger.accounts.exists(tx.from)) {
-          this.ledger.registerNode(tx.from, 'remote-peer');
+          this.ledger.registerNode(tx.from, extractPublicKey(tx.from) || 'unknown');
         }
         if (!this.ledger.accounts.exists(tx.to)) {
-          this.ledger.registerNode(tx.to, 'remote-peer');
+          this.ledger.registerNode(tx.to, extractPublicKey(tx.to) || 'unknown');
+        }
+
+        // #39: Validate sender balance for remote transfers to prevent double-spend
+        if (tx.type === TransactionType.TRANSFER && tx.from !== 'NETWORK') {
+          const senderBalance = this.ledger.accounts.getBalance(tx.from);
+          const totalDebit = tx.amount + (tx.fee || 0);
+          if (senderBalance < totalDebit) {
+            console.warn(`[sync] REJECTED remote tx ${tx.id.slice(0, 12)}... — insufficient balance: have ${senderBalance}, need ${totalDebit}`);
+            rejected++;
+            continue;
+          }
         }
 
         this.ledger.applyRemoteTransaction(tx);
@@ -313,15 +346,15 @@ export class LedgerSync {
         const id = `claim:${claim.peerId}:${claim.claimedAt}`;
         if (this.processedClaims.has(id)) continue;
         this.processedClaims.add(id);
-        // adjustBalance=true: during catch-up sync, transactions are already applied above,
-        // so if the account balance is still lower than the claim's balance, the emission tx
-        // was missing from this batch — safe to adjust balance + totalSupply.
+        // #41: During catch-up sync, emission transactions are applied above and already
+        // increment totalSupply. Do NOT also add claim balance to totalSupply — that causes
+        // double-counting. Use adjustBalance=true to fix account balance, but skip totalSupply update.
         const result = this.ledger.accounts.applyRemoteClaim(claim.peerId, claim.username, claim.displayName, claim.passwordHash, claim.claimedAt, claim.balance, true);
         if (result.applied) {
           claimsApplied++;
           if (result.supplyDelta > 0) {
-            this.updateTotalSupply(result.supplyDelta);
-            console.log(`[sync] Catch-up claim: ${claim.username || claim.peerId.slice(0, 16)}... balance adjusted +${result.supplyDelta} (totalSupply synced)`);
+            // Do NOT call updateTotalSupply here — emission transactions already handle it.
+            console.log(`[sync] Catch-up claim: ${claim.username || claim.peerId.slice(0, 16)}... balance adjusted +${result.supplyDelta} (totalSupply NOT modified — emission txs handle it)`);
           }
         }
       }
@@ -357,10 +390,10 @@ export class LedgerSync {
 
     // Look up sender's public key from ledger accounts
     const senderAccount = this.ledger.accounts.get(tx.from);
-    if (!senderAccount || !senderAccount.publicKey || senderAccount.publicKey === 'remote-peer') {
+    if (!senderAccount || !senderAccount.publicKey || senderAccount.publicKey === 'unknown') {
       // We don't have the sender's public key — can't verify
-      // Allow signed transactions through (the sender's node verified the signature)
-      return true;
+      // Reject: cannot trust unverifiable signed transactions
+      return false;
     }
 
     try {
@@ -406,16 +439,24 @@ export class LedgerSync {
       this.appliedTxs.add(tx.id);
 
       try {
-        // Ensure both accounts exist in local ledger
+        // Ensure both accounts exist in local ledger — extract real public key from peerId
         if (!this.ledger.accounts.exists(tx.from)) {
-          this.ledger.registerNode(tx.from, 'remote-peer');
+          this.ledger.registerNode(tx.from, extractPublicKey(tx.from) || 'unknown');
         }
         if (!this.ledger.accounts.exists(tx.to)) {
-          this.ledger.registerNode(tx.to, 'remote-peer');
+          this.ledger.registerNode(tx.to, extractPublicKey(tx.to) || 'unknown');
         }
 
-        // Apply directly — don't re-validate sender balance.
-        // The originating node already validated this transaction.
+        // #39: Validate sender balance for real-time remote transfers to prevent double-spend
+        if (tx.type === TransactionType.TRANSFER && tx.from !== 'NETWORK') {
+          const senderBalance = this.ledger.accounts.getBalance(tx.from);
+          const totalDebit = tx.amount + (tx.fee || 0);
+          if (senderBalance < totalDebit) {
+            console.warn(`[sync] REJECTED real-time tx ${tx.id.slice(0, 12)}... — insufficient balance: have ${senderBalance}, need ${totalDebit}`);
+            return;
+          }
+        }
+
         this.ledger.applyRemoteTransaction(tx);
 
         const sigTag = sigResult === true ? ' [signed]' : '';

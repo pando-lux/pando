@@ -357,7 +357,8 @@ Be friendly and helpful. Keep answers short.`
     // Phase 35: Daily guest Lux reclamation — unclaimed guests older than 30 days
     // get remaining Lux transferred back to NETWORK for reuse
     const ledgerForReclaim = node.ledger;
-    setInterval(() => {
+    // #69: Store interval ref so stop() can clear it before nulling subsystems
+    node._guestReclaimTimer = setInterval(() => {
       if (node.userAccountStore && ledgerForReclaim) {
         node.userAccountStore.reclaimExpiredGuests(ledgerForReclaim);
       }
@@ -374,6 +375,20 @@ Be friendly and helpful. Keep answers short.`
     if (node.storageBackend) {
       node.projectStore = new ProjectStore(node.ledger.getDatabase(), node.storageBackend);
       node.projectStore.init();
+
+      // #48: Cancel running tasks when a project is archived
+      node.projectStore.setTaskCanceller((projectId: string) => {
+        const tq = node.getActiveTaskQueue();
+        if (!tq) return;
+        const tasks = tq.getTasks({ status: ['open', 'claimed', 'in_progress'] as any });
+        for (const task of tasks) {
+          if (task.projectId === projectId) {
+            tq.updateStatus(task.id, 'rejected');
+            tq.setResultNote(task.id, `Cancelled: project ${projectId} was archived`);
+            console.log(`[project-store] Cancelled task ${task.id.slice(0, 8)} (project archived)`);
+          }
+        }
+      });
 
       node.revenueEngine = new RevenueEngine(node.ledger.getDatabase(), node.ledger, node.storageBackend);
       node.revenueEngine.init();
@@ -649,6 +664,10 @@ Be friendly and helpful. Keep answers short.`
     // ── Team Registry + Bootstrap ──────────────────────────────────────
     // Initialize the TeamRegistry (SQLite + GossipSub sync) and auto-bootstrap
     // the pando-infra team if the EngineAdapter is available.
+    // #9: Check enableCouncil config flag — skip council/team bootstrap if disabled
+    if (node.config.enableCouncil === false) {
+      console.log('[team-registry] Council disabled (enableCouncil=false) — skipping team bootstrap');
+    } else
     try {
       const teamsDbPath = join(dataDir, 'teams', 'teams.db');
       const teamRegistry = new TeamRegistry(teamsDbPath, node.network, node.identity.peerId);
@@ -829,6 +848,17 @@ Be friendly and helpful. Keep answers short.`
             });
           }
         }
+      }
+
+      // Log unhandled message types at debug level so dropped messages are visible
+      const handledTypes = new Set([
+        MessageType.GOVERNANCE_SYNC_REQUEST, MessageType.GOVERNANCE_SYNC_RESPONSE,
+        MessageType.TASK_SYNC_REQUEST, MessageType.TASK_SYNC_RESPONSE,
+        MessageType.BALANCE_REQUEST, MessageType.CAPABILITY_PROFILE_DIRECT,
+        MessageType.PEER_EXCHANGE,
+      ]);
+      if (!handledTypes.has(message.type)) {
+        console.log(`[P2P] Unhandled message type: ${message.type}`);
       }
     });
 

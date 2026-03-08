@@ -21,10 +21,31 @@ const NODE_STARTED_AT = Date.now();
 
 export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Promise<void> {
   const { node } = deps;
+
+    // #80: Defense-in-depth auth check for /admin/* routes.
+    // The global auth hook already requires a Bearer token, but this adds an
+    // explicit per-handler check so admin routes are never accidentally exposed.
+    function requireOperatorAuth(request: any, reply: any): boolean {
+      const actor = request.actor;
+      if (actor?.type === 'operator' || actor?.type === 'agent') {
+        return true;
+      }
+      reply.code(403).send({ error: 'Admin routes require operator-level auth', code: 'FORBIDDEN' });
+      return false;
+    }
     // GET /health — lightweight health check for monitoring (load balancers, uptime services)
     // Returns 200 if node is operational, 503 if not ready. No auth required.
     // If HealthMonitor is running, defers to its assessment so /health and /monitor/status agree.
     fastify.get('/health', async (request: any, reply: any) => {
+      // Check if node is still initializing (API server starts before full init)
+      if (node.isInitializing()) {
+        return reply.code(503).send({
+          status: 'initializing',
+          reason: 'Node is still starting up',
+          timestamp: Date.now(),
+        });
+      }
+
       const network = node.getNetwork();
       const ledger = node.getLedger();
       const identity = node.getIdentity();
@@ -41,9 +62,20 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       // so /health and /monitor/status report the same health state.
       let status: string = 'healthy';
       const monitor = node.getMonitor();
+      // #71: Include subsystem health summary from monitor when available
+      let subsystemHealth: Record<string, any> | undefined;
       if (monitor) {
-        const metrics = monitor.getCurrentMetrics();
-        status = metrics.nodeHealth; // 'healthy' | 'degraded' | 'critical'
+        const summary = monitor.getHealthSummary();
+        status = summary.status;
+        subsystemHealth = {
+          activeAlerts: summary.activeAlerts,
+          criticalAlerts: summary.criticalAlerts,
+          schedulerRunning: summary.schedulerRunning,
+          memoryUsagePct: summary.memoryUsagePct,
+          eventLoopLagMs: summary.eventLoopLagMs,
+          consecutiveFailures: summary.consecutiveFailures,
+          recentSuccessRate: summary.recentSuccessRate,
+        };
       }
 
       const uptimeSeconds = Math.floor(process.uptime());
@@ -66,12 +98,14 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         nodeStartedAt: new Date(Date.now() - uptimeSeconds * 1000).toISOString(),
         version: '0.1.0',
         timestamp: Date.now(),
+        ...(subsystemHealth ? { subsystemHealth } : {}),
       };
     });
 
     // POST /admin/shutdown — Graceful shutdown API endpoint
-    // Requires Bearer token auth. Stops agents, closes subsystems, writes reason file, exits.
+    // Requires operator-level auth. Stops agents, closes subsystems, writes reason file, exits.
     fastify.post('/admin/shutdown', async (request: any, reply: any) => {
+      if (!requireOperatorAuth(request, reply)) return;
       const body = request.body as { reason?: string } | undefined;
       const reason = body?.reason || 'api-shutdown';
 
@@ -124,6 +158,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
     // v2.4: POST /admin/wipe-credentials — emergency tripwire trigger (admin token required)
     // Wipes CREDENTIAL_MASTER_KEY from memory + broadcasts node_compromised to network.
     fastify.post('/admin/wipe-credentials', async (request: any, reply: any) => {
+      if (!requireOperatorAuth(request, reply)) return;
       const body = request.body as { reason?: string } | undefined;
       const reason = body?.reason || 'admin-trigger';
       await node.triggerLocalCompromise(reason);
@@ -132,6 +167,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
 
     // Phase 80: POST /admin/migrate-apps — redeploy Tier 2 apps from a dead instance to a running one
     fastify.post('/admin/migrate-apps', async (request: any, reply: any) => {
+      if (!requireOperatorAuth(request, reply)) return;
       const body = request.body as { fromInstanceId?: string } | undefined;
       const fromInstanceId = body?.fromInstanceId;
       if (!fromInstanceId) return reply.code(400).send({ error: 'fromInstanceId is required' });
@@ -204,6 +240,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
 
     // Phase 80: POST /admin/cleanup-projects — soft-delete (archive) specified projects
     fastify.post('/admin/cleanup-projects', async (request: any, reply: any) => {
+      if (!requireOperatorAuth(request, reply)) return;
       const body = request.body as { projectIds?: string[] } | undefined;
       const projectIds = body?.projectIds;
       if (!projectIds || !Array.isArray(projectIds) || projectIds.length === 0) {
@@ -570,7 +607,15 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         });
       }
 
-      return { success: true, task };
+      // #65: Warn client if network is unavailable — task is local-only
+      const network = node.getNetwork();
+      const peerCount = network?.getPeerCount() ?? 0;
+      const localOnly = peerCount === 0;
+      if (localOnly) {
+        console.warn(`[tasks] Task ${task.id.slice(0, 8)} created but no peers connected — local-only until network recovers`);
+      }
+
+      return { success: true, task, localOnly, ...(localOnly ? { warning: 'No peers connected — task is local-only and will not be broadcast until network recovers' } : {}) };
     });
 
     // POST /tasks/:id/claim — claim a task for an agent
@@ -579,6 +624,11 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       if (!tq) return reply.code(503).send({ error: 'No task queue available' });
       const { agentId } = request.body || {};
       if (!agentId) return reply.code(400).send({ error: 'agentId is required' });
+      // #29: Reject claims from quarantined peers
+      const secMonClaim = node.getSecurityMonitor();
+      if (secMonClaim && secMonClaim.isQuarantined(agentId)) {
+        return reply.code(403).send({ error: 'Quarantined peers cannot claim tasks' });
+      }
       const result = tq.claimTask(request.params.id, agentId);
       if (!result.success) return reply.code(409).send({ error: result.error });
       return { success: true };
@@ -825,6 +875,11 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       const userPeerId = await deps.verifyUserJwt(request);
       const identity = node.getIdentity();
       const proposerPeerId = userPeerId || identity?.peerId;
+      // #29: Reject proposals from quarantined peers
+      const secMonPropose = node.getSecurityMonitor();
+      if (secMonPropose && proposerPeerId && secMonPropose.isQuarantined(proposerPeerId)) {
+        return reply.code(403).send({ error: 'Quarantined peers cannot create proposals' });
+      }
       const { title, description, votingDurationMs, category, isEmergency, commitHash } = request.body || {};
       if (!title || !description) return reply.code(400).send({ error: 'title and description required' });
       const trimmedTitle = title.trim();
@@ -867,6 +922,11 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       const userPeerId = await deps.verifyUserJwt(request);
       const identity = node.getIdentity();
       const voterPeerId = userPeerId || identity?.peerId;
+      // #29: Reject votes from quarantined peers
+      const secMonVote = node.getSecurityMonitor();
+      if (secMonVote && voterPeerId && secMonVote.isQuarantined(voterPeerId)) {
+        return reply.code(403).send({ error: 'Quarantined peers cannot vote' });
+      }
       const { proposalId, choice, reasoning, modelAttestation } = request.body || {};
       if (!proposalId || !choice) return reply.code(400).send({ error: 'proposalId and choice required' });
       if (!['approve', 'reject', 'abstain'].includes(choice)) {
@@ -1374,6 +1434,14 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
 
     // GET /events — Server-Sent Events stream for real-time updates
     fastify.get('/events', (request: any, reply: any) => {
+      // #85: Per-IP SSE connection limit
+      const clientIp = request.ip || request.raw?.socket?.remoteAddress || 'unknown';
+      if (!deps.checkSSELimit(clientIp)) {
+        reply.code(429).send({ error: 'Too many SSE connections from this IP' });
+        return;
+      }
+      deps.trackSSEConnection(clientIp, 1);
+
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
@@ -1399,6 +1467,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       const cleanup = () => {
         clearInterval(heartbeat);
         deps.removeSSEClient(reply);
+        deps.trackSSEConnection(clientIp, -1);
       };
 
       request.raw.on('close', cleanup);
@@ -1763,6 +1832,24 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       if (!filePath || filePath.includes('..')) {
         return reply.code(400).send({ error: 'Invalid file path' });
       }
+      // #84: Ownership check — only task creator/owner or admin can read workspace files
+      const tqFiles = node.getActiveTaskQueue();
+      if (tqFiles) {
+        const taskRecord = tqFiles.getTask(taskId);
+        if (taskRecord) {
+          const userPeerId = await deps.verifyUserJwt(request);
+          const identity = node.getIdentity();
+          const requestingPeerId = userPeerId || identity?.peerId;
+          const isOwner = requestingPeerId && (
+            taskRecord.createdBy === requestingPeerId ||
+            taskRecord.assignedTo === requestingPeerId
+          );
+          const isAdmin = requestingPeerId === identity?.peerId;
+          if (!isOwner && !isAdmin) {
+            return reply.code(403).send({ error: 'Access denied: not the task owner' });
+          }
+        }
+      }
       const { readFileSync, statSync: statSync2 } = await import('node:fs');
       const { join: pathJoin } = await import('node:path');
       const wsDir = pathJoin(node.getDataDir() || join(homedir(), '.pando'), 'workspaces', taskId);
@@ -1897,6 +1984,14 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
     // GET /scheduler/tasks/:id/stream — SSE stream of live task output
     // Works for both local tasks (via Scheduler emitters) and remote tasks (via GossipSub timeline events)
     fastify.get('/scheduler/tasks/:id/stream', (request: any, reply: any) => {
+      // #85: Per-IP SSE connection limit
+      const streamClientIp = request.ip || request.raw?.socket?.remoteAddress || 'unknown';
+      if (!deps.checkSSELimit(streamClientIp)) {
+        reply.code(429).send({ error: 'Too many SSE connections from this IP' });
+        return;
+      }
+      deps.trackSSEConnection(streamClientIp, 1);
+
       const scheduler = node.getScheduler();
       const taskId = request.params.id;
 
@@ -1904,6 +1999,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       const taskQueue = node.getActiveTaskQueue();
       const task = taskQueue?.getTask(taskId);
       if (!scheduler && !task) {
+        deps.trackSSEConnection(streamClientIp, -1);
         reply.code(503).send({ error: 'Scheduler not enabled and task not found.' });
         return;
       }
@@ -1981,6 +2077,12 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         if (emitter) emitter.off('output', onOutput);
         if (polledEmitter && polledEmitter !== emitter) polledEmitter.off('output', onOutput);
         remoteEmitter.off('output', onOutput);
+        // #85: Release SSE connection count for this IP
+        deps.trackSSEConnection(streamClientIp, -1);
+        // #86: Clean up remote emitter if no listeners remain
+        if (remoteEmitter.listenerCount('output') === 0) {
+          node.cleanupRemoteTaskEmitter(taskId);
+        }
       };
 
       request.raw.on('close', cleanup);

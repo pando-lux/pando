@@ -65,6 +65,10 @@ export class ResourceHealthChecker {
       try {
         const result = await this.checkOne(resource.resourceId, resource.type);
         this.results.set(resource.resourceId, result);
+        // #3: Feed health check results back into credential selection
+        if (this.credentialStore) {
+          this.credentialStore.markHealthStatus(resource.resourceId, result.status === 'healthy');
+        }
       } catch (err: any) {
         this.results.set(resource.resourceId, {
           resourceId: resource.resourceId,
@@ -73,6 +77,10 @@ export class ResourceHealthChecker {
           checkedAt: Date.now(),
           error: err.message?.slice(0, 120) || 'Unknown error',
         });
+        // #3: Mark as unhealthy on error
+        if (this.credentialStore) {
+          this.credentialStore.markHealthStatus(resource.resourceId, false);
+        }
       }
     }
   }

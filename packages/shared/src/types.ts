@@ -47,6 +47,46 @@ export interface EncryptedSerializedIdentity {
 export const MESSAGE_VERSION = 1;
 
 /**
+ * H-3: Stream event protocol version. Increment when StreamEvent format changes.
+ * Stream events are yielded by EngineAdapter.send() and consumed by API endpoints.
+ */
+export const STREAM_EVENT_VERSION = 1;
+
+/**
+ * H-2 + H-3: Typed stream event emitted by EngineAdapter.
+ *
+ * PandoCode engines yield raw events with string `type` fields (e.g. 'stream:chunk',
+ * 'tool:start', 'tool:result', 'error'). This interface normalizes them with a version
+ * field for forward compatibility.
+ *
+ * Event type vocabulary mapping (PandoCode -> Pando):
+ *   'stream:chunk'  -> text content fragment (for SSE streaming)
+ *   'tool:start'    -> agent tool invocation began
+ *   'tool:result'   -> agent tool invocation completed
+ *   'error'         -> engine error (timeout, budget exhausted, crash)
+ *   'result'        -> final structured result from engine
+ *
+ * These are LOCAL events (engine -> API -> client). They are NOT P2P MessageType values.
+ * P2P messaging uses MessageType enum via publishToTopic/onMessage.
+ */
+export interface StreamEvent {
+  /** Event type from PandoCode engine */
+  type: 'stream:chunk' | 'tool:start' | 'tool:result' | 'error' | 'result' | string;
+  /** Protocol version for forward compatibility */
+  version: number;
+  /** Text content (for stream:chunk events) */
+  content?: string;
+  /** Tool name (for tool:start / tool:result events) */
+  toolName?: string;
+  /** Tool arguments (for tool:start events) */
+  args?: any;
+  /** Tool result (for tool:result events) */
+  result?: { success?: boolean; output?: string };
+  /** Error message (for error events) */
+  error?: string;
+}
+
+/**
  * Node operational mode (v2.3).
  * Mode 1 = local-only (no P2P, no internet infra — works offline)
  * Mode 2 = P2P connected (no internet infra storage)
@@ -463,6 +503,10 @@ export interface CapabilityProfile {
   publicAddress?: string;
   /** Phase 97: Willing to accept compute task requests from peers. Set via /contribute claude-code. */
   shareCompute?: boolean;
+  /** #74: Whether capabilities have been verified via challenge-response. */
+  verified?: boolean;
+  /** #74: Timestamp of last successful capability verification. */
+  verifiedAt?: number;
   /** Optional details per capability */
   details?: {
     api_keys?: { providers: string[] };

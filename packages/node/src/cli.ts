@@ -240,6 +240,8 @@ async function main() {
   }
 
   // MongoDB storage via PANDO_STORAGE_URL env var
+  // NOTE: MongoDB URL is an ops concern. Long-term, it should be a contributed
+  // resource via /contribute, not a hardcoded URL or env var.
   let storageUrl = process.env.PANDO_STORAGE_URL;
   // Legacy: --storage flag (still accepted, maps to same path)
   const storageFlag = args.indexOf('--storage');

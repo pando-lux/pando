@@ -821,28 +821,47 @@ export class GovernanceSync {
     }
 
     if (totalVotes >= quorum) {
-      // Count votes
+      // #22: Use reputation-weighted voting when available, fall back to simple counting
       let votesFor = 0;
       let votesAgainst = 0;
       let votesAbstain = 0;
-
-      for (const vote of proposalVotes.values()) {
-        if (vote.choice === 'approve') votesFor++;
-        else if (vote.choice === 'reject') votesAgainst++;
-        else votesAbstain++;
-      }
-
-      // Phase 30.6: governance_change proposals need 80% approval threshold
-      const deciding = votesFor + votesAgainst;
-      if (deciding === 0) return; // All abstained — wait for more votes
-
       let outcome: 'passed' | 'rejected';
-      if (proposal.category === 'governance_change') {
-        const approvalRatio = votesFor / deciding;
-        outcome = approvalRatio >= GOVERNANCE_CHANGE_APPROVAL_THRESHOLD ? 'passed' : 'rejected';
+
+      const weightedResult = this.getWeightedVoteResult(proposalId);
+      if (weightedResult) {
+        // Use weighted vote result
+        votesFor = Math.round(weightedResult.approveWeight);
+        votesAgainst = Math.round(weightedResult.rejectWeight);
+        votesAbstain = Math.round(weightedResult.abstainWeight);
+
+        const deciding = weightedResult.approveWeight + weightedResult.rejectWeight;
+        if (deciding === 0) return; // All abstained — wait for more votes
+
+        if (proposal.category === 'governance_change') {
+          const approvalRatio = weightedResult.approveWeight / deciding;
+          outcome = approvalRatio >= GOVERNANCE_CHANGE_APPROVAL_THRESHOLD ? 'passed' : 'rejected';
+        } else {
+          outcome = weightedResult.approveWeight > weightedResult.rejectWeight ? 'passed' : 'rejected';
+        }
       } else {
-        // Simple majority of non-abstain votes
-        outcome = votesFor > votesAgainst ? 'passed' : 'rejected';
+        // Fallback: simple 1-per-peer counting (no reputation governance available)
+        for (const vote of proposalVotes.values()) {
+          if (vote.choice === 'approve') votesFor++;
+          else if (vote.choice === 'reject') votesAgainst++;
+          else votesAbstain++;
+        }
+
+        // Phase 30.6: governance_change proposals need 80% approval threshold
+        const deciding = votesFor + votesAgainst;
+        if (deciding === 0) return; // All abstained — wait for more votes
+
+        if (proposal.category === 'governance_change') {
+          const approvalRatio = votesFor / deciding;
+          outcome = approvalRatio >= GOVERNANCE_CHANGE_APPROVAL_THRESHOLD ? 'passed' : 'rejected';
+        } else {
+          // Simple majority of non-abstain votes
+          outcome = votesFor > votesAgainst ? 'passed' : 'rejected';
+        }
       }
 
       // Phase 30.4: Include review summary in the decision record if reviews exist
@@ -2356,6 +2375,35 @@ export class GovernanceSync {
       // Phase 30: Resolve stake on expiry
       this.resolveProposalStake(proposal.id, 'expired');
     }
+  }
+
+  /**
+   * Resubmit a proposal that is in 'revision_requested' state.
+   * Transitions it back to 'pending' (awaiting AI review) and resets vote counts.
+   * Only the original proposer can resubmit.
+   */
+  resubmitProposal(proposalId: string, requesterId?: string): boolean {
+    const proposal = this.proposals.get(proposalId);
+    if (!proposal) return false;
+    if (proposal.status !== 'revision_requested') {
+      console.warn(`[governance] Cannot resubmit proposal ${proposalId.slice(0, 8)} — status is '${proposal.status}', expected 'revision_requested'`);
+      return false;
+    }
+    if (requesterId && proposal.proposedBy !== requesterId) {
+      console.warn(`[governance] Cannot resubmit proposal ${proposalId.slice(0, 8)} — requester ${requesterId.slice(0, 12)} is not the original proposer`);
+      return false;
+    }
+
+    // Reset to active for new review cycle
+    proposal.status = 'active';
+    this.stmtUpdateProposalStatus.run('active', proposal.id);
+
+    // Clear existing votes for this proposal
+    this.votes.set(proposalId, new Map());
+
+    console.log(`[governance] Proposal "${proposal.title}" resubmitted (revision_requested → pending)`);
+    this.broadcastGovernanceActivity('proposal_created', `Proposal "${proposal.title}" resubmitted after revision`, proposal.id);
+    return true;
   }
 
   // ── Queries ──

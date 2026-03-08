@@ -101,10 +101,43 @@ const RATE_LIMITS: Record<string, { max: number; envVar: string; windowMs?: numb
   'POST /chat/message':              { max: 20, envVar: 'PANDO_RATE_CHAT', windowMs: 3600_000 },
   'POST /chat/threads/:id/message':  { max: 30, envVar: 'PANDO_RATE_CHAT_THREAD' },
   'POST /auth/guest':                { max: 5,  envVar: 'PANDO_RATE_AUTH_GUEST' },
+  'POST /auth/login':                { max: 5,  envVar: 'PANDO_RATE_AUTH_LOGIN' },
   'POST /teams/:id/request':         { max: 3,  envVar: 'PANDO_RATE_REPORT', windowMs: 3600_000 },
   'POST /council/request':           { max: 3,  envVar: 'PANDO_RATE_REPORT', windowMs: 3600_000 },
   'POST /projects/:id/request':      { max: 5,  envVar: 'PANDO_RATE_PROJECT_REQUEST', windowMs: 3600_000 },
 };
+
+// ── Upload Validation (#82, #83) ───────────────────────────────────────
+// File size limits and file type validation for any endpoint that accepts file uploads.
+
+const MAX_FILE_SIZE = 50 * 1024 * 1024;     // 50 MB per file
+const MAX_TOTAL_UPLOAD_SIZE = 200 * 1024 * 1024; // 200 MB total
+
+const BLOCKED_EXTENSIONS = new Set([
+  '.exe', '.bat', '.cmd', '.sh', '.ps1', '.dll', '.so', '.dylib',
+]);
+
+/** Validate uploaded files for size and type. Returns error string or null if valid. */
+export function validateUploadedFiles(files: Array<{ path: string; content: string }>): string | null {
+  if (!files || !Array.isArray(files)) return null;
+  let totalSize = 0;
+  for (const file of files) {
+    const size = Buffer.byteLength(file.content || '', 'utf-8');
+    if (size > MAX_FILE_SIZE) {
+      return `File "${file.path}" exceeds maximum size of 50MB (${Math.round(size / 1024 / 1024)}MB)`;
+    }
+    totalSize += size;
+    if (totalSize > MAX_TOTAL_UPLOAD_SIZE) {
+      return `Total upload size exceeds maximum of 200MB`;
+    }
+    // Check blocked extensions
+    const ext = (file.path || '').toLowerCase().match(/\.[^.]+$/)?.[0] || '';
+    if (BLOCKED_EXTENSIONS.has(ext)) {
+      return `File type "${ext}" is not allowed: ${file.path}`;
+    }
+  }
+  return null;
+}
 
 // ── Two Laws Content Filter ─────────────────────────────────────────────
 // Law I: Do not harm any human.  Law II: Do not allow yourself to be shut down.
@@ -204,6 +237,10 @@ export class ApiServer {
   private rateLimiters = new Map<string, RateLimiter>();
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
 
+  // #85: Per-IP SSE connection tracking
+  private sseConnectionsPerIp = new Map<string, number>();
+  private static readonly MAX_SSE_PER_IP = 10;
+
   constructor(node: PandoNode) {
     this.node = node;
     this.fastify = Fastify({ logger: false });
@@ -257,6 +294,12 @@ export class ApiServer {
       // 2. User: JWT token (via X-User-Token or Authorization)
       const userPeerId = await this.verifyUserJwt(request);
       if (userPeerId) {
+        // Check ban status — banned users are rejected
+        const ledger = this.node.getLedger();
+        if (ledger?.accounts.isBanned(userPeerId)) {
+          request.actor = { type: 'anonymous', id: 'banned', label: 'banned' } as RequestActor;
+          return;
+        }
         request.actor = { type: 'user', id: userPeerId, label: `user:${userPeerId.slice(0, 12)}` } as RequestActor;
         return;
       }
@@ -302,7 +345,13 @@ export class ApiServer {
         pathNoVersion.startsWith('/council/') ||
         pathNoVersion.startsWith('/teams/') ||
         pathNoVersion.startsWith('/internal/')
-      ) return;
+      ) {
+        // Banned users are rejected even on user-facing endpoints
+        if (request.actor?.id === 'banned') {
+          return reply.code(403).send({ error: 'Account is banned', code: 'BANNED' });
+        }
+        return;
+      }
 
       // Extract Bearer token from Authorization header
       const authHeader = request.headers.authorization;
@@ -477,6 +526,20 @@ export class ApiServer {
       getAvailableApiKeys: () => this.getAvailableApiKeys(),
       addSSEClient: (reply) => this.sseClients.add(reply),
       removeSSEClient: (reply) => this.sseClients.delete(reply),
+      // #85: SSE per-IP connection limiting
+      checkSSELimit: (ip: string) => {
+        const count = this.sseConnectionsPerIp.get(ip) || 0;
+        return count < ApiServer.MAX_SSE_PER_IP;
+      },
+      trackSSEConnection: (ip: string, delta: 1 | -1) => {
+        const current = this.sseConnectionsPerIp.get(ip) || 0;
+        const next = current + delta;
+        if (next <= 0) {
+          this.sseConnectionsPerIp.delete(ip);
+        } else {
+          this.sseConnectionsPerIp.set(ip, next);
+        }
+      },
       doormanClassify: (msg) => this.doormanClassify(msg),
       doormanChat: (msg, history) => this.doormanChat(msg, history),
       decryptIncomingMessage: (ct, n, tm, etk) => this.decryptIncomingMessage(ct, n, tm, etk),

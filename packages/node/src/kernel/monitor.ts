@@ -622,6 +622,85 @@ export class HealthMonitor extends EventEmitter {
     for (const cb of this.alertCallbacks) {
       try { cb(alert); } catch {}
     }
+
+    // Execute recovery action if one is defined and not on cooldown
+    this.executeRecoveryAction(type);
+  }
+
+  /**
+   * Execute a recovery action for the given alert type, if configured and not on cooldown.
+   */
+  private executeRecoveryAction(alertType: MonitorAlertType): void {
+    const recovery = this.recoveryActions.find(r => r.trigger === alertType && r.enabled);
+    if (!recovery) return;
+
+    // Cooldown check: skip if last trigger was within the cooldown window
+    if (recovery.lastTriggeredAt && (Date.now() - recovery.lastTriggeredAt) < recovery.cooldownMs) {
+      return;
+    }
+
+    recovery.triggerCount++;
+    recovery.lastTriggeredAt = Date.now();
+
+    console.log(`[monitor] Recovery action: ${recovery.action} (trigger: ${alertType}, count: ${recovery.triggerCount})`);
+    this.recordAudit({
+      action: recovery.action,
+      actor: 'monitor',
+      reason: `Alert triggered: ${alertType}`,
+      affectedResources: [],
+      outcome: 'pending',
+      detail: `Auto-recovery for ${alertType}: executing ${recovery.action}`,
+      relatedIds: {},
+    });
+
+    try {
+      switch (recovery.action) {
+        case 'restart_scheduler': {
+          const scheduler = this.getScheduler?.();
+          if (scheduler) {
+            scheduler.getStatus(); // verify it's accessible
+            // Emit event so external code (PandoNode) can handle the restart
+            this.emit('recovery:restart_scheduler');
+          }
+          break;
+        }
+        case 'force_gc': {
+          if (global.gc) {
+            global.gc();
+            console.log('[monitor] Recovery: forced garbage collection');
+          }
+          break;
+        }
+        case 'reduce_concurrency': {
+          this.emit('recovery:reduce_concurrency');
+          break;
+        }
+        case 'reconnect_bootstrap': {
+          this.emit('recovery:reconnect_bootstrap');
+          break;
+        }
+        case 'pause_spawning': {
+          this.emit('recovery:pause_spawning');
+          break;
+        }
+        case 'submit_diagnostic': {
+          this.emit('recovery:submit_diagnostic', { alertType });
+          break;
+        }
+        case 'log_only': {
+          // Intentionally no-op beyond the audit entry above
+          break;
+        }
+        default: {
+          console.warn(`[monitor] Unknown recovery action: ${recovery.action}`);
+          break;
+        }
+      }
+    } catch (err: any) {
+      console.error(`[monitor] Recovery action '${recovery.action}' failed: ${err.message}`);
+    }
+
+    this.saveRecoveryConfig();
   }
 
   /**
@@ -670,6 +749,38 @@ export class HealthMonitor extends EventEmitter {
     }
     // No metrics yet — return a baseline
     return this.collectMetrics();
+  }
+
+  /**
+   * #71: Get a concise health summary for the /health endpoint and decision makers.
+   * Returns current status, active alerts count, key metrics, and subsystem states.
+   */
+  getHealthSummary(): {
+    status: string;
+    activeAlerts: number;
+    criticalAlerts: number;
+    peerCount: number;
+    schedulerRunning: boolean;
+    memoryUsagePct: number;
+    eventLoopLagMs: number;
+    uptimeSeconds: number;
+    consecutiveFailures: number;
+    recentSuccessRate: number;
+  } {
+    const metrics = this.getCurrentMetrics();
+    const activeAlerts = this.alerts.filter(a => !a.resolved);
+    return {
+      status: metrics.nodeHealth,
+      activeAlerts: activeAlerts.length,
+      criticalAlerts: activeAlerts.filter(a => a.severity === 'critical').length,
+      peerCount: metrics.peerCount,
+      schedulerRunning: metrics.schedulerRunning,
+      memoryUsagePct: metrics.memoryUsage ? Math.round(metrics.memoryUsage.heapUsedFraction * 100) : 0,
+      eventLoopLagMs: metrics.eventLoopLagMs ?? 0,
+      uptimeSeconds: metrics.uptimeSeconds,
+      consecutiveFailures: metrics.consecutiveFailures,
+      recentSuccessRate: metrics.recentSuccessRate,
+    };
   }
 
   /**

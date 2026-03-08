@@ -54,6 +54,11 @@ export interface SchedulerStatus {
   approvedQueueLength?: number;
 }
 
+// ── Limits ──────────────────────────────────────────────────────────────────
+
+/** Maximum approved-queue size to prevent memory exhaustion from task spam. */
+const MAX_QUEUE_SIZE = 10_000;
+
 // ── Default config ──────────────────────────────────────────────────────────
 
 const DEFAULT_CONFIG: SchedulerConfig = {
@@ -93,6 +98,7 @@ export class Scheduler extends EventEmitter {
 
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private running = false;
+  private _polling = false;  // Guard against concurrent poll() calls
 
   // Per-task output streaming emitters (for SSE — kept for backward compat)
   private taskEmitters: Map<string, EventEmitter> = new Map();
@@ -103,6 +109,9 @@ export class Scheduler extends EventEmitter {
 
   // Reputation callback (Phase 10.3) — called on task complete/fail/timeout
   private reputationCallback?: (type: string, detail: string, metadata?: Record<string, any>) => void;
+
+  // #24: Reputation reader — used to prioritize approved queue by submitter reputation
+  private reputationScorer?: (nodeId: string) => number | null;
 
   private nodeCapabilities: string[] = [];
   private capabilityRegistry: CapabilityRegistry | null = null;
@@ -116,6 +125,9 @@ export class Scheduler extends EventEmitter {
   // Stored as `any` — AgentManager retrieves these when picking up tasks
   private approvedProfiles: Map<string, any> = new Map();
 
+  // #24: Track which manager approved each task (for reputation-based priority)
+  private approvedManagers: Map<string, string> = new Map();
+
   // Manager mode: callbacks fired when an approved task finishes execution
   private resultCallbacks: Map<string, (taskId: string, success: boolean, output: string) => void> = new Map();
 
@@ -127,8 +139,6 @@ export class Scheduler extends EventEmitter {
   constructor(
     config: Partial<SchedulerConfig>,
     taskQueue: TaskQueue,
-    _profileCache: any,       // Legacy — ignored (Phase 27)
-    _workspaceManager: any,   // Legacy — ignored (Phase 27)
     claudePath?: string,
     dataDir?: string,
     private rewardWork?: (workType: string, workProof: string) => void,
@@ -149,14 +159,6 @@ export class Scheduler extends EventEmitter {
    */
   setFileRegistry(registry: FileRegistry): void {
     this.fileRegistry = registry;
-  }
-
-  /**
-   * Get the BridgeQueue reference — REMOVED. Task results flow via EventEmitter.
-   * @deprecated — left as stub for any external callers. Returns null always.
-   */
-  getBridgeQueue(): null {
-    return null;
   }
 
   /**
@@ -281,27 +283,13 @@ export class Scheduler extends EventEmitter {
   }
 
   /**
-   * Set a callback for broadcasting high-scoring profiles (Phase 10.2).
-   * Phase 27: No-op — profile broadcasting moved to AgentManager.
+   * Set a reputation scorer function (#24). Used to prioritize the approved
+   * queue so tasks from higher-reputation managers are dequeued first.
+   * The scorer takes a nodeId and returns the reputation score, or null if unknown.
    */
-  setProfileBroadcaster(_fn: any): void {
-    // No-op — kept for backward compat with index.ts wiring
-  }
-
-  /**
-   * Set a callback for publishing graduated memories to the network.
-   * Phase 27: No-op — memory publishing moved to AgentManager.
-   */
-  setMemoryPublisher(_fn: any): void {
-    // No-op — kept for backward compat with index.ts wiring
-  }
-
-  /**
-   * Set a callback for injecting shared memories into workspaces.
-   * Phase 27: No-op — memory injection moved to AgentManager.
-   */
-  setMemoryInjector(_fn: any): void {
-    // No-op — kept for backward compat with index.ts wiring
+  setReputationScorer(scorer: (nodeId: string) => number | null): void {
+    this.reputationScorer = scorer;
+    console.log('[scheduler] ReputationScorer attached — tasks prioritized by submitter reputation');
   }
 
   setNodeCapabilities(capabilities: string[]): void {
@@ -338,6 +326,12 @@ export class Scheduler extends EventEmitter {
    * for pickup by the AgentManager.
    */
   async receiveApprovedTask(taskId: string, managerId: string, profile?: any): Promise<void> {
+    // Queue capacity check — prevent memory exhaustion from task spam
+    if (this.approvedQueue.length >= MAX_QUEUE_SIZE) {
+      console.error(`[scheduler] receiveApprovedTask: queue at capacity (${MAX_QUEUE_SIZE}), rejecting task ${taskId}`);
+      return;
+    }
+
     const task = this.taskQueue.getTask(taskId);
     if (!task) {
       console.error(`[scheduler] receiveApprovedTask: task ${taskId} not found`);
@@ -363,6 +357,9 @@ export class Scheduler extends EventEmitter {
       this.approvedProfiles.set(taskId, profile);
     }
 
+    // #24: Store the approving manager for reputation-based priority lookup
+    this.approvedManagers.set(taskId, managerId);
+
     console.log(`[scheduler] Received approved task ${taskId.slice(0, 8)} from manager ${managerId}: ${task.title}${profile ? ` (profile: ${profile.profileId})` : ''}`);
     this.taskQueue.pushTimelineEvent(taskId, {
       event: 'manager_approved',
@@ -370,7 +367,23 @@ export class Scheduler extends EventEmitter {
       metadata: { managerId, profileId: profile?.profileId },
     });
 
-    this.approvedQueue.push(taskId);
+    // #24: Insert into approved queue with reputation-based priority.
+    // Higher-reputation managers' tasks are placed earlier in the queue.
+    if (this.reputationScorer && this.approvedQueue.length > 0) {
+      const score = this.reputationScorer(managerId) ?? 0;
+      let insertIdx = this.approvedQueue.length; // default: end of queue
+      for (let i = 0; i < this.approvedQueue.length; i++) {
+        const existingManager = this.approvedManagers.get(this.approvedQueue[i]) || '';
+        const existingScore = this.reputationScorer(existingManager) ?? 0;
+        if (score > existingScore) {
+          insertIdx = i;
+          break;
+        }
+      }
+      this.approvedQueue.splice(insertIdx, 0, taskId);
+    } else {
+      this.approvedQueue.push(taskId);
+    }
 
     // Notify listeners (index.ts wires this to AgentManager's bridge queue)
     this.emit('task:approved', { taskId, managerId: task?.managerId || null });
@@ -394,6 +407,7 @@ export class Scheduler extends EventEmitter {
       if (task.status !== 'open') {
         this.approvedQueue.shift();
         this.approvedProfiles.delete(taskId);
+        this.approvedManagers.delete(taskId);
         continue;
       }
 
@@ -420,6 +434,7 @@ export class Scheduler extends EventEmitter {
         if (resourceReqs && resourceReqs.length > 0 && !this.capabilityRegistry.canExecuteLocally(resourceReqs)) {
           this.approvedQueue.shift();
           this.approvedProfiles.delete(taskId);
+          this.approvedManagers.delete(taskId);
           continue;
         }
       }
@@ -431,6 +446,7 @@ export class Scheduler extends EventEmitter {
       if (missing.length > 0) {
         this.approvedQueue.shift();
         this.approvedProfiles.delete(taskId);
+        this.approvedManagers.delete(taskId);
         continue;
       }
 
@@ -441,6 +457,7 @@ export class Scheduler extends EventEmitter {
           console.log(`[scheduler] Parent-done gate: rejecting task ${taskId.slice(0, 8)} — parent ${task.parentTask.slice(0, 8)} is ${parent.status}`);
           this.approvedQueue.shift();
           this.approvedProfiles.delete(taskId);
+          this.approvedManagers.delete(taskId);
           this.taskQueue.pushTimelineEvent(taskId, {
             event: 'rejected',
             detail: `Parent task ${parent.status}: ${task.parentTask}`,
@@ -461,6 +478,7 @@ export class Scheduler extends EventEmitter {
         console.log(`[scheduler] Dedup gate: rejecting task ${taskId.slice(0, 8)} — similar to recently completed ${dupTask.id.slice(0, 8)} ("${dupTask.title.slice(0, 60)}")`);
         this.approvedQueue.shift();
         this.approvedProfiles.delete(taskId);
+        this.approvedManagers.delete(taskId);
         this.taskQueue.pushTimelineEvent(taskId, {
           event: 'rejected',
           detail: `Similar task already completed: ${dupTask.id}`,
@@ -476,6 +494,7 @@ export class Scheduler extends EventEmitter {
       this.approvedQueue.shift();
       const profile = this.approvedProfiles.get(taskId);
       this.approvedProfiles.delete(taskId);
+      this.approvedManagers.delete(taskId);
       return { taskId, profile };
     }
 
@@ -606,30 +625,38 @@ export class Scheduler extends EventEmitter {
    */
   private async poll(): Promise<void> {
     if (!this.running) return;
+    if (this._polling) return;  // Previous poll still running — skip this cycle
+    this._polling = true;
 
-    this.cleanupCounter++;
+    try {
+      this.cleanupCounter++;
 
-    // Task expiry cleanup every poll cycle:
-    // - Open tasks >48h old → expired
-    // - Done/rejected/expired tasks >7d old → removed entirely
-    this.taskQueue.cleanupExpiredTasks();
+      // Task expiry cleanup every poll cycle:
+      // - Open tasks >48h old → expired
+      // - Claimed tasks >2h old → reset to open
+      // - In-progress tasks >4h old → reset to open
+      // - Done/rejected/expired tasks >7d old → removed entirely
+      this.taskQueue.cleanupExpiredTasks();
 
-    // Sweep stale taskEmitters every 10th cycle to prevent memory leaks (TD-11)
-    if (this.cleanupCounter % 10 === 0) {
-      this.sweepStaleEmitters();
-    }
+      // Sweep stale taskEmitters every 10th cycle to prevent memory leaks (TD-11)
+      if (this.cleanupCounter % 10 === 0) {
+        this.sweepStaleEmitters();
+      }
 
-    // BUG-02 safety net: Scan all in_progress parent tasks with children
-    // and auto-complete parents when all children are terminal (done/rejected).
-    if (this.cleanupCounter % 6 === 0) {
-      this.safetyNetParentCompletionScan();
-    }
+      // BUG-02 safety net: Scan all in_progress parent tasks with children
+      // and auto-complete parents when all children are terminal (done/rejected).
+      if (this.cleanupCounter % 6 === 0) {
+        this.safetyNetParentCompletionScan();
+      }
 
-    // Auto-archive old done/rejected tasks once per hour
-    const now = Date.now();
-    if (now - this.lastArchiveTime >= 3_600_000) {
-      this.lastArchiveTime = now;
-      this.taskQueue.archiveOldTasks();
+      // Auto-archive old done/rejected tasks once per hour
+      const now = Date.now();
+      if (now - this.lastArchiveTime >= 3_600_000) {
+        this.lastArchiveTime = now;
+        this.taskQueue.archiveOldTasks();
+      }
+    } finally {
+      this._polling = false;
     }
   }
 

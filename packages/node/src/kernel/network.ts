@@ -976,6 +976,10 @@ export class PandoNetwork {
                   console.warn(`[REJECTED] Invalid signature from ${fromPeer.slice(0, 16)}...`);
                   continue;
                 }
+              } else {
+                // Signed message from unknown peer — reject (cannot verify without public key)
+                console.warn(`[REJECTED] Signed message from unknown peer ${fromPeer.slice(0, 16)}... (no public key on file)`);
+                continue;
               }
             }
 

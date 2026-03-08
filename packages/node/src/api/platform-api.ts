@@ -27,9 +27,9 @@ export async function registerPlatformRoutes(
   async function sendToEngine(
     message: string,
     projectId?: string,
-  ): Promise<{ sent: boolean; response?: string }> {
+  ): Promise<{ sent: boolean; response?: string; error?: string }> {
     const adapter = node.getEngineAdapter();
-    if (!adapter?.available) return { sent: false };
+    if (!adapter?.available) return { sent: false, error: 'Engine not available' };
     try {
       const chunks: string[] = [];
       for await (const event of adapter.send(message, projectId)) {
@@ -40,7 +40,11 @@ export async function registerPlatformRoutes(
       return { sent: true, response: chunks.join('') };
     } catch (err: any) {
       console.error('[engine] sendToEngine failed:', err.message);
-      return { sent: false };
+      // #43: Return meaningful error message instead of silent failure
+      const reason = err.message?.includes('budget') || err.message?.includes('Budget')
+        ? 'Budget exhausted'
+        : err.message || 'Engine error';
+      return { sent: false, error: reason };
     }
   }
 
@@ -71,16 +75,30 @@ export async function registerPlatformRoutes(
       return { peerId: selfPeerId, isLocal: true };
     }
 
-    // Find best remote peer
+    // Find best remote peer — M-8/#12: Score by latency/load, fall back to random
     const remoteCandidates = candidates.filter((p: any) => p.peerId !== selfPeerId);
     if (remoteCandidates.length > 0) {
-      // TODO: score by latency/load — for now pick first available
-      return { peerId: remoteCandidates[0].peerId, isLocal: false };
+      // Sort by latency (lower is better) and active task count (lower is better)
+      const scored = remoteCandidates.map((p: any) => ({
+        ...p,
+        score: (p.latencyMs ? 1000 / (p.latencyMs + 1) : 0.5) + (p.activeTasks ? 10 / (p.activeTasks + 1) : 5),
+      }));
+      // If scoring data is available, pick the best; otherwise random selection for load distribution
+      const hasMetrics = scored.some((p: any) => p.latencyMs || p.activeTasks !== undefined);
+      if (hasMetrics) {
+        scored.sort((a: any, b: any) => b.score - a.score);
+        return { peerId: scored[0].peerId, isLocal: false };
+      }
+      // Random selection from candidates to distribute load evenly
+      const idx = Math.floor(Math.random() * remoteCandidates.length);
+      return { peerId: remoteCandidates[idx].peerId, isLocal: false };
     }
 
     return null;
   }
 
+    // NOTE: pando-node owns /v1/chat/message (user-facing chat via gateway).
+    // @pando-code/core owns /v1/chat (engine-level direct chat). Do not merge these routes.
     fastify.post('/chat/message', async (request: any, reply: any) => {
       const peerId = await deps.verifyUserJwt(request);
       if (!peerId) { reply.status(401).send({ error: 'Unauthorized' }); return; }
@@ -1526,6 +1544,21 @@ export async function registerPlatformRoutes(
         return reply.code(403).send({ error: 'Only the owner can publish this content' });
       }
 
+      // #47: Content safety check — block publish if safety score is below threshold
+      const safetyReviewer = node.getContentSafetyReviewer();
+      if (safetyReviewer && existing.repoUrl) {
+        // Check if there's an existing review for this content
+        const existingReviews = safetyReviewer.getReviewHistory(request.params.id);
+        const latestReview = existingReviews[0];
+        if (latestReview && !latestReview.passed) {
+          return reply.code(403).send({
+            error: 'Content blocked by safety review',
+            safetyScore: latestReview.score,
+            findings: latestReview.findings.length,
+          });
+        }
+      }
+
       // Set status to live
       const updated = registry.update(request.params.id, { status: 'live' });
       if (!updated) return reply.code(500).send({ error: 'Publish failed' });
@@ -2825,6 +2858,16 @@ export async function registerPlatformRoutes(
       }
 
       const report = await ps.createReport(id, userId, body.reason as any, body.description);
+
+      // #49: Run content safety review and write score back to the report
+      const safetyReviewer = node.getContentSafetyReviewer?.();
+      if (safetyReviewer) {
+        try {
+          const review = await safetyReviewer.reviewContent([], { contentId: report.id });
+          await ps.updateReportStatus(report.id, report.status, undefined, undefined, review.score);
+        } catch { /* non-fatal — report created without safety score */ }
+      }
+
       return reply.code(201).send({ report });
     });
 
@@ -3649,29 +3692,5 @@ export async function registerPlatformRoutes(
 
     // Phase 53.1/65: Legacy /apps/data + deploy + static serving routes REMOVED.
     // All app lifecycle is now managed by AppManager (see app-api.ts).
-
-  // ==========================================================================
-  // Phase 105: Agent Template CRUD — removed (brain now in @pando-code/core)
-  // ==========================================================================
-
-  fastify.get('/templates', async (_request: any, reply: any) => {
-    return reply.code(503).send({ error: 'Template registry removed — brain now in @pando-code/core' });
-  });
-
-  fastify.get('/templates/:id', async (_request: any, reply: any) => {
-    return reply.code(503).send({ error: 'Template registry removed — brain now in @pando-code/core' });
-  });
-
-  fastify.post('/templates', async (_request: any, reply: any) => {
-    return reply.code(503).send({ error: 'Template registry removed — brain now in @pando-code/core' });
-  });
-
-  fastify.put('/templates/:id', async (_request: any, reply: any) => {
-    return reply.code(503).send({ error: 'Template registry removed — brain now in @pando-code/core' });
-  });
-
-  fastify.delete('/templates/:id', async (_request: any, reply: any) => {
-    return reply.code(503).send({ error: 'Template registry removed — brain now in @pando-code/core' });
-  });
 
 }

@@ -18,7 +18,10 @@
 import { join as pathJoin } from 'node:path';
 import { existsSync } from 'node:fs';
 import { homedir } from 'node:os';
+import { randomUUID } from 'node:crypto';
 import type { ResourceRegistry } from '../platform/resource-registry.js';
+import { STREAM_EVENT_VERSION } from '@pando/shared';
+import type { StreamEvent } from '@pando/shared';
 
 // ─── Two Laws Content Filter (defense-in-depth at storage level) ─────────
 // Duplicated from api-server.ts so the storage layer rejects harmful content
@@ -64,6 +67,9 @@ const MODEL_PRICING: Record<string, [number, number]> = {
   'gemini-2.0-flash': [0.0000001,  0.0000004],
 };
 
+// Daily emission cap — mirrors DAILY_EMISSION_CAP from @pando/shared for budget boundary enforcement
+const DAILY_EMISSION_CAP_LUX = 500;
+
 function createLuxBudgetProvider(luxPerUsd = 100) {
   return {
     currency: 'lux' as const,
@@ -76,7 +82,15 @@ function createLuxBudgetProvider(luxPerUsd = 100) {
       }
       if (!prices) prices = [0.0000025, 0.00001];
       const usd = (usage.inputTokens * prices[0]) + (usage.outputTokens * prices[1]);
-      return usd * luxPerUsd;
+      let luxCost = usd * luxPerUsd;
+
+      // H-1: Cap converted amount so a single task can't exceed DAILY_EMISSION_CAP
+      if (luxCost > DAILY_EMISSION_CAP_LUX) {
+        console.warn(`[LuxBudget] Task Lux cost ${luxCost.toFixed(2)} exceeds daily emission cap (${DAILY_EMISSION_CAP_LUX}). Capping to ${DAILY_EMISSION_CAP_LUX} Lux.`);
+        luxCost = DAILY_EMISSION_CAP_LUX;
+      }
+
+      return luxCost;
     },
   };
 }
@@ -283,7 +297,8 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
             return { success: true, output: JSON.stringify({ path: workDir, status: 'cloned', repo, branch }) };
           }
         } catch (err: any) {
-          return { success: false, output: `pando_workspace failed: ${err.message}` };
+          console.error(`[engine-adapter] pando_workspace failed: ${err.message}`);
+          return { success: false, output: 'pando_workspace failed: internal error' };
         }
       },
     },
@@ -421,6 +436,7 @@ export class EngineAdapter {
   private started = false;
   private Database: any = null;  // better-sqlite3 constructor (cached at startup)
   private projectTicks = new Set<string>();  // Track which projects have scheduler ticks
+  private projectIntervals = new Map<string, NodeJS.Timeout>();  // projectId → tick interval (keyed to prevent leaks)
   private activeTeams = new Map<string, { dbPath: string; agents: TeamAgentConfig[]; intervals: any[] }>();
 
   /** Whether the adapter is ready (pando-code loaded + pool started). */
@@ -433,6 +449,14 @@ export class EngineAdapter {
    * Start the adapter: load pando-code, create pool, boot system engine.
    */
   async start(config: AdapterConfig): Promise<void> {
+    // Validate dataDir: must be a non-empty absolute path. Fall back to default if invalid.
+    if (config.dataDir) {
+      const isAbsolute = config.dataDir.startsWith('/') || /^[A-Za-z]:[/\\]/.test(config.dataDir);
+      if (typeof config.dataDir !== 'string' || !config.dataDir.trim() || !isAbsolute) {
+        console.warn(`[EngineAdapter] Invalid dataDir "${config.dataDir}" — falling back to default`);
+        config.dataDir = pathJoin(homedir(), '.pando');
+      }
+    }
     this.config = config;
 
     // Load pando-code dynamically
@@ -456,10 +480,15 @@ export class EngineAdapter {
     // Do NOT override defaultModel — let PandoCode use its own configured provider/model.
     // Contributors choose their own provider (Gemini, OpenAI, Anthropic, Ollama).
     this.pool = new _EnginePool({
+      /** defaultModel: Override PandoCode's default model selection. Only set when
+       *  the node operator explicitly specifies a model via CLI/config. When omitted,
+       *  PandoCode uses its own configured provider/model from ~/.pando-code/config. */
       ...(config.model ? { defaultModel: config.model } : {}),
       defaultRole: 'lead',
       maxEngines: 20,
       idleTTLMs: 30 * 60 * 1000,
+      // skipKnowledgeSync: Disables PandoCode's internal knowledge base sync on engine creation.
+      // Pando nodes manage their own data sync via P2P — PandoCode's KB sync would be redundant.
       skipKnowledgeSync: true,
       onAfterCreate: async (id: string, engine: any) => {
         // Inject Lux budget
@@ -501,9 +530,11 @@ export class EngineAdapter {
    * Send a message to an engine. Routes by projectId.
    * No projectId → system engine.
    * Project engines get a dedicated workspace directory under dataDir/projects/.
+   * Includes a configurable timeout (default 300s) — if the engine hangs, yields
+   * an error event and returns instead of blocking forever.
    */
-  async *send(message: string, projectId?: string): AsyncGenerator<any> {
-    if (!this.pool) throw new Error('EngineAdapter not started');
+  async *send(message: string, projectId?: string, timeoutMs = 300_000): AsyncGenerator<any> {
+    this.requirePool();
     const id = projectId || 'system';
 
     // Ensure project workspace exists
@@ -517,7 +548,35 @@ export class EngineAdapter {
       await this.pool.getOrCreate(id, { projectPath: projectDir });
     }
 
-    yield* this.pool.send(id, message);
+    // Wrap the engine's async generator with a timeout.
+    // If no event is yielded within timeoutMs, yield an error and return.
+    const source = this.pool.send(id, message);
+    const iterator = source[Symbol.asyncIterator]();
+    let done = false;
+
+    while (!done) {
+      const result = await Promise.race([
+        iterator.next(),
+        new Promise<{ value: any; done: true }>((_, reject) =>
+          setTimeout(() => reject(new Error(`Engine execution timed out after ${timeoutMs}ms`)), timeoutMs)
+        ),
+      ]).catch((err: Error) => {
+        done = true;
+        return { value: { type: 'error', error: err.message }, done: false as const };
+      });
+
+      if (result.done) {
+        done = true;
+      } else {
+        yield result.value;
+        // If we yielded a timeout error, stop the iteration
+        if (result.value?.type === 'error' && done) {
+          // Try to clean up the source iterator
+          iterator.return?.();
+          return;
+        }
+      }
+    }
   }
 
   /**
@@ -643,14 +702,38 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     }
   }
 
+  /** M2-2: Guard — throws if pool is not initialized (start() not called). */
+  private requirePool(): void {
+    if (!this.pool) throw new Error('EngineAdapter not started — call start() first');
+  }
+
+  /**
+   * H-2 + H-3: Normalize a raw PandoCode engine event into a typed StreamEvent
+   * with protocol version. Use this when forwarding events to API consumers
+   * who need a stable, versioned contract.
+   */
+  static normalizeStreamEvent(raw: any): StreamEvent {
+    return {
+      type: raw.type ?? 'unknown',
+      version: STREAM_EVENT_VERSION,
+      ...(raw.content !== undefined ? { content: raw.content } : {}),
+      ...(raw.toolName !== undefined ? { toolName: raw.toolName } : {}),
+      ...(raw.args !== undefined ? { args: raw.args } : {}),
+      ...(raw.result !== undefined ? { result: raw.result } : {}),
+      ...(raw.error !== undefined ? { error: raw.error } : {}),
+    };
+  }
+
   /** List active engines with metadata. */
   getActiveEngines(): any[] {
-    return this.pool?.getActive() ?? [];
+    if (!this.pool) return [];
+    return this.pool.getActive() ?? [];
   }
 
   /** Check if a project engine exists. */
   hasEngine(projectId: string): boolean {
-    return this.pool?.has(projectId) ?? false;
+    if (!this.pool) return false;
+    return this.pool.has(projectId) ?? false;
   }
 
   /** Get scheduler info. */
@@ -728,7 +811,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     if (!teamData?.dbPath || !this.Database) return false;
     try {
       const db = new this.Database(teamData.dbPath);
-      const uuid = `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const uuid = randomUUID();
       const key = `msg:${toAgentId}:${uuid}`;
       const value = JSON.stringify({ from: fromAgentId, message, timestamp: new Date().toISOString() });
       const ttl = new Date(Date.now() + 3600_000).toISOString(); // 1 hour
@@ -747,14 +830,16 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
    * Update a team board task's status and/or progress.
    */
   updateTeamBoardTask(teamId: string, taskId: string, updates: { status?: string; progress?: string }): boolean {
+    // Whitelist of allowed board_tasks columns — defense-in-depth against SQL injection
+    const ALLOWED_COLUMNS = new Set(['status', 'progress']);
     const teamData = this.activeTeams.get(teamId);
     if (!teamData?.dbPath || !this.Database) return false;
     try {
       const db = new this.Database(teamData.dbPath);
       const sets: string[] = [];
       const vals: any[] = [];
-      if (updates.status) { sets.push('status = ?'); vals.push(updates.status); }
-      if (updates.progress !== undefined) { sets.push('progress = ?'); vals.push(updates.progress); }
+      if (updates.status && ALLOWED_COLUMNS.has('status')) { sets.push('status = ?'); vals.push(updates.status); }
+      if (updates.progress !== undefined && ALLOWED_COLUMNS.has('progress')) { sets.push('progress = ?'); vals.push(updates.progress); }
       if (sets.length === 0) { db.close(); return false; }
       vals.push(taskId);
       db.prepare(`UPDATE board_tasks SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
@@ -782,7 +867,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       } catch (err: any) {
         console.error(`[team:${teamId}] ${agentId} trigger error: ${err.message}`);
       }
-    })();
+    })().catch(err => console.error('[engine-adapter] unhandled async error:', err));
   }
 
   /**
@@ -852,7 +937,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         return existing.id;
       }
 
-      const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const id = `task-${randomUUID()}`;
       // Get latest session_id for the FK constraint and next order value
       const session = db.prepare(
         `SELECT id FROM sessions ORDER BY created_at DESC LIMIT 1`
@@ -884,6 +969,10 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
     this.projectTicks.add(projectId);
 
+    // Clear any existing interval for this project before creating a new one
+    const existing = this.projectIntervals.get(projectId);
+    if (existing) clearInterval(existing);
+
     // Project ticks run every 6 hours (less urgent than team lead's 15 min)
     const projectTickMs = 6 * 60 * 60_000;
     const tickInterval = setInterval(async () => {
@@ -903,11 +992,21 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       }
     }, projectTickMs);
 
-    // Store for cleanup
-    if (!(this as any)._projectIntervals) (this as any)._projectIntervals = [];
-    (this as any)._projectIntervals.push(tickInterval);
+    // Store in Map keyed by projectId (prevents unbounded accumulation)
+    this.projectIntervals.set(projectId, tickInterval);
 
     console.log(`[EngineAdapter] Project "${projectId}" scheduler tick registered (every 6h).`);
+  }
+
+  /**
+   * Stop all project tick intervals and clear the Map. Call on shutdown.
+   */
+  stopProjectTicks(): void {
+    for (const [projectId, interval] of this.projectIntervals) {
+      clearInterval(interval);
+    }
+    this.projectIntervals.clear();
+    this.projectTicks.clear();
   }
 
   /**

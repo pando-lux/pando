@@ -1,6 +1,40 @@
 import { sign, verify } from '../core/signing.js';
 import { JWT_EXPIRY_SECONDS } from '../constants.js';
+import { randomBytes } from 'node:crypto';
 import type { JwtPayload } from '../types.js';
+
+// ── Token Blacklist (#36: JWT revocation) ──────────────────────────────
+// In-memory blacklist of revoked token IDs (jti).
+// Entries are cleaned up periodically when they expire.
+
+const tokenBlacklist = new Map<string, number>(); // jti → exp (seconds)
+let blacklistCleanupTimer: ReturnType<typeof setInterval> | null = null;
+
+function ensureBlacklistCleanup(): void {
+  if (blacklistCleanupTimer) return;
+  blacklistCleanupTimer = setInterval(() => {
+    const now = Math.floor(Date.now() / 1000);
+    for (const [jti, exp] of tokenBlacklist) {
+      if (exp <= now) {
+        tokenBlacklist.delete(jti);
+      }
+    }
+  }, 5 * 60_000); // Clean up every 5 minutes
+  blacklistCleanupTimer.unref(); // Don't prevent process exit
+}
+
+/** Revoke a token by its jti (unique token ID). */
+export function revokeToken(jti: string, exp?: number): void {
+  // Default expiry: 24 hours from now if not specified
+  const expiry = exp || Math.floor(Date.now() / 1000) + JWT_EXPIRY_SECONDS;
+  tokenBlacklist.set(jti, expiry);
+  ensureBlacklistCleanup();
+}
+
+/** Check if a token has been revoked. */
+export function isRevoked(jti: string): boolean {
+  return tokenBlacklist.has(jti);
+}
 
 /**
  * Issue a Pando JWT signed with the node's Ed25519 private key.
@@ -20,6 +54,7 @@ export async function issueJwt(
     iat: now,
     exp: now + (opts?.expirySeconds ?? JWT_EXPIRY_SECONDS),
     typ: opts?.typ ?? 'human',
+    jti: randomBytes(16).toString('hex'),
   };
 
   const headerB64 = toBase64Url(JSON.stringify(header));
@@ -34,7 +69,7 @@ export async function issueJwt(
 
 /**
  * Verify and decode a Pando JWT against the node's Ed25519 public key.
- * Returns the payload if valid, null if invalid or expired.
+ * Returns the payload if valid, null if invalid, expired, or revoked.
  */
 export async function verifyJwt(
   token: string,
@@ -58,6 +93,8 @@ export async function verifyJwt(
     const payload: JwtPayload = JSON.parse(fromBase64Url(payloadB64));
     const now = Math.floor(Date.now() / 1000);
     if (payload.exp <= now) return null;
+    // #36: Check blacklist for revoked tokens
+    if (payload.jti && isRevoked(payload.jti)) return null;
     return payload;
   } catch {
     return null;

@@ -263,11 +263,13 @@ export class ReputationManager {
 
   /**
    * Score formula:
-   *   (tasksCompleted * 2) + (buildPassRate * 10) + (testPassRate * 10)
-   *   - (tasksFailed * 3) - (tasksTimedOut * 5) + (profilesContributed * 1)
+   *   base = (tasksCompleted * 2) + (buildPassRate * 10) + (testPassRate * 10)
+   *          - (tasksFailed * 3) - (tasksTimedOut * 5) + (profilesContributed * 1)
+   *   #23: Apply time-based decay: score * max(0.1, 1 - daysSinceLastActive/180)
+   *   Inactive nodes lose up to 90% of their score over 180 days.
    */
   computeScore(record: ReputationRecord): number {
-    return (
+    const base = (
       (record.tasksCompleted * 2) +
       (record.buildPassRate * 10) +
       (record.testPassRate * 10) -
@@ -275,6 +277,11 @@ export class ReputationManager {
       (record.tasksTimedOut * 5) +
       (record.profilesContributed * 1)
     );
+
+    // #23: Apply time-based decay for inactive nodes
+    const daysSinceLastActive = (Date.now() - (record.lastUpdated || Date.now())) / (24 * 60 * 60 * 1000);
+    const decayFactor = Math.max(0.1, 1 - (daysSinceLastActive / 180));
+    return base * decayFactor;
   }
 
   /**

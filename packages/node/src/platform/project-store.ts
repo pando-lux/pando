@@ -202,6 +202,8 @@ export class ProjectStore {
   private backend: StorageBackend;
   // Phase 63: Write-through callback to P2P ProjectRegistry
   private broadcastToP2P: ((action: 'register' | 'update' | 'archive', project: any) => void) | null = null;
+  // #48: Callback to cancel running tasks when a project is archived
+  private taskCanceller: ((projectId: string) => void) | null = null;
 
   constructor(db: Database.Database, storageBackend: StorageBackend) {
     if (!storageBackend) {
@@ -214,6 +216,11 @@ export class ProjectStore {
   /** Phase 63: Set callback to broadcast project changes to P2P ProjectRegistry. */
   setBroadcastCallback(cb: (action: 'register' | 'update' | 'archive', project: any) => void): void {
     this.broadcastToP2P = cb;
+  }
+
+  /** #48: Set callback to cancel running tasks when a project is archived. */
+  setTaskCanceller(cb: (projectId: string) => void): void {
+    this.taskCanceller = cb;
   }
 
   /**
@@ -661,6 +668,11 @@ export class ProjectStore {
       // Phase 63: Broadcast archive to P2P
       if (this.broadcastToP2P && archived) {
         try { this.broadcastToP2P('archive', archived); } catch { /* ignore */ }
+      }
+
+      // #48: Cancel running tasks associated with this project
+      if (this.taskCanceller) {
+        try { this.taskCanceller(projectId); } catch { /* ignore */ }
       }
     }
     return result.changes > 0;
@@ -1850,6 +1862,11 @@ export class ProjectStore {
   async resolveReport(reportId: string, reviewedBy: string, action: ReportAction): Promise<void> {
     const report = this.getReport(reportId);
     if (!report) return;
+
+    // #8: Transition through 'reviewing' status before resolving
+    if (report.status === 'pending') {
+      await this.updateReportStatus(reportId, 'reviewing', reviewedBy);
+    }
 
     await this.updateReportStatus(reportId, 'resolved', reviewedBy);
 

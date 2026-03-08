@@ -104,6 +104,8 @@ export {
   issueJwt,
   verifyJwt,
   decodeJwtPayload,
+  revokeToken,
+  isRevoked,
 } from './auth/jwt.js';
 
 // Auth: Password hashing (scrypt)

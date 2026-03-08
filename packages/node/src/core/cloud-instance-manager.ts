@@ -39,6 +39,8 @@ export class CloudInstanceManager {
   private node: PandoNode;
   private db: Database.Database | null = null;
   private instances: Map<string, CloudInstanceRecord> = new Map();
+  // #52: Mutex to prevent concurrent security group creation races
+  private sgCreationLock: Promise<string> | null = null;
 
   constructor(node: PandoNode) {
     this.node = node;
@@ -204,37 +206,59 @@ export class CloudInstanceManager {
     const instanceId = runResult.Instances?.[0]?.InstanceId;
     if (!instanceId) throw new Error('EC2 RunInstances returned no instance ID');
 
-    // 6. Create record
-    const record: CloudInstanceRecord = {
-      instanceId,
-      resourceId,
-      region,
-      instanceType,
-      publicIp: null,
-      peerId: null,
-      status: 'launching',
-      launchedAt: Date.now(),
-      terminatedAt: null,
-      mode: 'compute',
-      apps: [],
-      error: null,
-    };
+    // Post-launch steps wrapped in try-catch — if anything fails, terminate the
+    // instance to prevent orphaned EC2 instances from accumulating billing.
+    try {
+      // 6. Create record
+      const record: CloudInstanceRecord = {
+        instanceId,
+        resourceId,
+        region,
+        instanceType,
+        publicIp: null,
+        peerId: null,
+        status: 'launching',
+        launchedAt: Date.now(),
+        terminatedAt: null,
+        mode: 'compute',
+        apps: [],
+        error: null,
+      };
 
-    this.instances.set(instanceId, record);
-    this.persistInstance(record);
+      this.instances.set(instanceId, record);
+      this.persistInstance(record);
 
-    // 7. Poll for public IP (non-blocking)
-    this.pollForPublicIp(ec2, instanceId, DescribeInstancesCommand).catch(err => {
-      console.error(`[cloud] Failed to get public IP for ${instanceId}: ${(err as Error).message}`);
-    });
+      // #53: Await IP polling before returning — callers need IP to be available
+      try {
+        await this.pollForPublicIp(ec2, instanceId, DescribeInstancesCommand);
+      } catch (err) {
+        console.error(`[cloud] Failed to get public IP for ${instanceId}: ${(err as Error).message}`);
+      }
 
-    // 8. Wipe credentials from local scope
-    // (JavaScript GC will handle the rest, but null out references)
-    (creds as any).accessKeyId = '';
-    (creds as any).secretAccessKey = '';
+      // 8. Wipe credentials from local scope
+      // (JavaScript GC will handle the rest, but null out references)
+      (creds as any).accessKeyId = '';
+      (creds as any).secretAccessKey = '';
 
-    console.log(`[cloud] Instance ${instanceId} launched. Waiting for P2P connection...`);
-    return record;
+      // Re-read record after IP polling (may have been updated)
+      const updatedRecord = this.instances.get(instanceId) || record;
+      console.log(`[cloud] Instance ${instanceId} launched${updatedRecord.publicIp ? ` at ${updatedRecord.publicIp}` : ' (no IP yet)'}. Waiting for P2P connection...`);
+      return updatedRecord;
+    } catch (postLaunchErr: any) {
+      // Post-launch steps failed — terminate the instance to prevent orphaned billing
+      console.error(`[cloud] Post-launch setup failed for ${instanceId}: ${postLaunchErr.message}. Terminating orphaned instance...`);
+      try {
+        const { TerminateInstancesCommand } = await import('@aws-sdk/client-ec2');
+        await ec2.send(new TerminateInstancesCommand({ InstanceIds: [instanceId] }));
+        console.log(`[cloud] Orphaned instance ${instanceId} terminated.`);
+      } catch (terminateErr: any) {
+        console.error(`[cloud] CRITICAL: Failed to terminate orphaned instance ${instanceId}: ${terminateErr.message}. Manual cleanup required!`);
+      }
+      // Wipe credentials before re-throwing
+      (creds as any).accessKeyId = '';
+      (creds as any).secretAccessKey = '';
+      throw postLaunchErr;
+    }
   }
 
   /**
@@ -486,8 +510,22 @@ export class CloudInstanceManager {
   /**
    * Ensure the pando-compute-node security group exists in the region.
    * Returns the security group ID. Throws on failure (never returns null).
+   * #52: Uses a lock to prevent concurrent launches from creating duplicate groups.
    */
   private async ensureSecurityGroup(ec2: any, region: string, commands: any): Promise<string> {
+    // #52: Serialize concurrent security group creation attempts
+    if (this.sgCreationLock) {
+      return this.sgCreationLock;
+    }
+    this.sgCreationLock = this.doEnsureSecurityGroup(ec2, region, commands);
+    try {
+      return await this.sgCreationLock;
+    } finally {
+      this.sgCreationLock = null;
+    }
+  }
+
+  private async doEnsureSecurityGroup(ec2: any, region: string, commands: any): Promise<string> {
     // Check if it already exists
     try {
       const existing = await ec2.send(new commands.DescribeSecurityGroupsCommand({
@@ -502,13 +540,30 @@ export class CloudInstanceManager {
       console.log(`[cloud] Security group lookup failed: ${(err as Error).message}. Creating new one.`);
     }
 
-    // Create new security group
-    const createResult = await ec2.send(new commands.CreateSecurityGroupCommand({
-      GroupName: SECURITY_GROUP_NAME,
-      Description: 'Pando compute node - P2P + API only, no SSH',
-    }));
-    const sgId = createResult.GroupId;
-    if (!sgId) throw new Error('CreateSecurityGroup returned no GroupId');
+    // Create new security group — catch GroupAlreadyExists from concurrent creation
+    let sgId: string;
+    try {
+      const createResult = await ec2.send(new commands.CreateSecurityGroupCommand({
+        GroupName: SECURITY_GROUP_NAME,
+        Description: 'Pando compute node - P2P + API only, no SSH',
+      }));
+      sgId = createResult.GroupId;
+      if (!sgId) throw new Error('CreateSecurityGroup returned no GroupId');
+    } catch (err: any) {
+      // #52: Handle race condition — another concurrent launch created the group
+      if (err.name === 'InvalidGroup.Duplicate' || err.Code === 'InvalidGroup.Duplicate'
+          || err.message?.includes('already exists')) {
+        console.log(`[cloud] Security group already exists (concurrent creation). Looking up...`);
+        const existing = await ec2.send(new commands.DescribeSecurityGroupsCommand({
+          Filters: [{ Name: 'group-name', Values: [SECURITY_GROUP_NAME] }],
+        }));
+        if (existing.SecurityGroups?.length > 0) {
+          return existing.SecurityGroups[0].GroupId;
+        }
+        throw new Error('Security group creation race: group exists but lookup failed');
+      }
+      throw err;
+    }
 
     // Allow P2P, API, and app ports. No SSH (port 22) — intentional.
     await ec2.send(new commands.AuthorizeSecurityGroupIngressCommand({

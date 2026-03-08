@@ -517,12 +517,16 @@ export class TaskDatabase {
   /**
    * Cleanup expired tasks:
    * 1. Open tasks older than 48h → mark as "expired"
-   * 2. Done/rejected/expired tasks older than 7 days → delete entirely
+   * 2. Claimed tasks older than 2h → reset to "open" (so they can be reclaimed)
+   * 3. In-progress tasks older than 4h → reset to "open" (so they can be reclaimed)
+   * 4. Done/rejected/expired tasks older than 7 days → delete entirely
    * Returns { expired, removed } counts.
    */
   cleanupExpiredTasks(): { expired: number; removed: number } {
     const now = Date.now();
     const expireCutoff = now - (48 * 60 * 60 * 1000);    // 48 hours
+    const claimedCutoff = now - (2 * 60 * 60 * 1000);     // 2 hours
+    const inProgressCutoff = now - (4 * 60 * 60 * 1000);  // 4 hours
     const removeCutoff = now - (7 * 24 * 60 * 60 * 1000); // 7 days
 
     // Step 1: Expire stale open tasks (>48h old)
@@ -530,7 +534,17 @@ export class TaskDatabase {
       "UPDATE tasks SET status = 'expired', updated_at = ? WHERE status = 'open' AND created_at < ?"
     ).run(now, expireCutoff);
 
-    // Step 2: Delete old terminal tasks (done/rejected/expired >7 days old)
+    // Step 2: Reset stale claimed tasks (>2h) back to open so they can be reclaimed
+    const claimedResult = this.db.prepare(
+      "UPDATE tasks SET status = 'open', claimed_by_node = NULL, claimed_at = NULL, assigned_to = NULL, updated_at = ? WHERE status = 'claimed' AND claimed_at < ?"
+    ).run(now, claimedCutoff);
+
+    // Step 3: Reset stale in_progress tasks (>4h) back to open so they can be reclaimed
+    const inProgressResult = this.db.prepare(
+      "UPDATE tasks SET status = 'open', claimed_by_node = NULL, claimed_at = NULL, assigned_to = NULL, executed_by_node = NULL, updated_at = ? WHERE status = 'in_progress' AND updated_at < ?"
+    ).run(now, inProgressCutoff);
+
+    // Step 4: Delete old terminal tasks (done/rejected/expired >7 days old)
     // First get the IDs so we can clean up related tables
     const oldTerminalRows = this.db.prepare(
       "SELECT id FROM tasks WHERE status IN ('done', 'rejected', 'expired') AND updated_at < ?"
@@ -561,7 +575,7 @@ export class TaskDatabase {
       removed = ids.length;
     }
 
-    return { expired: expireResult.changes, removed };
+    return { expired: expireResult.changes + claimedResult.changes + inProgressResult.changes, removed };
   }
 
   // =========================================================================

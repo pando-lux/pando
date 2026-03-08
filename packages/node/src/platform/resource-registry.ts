@@ -21,6 +21,12 @@ import { randomUUID } from 'node:crypto';
 
 export const TOPIC_RESOURCES = 'pando/resources';
 
+/** Minimal ledger interface for Lux charges (#5) */
+interface LedgerLike {
+  transfer(from: string, to: string, amount: number): any;
+  accounts: { getBalance(peerId: string): number };
+}
+
 export class ResourceRegistry {
   private network: PandoNetwork;
   private localPeerId: string;
@@ -28,15 +34,17 @@ export class ResourceRegistry {
   private credentialStore: CredentialStore | null = null;
   // P2P proxy: used by non-secure nodes to request credential decryption from compute peers
   private p2pCredentialProxy: ((resourceId: string, type: string) => Promise<string | null>) | null = null;
+  // #5: Ledger for charging pricePerUnit
+  private ledger: LedgerLike | null = null;
 
   private resources: Map<string, ResourceRecord> = new Map();
   private processedIds: Set<string> = new Set();
   private cleanupInterval: ReturnType<typeof setInterval> | null = null;
 
-  // SQLite prepared statements
-  private stmtInsert!: Database.Statement;
-  private stmtUpdateStatus!: Database.Statement;
-  private stmtUpdateUserId!: Database.Statement;
+  // SQLite prepared statements — lazily prepared and re-prepared on error (M2-3)
+  private _stmtInsert: Database.Statement | null = null;
+  private _stmtUpdateStatus: Database.Statement | null = null;
+  private _stmtUpdateUserId: Database.Statement | null = null;
 
   constructor(network: PandoNetwork, localPeerId: string, db: Database.Database) {
     this.network = network;
@@ -44,10 +52,45 @@ export class ResourceRegistry {
     this.db = db;
   }
 
+  /** M2-3: Lazy statement preparation — prepares on first use, re-prepares on error. */
+  private get stmtInsert(): Database.Statement {
+    if (!this._stmtInsert) {
+      this._stmtInsert = this.db.prepare(`
+        INSERT OR REPLACE INTO resource_registry
+        (resource_id, type, user_id, granted_to, max_usage_per_day, price_per_unit, registered_at, expires_at, status, metadata)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+    }
+    return this._stmtInsert;
+  }
+  private get stmtUpdateStatus(): Database.Statement {
+    if (!this._stmtUpdateStatus) {
+      this._stmtUpdateStatus = this.db.prepare(`UPDATE resource_registry SET status = ? WHERE resource_id = ?`);
+    }
+    return this._stmtUpdateStatus;
+  }
+  private get stmtUpdateUserId(): Database.Statement {
+    if (!this._stmtUpdateUserId) {
+      this._stmtUpdateUserId = this.db.prepare(`UPDATE resource_registry SET user_id = ? WHERE resource_id = ?`);
+    }
+    return this._stmtUpdateUserId;
+  }
+  /** Invalidate cached statements (call after DB reconnect or on statement error). */
+  private invalidateStatements(): void {
+    this._stmtInsert = null;
+    this._stmtUpdateStatus = null;
+    this._stmtUpdateUserId = null;
+  }
+
   /** Set the CredentialStore (available after MongoDB connects) */
   setCredentialStore(store: CredentialStore): void {
     this.credentialStore = store;
     console.log(`[resources] CredentialStore attached (decryption: ${store.hasDecryptionCapability() ? 'YES' : 'NO'})`);
+  }
+
+  /** #5: Set ledger for pricePerUnit charging */
+  setLedger(ledger: LedgerLike): void {
+    this.ledger = ledger;
   }
 
   /** Set P2P credential proxy — called by non-secure nodes that lack CREDENTIAL_MASTER_KEY.
@@ -84,29 +127,38 @@ export class ResourceRegistry {
       )
     `);
 
-    // Prepare statements
-    this.stmtInsert = this.db.prepare(`
-      INSERT OR REPLACE INTO resource_registry
-      (resource_id, type, user_id, granted_to, max_usage_per_day, price_per_unit, registered_at, expires_at, status, metadata)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    `);
-    this.stmtUpdateStatus = this.db.prepare(`UPDATE resource_registry SET status = ? WHERE resource_id = ?`);
-    this.stmtUpdateUserId = this.db.prepare(`UPDATE resource_registry SET user_id = ? WHERE resource_id = ?`);
+    // M2-3: Statements are now lazily prepared via getters (stmtInsert, stmtUpdateStatus, stmtUpdateUserId).
+    // Invalidate any previously cached statements in case the DB was reconnected.
+    this.invalidateStatements();
 
     // Load metadata from SQLite
     const rows = this.db.prepare('SELECT * FROM resource_registry').all() as any[];
     for (const row of rows) {
+      let grantedTo: string[];
+      try {
+        grantedTo = JSON.parse(row.granted_to);
+      } catch {
+        console.error(`[resources] Malformed granted_to JSON for resource ${row.resource_id}, defaulting to ['*']`);
+        grantedTo = ['*'];
+      }
+      let metadata: any;
+      try {
+        metadata = row.metadata ? JSON.parse(row.metadata) : undefined;
+      } catch {
+        console.error(`[resources] Malformed metadata JSON for resource ${row.resource_id}, skipping metadata`);
+        metadata = undefined;
+      }
       const record: ResourceRecord = {
         resourceId: row.resource_id,
         type: row.type,
         userId: row.user_id || undefined,
-        grantedTo: JSON.parse(row.granted_to),
+        grantedTo,
         maxUsagePerDay: row.max_usage_per_day,
         pricePerUnit: row.price_per_unit,
         registeredAt: row.registered_at,
         expiresAt: row.expires_at,
         status: row.status,
-        metadata: row.metadata ? JSON.parse(row.metadata) : undefined,
+        metadata,
       };
       this.resources.set(record.resourceId, record);
     }
@@ -219,14 +271,35 @@ export class ResourceRegistry {
     return results;
   }
 
-  /** Decrypt a credential via CredentialStore (MongoDB), or via P2P proxy on non-secure nodes. */
-  async getCredential(resourceId: string): Promise<string | null> {
+  /** Decrypt a credential via CredentialStore (MongoDB), or via P2P proxy on non-secure nodes.
+   *  @param requestingPeerId — If provided, used for grantedTo checks and pricePerUnit charging. */
+  async getCredential(resourceId: string, requestingPeerId?: string): Promise<string | null> {
     const record = this.resources.get(resourceId);
     if (!record || record.status !== 'active') return null;
 
+    // #5: Check pricePerUnit — if > 0, attempt to charge the requester
+    if (record.pricePerUnit > 0 && requestingPeerId && record.userId) {
+      if (!this.ledger) {
+        console.warn(`[resources] Cannot charge for resource ${resourceId.slice(0, 8)}: no ledger available`);
+        return null;
+      }
+      const balance = this.ledger.accounts.getBalance(requestingPeerId);
+      if (balance < record.pricePerUnit) {
+        console.log(`[resources] Requester ${requestingPeerId.slice(0, 12)} cannot afford resource ${resourceId.slice(0, 8)} (balance: ${balance}, price: ${record.pricePerUnit})`);
+        return null;
+      }
+      try {
+        this.ledger.transfer(requestingPeerId, record.userId, record.pricePerUnit);
+        console.log(`[resources] Charged ${record.pricePerUnit} Lux from ${requestingPeerId.slice(0, 12)} to resource owner ${record.userId.slice(0, 12)}`);
+      } catch (err: any) {
+        console.warn(`[resources] Lux charge failed for resource ${resourceId.slice(0, 8)}: ${err.message}`);
+        return null;
+      }
+    }
+
     // Try local decryption first (EC2 nodes with CREDENTIAL_MASTER_KEY)
     if (this.credentialStore) {
-      const local = await this.credentialStore.getCredential(resourceId);
+      const local = await this.credentialStore.getCredential(resourceId, requestingPeerId);
       if (local !== null) return local;
     }
 

@@ -19,6 +19,7 @@ import type { PandoNetwork } from './network.js';
 import type { PandoLedger } from '@pando/ledger';
 import type { LedgerSync } from './sync.js';
 import type { Transaction, WorkType } from '@pando/shared';
+import { DAILY_EMISSION_CAP } from '@pando/shared';
 import { randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -77,6 +78,11 @@ const QUORUM_REQUIRED = 2;                             // 2+ independent witness
 const BOOTSTRAP_NODE_THRESHOLD = 3;                    // if <3 nodes, use bootstrap fallback
 const MAX_HISTORY = 500;                               // max completed proposals kept
 const CLEANUP_INTERVAL_MS = 60_000;                    // run cleanup every 60s
+const BOOTSTRAP_DAILY_CAP = 50;                        // max Lux/day auto-approved in bootstrap mode
+const DAY_MS = 24 * 60 * 60 * 1000;                   // milliseconds in a day
+
+// Work proof validation: must contain a valid task/work ID (hex string, 8+ chars)
+const WORK_PROOF_ID_PATTERN = /[0-9a-f]{8,}/i;
 
 export const TOPIC_EMISSIONS = 'pando/emissions';
 
@@ -105,6 +111,14 @@ export class EmissionWitness {
   private totalRejected = 0;
   private totalExpired = 0;
   private totalLuxEmitted = 0;
+
+  // Daily emission cap tracking (#25)
+  private dailyEmittedLux = 0;
+  private dailyEmittedDate = ''; // YYYY-MM-DD string for the current tracking day
+
+  // Bootstrap auto-approve daily cap tracking (#27)
+  private dailyBootstrapLux = 0;
+  private dailyBootstrapDate = '';
 
   // Timers
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
@@ -145,6 +159,68 @@ export class EmissionWitness {
     this.emitCallback = cb;
   }
 
+  // ── Daily cap helpers ───────────────────────────────────
+
+  /** Get today's date string (YYYY-MM-DD) for daily cap tracking. */
+  private getTodayStr(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  /** Reset daily counters if the date has rolled over. */
+  private resetDailyCountersIfNeeded(): void {
+    const today = this.getTodayStr();
+    if (this.dailyEmittedDate !== today) {
+      this.dailyEmittedLux = 0;
+      this.dailyEmittedDate = today;
+    }
+    if (this.dailyBootstrapDate !== today) {
+      this.dailyBootstrapLux = 0;
+      this.dailyBootstrapDate = today;
+    }
+  }
+
+  /** Check if adding `amount` Lux would exceed the daily emission cap. */
+  private wouldExceedDailyCap(amount: number): boolean {
+    this.resetDailyCountersIfNeeded();
+    return (this.dailyEmittedLux + amount) > DAILY_EMISSION_CAP;
+  }
+
+  /** Check if adding `amount` Lux would exceed the bootstrap auto-approve daily cap. */
+  private wouldExceedBootstrapCap(amount: number): boolean {
+    this.resetDailyCountersIfNeeded();
+    return (this.dailyBootstrapLux + amount) > BOOTSTRAP_DAILY_CAP;
+  }
+
+  /** Record emitted Lux against daily cap counters. */
+  private recordDailyEmission(amount: number, isBootstrap: boolean): void {
+    this.resetDailyCountersIfNeeded();
+    this.dailyEmittedLux += amount;
+    if (isBootstrap) {
+      this.dailyBootstrapLux += amount;
+    }
+  }
+
+  // ── Work proof validation ─────────────────────────────
+
+  /**
+   * Validate a work proof string. Returns null if valid, or an error message if invalid.
+   * - Must be non-empty
+   * - Must contain a valid task/work ID format (hex string, 8+ chars)
+   * TODO: Full cross-layer validation against task database when accessible from kernel layer.
+   */
+  private validateWorkProof(workProof: string): string | null {
+    if (!workProof || workProof.trim().length === 0) {
+      return 'workProof is empty';
+    }
+    if (workProof.trim().length < 8) {
+      return 'workProof too short (must be at least 8 characters)';
+    }
+    if (!WORK_PROOF_ID_PATTERN.test(workProof)) {
+      return 'workProof must contain a valid task/work ID (hex string, 8+ chars)';
+    }
+    return null; // valid
+  }
+
   // ── Lifecycle ────────────────────────────────────────────
 
   start(): void {
@@ -172,6 +248,13 @@ export class EmissionWitness {
     workType: string,
     workProof: string,
   ): Promise<EmissionProposal | null> {
+    // Work proof validation (#26)
+    const proofError = this.validateWorkProof(workProof);
+    if (proofError) {
+      console.log(`[emission-witness] Invalid work proof from ${peerId.slice(0, 12)}: ${proofError}`);
+      return null;
+    }
+
     // Rate limit check
     if (!this.checkRateLimit(peerId)) {
       console.log(`[emission-witness] Rate limited: ${peerId.slice(0, 12)} (${RATE_LIMIT_PER_HOUR}/hour)`);
@@ -213,7 +296,15 @@ export class EmissionWitness {
     // peers, auto-approve immediately (single-node or tiny network)
     const peerCount = this.network?.getPeerCount() ?? 0;
     if (peerCount < BOOTSTRAP_NODE_THRESHOLD) {
-      this.finalizeProposal(proposal);
+      // Bootstrap auto-approve daily cap (#27): max BOOTSTRAP_DAILY_CAP Lux/day
+      // Use a conservative estimate for the amount (highest single reward = 25 Lux for GUEST_WELCOME)
+      const estimatedAmount = 25; // conservative estimate before finalization
+      if (this.wouldExceedBootstrapCap(estimatedAmount)) {
+        console.log(`[emission-witness] Bootstrap daily cap reached (${this.dailyBootstrapLux}/${BOOTSTRAP_DAILY_CAP} Lux). Proposal ${proposal.id.slice(0, 12)} will wait for witnesses.`);
+        // Don't auto-approve — let it wait for real witnesses or expire
+      } else {
+        this.finalizeProposal(proposal, true /* isBootstrap */);
+      }
     }
 
     return proposal;
@@ -249,6 +340,13 @@ export class EmissionWitness {
     // Anti-spoofing: proposal.peerId must match fromPeerId
     if (proposal.peerId !== fromPeerId) {
       console.log(`[emission-witness] Anti-spoof: proposal peerId mismatch (${proposal.peerId.slice(0, 12)} != ${fromPeerId.slice(0, 12)})`);
+      return;
+    }
+
+    // Work proof validation (#26) — reject remote proposals with invalid work proofs
+    const proofError = this.validateWorkProof(proposal.workProof);
+    if (proofError) {
+      console.log(`[emission-witness] Rejecting remote proposal from ${fromPeerId.slice(0, 12)}: ${proofError}`);
       return;
     }
 
@@ -354,8 +452,23 @@ export class EmissionWitness {
 
   // ── Finalize ─────────────────────────────────────────────
 
-  private finalizeProposal(proposal: EmissionProposal): void {
+  private finalizeProposal(proposal: EmissionProposal, isBootstrap = false): void {
     if (proposal.status !== 'pending') return;
+
+    // Daily emission cap check (#25): reject if today's total would exceed DAILY_EMISSION_CAP
+    // Use a conservative estimate before minting (actual amount determined by ledger)
+    const estimatedAmount = 25; // conservative max per single emission
+    if (this.wouldExceedDailyCap(estimatedAmount)) {
+      console.log(`[emission-witness] DAILY_EMISSION_CAP reached (${this.dailyEmittedLux}/${DAILY_EMISSION_CAP} Lux today). Rejecting proposal ${proposal.id.slice(0, 12)}.`);
+      proposal.status = 'rejected';
+      this.totalRejected++;
+      this.pending.delete(proposal.id);
+      this.history.push(proposal);
+      if (this.history.length > MAX_HISTORY) {
+        this.history.shift();
+      }
+      return;
+    }
 
     proposal.status = 'approved';
     proposal.finalizedAt = Date.now();
@@ -369,7 +482,8 @@ export class EmissionWitness {
           proposal.amount = tx.amount;
           proposal.transactionId = tx.id;
           this.totalLuxEmitted += tx.amount;
-          console.log(`[emission-witness] Finalized: +${tx.amount} Lux for ${proposal.workType} (${proposal.witnesses.length} witnesses)`);
+          this.recordDailyEmission(tx.amount, isBootstrap);
+          console.log(`[emission-witness] Finalized: +${tx.amount} Lux for ${proposal.workType} (${proposal.witnesses.length} witnesses${isBootstrap ? ', bootstrap' : ''})`);
         }
       } catch (err: any) {
         console.error(`[emission-witness] Finalize error: ${err.message}`);

@@ -17,13 +17,15 @@ interface CapabilityRegistryLike {
 }
 
 const MAX_ATTEMPTS = 3;
-const PEER_WAIT_TIMEOUT_MS = 30_000;
-const PEER_POLL_INTERVAL_MS = 1_000;
+const PEER_WAIT_TIMEOUT_MS = 5_000;  // #61: Reduced from 30s to 5s to avoid blocking I/O
+const PEER_POLL_INTERVAL_MS = 500;
 const UNHEALTHY_TTL_MS = 30_000;
+const UNHEALTHY_EXTEND_MS = 60_000;  // #62: Extended unhealthy period after failed health check
 
 export class P2PStorageBackend implements StorageBackend {
   private preferredPeerId: string | null = null;
   private unhealthyPeers = new Map<string, number>();
+  private peerOnProbation = new Set<string>();  // #62: Peers that just recovered — next failure extends TTL
 
   constructor(
     private httpPeerClient: HttpPeerClient,
@@ -68,12 +70,13 @@ export class P2PStorageBackend implements StorageBackend {
     await this.proxy('pushToArray', { collection, key, field, value });
   }
 
-  private async proxy(method: string, args: Record<string, any>): Promise<any> {
+  private async proxy(method: string, args: Record<string, any>, opts?: { timeout?: number }): Promise<any> {
     let computePeers = this.getComputePeers();
 
-    // Startup grace period: wait for compute peers to connect
+    // #61: Startup grace period with reduced timeout (5s default, configurable)
     if (computePeers.length === 0) {
-      const deadline = Date.now() + PEER_WAIT_TIMEOUT_MS;
+      const waitTimeout = opts?.timeout ?? PEER_WAIT_TIMEOUT_MS;
+      const deadline = Date.now() + waitTimeout;
       while (computePeers.length === 0 && Date.now() < deadline) {
         await new Promise(r => setTimeout(r, PEER_POLL_INTERVAL_MS));
         computePeers = this.getComputePeers();
@@ -98,15 +101,32 @@ export class P2PStorageBackend implements StorageBackend {
           throw new Error(`Storage proxy error: ${response.error}`);
         }
 
+        // #60: Validate response data integrity
+        const result = response?.result;
+        if (method === 'getRecord' && result !== undefined && result !== null) {
+          if (typeof result !== 'object') {
+            console.warn(`[P2PStorageBackend] Suspicious response from ${peerId.slice(0, 12)}: getRecord returned ${typeof result} instead of object`);
+          }
+        }
+        if ((method === 'queryRecords' || method === 'listRecords') && result !== undefined && result !== null) {
+          if (!Array.isArray(result)) {
+            console.warn(`[P2PStorageBackend] Suspicious response from ${peerId.slice(0, 12)}: ${method} returned ${typeof result} instead of array`);
+          }
+        }
+
         this.preferredPeerId = peerId;
-        return response?.result;
+        this.peerOnProbation.delete(peerId);  // #62: Successful request clears probation
+        return result;
       } catch (err) {
         lastError = err as Error;
-        this.unhealthyPeers.set(peerId, Date.now() + UNHEALTHY_TTL_MS);
+        // #62: If peer was on probation (just recovered), use extended unhealthy TTL
+        const ttl = this.peerOnProbation.has(peerId) ? UNHEALTHY_EXTEND_MS : UNHEALTHY_TTL_MS;
+        this.peerOnProbation.delete(peerId);
+        this.unhealthyPeers.set(peerId, Date.now() + ttl);
         if (this.preferredPeerId === peerId) {
           this.preferredPeerId = null;
         }
-        console.log(`[P2PStorageBackend] ${method} failed on ${peerId.slice(0, 12)}: ${(err as Error).message}`);
+        console.log(`[P2PStorageBackend] ${method} failed on ${peerId.slice(0, 12)}: ${(err as Error).message} (unhealthy for ${ttl / 1000}s)`);
       }
     }
 
@@ -117,7 +137,13 @@ export class P2PStorageBackend implements StorageBackend {
     const expiry = this.unhealthyPeers.get(peerId);
     if (expiry === undefined) return false;
     if (Date.now() > expiry) {
+      // #62: Don't immediately trust recovered peers. Probe before clearing.
+      // Use synchronous check — async health check would complicate the call site.
+      // The peer will be tested on the next actual proxy() call. If it fails again,
+      // it gets an extended unhealthy period.
       this.unhealthyPeers.delete(peerId);
+      // Mark peer as "probation" — next failure extends unhealthy period
+      this.peerOnProbation.add(peerId);
       return false;
     }
     return true;

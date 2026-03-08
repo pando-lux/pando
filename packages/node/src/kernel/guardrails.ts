@@ -10,7 +10,7 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import type {
   GuardrailConfig,
   PendingChange,
@@ -512,6 +512,16 @@ export class Guardrails {
 
     if (passed) {
       console.log('[guardrails] postCheck: all checks passed');
+    } else {
+      // #31: Auto-rollback on postCheck failure (build failure or immutable file modification)
+      if ((!buildOk || !immutableKernelOk) && existsSync(join(cwd, '.git'))) {
+        try {
+          execFileSync('git', ['checkout', '--', '.'], { cwd, timeout: 30_000, stdio: 'pipe', windowsHide: true });
+          console.log(`[guardrails] postCheck: auto-rollback executed (git checkout -- .) in ${cwd}`);
+        } catch (rollbackErr: any) {
+          console.error(`[guardrails] postCheck: auto-rollback failed: ${rollbackErr.message}`);
+        }
+      }
     }
 
     return { passed, buildOk, testOk, protectedFilesOk, immutableKernelOk, error };

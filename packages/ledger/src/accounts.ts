@@ -76,11 +76,16 @@ export class AccountStore {
   /**
    * Force-subtract balance without checking sufficiency.
    * Used for applying pre-validated remote transactions.
-   * Balance can temporarily go negative if transactions arrive out of order.
+   * If the balance would go negative (out-of-order sync), clamp to 0
+   * and flag the account as in deficit via a warning log.
    */
   forceSubtractBalance(peerId: string, amount: number): void {
     const current = this.getBalance(peerId);
-    const newBalance = roundLux(current - amount);
+    let newBalance = roundLux(current - amount);
+    if (newBalance < 0) {
+      console.warn(`[accounts] Balance deficit: ${peerId.slice(0, 16)} would go to ${newBalance} Lux — clamping to 0 (sync may reconcile later)`);
+      newBalance = 0;
+    }
     this.db.prepare(
       'UPDATE accounts SET balance = ?, updated_at = ? WHERE peer_id = ?'
     ).run(newBalance, Date.now(), peerId);
@@ -141,14 +146,14 @@ export class AccountStore {
 
     // Create account if it doesn't exist
     if (!this.exists(peerId)) {
-      let extractedKey = 'remote-peer';
+      let extractedKey = 'unknown';
       try {
         const peerIdObj = peerIdFromString(peerId);
         if (peerIdObj.publicKey?.raw) {
           extractedKey = Buffer.from(peerIdObj.publicKey.raw).toString('base64');
         }
       } catch {
-        // Extraction failed — fall back to 'remote-peer' so P2P sync isn't broken
+        // Extraction failed — fall back to 'unknown' so P2P sync isn't broken
       }
       this.create(peerId, extractedKey);
     }
@@ -157,20 +162,11 @@ export class AccountStore {
       'UPDATE accounts SET username = ?, display_name = ?, password_hash = ?, is_claimed = 1, updated_at = ? WHERE peer_id = ?'
     ).run(username, displayName, passwordHash, claimedAt, peerId);
 
-    // If adjustBalance is requested and originating node sent a balance, check for deficit.
-    // If local balance is lower (emission tx was not in the sync batch), adjust up.
-    // This prevents totalSupply divergence from missing emission transactions during catch-up sync.
-    let supplyDelta = 0;
-    if (adjustBalance && typeof balance === 'number' && balance > 0) {
-      const currentBalance = this.getBalance(peerId);
-      if (currentBalance < balance) {
-        const deficit = roundLux(balance - currentBalance);
-        this.addBalance(peerId, deficit);
-        supplyDelta = deficit;
-      }
-    }
-
-    return { applied: true, supplyDelta };
+    // #40: Do NOT accept balance from remote claims. Balance must only change via
+    // validated transactions (emissions, transfers). Accepting balance from claims
+    // allows malicious peers to broadcast fake balances.
+    // The `balance` and `adjustBalance` params are kept for API compatibility but ignored.
+    return { applied: true, supplyDelta: 0 };
   }
 
   /** Look up account by username (case-insensitive). Returns full account + auth fields. */
@@ -205,6 +201,32 @@ export class AccountStore {
   isUsernameAvailable(username: string): boolean {
     const row = this.db.prepare('SELECT 1 FROM accounts WHERE username = ? COLLATE NOCASE').get(username);
     return !row;
+  }
+
+  // ── Ban Mechanism ─────────────────────────────────────────────────────
+
+  /** Ban an account. Prevents the user from making authenticated API requests. */
+  banAccount(peerId: string): boolean {
+    const result = this.db.prepare(
+      'UPDATE accounts SET banned = 1, updated_at = ? WHERE peer_id = ?'
+    ).run(Date.now(), peerId);
+    return result.changes > 0;
+  }
+
+  /** Unban an account. */
+  unbanAccount(peerId: string): boolean {
+    const result = this.db.prepare(
+      'UPDATE accounts SET banned = 0, updated_at = ? WHERE peer_id = ?'
+    ).run(Date.now(), peerId);
+    return result.changes > 0;
+  }
+
+  /** Check if an account is banned. Returns false for unknown accounts. */
+  isBanned(peerId: string): boolean {
+    const row = this.db.prepare(
+      'SELECT banned FROM accounts WHERE peer_id = ?'
+    ).get(peerId) as any;
+    return row?.banned === 1;
   }
 
   /** Get all claimed accounts for sync responses. Includes balance for totalSupply consistency. */

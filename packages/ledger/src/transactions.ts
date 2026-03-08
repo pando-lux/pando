@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import type Database from 'better-sqlite3';
 import {
   type Transaction,
@@ -53,16 +53,21 @@ export class TransactionStore {
 
     // Atomic: debit sender, credit recipient, pay relay
     const doTransfer = this.db.transaction(() => {
-      this.accounts.subtractBalance(from, totalDebit);
-      this.accounts.addBalance(to, amount);
+      try {
+        this.accounts.subtractBalance(from, totalDebit);
+        this.accounts.addBalance(to, amount);
 
-      // Pay fee to relay node
-      if (fee > 0 && relay) {
-        this.accounts.addBalance(relay, fee);
-        this.updateStat('total_relay_fees', fee, true);
+        // Pay fee to relay node
+        if (fee > 0 && relay) {
+          this.accounts.addBalance(relay, fee);
+          this.updateStat('total_relay_fees', fee, true);
+        }
+
+        this.recordTransaction(tx);
+      } catch (err) {
+        console.error(`[ledger] Transfer transaction failed: ${(err as Error).message}`);
+        throw err;
       }
-
-      this.recordTransaction(tx);
     });
 
     doTransfer();
@@ -98,14 +103,19 @@ export class TransactionStore {
     };
 
     const doEmit = this.db.transaction(() => {
-      this.accounts.addBalance(to, amount);
-      this.recordTransaction(tx);
-      this.updateStat('total_supply', amount, true);
+      try {
+        this.accounts.addBalance(to, amount);
+        this.recordTransaction(tx);
+        this.updateStat('total_supply', amount, true);
 
-      // Record emission
-      this.db.prepare(
-        'INSERT INTO emissions (id, peer_id, amount, work_type, work_proof, timestamp) VALUES (?, ?, ?, ?, ?, ?)'
-      ).run(tx.id, to, amount, workType, workProof, tx.timestamp);
+        // Record emission
+        this.db.prepare(
+          'INSERT INTO emissions (id, peer_id, amount, work_type, work_proof, timestamp) VALUES (?, ?, ?, ?, ?, ?)'
+        ).run(tx.id, to, amount, workType, workProof, tx.timestamp);
+      } catch (err) {
+        console.error(`[ledger] Emission transaction failed: ${(err as Error).message}`);
+        throw err;
+      }
     });
 
     doEmit();
@@ -122,26 +132,31 @@ export class TransactionStore {
     if (this.getTransaction(tx.id)) return;
 
     const doApply = this.db.transaction(() => {
-      // For transfers, debit the sender (trust originating node's validation)
-      if (tx.type === TransactionType.TRANSFER && tx.from !== NETWORK_ACCOUNT) {
-        this.accounts.forceSubtractBalance(tx.from, tx.amount + tx.fee);
-      }
+      try {
+        // For transfers, debit the sender (trust originating node's validation)
+        if (tx.type === TransactionType.TRANSFER && tx.from !== NETWORK_ACCOUNT) {
+          this.accounts.forceSubtractBalance(tx.from, tx.amount + tx.fee);
+        }
 
-      // Credit recipient
-      this.accounts.addBalance(tx.to, tx.amount);
+        // Credit recipient
+        this.accounts.addBalance(tx.to, tx.amount);
 
-      // Pay fee to relay node
-      if (tx.fee > 0 && tx.relay && this.accounts.exists(tx.relay)) {
-        this.accounts.addBalance(tx.relay, tx.fee);
-        this.updateStat('total_relay_fees', tx.fee, true);
-      }
+        // Pay fee to relay node
+        if (tx.fee > 0 && tx.relay && this.accounts.exists(tx.relay)) {
+          this.accounts.addBalance(tx.relay, tx.fee);
+          this.updateStat('total_relay_fees', tx.fee, true);
+        }
 
-      // Record the transaction
-      this.recordTransaction(tx);
+        // Record the transaction
+        this.recordTransaction(tx);
 
-      // Track the supply change if it's an emission
-      if (tx.type === TransactionType.EMISSION) {
-        this.updateStat('total_supply', tx.amount, true);
+        // Track the supply change if it's an emission
+        if (tx.type === TransactionType.EMISSION) {
+          this.updateStat('total_supply', tx.amount, true);
+        }
+      } catch (err) {
+        console.error(`[ledger] Apply remote transaction failed: ${(err as Error).message}`);
+        throw err;
       }
     });
 
@@ -239,7 +254,8 @@ export class TransactionStore {
   }
 
   private hashTransaction(from: string, to: string, amount: number, fee: number, timestamp: number): string {
-    const data = `${from}:${to}:${amount}:${fee}:${timestamp}:${Math.random()}`;
+    const nonce = randomBytes(8).toString('hex');
+    const data = `${from}:${to}:${amount}:${fee}:${timestamp}:${nonce}`;
     return createHash('sha256').update(data).digest('hex');
   }
 

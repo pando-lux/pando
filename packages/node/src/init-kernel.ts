@@ -211,6 +211,11 @@ export async function initKernel(node: any): Promise<void> {
     if (node.emissionWitness) {
       node.securityMonitor.setEmissionWitness(node.emissionWitness);
     }
+    // #32: Wire tripwire — auto-wipe credential key on critical threats
+    const credStore = (node as any)._credentialStore;
+    if (credStore && typeof credStore.wipe === 'function') {
+      node.securityMonitor.setCredentialWiper(() => credStore.wipe());
+    }
     node.securityMonitor.start();
 
     // Periodic sync cleanup + database pruning
@@ -627,6 +632,45 @@ export async function initKernel(node: any): Promise<void> {
       await node.broadcastCapabilities();
       await node.broadcastCapabilityProfile();
     } catch {}
+
+    // #76: Retry capability broadcast for small networks where initial broadcast may be lost.
+    // If fewer than 2 peers have acknowledged (have our profile), retry up to 3 times at 30s intervals.
+    {
+      let retryCount = 0;
+      const MAX_RETRIES = 3;
+      const RETRY_INTERVAL_MS = 30_000;
+      const retryTimer = setInterval(async () => {
+        retryCount++;
+        if (retryCount > MAX_RETRIES) {
+          clearInterval(retryTimer);
+          return;
+        }
+        const peerCount = node.network?.getPeerCount() ?? 0;
+        if (peerCount === 0) {
+          // No peers at all — retry broadcast
+          try {
+            await node.broadcastCapabilities();
+            await node.broadcastCapabilityProfile();
+            console.log(`[capabilities] Retry broadcast ${retryCount}/${MAX_RETRIES} (no peers yet)`);
+          } catch {}
+        } else {
+          // Have peers — check if they have our profile (via known peer profiles)
+          const knownProfiles = node.capabilityRegistry.getAllProfiles();
+          const remotePeerCount = knownProfiles.filter((p: any) => p.peerId !== node.identity.peerId).length;
+          if (remotePeerCount < peerCount) {
+            try {
+              await node.broadcastCapabilities();
+              await node.broadcastCapabilityProfile();
+              console.log(`[capabilities] Retry broadcast ${retryCount}/${MAX_RETRIES} (${remotePeerCount}/${peerCount} peers have our profile)`);
+            } catch {}
+          } else {
+            // All peers have our profile — stop retrying
+            clearInterval(retryTimer);
+          }
+        }
+      }, RETRY_INTERVAL_MS);
+      retryTimer.unref();
+    }
 
     // Phase A: Re-broadcast capability profile every 5 minutes (heartbeat)
     node.capabilityBroadcastTimer = setInterval(async () => {

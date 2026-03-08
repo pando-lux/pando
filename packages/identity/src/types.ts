@@ -146,4 +146,5 @@ export interface JwtPayload {
   iat: number;
   exp: number;
   typ: 'human' | 'agent';
+  jti?: string;               // unique token ID for revocation
 }

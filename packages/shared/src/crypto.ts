@@ -211,7 +211,8 @@ export async function verifyProposalSignature(
     const rawBytes = pubKeyRaw.raw ?? pubKeyRaw;
     const publicKeyBytes = rawBytes instanceof Uint8Array && rawBytes.length === 32
       ? rawBytes
-      : (pubKeyRaw as any).raw ?? new Uint8Array(32);
+      : (pubKeyRaw as any).raw;
+    if (!(publicKeyBytes instanceof Uint8Array) || publicKeyBytes.length !== 32) return false;
 
     const data = new TextEncoder().encode(buildProposalSignablePayload(proposal));
     return await _verify(data, signature, publicKeyBytes);
