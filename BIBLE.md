@@ -1899,6 +1899,10 @@ The codebase has multiple restart mechanisms, each serving a distinct purpose:
 | **Shutdown improvements** | P2P request drain, WAL checkpoint, 30s timeout |
 | **Double-spend prevention** | Balance validation on remote transactions |
 | **Weighted governance** | Reputation-weighted vote counting |
+| **Command injection prevention** | `safeGitRef()` validator in app-manager, hex validation on commitHash, `execFileSync` for user-influenced git commands |
+| **Two Laws on all agent-facing endpoints** | All trigger, spawn, message, request, and board endpoints check `violatesTwoLaws()` before passing text to AI agents |
+| **Board task CRUD validation** | `updateTeamBoardTask()` checks `result.changes > 0` — nonexistent tasks return 404, not 200 |
+| **repoUrl validation** | `cloneOrPull()` validates URL format before `execSync` to prevent shell injection via malicious repo URLs |
 
 ### Credential Storage Uses resourceId, NOT peerId
 

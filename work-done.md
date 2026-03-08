@@ -150,10 +150,17 @@
 - **Fix**: Added `violatesTwoLaws(message)` check to all three endpoints
 - **Endpoints**: `/teams/:id/trigger`, `/teams/:id/agents/:agentId/trigger`, `/council/trigger/:agent`
 
+#### 12. Unauthenticated Team/Council Mutations (CRITICAL)
+- **Root cause**: Auth hook in `api-server.ts:338-339` skipped API token verification for `/teams/*` and `/council/*` paths (treated as "user-facing" endpoints). ALL POST/PUT/DELETE operations on team endpoints were completely unauthenticated.
+- **Impact**: Any unauthenticated HTTP request to port 4000 could create board tasks, spawn agents, trigger the lead, stop agents, and send inter-agent messages.
+- **Fix**: Removed `/teams/` and `/council/` from the auth skip list. All team/council mutations now require Bearer API token. GET requests remain public.
+- **Verified**: Unauthenticated POST returns 401, authenticated POST returns 200. 9/9 E2E tests pass.
+
 ### Commits Pushed
 5. `b1e85c00` — Fix nonexistent task update bug + Pipeline 7/8 E2E tests
 6. `e861b636` — Security: fix command injection in 5 git operation attack surfaces
 7. `14857ea2` — Security: Two Laws checks on 3 trigger endpoints
+8. `98f4cd1c` — Security: require API token for team/council mutations (CRITICAL)
 
 ### Pending
 - [ ] PandoCode web UI testing (UI not running currently)
@@ -165,3 +172,5 @@
 - [x] Pipeline 7: Board Task CRUD E2E test
 - [x] Pipeline 8: Agent Spawn/Stop E2E test
 - [x] Security: command injection fixes (5 attack surfaces)
+- [x] Security: Two Laws on trigger endpoints
+- [x] Security: auth on team/council mutations
