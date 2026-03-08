@@ -298,7 +298,8 @@ export class ApiServer {
         pathNoVersion.startsWith('/projects') ||
         pathNoVersion.startsWith('/chat/') ||
         pathNoVersion.startsWith('/council/') ||
-        pathNoVersion.startsWith('/teams/')
+        pathNoVersion.startsWith('/teams/') ||
+        pathNoVersion.startsWith('/internal/')
       ) return;
 
       // Extract Bearer token from Authorization header
