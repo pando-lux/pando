@@ -944,6 +944,13 @@ export class PandoNode {
         nodeId: this.identity?.peerId,
         dataDir: this.config.dataDir,
         resourceRegistry: this.resourceRegistry,
+        projectResolver: async (projectId: string) => {
+          const ps = this.getProjectStore();
+          if (!ps) return null;
+          const project = await ps.getProjectAsync(projectId);
+          if (!project) return null;
+          return { repoUrl: project.repoUrl || project.githubRepo || undefined, name: project.name };
+        },
       });
       console.log('[engine] EngineAdapter started — PandoCode brain connected.');
     } catch (err: any) {

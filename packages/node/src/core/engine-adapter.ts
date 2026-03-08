@@ -397,6 +397,8 @@ export interface AdapterConfig {
   resourceRegistry?: ResourceRegistry | null;
   /** Schedule periodic system checks. Default: true. */
   enableScheduler?: boolean;
+  /** Resolve project metadata (repoUrl, name) by projectId — used for workspace recovery. */
+  projectResolver?: (projectId: string) => Promise<{ repoUrl?: string; name?: string } | null>;
 }
 
 export interface ReviewResult {
@@ -515,12 +517,50 @@ export class EngineAdapter {
 
   /**
    * Ensure a project workspace directory exists with network linking metadata.
+   * If workspace is empty and project has a GitHub repo, clones it automatically.
    */
   private async ensureProjectWorkspace(projectId: string): Promise<string> {
-    const { mkdirSync, writeFileSync, existsSync: fsExists } = await import('node:fs');
+    const { mkdirSync, writeFileSync, existsSync: fsExists, readdirSync } = await import('node:fs');
+    const { execSync } = await import('node:child_process');
     const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
     const projectDir = pathJoin(baseDir, 'projects', projectId);
     mkdirSync(projectDir, { recursive: true });
+
+    // Check if workspace has real content (not just PANDO_PROJECT.json)
+    const entries = readdirSync(projectDir).filter(f => f !== 'PANDO_PROJECT.json' && f !== '.git');
+    const isEmpty = entries.length === 0;
+
+    // If empty, try to recover from GitHub via projectResolver
+    if (isEmpty && this.config?.projectResolver) {
+      try {
+        const project = await this.config.projectResolver(projectId);
+        if (project?.repoUrl) {
+          console.log(`[engine] Workspace empty for ${projectId} — recovering from ${project.repoUrl}`);
+          try {
+            // Dir already exists — use git init + fetch + checkout (clone fails on non-empty dirs)
+            const gitDir = pathJoin(projectDir, '.git');
+            if (!fsExists(gitDir)) {
+              execSync('git init', { cwd: projectDir, timeout: 10_000, stdio: 'pipe', windowsHide: true });
+              execSync(`git remote add origin "${project.repoUrl}"`, { cwd: projectDir, timeout: 10_000, stdio: 'pipe', windowsHide: true });
+            }
+            execSync('git fetch origin', { cwd: projectDir, timeout: 60_000, stdio: 'pipe', windowsHide: true });
+            // Try main branch first, fall back to master
+            try {
+              execSync('git checkout -f origin/main -- .', { cwd: projectDir, timeout: 30_000, stdio: 'pipe', windowsHide: true });
+            } catch {
+              execSync('git checkout -f origin/master -- .', { cwd: projectDir, timeout: 30_000, stdio: 'pipe', windowsHide: true });
+            }
+            const recovered = readdirSync(projectDir).filter(f => f !== 'PANDO_PROJECT.json' && f !== '.git');
+            console.log(`[engine] Recovered ${recovered.length} file(s) from ${project.repoUrl}`);
+          } catch (gitErr: any) {
+            console.warn(`[engine] Workspace recovery failed for ${projectId}: ${gitErr.message?.slice(0, 200)}`);
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[engine] projectResolver failed for ${projectId}: ${err.message?.slice(0, 100)}`);
+      }
+    }
+
     const metaPath = pathJoin(projectDir, 'PANDO_PROJECT.json');
     if (!fsExists(metaPath)) {
       writeFileSync(metaPath, JSON.stringify({
