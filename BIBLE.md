@@ -1582,13 +1582,13 @@ This makes a contributor's Claude Code subscription a network resource — they 
 
 ### 8.1 Live Network
 
-| Machine | IP | Role | Features |
-|---|---|---|---|
-| EC2-1 | 54.82.241.132 | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY |
-| EC2-2 | 34.201.82.126 | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY |
-| LS-1 | 54.145.144.221 | Relay (untrusted) | P2P storage, PM2 |
-| LS-2 | 3.237.175.38 | Untrusted | P2P storage, PM2 |
-| Windows | 100.87.67.78 | Contributor | PandoCode (gemini-2.5-flash), Claude Code, P2P port 4100, API port 4000 |
+| Machine | IP | Instance ID | Role | Features |
+|---|---|---|---|---|
+| EC2-1 | 54.160.217.16 | i-066e87f7440e7e2f5 | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY |
+| EC2-2 | 34.201.82.126 | i-002a88a1372adfbdb | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY |
+| Windows | 100.87.67.78 | — | Contributor | PandoCode, Claude Code, P2P port 4100, API port 4000 |
+
+**Decommissioned (2026-03-08):** LS-1 (54.145.144.221), LS-2 (3.237.175.38) — Lightsail terminated. Old EC2-1 (54.82.241.132, i-0c74c15769abfcaf7) — impaired, terminated and replaced. pando-untrusted-1 (54.164.43.155), liva-test-instance (3.87.124.136) — idle, terminated.
 
 **Public gateway:** https://gateway-one-mu.vercel.app
 **S3 deployments:** `http://pando-deployments.s3-website-us-east-1.amazonaws.com/public/{projectId}/index.html`
@@ -1597,19 +1597,54 @@ This makes a contributor's Claude Code subscription a network resource — they 
 #### EC2 Node Details (critical for SSH troubleshooting)
 
 ```
-SSH:    ssh -i ~/.ssh/lightsail-default.pem ubuntu@<IP>
-Path:   /opt/pando                    (NOT /opt/pando/node)
-User:   pando                         (systemd runs as pando:pando)
-SSH as: ubuntu                        (has sudo)
+SSH:     ssh -i ~/.ssh/lightsail-default.pem ubuntu@<IP>
+Path:    /opt/pando                    (NOT /opt/pando/node)
+User:    pando                         (systemd runs as pando:pando)
+SSH as:  ubuntu                        (has sudo)
 Service: sudo systemctl restart pando-node
-PM2:    sudo -u pando pm2 list        (runs under pando user, NOT ubuntu)
-Logs:   sudo journalctl -u pando-node --since '1 hour ago' --no-pager
-Node:   v22.22.0
+Logs:    sudo journalctl -u pando-node --since '1 hour ago' --no-pager
+Build:   cd /opt/pando && sudo -u pando npx tsc -p packages/node/tsconfig.json
+Node:    v22.22.1
 ```
 
 **CRITICAL: File ownership must be `pando:pando` for ALL files under `/opt/pando/`.** The systemd service runs as user `pando`. If any files are owned by `ubuntu` (e.g., from manual gateway deploys or SSH file copies), `git reset --hard` will fail with "Permission denied" during auto-upgrade. Fix: `sudo chown -R pando:pando /opt/pando`.
 
 **Running commands as pando:** `sudo -u pando bash -c 'cd /opt/pando && <command>'`
+
+#### EC2 Deploy Playbook (manual update)
+
+```bash
+# From dev machine (Windows):
+ssh -i ~/.ssh/lightsail-default.pem ubuntu@<IP> bash -s << 'EOF'
+  cd /opt/pando
+  sudo -u pando git pull origin master
+  sudo -u pando npx tsc -p packages/node/tsconfig.json  # engine-adapter errors OK
+  sudo rm -f /home/pando/.pando/circuit-breaker.json /home/pando/.pando/crash-log.json /home/pando/.pando/halted.json
+  sudo systemctl restart pando-node
+  sleep 8
+  curl -s http://localhost:4000/v1/status | python3 -c "import sys,json; d=json.load(sys.stdin); print(f'commit={d[\"commitHash\"]}, health={d[\"health\"][\"kernel\"]}')"
+EOF
+```
+
+#### AWS CLI (us-east-1)
+
+```bash
+# Set credentials (contributed resource, not in env/config files)
+export AWS_ACCESS_KEY_ID=AKIAX3DNHH2QISP7C4FM
+export AWS_SECRET_ACCESS_KEY='...'  # see credential store
+export AWS_DEFAULT_REGION=us-east-1
+
+# List instances
+aws ec2 describe-instances --query 'Reservations[].Instances[].{ID:InstanceId,State:State.Name,IP:PublicIpAddress,Name:Tags[?Key==`Name`].Value|[0]}' --output table
+
+# Launch new compute node (same config as existing)
+aws ec2 run-instances --image-id ami-0f9de6e2d2f067fca --instance-type t3.small --key-name prax-lightsail-key --security-group-ids sg-069b5c032425687e3 --subnet-id subnet-0964c36c69381a6e0 --associate-public-ip-address --tag-specifications 'ResourceType=instance,Tags=[{Key=Name,Value=pando-compute-N}]'
+
+# Reboot / stop / terminate
+aws ec2 reboot-instances --instance-ids <id>
+aws ec2 stop-instances --instance-ids <id>
+aws ec2 terminate-instances --instance-ids <id>
+```
 
 ### 8.2 How to Build and Run
 
@@ -1637,7 +1672,7 @@ npx playwright test --project pando-code
 |---|---|---|
 | `--port <n>` | random | TCP listen port for P2P |
 | `--api-port <n>` | 4000 | HTTP API port |
-| `--bootstrap <multiaddr>` | Lightsail | Known peer to connect to |
+| `--bootstrap <multiaddr>` | EC2 nodes | Known peer to connect to |
 | `--data-dir <path>` | `~/.pando` | Data directory |
 | `--mode <contributor\|secure\|lightweight\|full>` | full | Node type. Legacy aliases: `compute` → `secure`, `relay` → `lightweight`. |
 
@@ -1703,12 +1738,12 @@ The codebase has multiple restart mechanisms, each serving a distinct purpose:
 | **crash-guard** | `kernel/crash-guard.ts` | 6 crashes in 60s → rolls back dist/ | 75 |
 | **circuit breaker** | `kernel/startup-health.ts` | 5 consecutive boot failures → halt | 1 |
 | **supervisor.ts** | `supervisor.ts` | Watches exit codes, respawns child | — |
-| **PM2** | `ecosystem.config.cjs` | External process manager (EC2) | — |
+| **systemd** | `pando-node.service` | External process manager (EC2) | — |
 | **port pre-check** | `cli.ts` | Kills old process if port in use | 78 |
 
 **Exit code convention:** 0 = stop, 75 = restart (supervisor/PM2respawns), 78 = port conflict (don't respawn), 1 = fatal.
 
-**PM2 detection:** When PM2 is detected (`process.env.PM2_HOME`), supervisor.ts is skipped (cli.ts runs node directly). PM2 is the restart authority on EC2.
+**EC2 restart authority: systemd** (`pando-node.service`). `Restart=always` + `RestartSec=5`. PM2 was previously used but has been cleaned up — systemd is the sole process manager on EC2. On Windows, `supervisor.ts` manages restarts (no systemd).
 
 **No RestartController needed.** Investigation found these mechanisms serve different roles and don't conflict in practice. The main pattern: upgrade-protocol.ts calls `safeRestart()` which calls `requestGracefulRestart()` which waits for drain then exits with 75.
 
@@ -1818,7 +1853,7 @@ Observer and QA agents remain on fast/cheap models (gemini-2.5-flash) since they
      4. Stash uncommitted changes (pando-auto-stash-{timestamp})
      5. git reset --hard origin/master
      6. npm install (non-fatal — build may succeed without it)
-     7. npm run build (5min timeout; on failure → git reset --hard <previous>)
+     7. build() — tries `npm run build` first, falls back to `npx tsc -p packages/node/tsconfig.json` (EC2 nodes lack @pando-code/core). On total failure → git reset --hard <previous>
      8. Record success, mark proposalId as applied
      9. Safe restart: 0 active workers + 0 pending messages → exit(75)
 
@@ -1865,9 +1900,9 @@ When `commitHash` is present, the API automatically:
 3. **Exit code 75 = restart.** Exit code 78 = port conflict (don't respawn). Any other crash = backoff respawn.
 4. **Teams survive restart.** Team registry persists in SQLite. Claude Code persistent sessions resume. Board tasks persist. Memory persists. Teams re-bootstrap from registry on startup.
 5. **Stale code detection.** `runningCommit` (snapshot at boot) vs `git rev-parse HEAD` (current). Mismatch → restart needed.
-6. **Build must pass.** If `npm run build` fails after git reset, rollback to previous commit. No broken deploys.
+6. **Build must pass.** `upgrade-protocol.ts build()` tries `npm run build`, falls back to targeted `npx tsc -p packages/node/tsconfig.json` (for EC2 nodes missing @pando-code/core). If both fail → rollback to previous commit. No broken deploys.
 7. **Two Laws filter.** All user input and board tasks filtered. Teams cannot be weaponized.
-8. **npm install before build.** New deps may have been added between commits. `npm install` runs before `npm run build` in both upgrade-protocol.ts and the `/upgrade` API endpoint. Failure is non-fatal (build may still work if deps didn't change).
+8. **npm install before build.** New deps may have been added between commits. `npm install` runs before `build()` in upgrade-protocol.ts. Failure is non-fatal (build may still work if deps didn't change).
 9. **Hash verification is the security gate.** Even if someone pushes malicious code to GitHub, nodes only upgrade to the exact commit hash approved by governance. `merge-base --is-ancestor` ensures the hash is in origin/master's history.
 10. **Team handoff is automatic.** If a managing node dies, any PandoCode-capable node claims the orphaned team. Board recovered from git. No manual intervention needed.
 

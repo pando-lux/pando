@@ -27,7 +27,7 @@ import { spawn as spawnProc } from 'node:child_process';
 //   @gotcha("RESTART_EXIT_CODE = 75 — PM2/systemd/start-node.bat restarts the process when it exits with this code.")
 //   @gotcha("MSYS2 path normalization: /c/Users/... is converted to C:\\Users\\... on Windows because path.join mishandles MSYS2 paths.")
 //   @why("DEFAULT_BOOTSTRAPS contains 3 nodes (LS-1, EC2-1, EC2-2) for mesh connectivity — ensures new nodes connect to at least 2 bootstrap peers.")
-//   @why("Public IP auto-detection uses AWS IMDS v1 (http://169.254.169.254/latest/meta-data/public-ipv4) with 2s timeout — works on EC2 and Lightsail, silently skips elsewhere.")
+//   @why("Public IP auto-detection uses AWS IMDS v1 (http://169.254.169.254/latest/meta-data/public-ipv4) with 2s timeout — works on EC2, silently skips elsewhere.")
 // }
 //
 // lesson PORT_PRECHECK {
@@ -124,12 +124,9 @@ async function tryShutdownExistingNode(apiPort: number, dataDir?: string): Promi
 }
 
 // Default public bootstrap nodes for peer discovery.
-// Phase 87: Multiple bootstraps for mesh connectivity (2+ peers per node).
-// Phase 91: EC2-2 added now that it announces its public IP via announceAddresses.
 const DEFAULT_BOOTSTRAPS: string[] = [
-  '/ip4/54.145.144.221/tcp/4001/p2p/12D3KooWNSUWHf6tzHPb8uzUkaRfk3VfuMVrjzGgyueR4yioMGDP', // LS-1
-  '/ip4/54.82.241.132/tcp/4001/p2p/12D3KooWDRjGzaUuATiPuhg5D2k1CQTT6nCMpjdsDTVwrGDC4QVP',  // EC2-1
-  '/ip4/34.201.82.126/tcp/4001/p2p/12D3KooWLMnoeqedX6uTWoBbq2ZfRyYKpDtttdtp6uNfm3PeJ33d',  // EC2-2
+  '/ip4/54.160.217.16/tcp/4001/p2p/12D3KooWJL2UxKRw2te6DNPsLa9KjRmB5SkML6Kd5wsndA8vJysN',  // EC2-1 (pando-compute-1)
+  '/ip4/34.201.82.126/tcp/4001/p2p/12D3KooWLMnoeqedX6uTWoBbq2ZfRyYKpDtttdtp6uNfm3PeJ33d',  // EC2-2 (pando-compute-2)
 ];
 
 async function main() {
