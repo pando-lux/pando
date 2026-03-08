@@ -39,8 +39,8 @@ export async function registerAppRoutes(
       envVars?: Record<string, string>;
     };
 
-    if (!body.id || !body.name || !body.repoUrl) {
-      return reply.code(400).send({ error: 'Missing required fields: id, name, repoUrl' });
+    if (!body.id || !body.name) {
+      return reply.code(400).send({ error: 'Missing required fields: id, name' });
     }
 
     try {
