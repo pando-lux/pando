@@ -31,6 +31,14 @@ import {
 } from 'node:fs';
 import { execSync, execFileSync } from 'node:child_process';
 
+/** Validate a git ref (commit hash or branch name) to prevent command injection */
+function safeGitRef(ref: string): string {
+  if (!/^[0-9a-zA-Z._\-/]{1,100}$/.test(ref)) {
+    throw new Error(`Invalid git ref: ${ref.slice(0, 20)}`);
+  }
+  return ref;
+}
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -1001,7 +1009,7 @@ export class AppManager {
       }
 
       // Checkout new commit
-      execSync(`git checkout ${newCommit}`, { ...GIT_OPTS, cwd: appDir });
+      execSync(`git checkout ${safeGitRef(newCommit)}`, { ...GIT_OPTS, cwd: appDir });
     } else {
       // Workspace-based: files were already re-copied by update(), use timestamp as "commit"
       newCommit = `workspace-${Date.now()}`;
@@ -1100,7 +1108,7 @@ export class AppManager {
       // Restore old commit so old process's code is intact
       if (oldCommit) {
         try {
-          execSync(`git checkout ${oldCommit}`, { ...GIT_OPTS, cwd: appDir });
+          execSync(`git checkout ${safeGitRef(oldCommit)}`, { ...GIT_OPTS, cwd: appDir });
         } catch { /* best effort — old process is still running on old port */ }
       }
 
@@ -1156,7 +1164,7 @@ export class AppManager {
       const currentCommit = app.current_commit;
 
       // Checkout previous commit
-      execSync(`git checkout ${targetCommit}`, { ...GIT_OPTS, cwd: appDir });
+      execSync(`git checkout ${safeGitRef(targetCommit)}`, { ...GIT_OPTS, cwd: appDir });
 
       // Reinstall deps and rebuild
       execSync('npm install --production', { ...INSTALL_OPTS, cwd: appDir });
@@ -1266,7 +1274,7 @@ export class AppManager {
           try { execFileSync('pm2', ['delete', pm2NameStaging], EXEC_OPTS); } catch { /* best effort */ }
 
           if (currentCommit) {
-            try { execSync(`git checkout ${currentCommit}`, { ...GIT_OPTS, cwd: appDir }); } catch { /* best effort */ }
+            try { execSync(`git checkout ${safeGitRef(currentCommit)}`, { ...GIT_OPTS, cwd: appDir }); } catch { /* best effort */ }
           }
 
           const error = 'Rollback staging health check failed — original process continues running';
@@ -1763,6 +1771,10 @@ location /apps/${appId}/ {
   // ── Helpers ──────────────────────────────────────────────────────────────
 
   private cloneOrPull(appDir: string, repoUrl: string): void {
+    // Validate repoUrl to prevent command injection (only allow valid git URLs)
+    if (!/^https?:\/\/[^\s;|&`$]+$/.test(repoUrl) && !/^git@[^\s;|&`$]+$/.test(repoUrl)) {
+      throw new Error(`Invalid repo URL: ${repoUrl.slice(0, 50)}`);
+    }
     if (existsSync(join(appDir, '.git'))) {
       execSync('git pull origin main', { ...GIT_OPTS, cwd: appDir });
       console.log(`[app-manager] Updated ${repoUrl} in ${appDir}`);

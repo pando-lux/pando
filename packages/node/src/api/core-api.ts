@@ -157,6 +157,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         if (p.status !== 'passed' || p.category !== 'upgrade') continue;
         const commitHash = (p as any).upgradePayload?.commitHash;
         if (!commitHash) { results.push({ id: p.id.slice(0, 16), skip: 'no commitHash' }); continue; }
+        // Validate commitHash is a safe hex string (prevents command injection)
+        if (!/^[0-9a-f]{6,40}$/i.test(commitHash)) { results.push({ id: p.id.slice(0, 16), skip: 'invalid commitHash format' }); continue; }
         if (upgradeProtocol.hasApplied(commitHash)) { results.push({ id: p.id.slice(0, 16), commitHash, skip: 'already applied' }); continue; }
         if (currentVersion?.startsWith(commitHash) || commitHash.startsWith((currentVersion || '').slice(0, commitHash.length))) {
           results.push({ id: p.id.slice(0, 16), commitHash, skip: 'current version matches' }); continue;

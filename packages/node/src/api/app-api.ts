@@ -101,6 +101,9 @@ export async function registerAppRoutes(
 
     const { id } = request.params;
     const body = request.body as { targetCommit?: string } | undefined;
+    if (body?.targetCommit && !/^[0-9a-f]{6,40}$/i.test(body.targetCommit)) {
+      return reply.code(400).send({ error: 'Invalid targetCommit format — must be a hex git hash' });
+    }
     const opts = body?.targetCommit ? { targetCommit: body.targetCommit } : undefined;
 
     try {

@@ -73,7 +73,7 @@ import { LocalEnvironment } from './kernel/local-environment.js';
 import { join, resolve as pathResolve } from 'node:path';
 import { homedir } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { execSync, exec as execCb } from 'node:child_process';
+import { execSync, execFileSync, exec as execCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(execCb);
@@ -806,7 +806,7 @@ export class PandoNode {
         const cloneUrl = pat
           ? `https://x-access-token:${pat}@github.com/${project.githubRepo}.git`
           : `https://github.com/${project.githubRepo}.git`;
-        execSync(`git clone ${cloneUrl} .`, { cwd: wsDir, timeout: 60000, stdio: 'ignore' });
+        execFileSync('git', ['clone', cloneUrl, '.'], { cwd: wsDir, timeout: 60000, stdio: 'ignore' });
         console.log(`[project-workspace] Cloned ${project.githubRepo} into ${wsDir}`);
       } catch (err: any) {
         console.warn(`[project-workspace] Clone failed (using empty workspace): ${err.message?.slice(0, 100)}`);
@@ -888,7 +888,8 @@ export class PandoNode {
           console.log(`[project-orch] Nothing to commit in project ${projectId}`);
           return false;
         }
-        execSync(`git commit -m "${message.replace(/"/g, '\\"')}"`, { cwd: wsDir, timeout: 30000 });
+        // Use execFileSync to avoid shell interpretation of special chars in commit message
+        execFileSync('git', ['commit', '-m', message], { cwd: wsDir, timeout: 30000 });
         console.log(`[project-orch] Committed in ${wsDir}: ${message}`);
 
         // Push to GitHub via the API endpoint (non-fatal if fails)
