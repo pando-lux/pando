@@ -212,9 +212,65 @@
 10. `818e6626` — Security: validate commitHash in P2P upgrade paths
 11. `540f9b6d` — Security: thread ownership, Two Laws on thread messages, input validation
 
+## Session: 2026-03-09 (cron loop)
+
+### Phase 6.2: Graceful Degradation
+
+#### 18. TeamRegistry DB Corruption Recovery (RESILIENCE)
+- **Root cause**: `new Database(dbPath)` in TeamRegistry constructor had no error handling. Corrupted DB = node crash.
+- **Fix**: Added `PRAGMA integrity_check` on open. On failure: close, delete corrupted files (DB + WAL + SHM), recreate fresh. Teams repopulate from P2P sync.
+- **File**: `packages/node/src/core/team-registry.ts:80-99`
+
+#### 19. Stale CLI Session TTL (RESILIENCE)
+- **Root cause**: Saved Claude Code CLI sessions persisted forever. Stale sessions (dead CLI process) caused agents to hang on resume.
+- **Fix**: Added 24h TTL on `cli-session:*` entries in state table. Sessions older than 24h are discarded + cleaned up. Agents start fresh.
+- **File**: `packages/node/src/core/engine-adapter.ts:1409-1448`
+
+#### 20. Dead Engine Detection (MONITORING)
+- **Root cause**: CLI process crash left zombie engines — agents appeared active but couldn't execute. No monitoring or alerts.
+- **Fix**: Added consecutive failure counter to lead agent tick handler. After 3 failures or fatal error patterns (ENOENT, spawn, session expired), logs CRITICAL with recovery instructions.
+- **File**: `packages/node/src/core/engine-adapter.ts:1554-1572`
+
+### Bug Fixes
+
+#### 21. Chat Balance Shows Wrong User (LOGIC BUG)
+- **Root cause**: `getBalanceText()` and `getNodeStatusText()` used `this.node.getIdentity().peerId` (node operator) instead of authenticated user's peerId.
+- **Fix**: Pass `userPeerId` through doormanClassify → getBalanceText/getNodeStatusText. Falls back to node identity if no auth.
+- **Files**: `api-server.ts` (doormanClassify, getBalanceText, getNodeStatusText), `platform-api.ts` (pass peerId), `middleware/auth.ts` (type)
+
+#### 22. Thread Auto-Create on Non-Existent IDs (LOGIC BUG)
+- **Root cause**: `POST /chat/threads/:id/message` processed messages for non-existent thread IDs, auto-creating threads.
+- **Fix**: Added existence check before processing — returns 404 if thread doesn't exist.
+- **File**: `packages/node/src/api/platform-api.ts:480-485`
+
+#### 23. Query Limit Unbounded (INPUT VALIDATION)
+- **Root cause**: 13 API endpoints accepted `query.limit` without upper bounds. Attacker could request limit=999999.
+- **Fix**: All limit params capped at 200 (or 100 for search). Applied across core-api, kernel-api, platform-api, app-api, testing-api.
+
+#### 24. Team Creation Field Validation (INPUT VALIDATION)
+- **Root cause**: `POST /v1/teams` accepted arbitrary-length id, displayName, description with no type/length checks.
+- **Fix**: id max 100 chars, displayName max 200 chars, description max 2000 chars. All type-validated.
+- **File**: `packages/node/src/api/core-api.ts:605-614`
+
+#### 25. Template ID Type Validation (INPUT VALIDATION)
+- **Root cause**: Agent spawn endpoint accepted non-string template IDs without validation.
+- **Fix**: Added `typeof template !== 'string'` check before use.
+- **File**: `packages/node/src/api/core-api.ts:728-730`
+
+#### 26. P2P Silent Promise Rejections (BUG)
+- **Root cause**: 7 async calls in `sync.ts` (requestSync, handleSyncRequest, etc.) were fire-and-forget without `.catch()`. Errors silently swallowed.
+- **Fix**: Added `.catch(err => console.error(...))` to all 7 unhandled promise chains.
+- **File**: `packages/node/src/kernel/sync.ts`
+
+### E2E Test Results
+- **9/9 pass** — all pipelines green after all changes
+
+### Commits Pushed
+12. `74249c43` — Phase 6.2 graceful degradation + fix chat balance bug + input validation hardening
+
 ### Pending
-- [ ] PandoCode web UI testing (UI not running currently)
-- [ ] Phase 6.2+: Cross-node team migration
+- [ ] PandoCode web UI testing (UI not running currently — port 4873 down)
+- [ ] Phase 6.2+: Cross-node team migration (orphan → claim → resume)
 - [ ] Phase 8: Gateway integration
 - [ ] P2P: Fix unsigned message acceptance (protocol design change)
 - [ ] P2P: Populate peer publicKey on connect (signature verification)
@@ -230,3 +286,12 @@
 - [x] Security: auth on team/council mutations
 - [x] Security: thread ownership validation
 - [x] Security: input validation (board title/desc/status, message length)
+- [x] Phase 6.2: TeamRegistry corruption recovery
+- [x] Phase 6.2: Stale CLI session TTL (24h expiry)
+- [x] Phase 6.2: Dead engine detection (CRITICAL logging)
+- [x] Fix: Chat balance shows authenticated user's data
+- [x] Fix: Thread 404 on non-existent IDs
+- [x] Fix: Query limit bounds (13 endpoints)
+- [x] Fix: Team creation field validation
+- [x] Fix: Template ID type validation
+- [x] Fix: P2P silent promise rejections (7 locations)
