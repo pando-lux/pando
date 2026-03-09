@@ -3498,7 +3498,7 @@ export async function registerPlatformRoutes(
       const githubToken = await registry.getCredential(githubResources[0].resourceId);
       if (!githubToken) return reply.code(503).send({ error: 'Could not decrypt GitHub credential' });
 
-      const { execSync } = await import('node:child_process');
+      const { execFileSync } = await import('node:child_process');
       const { existsSync: fsExists } = await import('node:fs');
       const workDir = body.workspaceDir;
 
@@ -3506,23 +3506,24 @@ export async function registerPlatformRoutes(
 
       try {
         const pushUrl = `https://x-access-token:${githubToken}@github.com/${project.githubRepo}.git`;
+        const gitOpts = { cwd: workDir, stdio: 'pipe' as const, windowsHide: true, timeout: 30_000 };
 
         // Init git if needed
         if (!fsExists(`${workDir}/.git`)) {
-          execSync('git init', { cwd: workDir, stdio: 'pipe' });
+          execFileSync('git', ['init'], gitOpts);
         }
-        execSync('git config user.email "deploy@pando.network"', { cwd: workDir, stdio: 'pipe' });
-        execSync('git config user.name "Pando Deploy"', { cwd: workDir, stdio: 'pipe' });
-        execSync('git add -A', { cwd: workDir, stdio: 'pipe' });
+        execFileSync('git', ['config', 'user.email', 'deploy@pando.network'], gitOpts);
+        execFileSync('git', ['config', 'user.name', 'Pando Deploy'], gitOpts);
+        execFileSync('git', ['add', '-A'], gitOpts);
 
         const commitMsg = `Deploy ${new Date().toISOString().slice(0, 19)}`;
-        try { execSync(`git commit -m "${commitMsg}"`, { cwd: workDir, stdio: 'pipe' }); } catch {}
+        try { execFileSync('git', ['commit', '-m', commitMsg], gitOpts); } catch {}
 
-        try { execSync('git remote remove origin', { cwd: workDir, stdio: 'pipe' }); } catch {}
-        execSync(`git remote add origin ${pushUrl}`, { cwd: workDir, stdio: 'pipe' });
-        execSync('git push -u origin HEAD:main --force', { cwd: workDir, stdio: 'pipe', timeout: 30000 });
+        try { execFileSync('git', ['remote', 'remove', 'origin'], gitOpts); } catch {}
+        execFileSync('git', ['remote', 'add', 'origin', pushUrl], gitOpts);
+        execFileSync('git', ['push', '-u', 'origin', 'HEAD:main', '--force'], gitOpts);
 
-        const commitSha = execSync('git rev-parse HEAD', { cwd: workDir, encoding: 'utf-8' }).trim();
+        const commitSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workDir, encoding: 'utf-8', windowsHide: true, timeout: 10_000 }).trim();
         console.log(`[github] Pushed to ${project.githubRepo} (${commitSha.slice(0, 8)})`);
 
         return {

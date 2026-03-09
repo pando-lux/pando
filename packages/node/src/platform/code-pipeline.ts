@@ -14,7 +14,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from 'node:fs';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { join, relative, dirname, extname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type {
@@ -163,7 +163,7 @@ export class CodePipeline {
           const newContent = readFileSync(fullPath, 'utf-8');
           let oldContent = '';
           try {
-            oldContent = execSync(`git show HEAD:${relPath}`, { cwd: this.repoDir, encoding: 'utf-8', windowsHide: true });
+            oldContent = execFileSync('git', ['show', `HEAD:${relPath}`], { cwd: this.repoDir, encoding: 'utf-8', windowsHide: true });
           } catch {
             // New file not in HEAD
           }

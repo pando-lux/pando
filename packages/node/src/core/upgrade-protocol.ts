@@ -8,7 +8,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import type {
   UpgradeProposal,
   RiskAssessment,
@@ -64,7 +64,7 @@ export function safeGitReset(repoDir: string, target: string = 'origin/master'):
   if (status.length > 0) {
     console.warn(`[upgrade] WARNING: Uncommitted changes detected (${status.split('\n').length} files). Stashing...`);
     try {
-      execSync(`git stash push -m "pando-auto-stash-${Date.now()}"`, {
+      execFileSync('git', ['stash', 'push', '-m', `pando-auto-stash-${Date.now()}`], {
         cwd: repoDir, encoding: 'utf-8', timeout: 15_000, stdio: 'pipe', windowsHide: true,
       });
       console.warn('[upgrade] Changes stashed. Recover with: git stash pop');
@@ -73,7 +73,7 @@ export function safeGitReset(repoDir: string, target: string = 'origin/master'):
     }
   }
 
-  execSync(`git reset --hard ${target}`, {
+  execFileSync('git', ['reset', '--hard', target], {
     cwd: repoDir, encoding: 'utf-8', timeout: 30_000,
     stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
   });
@@ -245,7 +245,7 @@ export class UpgradeProtocol {
     // Step 0: If local HEAD already matches target hash, we're the proposer — skip pull
     if (commitHash) {
       try {
-        const localSha = this.git('rev-parse HEAD');
+        const localSha = this.git(['rev-parse', 'HEAD']);
         if (localSha.startsWith(commitHash) || commitHash.startsWith(localSha.slice(0, commitHash.length))) {
           console.log(`[upgrade] Already at target version ${commitHash.slice(0, 8)} — skipping pull.`);
           // Proposer node: dist/ was rebuilt by asyncOnCommit but running process uses stale in-memory code
@@ -260,7 +260,7 @@ export class UpgradeProtocol {
 
     // Step 1: Ensure git safe.directory
     try {
-      execSync(`git config --global --add safe.directory ${repoDir}`, {
+      execFileSync('git', ['config', '--global', '--add', 'safe.directory', repoDir], {
         cwd: repoDir, timeout: 5_000, stdio: 'pipe', windowsHide: true,
       });
     } catch {}
@@ -279,8 +279,8 @@ export class UpgradeProtocol {
     }
 
     // Step 3: Check if already up to date
-    const localSha = this.git('rev-parse HEAD');
-    const remoteSha = this.git('rev-parse origin/master');
+    const localSha = this.git(['rev-parse', 'HEAD']);
+    const remoteSha = this.git(['rev-parse', 'origin/master']);
 
     if (localSha === remoteSha) {
       console.log('[upgrade] Already up to date.');
@@ -298,7 +298,7 @@ export class UpgradeProtocol {
     // Neither → ABORT. No code runs without governance approval.
     if (commitHash && remoteSha !== commitHash && !remoteSha.startsWith(commitHash) && !commitHash.startsWith(remoteSha.slice(0, commitHash.length))) {
       try {
-        this.git(`merge-base --is-ancestor ${commitHash} origin/master`);
+        this.git(['merge-base', '--is-ancestor', commitHash, 'origin/master']);
         console.log(`[upgrade] Proposed commit ${commitHash.slice(0, 12)} is ancestor of origin/master (${remoteSha.slice(0, 12)}) — upgrading to latest`);
       } catch {
         console.error(`[upgrade] REJECTED: governance approved ${commitHash.slice(0, 12)}, but origin/master is ${remoteSha.slice(0, 12)} and commit is not an ancestor`);
@@ -317,7 +317,7 @@ export class UpgradeProtocol {
     }
 
     // Step 5b: If HEAD didn't move (safeGitReset skipped), mark applied without restart
-    const headAfterReset = this.git('rev-parse HEAD');
+    const headAfterReset = this.git(['rev-parse', 'HEAD']);
     if (headAfterReset === localSha && localSha === this.runningCommit) {
       console.log(`[upgrade] HEAD unchanged after reset (local ahead) — marking ${(commitHash || remoteSha).slice(0, 8)} as applied, no restart needed`);
       const proposalId = commitHash || remoteSha;
@@ -346,7 +346,7 @@ export class UpgradeProtocol {
       const stderr = err.stderr?.toString()?.slice(-500) || err.message;
       console.error(`[upgrade] Build FAILED: ${stderr}`);
       // Rollback to previous commit
-      try { execSync(`git reset --hard ${localSha}`, { cwd: repoDir, timeout: 10_000, stdio: 'pipe', windowsHide: true }); } catch {}
+      try { execFileSync('git', ['reset', '--hard', localSha], { cwd: repoDir, timeout: 10_000, stdio: 'pipe', windowsHide: true }); } catch {}
       return { success: false, message: `Build failed: ${stderr}` };
     }
 
@@ -358,7 +358,7 @@ export class UpgradeProtocol {
     this.recordUpgrade(proposalId, 'success');
     this.saveState();
 
-    const actualHead = this.git('rev-parse HEAD');
+    const actualHead = this.git(['rev-parse', 'HEAD']);
     this.safeRestart(actualHead);
 
     return { success: true, message: `Updated to ${actualHead.slice(0, 8)}. Restarting...` };
@@ -375,7 +375,7 @@ export class UpgradeProtocol {
     // Fetch remote state first so we propose the remote HEAD, not local HEAD.
     // This ensures all nodes actually pull new code rather than seeing "already at target".
     try {
-      this.git('fetch origin master');
+      this.git(['fetch', 'origin', 'master']);
     } catch (e) {
       console.warn('[upgrade] git fetch failed — proposal will use local HEAD:', e);
     }
@@ -572,9 +572,9 @@ export class UpgradeProtocol {
 
     try {
       if (targetVersion) {
-        this.git(`checkout ${targetVersion} -- packages/`);
+        this.git(['checkout', targetVersion, '--', 'packages/']);
       } else {
-        this.git('checkout HEAD -- packages/');
+        this.git(['checkout', 'HEAD', '--', 'packages/']);
       }
       this.build(180_000);
       console.log('[upgrade-protocol] Git-based rollback successful.');
@@ -652,19 +652,19 @@ export class UpgradeProtocol {
         let isAncestor = false;
         if (!headMatches) {
           try {
-            this.git(`merge-base --is-ancestor ${commitHash} HEAD`);
+            this.git(['merge-base', '--is-ancestor', commitHash, 'HEAD']);
             isAncestor = true;
           } catch { /* not an ancestor */ }
         }
         if (headMatches || isAncestor) {
           // HEAD has this commit, but is the BUILD stale?
           // This catches the proposer-node case: lead committed locally but process is running old dist/
-          if (this.runningCommit !== 'unknown' && this.runningCommit !== this.git('rev-parse HEAD')) {
+          if (this.runningCommit !== 'unknown' && this.runningCommit !== this.git(['rev-parse', 'HEAD'])) {
             console.log(`[upgrade] Catch-up: HEAD has ${commitHash.slice(0, 8)} but running commit is stale (${this.runningCommit.slice(0, 8)}) — rebuilding`);
             try {
               this.build(180_000);
               console.log('[upgrade] Rebuild complete after local commit — triggering safe restart');
-              this.safeRestart(this.git('rev-parse HEAD'));
+              this.safeRestart(this.git(['rev-parse', 'HEAD']));
             } catch (buildErr: any) {
               console.warn(`[upgrade] Rebuild failed: ${buildErr.message?.slice(0, 200)}`);
             }
@@ -708,13 +708,13 @@ export class UpgradeProtocol {
   private getRecentFilesTouched(): string[] {
     try {
       // Try origin/master diff first (for remote upgrades)
-      const output = this.git('diff --name-only HEAD origin/master');
+      const output = this.git(['diff', '--name-only', 'HEAD', 'origin/master']);
       const files = output.split('\n').filter(Boolean);
       // If empty (proposer already pushed), fall back to last commit diff
       if (files.length > 0) return files;
     } catch { /* origin/master unavailable */ }
     try {
-      const output = this.git('diff --name-only HEAD~1 HEAD');
+      const output = this.git(['diff', '--name-only', 'HEAD~1', 'HEAD']);
       return output.split('\n').filter(Boolean);
     } catch {
       return [];
@@ -722,7 +722,7 @@ export class UpgradeProtocol {
   }
 
   private getRemoteVersion(): string {
-    try { return this.git('rev-parse --short origin/master'); } catch { return this.getCurrentVersion(); }
+    try { return this.git(['rev-parse', '--short', 'origin/master']); } catch { return this.getCurrentVersion(); }
   }
 
   private assessRisk(filesTouched: string[]): RiskAssessment {
@@ -785,15 +785,15 @@ export class UpgradeProtocol {
     }
   }
 
-  private git(cmd: string): string {
-    return execSync(`git ${cmd}`, {
+  private git(args: string[]): string {
+    return execFileSync('git', args, {
       cwd: this.repoDir, encoding: 'utf-8', timeout: 30_000,
       stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
     }).trim();
   }
 
   private getCurrentVersion(): string {
-    try { return this.git('rev-parse --short HEAD'); } catch { return 'unknown'; }
+    try { return this.git(['rev-parse', '--short', 'HEAD']); } catch { return 'unknown'; }
   }
 
   private recordUpgrade(proposalId: string, status: UpgradeRecord['status'], reason?: string): void {
