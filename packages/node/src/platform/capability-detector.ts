@@ -80,14 +80,14 @@ export function detectClaudeCode(): boolean {
   try {
     const cmd = platform() === 'win32' ? 'where claude' : 'which claude';
     execSync(cmd, { encoding: 'utf-8', stdio: 'pipe', windowsHide: true });
-    // Binary exists — also check for auth (API key or OAuth login)
+    // Binary exists — check for any known auth method
     return hasClaudeCodeAuth();
   } catch {
     return false;
   }
 }
 
-/** Check if Claude Code can actually authenticate (API key OR OAuth login) */
+/** Check if Claude Code can actually authenticate (API key, OAuth, or Max/Pro plan) */
 export function hasClaudeCodeAuth(): boolean {
   // Check ANTHROPIC_API_KEY env var (server/automated usage)
   if (process.env.ANTHROPIC_API_KEY) return true;
@@ -98,6 +98,16 @@ export function hasClaudeCodeAuth(): boolean {
       const content = readFileSync(credPath, 'utf-8').trim();
       if (content.length > 2) return true; // more than just "{}"
     }
+  } catch {
+    // ignore
+  }
+  // Check for Claude Max/Pro plan auth — ~/.claude directory with usage history
+  // indicates the user has logged in via browser/keychain at least once
+  try {
+    const claudeDir = join(homedir(), '.claude');
+    const hasHistory = existsSync(join(claudeDir, 'history.jsonl'));
+    const hasSettings = existsSync(join(claudeDir, 'settings.json'));
+    if (hasHistory && hasSettings) return true;
   } catch {
     // ignore
   }
