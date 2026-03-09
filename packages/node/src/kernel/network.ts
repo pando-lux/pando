@@ -261,7 +261,7 @@ export class PandoNetwork {
     const privateKey = getPrivateKeyFromIdentity(this.identity);
 
     // Set up peer discovery: MDNS for local + bootstrap for known peers
-    const peerDiscovery: any[] = [mdns()];
+    const peerDiscovery: any[] = [mdns({ interval: 2_000 })];
     if (this.config.bootstrapPeers.length > 0) {
       peerDiscovery.push(bootstrap({ list: this.config.bootstrapPeers }));
     }
@@ -323,6 +323,12 @@ export class PandoNetwork {
         enableKeepAlive: true,
         keepAliveInterval: 15_000, // 15s keepalive pings
       })],
+      connectionManager: {
+        // Proactively dial peers from peerStore when below minConnections
+        minConnections: 2,
+        // Check for new peers to dial every 2s (default 5s)
+        autoDialInterval: 2_000,
+      },
       peerDiscovery,
       services,
     });
@@ -405,13 +411,18 @@ export class PandoNetwork {
     }
     Promise.allSettled(startupDials).catch(() => {});
 
-    // Early discovery: re-sweep known peers 1s after start (catches peers
+    // Early discovery: re-sweep known peers 500ms after start (catches peers
     // that weren't ready during the initial dialKnownPeers call)
-    setTimeout(() => this.dialKnownPeers().catch(() => {}), 1_000);
+    setTimeout(() => this.dialKnownPeers().catch(() => {}), 500);
 
-    // Auto-reconnect and discovery sweep: dial bootstrap + known peers every 2s.
-    // Runs for all nodes (not just those with bootstrap peers) to sweep known-peers.json.
-    this.reconnectTimer = setInterval(() => this.checkAndReconnect().catch(err => console.error('[p2p] checkAndReconnect error:', err.message)), 2_000);
+    // Fast startup reconnect: 1s interval for first 30s, then settle to 2s.
+    // Aggressive early sweeps help new nodes form mesh quickly.
+    this.reconnectTimer = setInterval(() => this.checkAndReconnect().catch(err => console.error('[p2p] checkAndReconnect error:', err.message)), 1_000);
+    setTimeout(() => {
+      if (this.stopped || !this.reconnectTimer) return;
+      clearInterval(this.reconnectTimer);
+      this.reconnectTimer = setInterval(() => this.checkAndReconnect().catch(err => console.error('[p2p] checkAndReconnect error:', err.message)), 2_000);
+    }, 30_000);
 
     // Health check: remove stale peers every 60s
     this.healthTimer = setInterval(() => this.healthCheck(), 60_000);
