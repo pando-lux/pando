@@ -1594,7 +1594,13 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         // Lead agent uses custom interval for dynamic data injection (inbox + board)
         if (agent.role === 'lead') {
           let consecutiveFailures = 0;
+          let tickRunning = false;
           const interval = setInterval(async () => {
+            if (tickRunning) {
+              console.log(`[${label}] Tick skipped — previous tick still running`);
+              return;
+            }
+            tickRunning = true;
             try {
               const msg = 'Check your inbox and review board tasks now.';
               for await (const event of this.sendToTeamAgent(teamId, agent.id, msg)) {
@@ -1611,6 +1617,8 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
               } else {
                 console.warn(`[${label}] Tick error (${consecutiveFailures}/3): ${err.message}`);
               }
+            } finally {
+              tickRunning = false;
             }
           }, tickMs);
           intervals.push(interval);
@@ -1654,6 +1662,11 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       for (const agent of teamData.agents) {
         this.scheduler.unregister(`${teamId}-${agent.id}-tick`);
       }
+    }
+
+    // Destroy all agent engines to free memory
+    for (const agent of teamData.agents) {
+      await this.destroyEngine(`${teamId}:${agent.id}`);
     }
 
     this.activeTeams.delete(teamId);
