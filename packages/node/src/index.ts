@@ -1560,9 +1560,9 @@ export class PandoNode {
       (this as any)._teamRegistry = null;
     }
     // Shutdown ServiceLoader (stops all loaded services)
-    if ((this as any)._serviceLoader) {
-      await (this as any)._serviceLoader.stopAll();
-      (this as any)._serviceLoader = null;
+    if (this.serviceLoader) {
+      await this.serviceLoader.stopAll();
+      this.serviceLoader = null;
     }
     // Shutdown EngineAdapter
     await this.engineAdapter?.shutdown();

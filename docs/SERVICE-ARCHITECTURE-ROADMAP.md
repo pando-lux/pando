@@ -249,7 +249,7 @@ This is the big mechanical rename. All 100+ references across the codebase.
 | 5.1 | Update BIBLE.md: new service architecture section | DONE (Section 5.11) |
 | 5.2 | Update BIBLE.md: remove/update brain/body split to reflect service interface | DONE (brain/body stays — service layer added on top) |
 | 5.3 | Update BIBLE.md: document ServiceLoader, PandoService interface | DONE (Section 4.2 + 5.11) |
-| 5.4 | Update CLAUDE.md: new package structure, service pattern | TODO |
+| 5.4 | Update CLAUDE.md: new package structure, service pattern | DONE (7f2b0a1a — service architecture section, key files, diagnostic endpoint) |
 | 5.5 | Update infra/DEV-MODE.md: document service installation for nodes | TODO |
 | 5.6 | Create README.md for pando-node: "How to run a node" (light vs full) | TODO |
 | 5.7 | Update MEMORY.md with new architecture | DONE |
@@ -265,7 +265,7 @@ This is the big mechanical rename. All 100+ references across the codebase.
 | 6.1 | Fresh clone test: `git clone pando && npm install && node cli.js` → light node works | VERIFIED — EC2 nodes run healthy without @pando-code/core |
 | 6.2 | Service install test: `npm install @pando-code/core` → AI capability activates | VERIFIED — Windows node: npm link → engine starts → team agents run |
 | 6.3 | Service uninstall test: `npm uninstall @pando-code/core` → node gracefully degrades | VERIFIED — EC2/Mac: no engine, healthy relay/P2P. /services shows correct state |
-| 6.4 | Upgrade test: commit-and-propose → all 4 nodes upgrade → services survive | PASS — 3 deploys (8896593, 00ef17df, 9a507ccb) all propagated to 4 nodes |
+| 6.4 | Upgrade test: commit-and-propose → all 4 nodes upgrade → services survive | PASS — 4 deploys (8896593, 00ef17df, 9a507ccb, 7f2b0a1a) all propagated to all nodes |
 | 6.5 | Failover test: kill managing node → another node claims → services restart | TESTED PRIOR SESSION — orphan detection + claim + agent restart works |
 | 6.6 | Multi-service test: (future) install two services → both load | TODO (no second service exists yet) |
 
