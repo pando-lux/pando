@@ -1,6 +1,7 @@
 // Verified live: unified git operations layer — all nodes upgraded via governance pipeline.
 // Upgrade pipeline test: governance auto-upgrade verified on all 3 nodes (2026-03-09).
 // Atomic commit-and-propose test: endpoint verified on 4-node mesh (2026-03-09).
+// Auto-upgrade permissions fix: EC2 /opt/pando owned by pando:pando user (2026-03-09).
 /**
  * GitOps — Unified git operations layer.
  *
