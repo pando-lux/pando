@@ -2289,6 +2289,47 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   }
 
   /**
+   * Get recent activity (messages + tool_calls) for an entire team.
+   * Returns the last N messages and N tool_calls across all team sessions.
+   */
+  getTeamActivity(teamId: string, limit = 20): { messages: any[]; toolCalls: any[] } {
+    const teamData = this.activeTeams.get(teamId);
+    if (!teamData?.dbPath || !this.Database) return { messages: [], toolCalls: [] };
+    try {
+      const db = new this.Database(teamData.dbPath, { readonly: true });
+
+      // Check which tables exist
+      const hasMsgs = db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='messages'`
+      ).get();
+      const hasToolCalls = db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='tool_calls'`
+      ).get();
+
+      let messages: any[] = [];
+      if (hasMsgs) {
+        messages = db.prepare(
+          `SELECT m.id, m.role, substr(m.content, 1, 500) as content, m.tool_name, m.agent_id, m.created_at
+           FROM messages m ORDER BY m.created_at DESC LIMIT ?`
+        ).all(limit);
+      }
+
+      let toolCalls: any[] = [];
+      if (hasToolCalls) {
+        toolCalls = db.prepare(
+          `SELECT t.id, t.tool_name, substr(t.args, 1, 300) as args, t.success, t.duration_ms, t.created_at
+           FROM tool_calls t ORDER BY t.created_at DESC LIMIT ?`
+        ).all(limit);
+      }
+
+      db.close();
+      return { messages, toolCalls };
+    } catch {
+      return { messages: [], toolCalls: [] };
+    }
+  }
+
+  /**
    * Get recent messages from a team agent's sessions.
    * Queries the team's .pando-code.db for messages belonging to sessions
    * whose title contains the agentId (e.g. "pando-infra: lead").

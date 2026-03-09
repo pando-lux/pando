@@ -863,6 +863,20 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       }
     });
 
+    // GET /teams/:teamId/activity — Recent messages + tool_calls from PandoCode DB
+    fastify.get('/teams/:teamId/activity', async (request: any, reply: any) => {
+      try {
+        const teamId = (request.params as any).teamId;
+        const limit = Math.min(Number((request.query as any)?.limit) || 20, 100);
+        const adapter = node.getEngineAdapter();
+        const activity = adapter?.getTeamActivity?.(teamId, limit) ?? { messages: [], toolCalls: [] };
+        return { teamId, ...activity };
+      } catch (err: any) {
+        console.error('[api] Team activity query failed:', err.message);
+        return reply.status(500).send({ error: 'Failed to get team activity' });
+      }
+    });
+
     // ── Agent Templates ──────────────────────────────────────────────────
     fastify.get('/templates', async (_request: any, reply: any) => {
       try {
