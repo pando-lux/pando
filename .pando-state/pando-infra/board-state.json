@@ -1,5 +1,5 @@
 {
-  "savedAt": "2026-03-09T20:12:12.607Z",
+  "savedAt": "2026-03-09T20:14:58.350Z",
   "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
   "tasks": [
     {
@@ -97,6 +97,14 @@
       "status": "done",
       "created_at": "2026-03-09T19:03:40.232Z",
       "progress": "Auto-generated, not real. Closed."
+    },
+    {
+      "id": "task-6a12a7c3-bc82-4fee-a3ab-b8228759928e",
+      "title": "[FEATURE:medium] Add BOARD_STATE_REQUEST P2P handler for team handoff recovery",
+      "description": "File: packages/node/src/core/engine-adapter.ts\n\nCONTEXT: When a node claims an orphaned team, it needs the team's board state (pending tasks, history). Currently init-platform.ts broadcasts a BOARD_STATE_REQUEST but no handler exists to respond.\n\nWHAT TO BUILD:\n1. In engine-adapter.ts or init-kernel.ts, add a P2P request-reply handler for 'pando/board-state-request'.\n2. When received, look up the requested teamId's board-state.json from local storage (~/.pando/teams/{teamId}/board-state.json) or from the git repo (.pando-state/{teamId}/board-state.json).\n3. If found, respond with the board state JSON. If not found, respond with empty/null.\n4. The requesting node (init-platform.ts orphan handler, around line 745) already broadcasts BOARD_STATE_REQUEST and waits 5 seconds. Wire the response back so it can restore board state from a peer.\n\nREFERENCE: Look at existing P2P request-reply handlers in init-kernel.ts (search for 'pando/' handlers like pando/doorman-classify, pando/team-heartbeat). Follow the same pattern.\n\nVERIFY: After fix, if you have board state for pando-infra locally, the handler should respond when queried. Test by checking the handler is registered (look in node logs for the handler registration).",
+      "status": "pending",
+      "created_at": "2026-03-09 20:14:58",
+      "progress": ""
     },
     {
       "id": "task-eb530605-50ee-4c1c-a749-5e8cecb2e70e",
