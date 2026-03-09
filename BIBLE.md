@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-09 (Phase 6.2 resilience: DB corruption recovery, stale session TTL, dead engine detection. Chat balance fix. Input validation hardening across 13 API endpoints. P2P promise rejection fixes. Section 5.10.10 added.). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-09 (Memory leak fix: engine cleanup on agent stop/team stop/app delete. Tick overlap guard. Transfer Infinity bypass fix. Phase 6.2 resilience. Input validation hardening. 9/9 E2E pass.). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -1880,6 +1880,8 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | **App Lifecycle (AppManager)** | `core/app-manager.ts`, `api/app-api.ts` | DONE — Unified system replacing DeployPipeline + HostingService + init-platform handlers. SQLite registry, blue-green deploy, health monitoring, rollback, P2P dispatch. 5/5 pipeline E2E tests pass (71 total). |
 | **Deploy result push to chat** | `api/platform-api.ts` | DONE — Deploy result awaited (not fire-and-forget). Success/failure pushed to chat thread + SSE. Commit e6fe16b1. |
 | **Marketplace enrichment** | `api/platform-api.ts` | DONE — GET /v1/marketplace and GET /v1/marketplace/:id enriched with AppManager deployment data (status, url, tier, commit, deployedAt). Commit e6fe16b1. |
+| **Engine memory leak** | `core/engine-adapter.ts`, `api/app-api.ts` | DONE — stopTeamAgent/stopTeam/app DELETE now destroy PandoCode engine processes via engine.shutdown() + pool cleanup. Previously leaked zombie engines (13 at 95% memory). Commit 5b94cd77. |
+| **Tick overlap guard** | `core/engine-adapter.ts` | DONE — Lead agent tick handler now skips if previous tick still running. Prevents concurrent sends to same engine. Commit 919b92a0. |
 
 ### Restart Architecture (Verified 2026-03-08)
 

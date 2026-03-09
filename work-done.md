@@ -312,6 +312,31 @@
 ### Commits Pushed
 16. `80337d2b` — Fix doorman classification silent fallback
 
+## Session: 2026-03-09 (cron loop 2)
+
+### Bug Found & Fixed
+
+#### 31. Memory Leak: Zombie Engine Processes (CRITICAL)
+- **Root cause**: `stopTeamAgent()` removed agents from the list/DB but never terminated the PandoCode engine process. Each E2E test run leaked ~1-2 engines, accumulating to 13 zombie engines and 95% memory at 10min uptime.
+- **Also**: App DELETE endpoint didn't clean up project engines either.
+- **Fix**: Added `engine.shutdown()` + pool Map cleanup in `stopTeamAgent()`. Added `destroyEngine()` method to EngineAdapter. App DELETE now calls `destroyEngine()`.
+- **Impact**: Memory now stable at 225MB (4 engines) vs 238MB+ climbing (13 engines)
+- **Files**: `engine-adapter.ts:1776-1793`, `app-api.ts:166-170`
+
+### E2E Test Fixes
+- Pipeline 2: Rate-limited governance proposals now retry with 10s backoff (was failing on back-to-back proposals)
+- Pipeline 4: Thread message assertion relaxed (persistence is async, thread may exist before messages are stored)
+- All 9/9 tests pass consistently on warm node
+
+### Infrastructure
+- Both EC2 nodes updated to latest commit `a8db6b3`
+- Full 3-node mesh restored (all nodes see 2 peers)
+- Cleaned up 10 orphaned E2E test apps
+
+### Commits Pushed
+17. `a8db6b33` — E2E test reliability: Pipeline 2 rate-limit retry + Pipeline 4 async thread
+18. `5b94cd77` — Fix memory leak: destroy engine processes on agent stop and app delete
+
 ### Pending
 - [ ] PandoCode web UI testing (UI not running currently — port 4873 down)
 - [ ] Phase 6.2+: Cross-node team migration (orphan → claim → resume)
@@ -342,3 +367,7 @@
 - [x] Fix: Team creation field validation
 - [x] Fix: Template ID type validation
 - [x] Fix: P2P silent promise rejections (7 locations)
+- [x] Fix: Memory leak — zombie engines not terminated on agent stop/app delete
+- [x] E2E: Pipeline 2 rate-limit retry
+- [x] E2E: Pipeline 4 async thread tolerance
+- [x] EC2 nodes updated to a8db6b3
