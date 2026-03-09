@@ -104,7 +104,7 @@ shared < ledger < node
   Pure infrastructure. P2P networking. Identity. Economy. Governance. Storage. HTTP API.
   Has ZERO intelligence of its own. No orchestrator. No agent database. No message bus.
 
-engine-adapter.ts = THE NERVOUS SYSTEM (~1,393 lines)
+engine-adapter.ts = THE NERVOUS SYSTEM (~2,561 lines)
   The ONE file that connects brain to body.
   Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
   Starts teams (startTeam) using PandoTeams's native agent/board system.
@@ -1504,10 +1504,11 @@ BOARD RECOVERY (three sources, in priority order):
 
 **Stale CLI session cleanup (engine-adapter.ts):** Saved Claude Code CLI session IDs (`cli-session:*` in state table) have a 24-hour TTL. On `startTeam()`, sessions older than 24h are discarded and deleted from the DB. Agents start fresh instead of hanging on dead sessions.
 
-**Dead engine detection (engine-adapter.ts):** Lead agent tick handlers track consecutive failures. After 3 consecutive tick failures or a fatal error pattern (`ENOENT`, `spawn`, `session expired`, `process exit`), a `CRITICAL` log is emitted with recovery instructions. This makes zombie engines visible instead of silently broken.
+**Dead engine detection (engine-adapter.ts):** Lead agent tick handlers track consecutive failures. After 3 consecutive tick failures or a fatal error pattern (`ENOENT`, `spawn`, `session expired`, `process exit`), a `CRITICAL` log is emitted and the watchdog triggers an immediate restart attempt.
+
+**Engine watchdog (engine-adapter.ts):** `startWatchdog()` runs every 30 seconds. For each active team engine, checks `pool.has()` — if the engine is dead (crashed, idle-evicted, TTL expired), restarts it via `pool.getOrCreate()`. Circuit breaker: after 5 restarts within 1 hour for the same engine, the watchdog gives up to prevent restart loops. Tick failures trigger immediate watchdog checks instead of waiting for the next 30s interval. Timer is unref'd so it doesn't block graceful shutdown. Commit 79b201e8.
 
 **What's NOT yet implemented:**
-- **Automatic engine restart** — when a CLI process dies, the engine is not restarted. Requires node restart.
 - **Board state replication** — when a team migrates to a new node, board tasks stay on the old node. The `team-state.json` git backup is the designed recovery path but is not yet wired.
 - **Cross-node claiming conflict resolution** — the atomic UPDATE handles basic races, but there's no notification when a claim is overridden.
 
@@ -1784,7 +1785,7 @@ No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoTeams
 
 ## 6. THE ENGINE ADAPTER (detailed spec)
 
-The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-teams/core. Currently ~1,393 lines. It only exists on **PandoTeams contributor nodes** and **full dev nodes**.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-teams/core. Currently ~2,561 lines. It only exists on **PandoTeams contributor nodes** and **full dev nodes**.
 
 **Key principle:** PandoTeams uses its OWN configured provider and model. The engine-adapter does NOT override the model. Contributors choose their provider (default: Google/gemini-2.5-flash).
 
@@ -2158,7 +2159,7 @@ The `resourceId` is generated when a credential is contributed (via `/contribute
 | **Deploy pipeline resilience** | `core/app-manager.ts` | AppManager provides blue-green deploy (no port collision) + rollback (restore previous commit). Retry on transient failures still TODO. S3 partial upload edge case mitigated by rollback capability. All deploy events persisted to `app_history` table in apps.db. |
 | **Chat-created projects lack repo_url** | `api/platform-api.ts` | Chat-created projects use workspace-based deploy (workspaceDir). EC2 deploy dispatch requires GitHub repo to clone. Workspace-to-GitHub push before deploy dispatch needed. Being fixed separately. |
 | **Board state partially durable** | `core/team-registry.ts`, `init-platform.ts` | P2P board sync implemented (BOARD_STATE_REQUEST/RESPONSE) but on-demand only — claiming node requests from peers. If the old managing node is dead, board data from that node is lost. **Tested 2026-03-09:** orphan detection + team claim + agent restart all work. Local board persists across claims. Need proactive replication for full durability. |
-| **No engine watchdog** | `core/engine-adapter.ts` | Dead CLI process = dead agent until node restart. No health monitoring of spawned Claude Code processes. If the CLI crashes silently, the agent stops working with no alert or auto-restart. |
+| **Engine watchdog** | `core/engine-adapter.ts` | DONE — 30s interval watchdog monitors all team engines. Dead CLI processes auto-restart via `pool.getOrCreate()`. Circuit breaker: 5 restarts in 1 hour → gives up. Tick failures trigger immediate restart instead of waiting for next interval. Timer unref'd so it doesn't block shutdown. Commit 79b201e8. |
 | **Mac node has no auto-restart** | Infrastructure | Mac PandoTeams node runs via `nohup` — no systemd, no supervisor. If the process dies, it stays dead until manual restart. Needs launchd or equivalent. |
 | ~~**deployPeerId not persisting**~~ | `platform-api.ts:3685` | **ALREADY HANDLED.** Saved to both ProjectStore (MongoDB) and ProjectRegistry (local). |
 | ~~**Unified Pipeline Phases 3-7**~~ | `core/git-ops.ts`, `core/github-client.ts` | **DONE.** All 7 phases complete. GitOps class centralizes all git operations. GitHubClient for autonomous repo creation. All consumers refactored. See Section 5.8.2. |
