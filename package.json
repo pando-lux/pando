@@ -43,7 +43,6 @@
   },
   "dependencies": {
     "@aws-sdk/client-ssm": "^3.995.0",
-    "@pando-code/core": "file:../code/packages/core",
     "mongodb": "^7.1.0"
   }
 }
