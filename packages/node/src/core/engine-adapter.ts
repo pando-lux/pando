@@ -1512,7 +1512,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     try {
       const db = new this.Database(dbPath);
       const tasks = db.prepare(
-        `SELECT title, status, created_at FROM board_tasks
+        `SELECT id, title, description, status, created_at FROM board_tasks
          WHERE status IN ('pending', 'in_progress')
          ORDER BY
            CASE WHEN title LIKE '%CRITICAL%' THEN 0
@@ -1522,7 +1522,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
                 ELSE 4 END,
            created_at ASC
          LIMIT 20`
-      ).all() as { title: string; status: string; created_at: string }[];
+      ).all() as { id: string; title: string; description: string; status: string; created_at: string }[];
       db.close();
 
       if (tasks.length === 0) return 'BOARD STATE: No pending tasks.';
@@ -1532,7 +1532,8 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         const ageStr = age > 86400000 ? `${Math.floor(age / 86400000)}d ago`
           : age > 3600000 ? `${Math.floor(age / 3600000)}h ago`
           : `${Math.floor(age / 60000)}m ago`;
-        return `  [${t.status}] ${t.title.slice(0, 100)} — ${ageStr}`;
+        const desc = t.description ? `\n    ${t.description.slice(0, 500)}` : '';
+        return `  [${t.status}] (${t.id}) ${t.title.slice(0, 100)} — ${ageStr}${desc}`;
       });
       return `BOARD STATE (${tasks.length} active tasks):\n${lines.join('\n')}`;
     } catch {
