@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-09 (Hub simplified to 26 pages, chat-teams gateway added, legacy council deleted, self-evolution loop tested — steps 5-7 working, step 4 blocked). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-09 (Hub simplified to 26 pages, chat-teams gateway added, legacy council deleted, self-evolution loop COMPLETE — all 10 steps working). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -43,10 +43,10 @@ External agents (lead/dev/ops in pando/lead, pando/dev, pando/ops) exist to:
 
 **Self-Evolution Loop Status (as of 2026-03-09):**
 - Steps 1-3 (monitor/QA/lead ticking): WORKING — lead ticks every ~10min, reports "System healthy" on empty boards
-- Step 4 (lead processes board task and spawns builder): BROKEN — lead receives board-task prompt but produces no response. Under investigation (engine-adapter.ts / claude-code engine integration)
+- Step 4 (lead processes board task and spawns builder): WORKING — lead receives board tasks, processes them, and makes code changes (fixed by pando-teams commit b099106, timeout fix)
 - Step 5 (commit-and-propose): WORKING — tested end-to-end with BIBLE update
 - Steps 6-7 (governance → push → EC2 pull): WORKING — governance auto-approves, both EC2 nodes pull approved commits
-- Steps 8-10 (verify + BIBLE update): NOT YET TESTED (blocked by step 4)
+- Steps 8-10 (verify + BIBLE update): WORKING — lead updates BIBLE after completing tasks
 
 ### 1.2 The Portal and Workspace
 
