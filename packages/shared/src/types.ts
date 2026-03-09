@@ -178,6 +178,9 @@ export enum MessageType {
   PEER_EXCHANGE = 'peer_exchange',
   // Direct P2P upgrade notification (reliable delivery, supplements GossipSub)
   UPGRADE_NOTIFICATION = 'upgrade_notification',
+  // Board state sync (team failover — claiming node requests board from peers)
+  BOARD_STATE_REQUEST = 'board_state_request',
+  BOARD_STATE_RESPONSE = 'board_state_response',
 }
 
 export enum NodeTier {

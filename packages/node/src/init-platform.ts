@@ -682,13 +682,28 @@ Be friendly and helpful. Keep answers short.`
         console.log(`[team-registry] Auto-claiming orphaned team: ${team.id}`);
         const claimed = teamRegistry.claimTeam(team.id);
         if (claimed) {
-          // For pando-infra, use seed agents. For others, use a single default agent.
-          const agents = team.id === 'pando-infra' ? PANDO_INFRA_AGENTS : [
-            { id: 'lead', role: 'lead', displayName: `${team.displayName} Lead`, prompt: '', promptTemplate: 'lead-universal', model: 'claude-code', tickIntervalMs: 15 * 60_000 },
-          ];
-          adapter.startTeam(team.id, agents).catch((err: any) =>
-            console.warn(`[team-registry] Failed to start claimed team ${team.id}: ${err.message}`)
+          // Request board state from peers before starting team agents
+          // so restoreBoardState() in startTeam() can find the snapshot
+          console.log(`[board-sync] Requesting board state for claimed team: ${team.id}`);
+          node.network.broadcast({
+            type: MessageType.BOARD_STATE_REQUEST,
+            from: node.identity.peerId,
+            timestamp: Date.now(),
+            payload: { teamId: team.id },
+          }).catch((err: any) =>
+            console.warn(`[board-sync] Failed to broadcast BOARD_STATE_REQUEST: ${err.message}`)
           );
+
+          // Delay team start slightly to allow board state responses to arrive
+          setTimeout(() => {
+            // For pando-infra, use seed agents. For others, use a single default agent.
+            const agents = team.id === 'pando-infra' ? PANDO_INFRA_AGENTS : [
+              { id: 'lead', role: 'lead', displayName: `${team.displayName} Lead`, prompt: '', promptTemplate: 'lead-universal', model: 'claude-code', tickIntervalMs: 15 * 60_000 },
+            ];
+            adapter.startTeam(team.id, agents).catch((err: any) =>
+              console.warn(`[team-registry] Failed to start claimed team ${team.id}: ${err.message}`)
+            );
+          }, 5_000); // 5 second delay for P2P board state responses
         }
       };
 
@@ -842,7 +857,30 @@ Be friendly and helpful. Keep answers short.`
           );
           console.log(`[peer-exchange] Received ${exchangedPeers.length} peer(s) from ${from.slice(0, 12)}, ${unknownPeers.length} unknown, already connected to ${connectedPeers.size}`);
           if (unknownPeers.length > 0) {
-            // Dial all unknown peers in parallel, racing addresses per peer for speed
+            // Track successful dials for cascade — trigger on first success, not after all finish
+            let cascaded = false;
+            const triggerCascade = async () => {
+              if (cascaded) return;
+              cascaded = true;
+              try {
+                const allPeers = network.getPeers();
+                const peerAddrs = await network.getConnectedPeerAddresses();
+                if (allPeers.length >= 2 && peerAddrs.length > 0) {
+                  for (const p of allPeers) {
+                    const toShare = peerAddrs.filter((a: any) => a.peerId !== p.peerId);
+                    if (toShare.length === 0) continue;
+                    network.sendMessage(p.peerId, {
+                      type: MessageType.PEER_EXCHANGE,
+                      from: node.getIdentity()!.peerId,
+                      timestamp: Date.now(),
+                      payload: { peers: toShare },
+                    }).catch(() => {});
+                  }
+                  console.log(`[peer-exchange] Cascade re-shared with ${allPeers.length} peer(s)`);
+                }
+              } catch {}
+            };
+            // Dial all unknown peers in parallel, cascade on first success
             Promise.allSettled(unknownPeers.map(async (peer: any) => {
               const libp2p = network.getLibp2p();
               if (!libp2p) return;
@@ -852,43 +890,62 @@ Be friendly and helpful. Keep answers short.`
                 await libp2p.dial(ma(peer.addrs[0]), { signal: ac.signal });
                 clearTimeout(timer);
                 console.log(`[peer-exchange] Connected to ${peer.peerId.slice(0, 12)} via exchange from ${from.slice(0, 12)}`);
+                triggerCascade();
                 return;
               }
-              // Multiple addresses: race them — first success wins
+              // Multiple addresses: race them — first success wins (1.5s, was 2.5s)
               const ac = new AbortController();
-              const timer = setTimeout(() => ac.abort(), 2_500);
+              const timer = setTimeout(() => ac.abort(), 1_500);
               try {
                 await Promise.any(peer.addrs.map(async (addr: string) => {
                   await libp2p!.dial(ma(addr), { signal: ac.signal });
                   console.log(`[peer-exchange] Connected to ${peer.peerId.slice(0, 12)} via exchange from ${from.slice(0, 12)}`);
                 }));
+                triggerCascade();
               } finally {
                 clearTimeout(timer);
               }
-            })).then(async (results) => {
-              const dialed = results.filter(r => r.status === 'fulfilled').length;
-              if (dialed > 0) {
-                console.log(`[peer-exchange] Discovered ${dialed} new peer(s) from ${from.slice(0, 12)}`);
-                // Cascade: re-share updated peer list so newly-discovered peers propagate fast
-                try {
-                  const allPeers = network.getPeers();
-                  const peerAddrs = await network.getConnectedPeerAddresses();
-                  if (allPeers.length >= 2 && peerAddrs.length > 0) {
-                    for (const p of allPeers) {
-                      const toShare = peerAddrs.filter((a: any) => a.peerId !== p.peerId);
-                      if (toShare.length === 0) continue;
-                      network.sendMessage(p.peerId, {
-                        type: MessageType.PEER_EXCHANGE,
-                        from: node.getIdentity()!.peerId,
-                        timestamp: Date.now(),
-                        payload: { peers: toShare },
-                      }).catch(() => {});
-                    }
-                    console.log(`[peer-exchange] Cascade re-shared with ${allPeers.length} peer(s)`);
-                  }
-                } catch {}
-              }
-            });
+            }));
+          }
+        }
+      }
+
+      // Handle board state requests (team failover — peer asks for board snapshot)
+      if (message.type === MessageType.BOARD_STATE_REQUEST) {
+        const reqTeamId = (message.payload as any)?.teamId;
+        if (reqTeamId && typeof reqTeamId === 'string') {
+          const adapter = node.getEngineAdapter?.();
+          if (adapter?.available) {
+            const snapshot = adapter.getBoardStateSnapshot(reqTeamId);
+            if (snapshot) {
+              console.log(`[board-sync] Responding to BOARD_STATE_REQUEST for team ${reqTeamId} (${snapshot.tasks.length} tasks)`);
+              node.network.sendMessage(from, {
+                type: MessageType.BOARD_STATE_RESPONSE,
+                from: node.identity!.peerId,
+                timestamp: Date.now(),
+                payload: { teamId: reqTeamId, snapshot },
+              }).catch((err: any) =>
+                console.warn(`[board-sync] Failed to send BOARD_STATE_RESPONSE: ${err.message}`)
+              );
+            }
+          }
+        }
+      }
+
+      // Handle board state responses (team failover — receiving board from peer)
+      if (message.type === MessageType.BOARD_STATE_RESPONSE) {
+        const respTeamId = (message.payload as any)?.teamId;
+        const snapshot = (message.payload as any)?.snapshot;
+        if (respTeamId && snapshot?.tasks?.length) {
+          const adapter = node.getEngineAdapter?.();
+          if (adapter?.available) {
+            // Only restore if we are the managing node for this team
+            const teamRegistry = (node as any)._teamRegistry as TeamRegistry | undefined;
+            const team = teamRegistry?.getTeam(respTeamId);
+            if (team && team.managingNode === node.identity!.peerId) {
+              console.log(`[board-sync] Received BOARD_STATE_RESPONSE for team ${respTeamId} from ${from.slice(0, 12)} (${snapshot.tasks.length} tasks)`);
+              adapter.restoreBoardStateFromSnapshot(respTeamId, snapshot);
+            }
           }
         }
       }
@@ -899,6 +956,7 @@ Be friendly and helpful. Keep answers short.`
         MessageType.TASK_SYNC_REQUEST, MessageType.TASK_SYNC_RESPONSE,
         MessageType.BALANCE_REQUEST, MessageType.CAPABILITY_PROFILE_DIRECT,
         MessageType.PEER_EXCHANGE, MessageType.UPGRADE_NOTIFICATION,
+        MessageType.BOARD_STATE_REQUEST, MessageType.BOARD_STATE_RESPONSE,
       ]);
       if (!handledTypes.has(message.type)) {
         console.log(`[P2P] Unhandled message type: ${message.type}`);

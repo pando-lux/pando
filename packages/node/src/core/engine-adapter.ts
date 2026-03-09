@@ -1249,6 +1249,73 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   }
 
   /**
+   * Get the board state snapshot for a team as a JSON-serializable object.
+   * Used for P2P board state sync (team failover). Returns null if no board data.
+   * Only includes non-done tasks (same filtering as restoreBoardState).
+   */
+  getBoardStateSnapshot(teamId: string): { savedAt: string; nodeId: string; tasks: any[] } | null {
+    try {
+      // First try live board data from active team
+      const teamData = this.activeTeams.get(teamId);
+      if (teamData?.dbPath) {
+        const tasks = this.getTeamBoard(teamId, false); // exclude done tasks
+        if (tasks.length > 0) {
+          return {
+            savedAt: new Date().toISOString(),
+            nodeId: this.config?.nodeId || 'unknown',
+            tasks,
+          };
+        }
+      }
+
+      // Fall back to persisted board-state.json
+      const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
+      const filePath = pathJoin(baseDir, 'teams', teamId, 'board-state.json');
+      if (!existsSync(filePath)) return null;
+
+      const raw = readFileSync(filePath, 'utf-8');
+      const snapshot = JSON.parse(raw);
+      const tasks = (snapshot.tasks || []).filter((t: any) => t.status !== 'done');
+      if (tasks.length === 0) return null;
+
+      return {
+        savedAt: snapshot.savedAt || new Date().toISOString(),
+        nodeId: snapshot.nodeId || 'unknown',
+        tasks,
+      };
+    } catch (err: any) {
+      console.warn(`[board-sync] getBoardStateSnapshot failed for team ${teamId}: ${err.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Restore board state from a P2P-received snapshot (team failover).
+   * Writes the snapshot to board-state.json then delegates to restoreBoardState().
+   * Returns true if any tasks were restored.
+   */
+  restoreBoardStateFromSnapshot(teamId: string, snapshot: { savedAt: string; nodeId: string; tasks: any[] }): boolean {
+    try {
+      if (!snapshot?.tasks?.length) return false;
+
+      const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
+      const teamDir = pathJoin(baseDir, 'teams', teamId);
+      mkdirSync(teamDir, { recursive: true });
+
+      const filePath = pathJoin(teamDir, 'board-state.json');
+      const tmpPath = filePath + '.tmp';
+      writeFileSync(tmpPath, JSON.stringify(snapshot, null, 2), 'utf-8');
+      renameSync(tmpPath, filePath);
+      console.log(`[board-sync] Wrote P2P board snapshot for team ${teamId} (${snapshot.tasks.length} tasks from node ${snapshot.nodeId})`);
+
+      return this.restoreBoardState(teamId);
+    } catch (err: any) {
+      console.warn(`[board-sync] restoreBoardStateFromSnapshot failed for team ${teamId}: ${err.message}`);
+      return false;
+    }
+  }
+
+  /**
    * Trigger a team agent in the background. Returns immediately.
    */
   triggerTeamAgentBackground(teamId: string, agentId: string, message: string): void {

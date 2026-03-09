@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-09 (Atomic commit-and-propose endpoint, 4-node mesh (Mac = 2nd PandoCode), GossipSub unverifiable message fix, Claude Code 3-source auth detection). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-09 (Phase 1 security hardening complete, Elastic IPs, governance-deferred push, board P2P gap documented). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -1058,7 +1058,7 @@ All git operations consolidated into a single `GitOps` class (`core/git-ops.ts`)
 
 **Tier 1 (S3 static):** "build me a portfolio website" → PandoCode (Gemini 2.5 Flash) built index.html + style.css → GitHub push → EC2 cloned → Tier 1 detected → S3 upload with gateway vars injected → live at `http://pando-deployments.s3-website-us-east-1.amazonaws.com/public/{projectId}/index.html` → marketplace listing with `deploymentStatus: live`.
 
-**Tier 2 (PM2+nginx):** "build me a real-time chat room app with WebSockets" → PandoCode built Express+ws server → GitHub push → EC2 cloned → Tier 2 detected (express+ws deps, scripts.start) → `npm install` (66 modules) → PM2 start on port 3009 → nginx reverse proxy config written → live at `http://34.201.82.126/apps/{projectId}/` → HTTP 200, WebSocket upgrade working through nginx.
+**Tier 2 (PM2+nginx):** "build me a real-time chat room app with WebSockets" → PandoCode built Express+ws server → GitHub push → EC2 cloned → Tier 2 detected (express+ws deps, scripts.start) → `npm install` (66 modules) → PM2 start on port 3009 → nginx reverse proxy config written → live at `http://3.226.89.40/apps/{projectId}/` → HTTP 200, WebSocket upgrade working through nginx.
 
 **CRITICAL: Builder vs Deployer targeting (the #1 gotcha)**
 ```
@@ -1822,8 +1822,8 @@ This makes a contributor's Claude Code subscription a network resource — they 
 
 | Machine | IP | Instance ID | Role | Features |
 |---|---|---|---|---|
-| EC2-1 | 54.160.217.16 | i-066e87f7440e7e2f5 | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY, --relay |
-| EC2-2 | 34.201.82.126 | i-002a88a1372adfbdb | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY, --relay |
+| EC2-1 | 44.196.69.210 | i-066e87f7440e7e2f5 | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY, --relay, Elastic IP |
+| EC2-2 | 3.226.89.40 | i-002a88a1372adfbdb | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY, --relay, Elastic IP |
 | Windows | 100.87.67.78 | — | Contributor | PandoCode, Claude Code, P2P port 4100, API port 4000 |
 | Mac | — | — | Contributor | PandoCode (2nd node), nohup (no auto-restart) |
 
@@ -2002,6 +2002,8 @@ The codebase has multiple restart mechanisms, each serving a distinct purpose:
 
 ### Security & Operational Hardening (Audit Fixes)
 
+**Phase 1 security hardening: COMPLETE.** All 7 audit items fixed (commits `4ef3490`, `e161cf3`). Covers: command injection prevention (execFileSync everywhere), P2P Infinity/NaN guards, financial isFinite() gates, Two Laws enforcement on all agent-facing endpoints, board task CRUD validation, repoUrl validation, governance-deferred push (M-7).
+
 | Feature | Details |
 |---|---|
 | **User ban mechanism** | `ledger.banAccount(peerId)` / `isBanned()` enforced in api-server.ts — banned users receive 403 on all requests |
@@ -2044,7 +2046,7 @@ The `resourceId` is generated when a credential is contributed (via `/contribute
 | ~~**Tier 2 PM2 persistence**~~ | `init-platform.ts` | **ALREADY HANDLED.** `pm2 save` is called after every deploy. Port registry also persists. |
 | **Deploy pipeline resilience** | `core/app-manager.ts` | AppManager provides blue-green deploy (no port collision) + rollback (restore previous commit). Retry on transient failures still TODO. S3 partial upload edge case mitigated by rollback capability. All deploy events persisted to `app_history` table in apps.db. |
 | **Chat-created projects lack repo_url** | `api/platform-api.ts` | Chat-created projects use workspace-based deploy (workspaceDir). EC2 deploy dispatch requires GitHub repo to clone. Workspace-to-GitHub push before deploy dispatch needed. Being fixed separately. |
-| **Board state not durable** | `core/team-registry.ts` | Local SQLite only. `team-state.json` backup is NOT wired — if node dies, board tasks are lost unless PandoCode's own SQLite has them. Need persistent backup or P2P board recovery. |
+| **Board state not durable (no P2P sync)** | `core/team-registry.ts` | Board state is local-only SQLite — no P2P transfer for team failover. If a managing node dies, board tasks are lost unless PandoCode's own SQLite has them. `team-state.json` backup is NOT wired. Needed for reliable team handoff: either P2P board sync or persistent backup to git/remote store. |
 | **No engine watchdog** | `core/engine-adapter.ts` | Dead CLI process = dead agent until node restart. No health monitoring of spawned Claude Code processes. If the CLI crashes silently, the agent stops working with no alert or auto-restart. |
 | **Mac node has no auto-restart** | Infrastructure | Mac PandoCode node runs via `nohup` — no systemd, no supervisor. If the process dies, it stays dead until manual restart. Needs launchd or equivalent. |
 | ~~**deployPeerId not persisting**~~ | `platform-api.ts:3685` | **ALREADY HANDLED.** Saved to both ProjectStore (MongoDB) and ProjectRegistry (local). |
@@ -2102,8 +2104,7 @@ Observer and QA agents also use claude-code — all 3 pando-infra agents run on 
    Lead → pando_workspace({ repo: "pando-lux/node" }) → gets local clone path
    Lead → spawn_agent({ role: "builder", task: "Fix ...", working_directory: <path> })
    Builder reads code, writes fix, runs `npm run build`, runs tests
-   Builder commits: git add + git commit
-   Builder pushes: git push origin master
+   Builder commits locally: git add + git commit (NO push yet — push is DEFERRED until governance passes)
 
 4. GOVERN (only if team.governanceRequired == true)
    Lead → curl POST http://127.0.0.1:4000/v1/governance/propose
@@ -2111,9 +2112,14 @@ Observer and QA agents also use claude-code — all 3 pando-infra agents run on 
    API auto-sets category='upgrade' and builds upgradePayload when commitHash present.
    Governance: security file check → dangerous pattern scan → AI review (advisory) → kernel delay
    Auto-approves in dev mode (<=8 peers). Real voting with more peers.
-   Approved → onUpgradeApprovedCallback fires → pullAndUpgrade locally → broadcast to peers
+   Approved → push to origin → onUpgradeApprovedCallback fires → pullAndUpgrade locally → broadcast to peers
 
    (User project teams with governanceRequired: false skip this step — deploy directly)
+
+   **M-7 fix:** Push is now deferred until after governance approval. Previously, builders pushed
+   immediately and governance validated after the fact. Now the flow is:
+   commit locally → propose → governance approves → push to origin → notify peers.
+   This prevents unapproved code from reaching the remote repo.
 
 5. UPGRADE (all nodes, 4 paths — most reliable first)
    Path A: Direct P2P notification to each peer (TCP, reliable — primary)
@@ -2174,7 +2180,7 @@ When `commitHash` is present, the API automatically:
 
 Atomic pipeline that replaces 5+ sequential bash commands with a single curl call. Used by the pando-infra lead agent.
 
-**Pipeline:** `git add → npm run build → git commit → git push → governance propose → mark task done`
+**Pipeline:** `git add → npm run build → git commit → governance propose → (push deferred until governance approves) → mark task done`
 
 **Request body:**
 ```json
@@ -2191,7 +2197,7 @@ Atomic pipeline that replaces 5+ sequential bash commands with a single curl cal
   "status": "success",
   "commitHash": "abc123...",
   "proposalId": "prop-uuid",
-  "steps": ["staged", "built", "committed", "pushed", "proposed", "task-done"]
+  "steps": ["staged", "built", "committed", "proposed", "task-done"]
 }
 ```
 
@@ -2209,12 +2215,12 @@ Atomic pipeline that replaces 5+ sequential bash commands with a single curl cal
 6. **Build must pass.** `upgrade-protocol.ts build()` tries `npm run build`, falls back to targeted `npx tsc -p packages/node/tsconfig.json` (for EC2 nodes missing @pando-code/core). If both fail → rollback to previous commit. No broken deploys.
 7. **Two Laws filter.** All user input and board tasks filtered. Teams cannot be weaponized.
 8. **npm install before build.** New deps may have been added between commits. `npm install` runs before `build()` in upgrade-protocol.ts. Failure is non-fatal (build may still work if deps didn't change).
-9. **Hash verification is the security gate.** Even if someone pushes malicious code to GitHub, nodes only upgrade to the exact commit hash approved by governance. `merge-base --is-ancestor` ensures the hash is in origin/master's history.
+9. **Hash verification is the security gate.** Push to origin is deferred until governance approves (M-7 fix). Nodes only upgrade to the exact commit hash approved by governance. `merge-base --is-ancestor` ensures the hash is in origin/master's history.
 10. **Team handoff is automatic.** If a managing node dies, any PandoCode-capable node claims the orphaned team. Board recovered from git. No manual intervention needed.
 
 ### The Goal
 
-**Phase 1 (PROVEN 2026-03-07 with legacy council code):** pando-infra team detects issues, creates board tasks, spawns builders, fixes code, proposes via governance. Full autonomous loop — fix → commit → push → governance → all nodes upgrade. Verified end-to-end across 3 nodes (1 Windows + 2 EC2).
+**Phase 1 (PROVEN 2026-03-07, security hardened 2026-03-09):** pando-infra team detects issues, creates board tasks, spawns builders, fixes code, proposes via governance. Full autonomous loop — fix → commit → governance → push → all nodes upgrade. Security hardening complete: all 7 audit items fixed (commits `4ef3490`, `e161cf3`), governance-deferred push, Elastic IPs on EC2 nodes. Verified end-to-end across 3 nodes (1 Windows + 2 EC2).
 
 **Phase 2 (COMPLETE 2026-03-09):** Migrated from legacy hardcoded council to team architecture. TeamRegistry + `/v1/teams/*` endpoints + team handoff + git-backed board recovery. All legacy council routes delegate to `/teams/pando-infra`.
 
@@ -2225,8 +2231,8 @@ Atomic pipeline that replaces 5+ sequential bash commands with a single curl cal
 | Node | Role | PandoCode | Relay | Notes |
 |---|---|---|---|---|
 | Windows | Dev machine | Yes | No | P2P port 4100, API port 4000. Primary dev + CEO agent. |
-| EC2-1 (54.160.217.16) | Compute + relay | No | Yes (`--relay`) | systemd, MongoDB, NAT traversal relay |
-| EC2-2 (34.201.82.126) | Compute + relay | No | Yes (`--relay`) | systemd, MongoDB, NAT traversal relay |
+| EC2-1 (44.196.69.210) | Compute + relay | No | Yes (`--relay`) | systemd, MongoDB, NAT traversal relay, Elastic IP |
+| EC2-2 (3.226.89.40) | Compute + relay | No | Yes (`--relay`) | systemd, MongoDB, NAT traversal relay, Elastic IP |
 | Mac | PandoCode | Yes | No | 2nd PandoCode contributor. No auto-restart (nohup). |
 
 EC2 nodes run with `--relay` flag enabling circuit relay for NAT traversal — Windows and Mac nodes behind NAT can reach each other through EC2 relays. Dev infrastructure details (IPs, SSH, peer IDs, auth tokens, quick commands) are in `infra/DEV-MODE.md` (gitignored).
