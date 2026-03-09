@@ -672,8 +672,13 @@ Be friendly and helpful. Keep answers short.`
       // Subscribe to GossipSub team topic + wire peer sync
       teamRegistry.start();
 
-      // Start orphan scan (5-minute interval, 20-minute stale threshold)
-      teamRegistry.startOrphanScan();
+      // Start orphan scan — fast in dev mode (≤8 peers: 30s scan, 2 min threshold)
+      const peerCount = node.network?.getPeers?.()?.length ?? 0;
+      if (peerCount <= 8) {
+        teamRegistry.startOrphanScanDevMode();
+      } else {
+        teamRegistry.startOrphanScan();
+      }
 
       // Orphan detection callback: auto-claim + start orphaned teams
       teamRegistry.onOrphanDetected = (team) => {
@@ -742,12 +747,14 @@ Be friendly and helpful. Keep answers short.`
 
         // Heartbeat for all teams we manage (every 5 minutes)
         // #audit: Store ref so performStop() can clear it
+        // Heartbeat fast in dev mode (30s) so orphan detection works quickly
+        const heartbeatMs = peerCount <= 8 ? 30_000 : 5 * 60_000;
         node._teamHeartbeatTimer = setInterval(() => {
           const myTeams = teamRegistry.getTeamsForNode(node.identity.peerId);
           for (const team of myTeams) {
             teamRegistry.updateHeartbeat(team.id);
           }
-        }, 5 * 60_000);
+        }, heartbeatMs);
         node._teamHeartbeatTimer.unref();
       }
 

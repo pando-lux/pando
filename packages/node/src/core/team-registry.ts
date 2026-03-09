@@ -48,8 +48,10 @@ interface PandoMessage {
 // ---------------------------------------------------------------------------
 
 const TOPIC = 'pando/teams';
-const DEFAULT_ORPHAN_THRESHOLD_MS = 20 * 60 * 1000; // 20 minutes
-const DEFAULT_ORPHAN_SCAN_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_ORPHAN_THRESHOLD_MS = 20 * 60 * 1000;      // 20 min (production)
+const DEFAULT_ORPHAN_SCAN_INTERVAL_MS = 5 * 60 * 1000;  // 5 min (production)
+const DEV_ORPHAN_THRESHOLD_MS = 2 * 60 * 1000;           // 2 min (dev: ≤8 peers)
+const DEV_ORPHAN_SCAN_INTERVAL_MS = 30 * 1000;           // 30s (dev: ≤8 peers)
 const DEDUP_CAP = 10_000;
 
 // ---------------------------------------------------------------------------
@@ -443,16 +445,24 @@ export class TeamRegistry {
   // Orphan management
   // -----------------------------------------------------------------------
 
-  startOrphanScan(intervalMs: number = DEFAULT_ORPHAN_SCAN_INTERVAL_MS): void {
+  private orphanThresholdMs: number = DEFAULT_ORPHAN_THRESHOLD_MS;
+
+  startOrphanScan(intervalMs: number = DEFAULT_ORPHAN_SCAN_INTERVAL_MS, thresholdMs?: number): void {
     if (this.orphanScanInterval) {
       clearInterval(this.orphanScanInterval);
     }
+    if (thresholdMs) this.orphanThresholdMs = thresholdMs;
     this.orphanScanInterval = setInterval(() => this.scanForOrphans(), intervalMs);
-    log('orphan scan started — interval ' + intervalMs + 'ms');
+    log(`orphan scan started — interval ${intervalMs}ms, threshold ${this.orphanThresholdMs}ms`);
+  }
+
+  /** Use fast orphan detection for small networks (≤8 peers). */
+  startOrphanScanDevMode(): void {
+    this.startOrphanScan(DEV_ORPHAN_SCAN_INTERVAL_MS, DEV_ORPHAN_THRESHOLD_MS);
   }
 
   private scanForOrphans(): void {
-    const orphans = this.getOrphanedTeams();
+    const orphans = this.getOrphanedTeams(this.orphanThresholdMs);
     if (orphans.length === 0) return;
 
     log('orphan scan found ' + orphans.length + ' orphaned team(s)');
