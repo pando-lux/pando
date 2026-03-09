@@ -87,10 +87,10 @@ export class LedgerSync {
     // When a new peer connects, request their recent transactions and activity.
     // Two attempts: immediate (5s) and retry (30s) to handle GossipSub mesh forming delay.
     this.network.onPeerConnect((peerId) => {
-      setTimeout(() => this.requestSync(peerId).catch(err => console.error(`[p2p] requestSync error for ${peerId.slice(0, 16)}:`, err.message)), 5000);
-      setTimeout(() => this.requestActivitySync(peerId).catch(err => console.error(`[p2p] requestActivitySync error for ${peerId.slice(0, 16)}:`, err.message)), 5500);
-      // Retry after 30s in case GossipSub mesh wasn't ready for the first attempt
-      setTimeout(() => this.requestSync(peerId).catch(err => console.error(`[p2p] requestSync retry error for ${peerId.slice(0, 16)}:`, err.message)), 30000);
+      setTimeout(() => this.requestSync(peerId).catch(err => console.error(`[p2p] requestSync error for ${peerId.slice(0, 16)}:`, err.message)), 2000);
+      setTimeout(() => this.requestActivitySync(peerId).catch(err => console.error(`[p2p] requestActivitySync error for ${peerId.slice(0, 16)}:`, err.message)), 2500);
+      // Retry after 12s in case GossipSub mesh wasn't ready for the first attempt
+      setTimeout(() => this.requestSync(peerId).catch(err => console.error(`[p2p] requestSync retry error for ${peerId.slice(0, 16)}:`, err.message)), 12000);
     });
 
     // Start periodic sync health check to catch up if we fall behind

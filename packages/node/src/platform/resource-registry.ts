@@ -354,6 +354,45 @@ export class ResourceRegistry {
     return Array.from(this.resources.values());
   }
 
+  /**
+   * Resolve a GitHub credential for a given repo URL.
+   * Checks user-scoped credentials first, then any active code_repository credential on this node.
+   * Returns an authenticated URL or null if no credential available.
+   */
+  async resolveGitCredential(repoUrl: string, userId?: string): Promise<string | null> {
+    // Find active code_repository resources
+    const codeResources = this.findResources('code_repository' as ResourceCredentialType);
+    if (codeResources.length === 0) return null;
+
+    // 1. If userId provided, look for user-scoped credential first
+    let resource: ResourceRecord | undefined;
+    if (userId) {
+      resource = codeResources.find(r => r.userId === userId);
+    }
+    // 2. Fall back to any active code_repository credential
+    if (!resource) {
+      resource = codeResources[0];
+    }
+
+    // 3. Decrypt the PAT
+    const pat = await this.getCredential(resource.resourceId);
+    if (!pat) return null;
+
+    // 4. Inject PAT into the URL
+    try {
+      const url = new URL(repoUrl);
+      if (url.hostname !== 'github.com') return null;
+      url.username = 'x-access-token';
+      url.password = pat;
+      return url.toString();
+    } catch {
+      // URL parsing failed — try regex-based approach for non-standard URLs
+      const stripped = repoUrl.replace(/https:\/\/[^@]+@github\.com\//, 'https://github.com/');
+      const cleaned = stripped.replace(/https:\/\/github\.com\//, '');
+      return `https://x-access-token:${pat}@github.com/${cleaned}`;
+    }
+  }
+
   /** Handle incoming GossipSub message */
   private handleMessage(message: PandoMessage): void {
     const payload = message.payload as any;

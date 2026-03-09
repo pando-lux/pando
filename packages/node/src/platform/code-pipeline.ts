@@ -14,7 +14,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from 'node:fs';
-import { execSync, execFileSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { join, relative, dirname, extname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type {
@@ -142,8 +142,8 @@ export class CodePipeline {
 
     try {
       // Get both unstaged and staged changes
-      const unstaged = execSync('git diff --name-only', { cwd: this.repoDir, encoding: 'utf-8', windowsHide: true }).trim();
-      const staged = execSync('git diff --cached --name-only', { cwd: this.repoDir, encoding: 'utf-8', windowsHide: true }).trim();
+      const unstaged = execFileSync('git', ['diff', '--name-only'], { cwd: this.repoDir, encoding: 'utf-8', windowsHide: true }).trim();
+      const staged = execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: this.repoDir, encoding: 'utf-8', windowsHide: true }).trim();
 
       const changedFiles = new Set<string>();
       if (unstaged) unstaged.split('\n').forEach((f: string) => changedFiles.add(f.trim()));

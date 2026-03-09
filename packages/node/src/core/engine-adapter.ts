@@ -93,7 +93,7 @@ function createLuxBudgetProvider(luxPerUsd = 100) {
 
 // ─── Pando Tools ────────────────────────────────────────────────────────
 
-async function createPandoTools(apiPort: number, apiToken?: string) {
+async function createPandoTools(apiPort: number, apiToken?: string, resourceRegistry?: ResourceRegistry | null) {
   const baseUrl = `http://127.0.0.1:${apiPort}`;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiToken) headers['Authorization'] = `Bearer ${apiToken}`;
@@ -234,7 +234,7 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
         branch: z.string().optional().default('main').describe('Branch to checkout (default: main).'),
       }),
       execute: async (args: any): Promise<any> => {
-        const { execSync } = await import('node:child_process');
+        const { execFileSync } = await import('node:child_process');
         const { join, resolve, dirname } = await import('node:path');
         const { existsSync, mkdirSync } = await import('node:fs');
         const os = await import('node:os');
@@ -274,27 +274,25 @@ async function createPandoTools(apiPort: number, apiToken?: string) {
         try {
           if (existsSync(join(workDir, '.git'))) {
             // Already cloned — pull latest
-            execSync(`git -C "${workDir}" fetch origin ${branch} && git -C "${workDir}" checkout ${branch} && git -C "${workDir}" pull origin ${branch}`, {
-              timeout: 60000,
-              stdio: 'pipe',
-            });
+            const gitOpts = { timeout: 60000, stdio: 'pipe' as const, windowsHide: true };
+            execFileSync('git', ['-C', workDir, 'fetch', 'origin', branch], gitOpts);
+            execFileSync('git', ['-C', workDir, 'checkout', branch], gitOpts);
+            execFileSync('git', ['-C', workDir, 'pull', 'origin', branch], gitOpts);
             return { success: true, output: JSON.stringify({ path: workDir, status: 'updated', repo, branch }) };
           } else {
             // 3. Clone fresh from GitHub.
-            // Extract git credentials from the local node repo's origin remote
-            // so multi-account machines don't get prompted for auth.
+            // Use contributed credential from ResourceRegistry instead of hardcoded git remote PAT
             let cloneUrl = repo.includes('/') ? `https://github.com/${repo}.git` : `https://github.com/pando-lux/${repo}.git`;
-            try {
-              const originUrl = execSync(`git -C "${nodeRepoRoot}" remote get-url origin`, { encoding: 'utf-8', timeout: 5000, stdio: 'pipe' }).trim();
-              const match = originUrl.match(/https:\/\/([^@]+)@github\.com\//);
-              if (match) {
-                // Reuse the same user:token credentials for GitHub clones
-                cloneUrl = cloneUrl.replace('https://github.com/', `https://${match[1]}@github.com/`);
-              }
-            } catch { /* no credentials found — use plain URL */ }
-            execSync(`git clone --branch ${branch} "${cloneUrl}" "${workDir}"`, {
+            if (resourceRegistry?.resolveGitCredential) {
+              try {
+                const authenticatedUrl = await resourceRegistry.resolveGitCredential(cloneUrl);
+                if (authenticatedUrl) cloneUrl = authenticatedUrl;
+              } catch { /* credential resolution failed — use plain URL */ }
+            }
+            execFileSync('git', ['clone', '--branch', branch, cloneUrl, workDir], {
               timeout: 120000,
-              stdio: 'pipe',
+              stdio: 'pipe' as const,
+              windowsHide: true,
             });
             return { success: true, output: JSON.stringify({ path: workDir, status: 'cloned', repo, branch }) };
           }
@@ -760,7 +758,7 @@ export class EngineAdapter {
     await this.injectApiKeys(config.resourceRegistry);
 
     // Pre-create Pando tools and Lux provider (shared across all engines)
-    this.pandoTools = await createPandoTools(config.apiPort, config.apiToken);
+    this.pandoTools = await createPandoTools(config.apiPort, config.apiToken, config.resourceRegistry);
     this.luxProvider = createLuxBudgetProvider(config.luxPerUsd);
 
     // Create engine pool with lifecycle hooks
@@ -895,17 +893,18 @@ export class EngineAdapter {
           try {
             // Dir already exists — use git init + fetch + checkout (clone fails on non-empty dirs)
             const gitDir = pathJoin(projectDir, '.git');
+            const { execFileSync: efs } = await import('node:child_process');
+            const gitCmdOpts = { cwd: projectDir, stdio: 'pipe' as const, windowsHide: true };
             if (!fsExists(gitDir)) {
-              execSync('git init', { cwd: projectDir, timeout: 10_000, stdio: 'pipe', windowsHide: true });
-              const { execFileSync: efs } = await import('node:child_process');
-              efs('git', ['remote', 'add', 'origin', project.repoUrl], { cwd: projectDir, timeout: 10_000, stdio: 'pipe', windowsHide: true });
+              efs('git', ['init'], { ...gitCmdOpts, timeout: 10_000 });
+              efs('git', ['remote', 'add', 'origin', project.repoUrl], { ...gitCmdOpts, timeout: 10_000 });
             }
-            execSync('git fetch origin', { cwd: projectDir, timeout: 60_000, stdio: 'pipe', windowsHide: true });
+            efs('git', ['fetch', 'origin'], { ...gitCmdOpts, timeout: 60_000 });
             // Try main branch first, fall back to master
             try {
-              execSync('git checkout -f origin/main -- .', { cwd: projectDir, timeout: 30_000, stdio: 'pipe', windowsHide: true });
+              efs('git', ['checkout', '-f', 'origin/main', '--', '.'], { ...gitCmdOpts, timeout: 30_000 });
             } catch {
-              execSync('git checkout -f origin/master -- .', { cwd: projectDir, timeout: 30_000, stdio: 'pipe', windowsHide: true });
+              efs('git', ['checkout', '-f', 'origin/master', '--', '.'], { ...gitCmdOpts, timeout: 30_000 });
             }
             const recovered = readdirSync(projectDir).filter(f => f !== 'PANDO_PROJECT.json' && f !== '.git');
             console.log(`[engine] Recovered ${recovered.length} file(s) from ${project.repoUrl}`);

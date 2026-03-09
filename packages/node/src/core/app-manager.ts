@@ -52,10 +52,12 @@ export interface AppConfig {
   healthEndpoint?: string;
   healthTimeout?: number;
   processManager?: 'pm2' | 'systemd' | 'supervisor';
-  tier?: 1 | 2;
+  tier?: 1 | 2 | 3; // 1=static/S3, 2=server/PM2, 3=infrastructure
   envVars?: Record<string, string>;
   hostPeerId?: string;
   hostAddress?: string;
+  governance?: boolean;                // true if updates require governance approval
+  deployAction?: 'pm2' | 'restart-node'; // 'pm2' = PM2 process, 'restart-node' = exit 75 to restart
 }
 
 export interface App {
@@ -85,6 +87,8 @@ export interface App {
   last_health_at: number | null;
   restart_count: number;
   max_restarts: number;
+  governance: number;        // 1 if updates require governance approval
+  deploy_action: string;     // 'pm2' or 'restart-node'
 }
 
 export interface AppHistory {
@@ -212,7 +216,9 @@ export class AppManager {
         updated_at INTEGER,
         last_health_at INTEGER,
         restart_count INTEGER DEFAULT 0,
-        max_restarts INTEGER DEFAULT 10
+        max_restarts INTEGER DEFAULT 10,
+        governance INTEGER DEFAULT 0,
+        deploy_action TEXT DEFAULT 'pm2'
       );
 
       CREATE TABLE IF NOT EXISTS app_history (
@@ -229,6 +235,10 @@ export class AppManager {
         created_at INTEGER NOT NULL
       );
     `);
+
+    // Migrations for existing databases — add new columns if missing
+    try { this.db.exec('ALTER TABLE apps ADD COLUMN governance INTEGER DEFAULT 0'); } catch {}
+    try { this.db.exec('ALTER TABLE apps ADD COLUMN deploy_action TEXT DEFAULT \'pm2\''); } catch {}
   }
 
   // ── Registration ─────────────────────────────────────────────────────────
@@ -240,9 +250,10 @@ export class AppManager {
     this.db.prepare(`
       INSERT OR REPLACE INTO apps
         (id, name, repo_url, build_cmd, start_cmd, health_endpoint, health_timeout,
-         process_manager, tier, env_json, host_peer_id, host_address, created_at, updated_at)
+         process_manager, tier, env_json, host_peer_id, host_address,
+         governance, deploy_action, created_at, updated_at)
       VALUES
-        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).run(
       config.id,
       config.name,
@@ -256,6 +267,8 @@ export class AppManager {
       envJson,
       config.hostPeerId || null,
       config.hostAddress || null,
+      config.governance ? 1 : 0,
+      config.deployAction || 'pm2',
       now,
       now,
     );
@@ -371,7 +384,7 @@ export class AppManager {
           healthEndpoint: app.health_endpoint,
           healthTimeout: app.health_timeout,
           processManager: app.process_manager as any,
-          tier: app.tier as 1 | 2,
+          tier: app.tier as 1 | 2 | 3,
           envVars: app.env_json ? JSON.parse(app.env_json) : undefined,
           hostPeerId: app.host_peer_id,
           hostAddress: app.host_address || undefined,
@@ -1009,7 +1022,7 @@ export class AppManager {
       }
 
       // Checkout new commit
-      execSync(`git checkout ${safeGitRef(newCommit)}`, { ...GIT_OPTS, cwd: appDir });
+      execFileSync('git', ['checkout', safeGitRef(newCommit)], { ...GIT_OPTS, cwd: appDir });
     } else {
       // Workspace-based: files were already re-copied by update(), use timestamp as "commit"
       newCommit = `workspace-${Date.now()}`;
@@ -1108,7 +1121,7 @@ export class AppManager {
       // Restore old commit so old process's code is intact
       if (oldCommit) {
         try {
-          execSync(`git checkout ${safeGitRef(oldCommit)}`, { ...GIT_OPTS, cwd: appDir });
+          execFileSync('git', ['checkout', safeGitRef(oldCommit)], { ...GIT_OPTS, cwd: appDir });
         } catch { /* best effort — old process is still running on old port */ }
       }
 
@@ -1164,7 +1177,7 @@ export class AppManager {
       const currentCommit = app.current_commit;
 
       // Checkout previous commit
-      execSync(`git checkout ${safeGitRef(targetCommit)}`, { ...GIT_OPTS, cwd: appDir });
+      execFileSync('git', ['checkout', safeGitRef(targetCommit)], { ...GIT_OPTS, cwd: appDir });
 
       // Reinstall deps and rebuild
       execSync('npm install --production', { ...INSTALL_OPTS, cwd: appDir });
@@ -1274,7 +1287,7 @@ export class AppManager {
           try { execFileSync('pm2', ['delete', pm2NameStaging], EXEC_OPTS); } catch { /* best effort */ }
 
           if (currentCommit) {
-            try { execSync(`git checkout ${safeGitRef(currentCommit)}`, { ...GIT_OPTS, cwd: appDir }); } catch { /* best effort */ }
+            try { execFileSync('git', ['checkout', safeGitRef(currentCommit)], { ...GIT_OPTS, cwd: appDir }); } catch { /* best effort */ }
           }
 
           const error = 'Rollback staging health check failed — original process continues running';
@@ -1781,7 +1794,7 @@ location /apps/${appId}/ {
     } else {
       // Clone to tmp dir, move files, delete tmp (same pattern as init-platform.ts)
       const tmpDir = appDir + '-tmp-' + Date.now();
-      execSync(`git clone ${repoUrl} "${tmpDir}"`, GIT_OPTS);
+      execFileSync('git', ['clone', repoUrl, tmpDir], GIT_OPTS);
 
       const { renameSync } = require('node:fs') as typeof import('node:fs');
       for (const f of readdirSync(tmpDir)) {
@@ -1794,7 +1807,7 @@ location /apps/${appId}/ {
 
   private getCommit(appDir: string): string {
     try {
-      return execSync(`git -C "${appDir}" rev-parse HEAD`, EXEC_OPTS).toString().trim();
+      return execFileSync('git', ['-C', appDir, 'rev-parse', 'HEAD'], EXEC_OPTS).toString().trim();
     } catch {
       return 'unknown';
     }

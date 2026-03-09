@@ -35,6 +35,8 @@ export async function registerAppRoutes(
       healthEndpoint?: string;
       tier?: string;
       envVars?: Record<string, string>;
+      governance?: boolean;
+      deployAction?: 'pm2' | 'restart-node';
     };
 
     if (!body.id || !body.name) {

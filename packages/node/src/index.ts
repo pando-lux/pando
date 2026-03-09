@@ -301,16 +301,28 @@ export class PandoNode {
 
     // Initialize AppManager
     this.appManager = new AppManager(this);
-    // Register pando-node as app[0] in the unified app registry
+    // Register pando-node as infrastructure app (tier 3)
     this.appManager.register({
       id: 'pando-node',
-      name: 'pando-node',
-      repoUrl: 'https://github.com/pando-lux/node.git',
+      name: 'Pando Node',
+      repoUrl: 'https://github.com/pando-lux/pando.git',
       buildCmd: 'npm run build',
       startCmd: 'node packages/node/dist/cli.js',
-      healthEndpoint: '/v1/status',
+      healthEndpoint: '/v1/health',
       processManager: process.platform === 'win32' ? 'supervisor' : 'systemd',
-      tier: 2,
+      tier: 3,
+      governance: true,
+      deployAction: 'restart-node',
+    });
+    // Register pando-code as infrastructure app (tier 3)
+    this.appManager.register({
+      id: 'pando-code',
+      name: 'Pando Code',
+      repoUrl: 'https://github.com/pando-lux/pando-code.git',
+      buildCmd: 'npm run build',
+      tier: 3,
+      governance: true,
+      deployAction: 'restart-node',
     });
     // pando-node is always live when this code runs — mark it so
     const commit = this.upgradeProtocol?.getUpgradeStatus()?.currentVersion || null;
@@ -802,10 +814,13 @@ export class PandoNode {
     // If project has a GitHub repo and we don't have a local clone, clone it
     if (!hasGitDir && project.githubRepo) {
       try {
-        const pat = await this.getGitHubPat();
-        const cloneUrl = pat
-          ? `https://x-access-token:${pat}@github.com/${project.githubRepo}.git`
-          : `https://github.com/${project.githubRepo}.git`;
+        const plainUrl = `https://github.com/${project.githubRepo}.git`;
+        let cloneUrl = plainUrl;
+        // Use contributed credential via ResourceRegistry
+        if (this.resourceRegistry?.resolveGitCredential) {
+          const authenticatedUrl = await this.resourceRegistry.resolveGitCredential(plainUrl);
+          if (authenticatedUrl) cloneUrl = authenticatedUrl;
+        }
         execFileSync('git', ['clone', cloneUrl, '.'], { cwd: wsDir, timeout: 60000, stdio: 'ignore' });
         console.log(`[project-workspace] Cloned ${project.githubRepo} into ${wsDir}`);
       } catch (err: any) {
@@ -852,16 +867,16 @@ export class PandoNode {
 
   /**
    * Get a GitHub PAT from contributed resources.
+   * Uses ResourceRegistry.resolveGitCredential() for credential resolution,
+   * falling back to direct getCredential() if needed.
    */
   private async getGitHubPat(): Promise<string | null> {
     if (!this.resourceRegistry) return null;
     try {
-      const resources = this.resourceRegistry.getAllResources();
-      const ghRes = resources.find((r: any) => r.type === 'code_repository' && r.status === 'active');
-      if (!ghRes) return null;
-      // Try to get credential via P2P proxy
-      const cred = await (this as any).proxyCredentialOp?.('get', { resourceId: ghRes.resourceId });
-      return cred?.key || null;
+      const codeResources = this.resourceRegistry.findResources('code_repository' as any);
+      if (codeResources.length === 0) return null;
+      const resource = codeResources[0];
+      return await this.resourceRegistry.getCredential(resource.resourceId);
     } catch { return null; }
   }
 

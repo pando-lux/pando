@@ -24,6 +24,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { readFileSync } from 'node:fs';
 import { execSync } from 'node:child_process';
+import { multiaddr as ma } from '@multiformats/multiaddr';
 
 const DEFAULT_MANAGER_ID = 'pando-node-mgr';
 
@@ -80,13 +81,13 @@ export async function initPlatform(node: any): Promise<void> {
       }
       node.upgradeInProgress = true;
       try {
-        const { execSync } = await import('node:child_process');
+        const { execSync, execFileSync: efs } = await import('node:child_process');
         const repoDir = process.cwd();
 
         // Ensure git safe.directory (compute instances: repo cloned by root, node runs as 'pando')
         try {
-          execSync(`git config --global --add safe.directory ${repoDir}`, {
-            cwd: repoDir, encoding: 'utf-8', timeout: 5_000, stdio: 'pipe',
+          efs('git', ['config', '--global', '--add', 'safe.directory', repoDir], {
+            cwd: repoDir, encoding: 'utf-8', timeout: 5_000, stdio: 'pipe', windowsHide: true,
           });
         } catch {}
 
@@ -824,13 +825,12 @@ Be friendly and helpful. Keep answers short.`
           console.log(`[peer-exchange] Received ${exchangedPeers.length} peer(s) from ${from.slice(0, 12)}, ${unknownPeers.length} unknown, already connected to ${connectedPeers.size}`);
           if (unknownPeers.length > 0) {
             // Dial all unknown peers in parallel, racing addresses per peer for speed
-            const { multiaddr: ma } = await import('@multiformats/multiaddr');
             Promise.allSettled(unknownPeers.map(async (peer: any) => {
               const libp2p = network.getLibp2p();
               if (!libp2p) return;
               if (peer.addrs.length === 1) {
                 const ac = new AbortController();
-                const timer = setTimeout(() => ac.abort(), 3_000);
+                const timer = setTimeout(() => ac.abort(), 1_000);
                 await libp2p.dial(ma(peer.addrs[0]), { signal: ac.signal });
                 clearTimeout(timer);
                 console.log(`[peer-exchange] Connected to ${peer.peerId.slice(0, 12)} via exchange from ${from.slice(0, 12)}`);
@@ -838,7 +838,7 @@ Be friendly and helpful. Keep answers short.`
               }
               // Multiple addresses: race them — first success wins
               const ac = new AbortController();
-              const timer = setTimeout(() => ac.abort(), 4_000);
+              const timer = setTimeout(() => ac.abort(), 2_500);
               try {
                 await Promise.any(peer.addrs.map(async (addr: string) => {
                   await libp2p!.dial(ma(addr), { signal: ac.signal });

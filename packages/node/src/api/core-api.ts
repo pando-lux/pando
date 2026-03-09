@@ -8,7 +8,7 @@
  *       /instances/* is in platform-api.ts.
  */
 
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { safeGitReset } from '../core/upgrade-protocol.js';
 import type { RouteHelpers } from './middleware/auth.js';
 import { violatesTwoLaws } from './api-server.js';
@@ -41,7 +41,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       try {
         // Step 0: ensure git safe.directory (compute instances run as 'pando' user, repo cloned by root)
         try {
-          execSync(`git config --global --add safe.directory ${repoDir}`, {
+          execFileSync('git', ['config', '--global', '--add', 'safe.directory', repoDir], {
             cwd: repoDir, encoding: 'utf-8', timeout: 5_000, stdio: 'pipe', windowsHide: true,
           });
         } catch {}
@@ -167,7 +167,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         // Check git
         let isAncestor = false;
         try {
-          execSync(`git merge-base --is-ancestor ${commitHash} HEAD`, { cwd: process.cwd(), timeout: 5000, stdio: 'pipe' });
+          execFileSync('git', ['merge-base', '--is-ancestor', commitHash, 'HEAD'], { cwd: process.cwd(), timeout: 5000, stdio: 'pipe', windowsHide: true });
           isAncestor = true;
         } catch {}
 
