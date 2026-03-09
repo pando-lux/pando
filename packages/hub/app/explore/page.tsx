@@ -23,34 +23,25 @@ interface ActivityStats {
   byAction: Record<string, number>;
 }
 
-interface HealthMetrics {
-  nodeHealth: "healthy" | "degraded" | "critical";
-  uptimeSeconds: number;
-  recentSuccessRate: number;
-}
-
 export default function ExplorePage() {
   const [status, setStatus] = useState<Status | null>(null);
   const [scheduler, setScheduler] = useState<SchedulerStatus | null>(null);
   const [activityStats, setActivityStats] = useState<ActivityStats | null>(null);
-  const [health, setHealth] = useState<HealthMetrics | null>(null);
   const [proposalCount, setProposalCount] = useState<number>(0);
   const [appsCount, setAppsCount] = useState<number | null>(null);
   const [loaded, setLoaded] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const [s, sc, as_, h, gov, apps] = await Promise.all([
+    const [s, sc, as_, gov, apps] = await Promise.all([
       fetch("/api/status").then(r => r.json()).catch(() => null),
       fetch("/api/scheduler/status").then(r => r.json()).catch(() => null),
       fetch("/api/activity/stats?window=24h").then(r => r.json()).catch(() => null),
-      fetch("/api/monitor/status").then(r => r.ok ? r.json() : null).catch(() => null),
       fetch("/api/governance/proposals").then(r => r.json()).catch(() => null),
       fetch("/api/apps").then(r => r.json()).catch(() => null),
     ]);
     if (s) setStatus(s);
     if (sc) setScheduler(sc);
     if (as_) setActivityStats(as_);
-    if (h) setHealth(h);
     if (gov) {
       const proposals = gov.proposals || gov || [];
       const active = Array.isArray(proposals) ? proposals.filter((p: any) => p.status === "active").length : 0;
@@ -65,14 +56,6 @@ export default function ExplorePage() {
     const interval = setInterval(fetchData, 10000);
     return () => clearInterval(interval);
   }, [fetchData]);
-
-  function fmtUptime(s: number): string {
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    if (h > 24) return `${Math.floor(h / 24)}d ${h % 24}h`;
-    if (h > 0) return `${h}h ${m}m`;
-    return `${m}m`;
-  }
 
   const cards = [
     {
@@ -105,9 +88,9 @@ export default function ExplorePage() {
     },
     {
       title: "Health",
-      description: "Node status, managers, and alerts",
-      href: "/explore/health",
-      stat: health ? `${health.nodeHealth === "healthy" ? "All systems green" : health.nodeHealth} \u2022 ${fmtUptime(health.uptimeSeconds)} uptime` : null,
+      description: "Peers, nodes, reputation, and capabilities",
+      href: "/network",
+      stat: status ? `${status.peers} peer${status.peers !== 1 ? "s" : ""} online` : null,
       color: "blue",
     },
     {
@@ -185,10 +168,7 @@ export default function ExplorePage() {
               For Node Operators
             </summary>
             <div className="px-5 pb-4 pt-2 grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <a href="/explore/health" className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50 transition text-sm text-neutral-700 dark:text-neutral-300 font-medium">
-                Health
-              </a>
-              <a href="/explore/network" className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50 transition text-sm text-neutral-700 dark:text-neutral-300 font-medium">
+              <a href="/network" className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50 transition text-sm text-neutral-700 dark:text-neutral-300 font-medium">
                 Network
               </a>
               <a href="/resources" className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50 transition text-sm text-neutral-700 dark:text-neutral-300 font-medium">

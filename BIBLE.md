@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-10 (Phase D validated: user project teams produce working apps via 5-phase workflow, chat_progress streaming gives real-time build visibility, workspace continuity confirmed. All hub API routes use primary routing. Marketplace fixed (307 projects). Internal team 6/6 success rate). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-10 (Auto-deploy pipeline COMPLETE: local static file serving for Tier 1 apps when no S3, workspace-only apps skip remote dispatch. Full product loop validated: chat → build → deploy → live URL. Doorman misclassification fixed (resolvedPattern). Search page uses correct API. Internal team 9/9 success rate). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -1040,7 +1040,7 @@ Governance is a gate BEFORE the pipeline, not a separate pipeline. If `app.gover
 
 | Tier | Type | Deploy Action | Examples |
 |---|---|---|---|
-| 1 | Static | S3 upload | Portfolio sites, landing pages |
+| 1 | Static | S3 upload (or local serve fallback) | Portfolio sites, landing pages, chat-built apps |
 | 2 | Server | PM2 start + nginx reverse proxy | Express apps, WebSocket servers |
 | 3 | Infrastructure | exit(75) → node restart | pando-node, pando-teams |
 
@@ -1073,8 +1073,9 @@ REGISTER → DEPLOY → UPDATE → MONITOR
    │          │             4. Graceful kill old instance
    │          │             5. Record in app_history
    │          │
-   │          └─ Clone from GitHub → detect tier → deploy:
+   │          └─ Clone from GitHub OR copy workspace → detect tier → deploy:
    │               Tier 1 (static): S3 upload (via contributed ResourceRegistry creds)
+   │                                 OR local serve fallback: GET /v1/apps/:id/serve/*
    │               Tier 2 (server): npm install → PM2 start → nginx reverse proxy
    │               Tier 3 (infra):  npm install → build → exit(75) → restart
    │
@@ -1085,6 +1086,15 @@ ROLLBACK: restore previous_commit → blue-green swap back → record in history
 
 P2P DISPATCH: findDeployTarget() → CapabilityRegistry (credentialAccess + mongodb)
               → HttpPeerClient forwards deploy/update to EC2 secure node
+              NOTE: Workspace-only apps (no repo_url) ALWAYS deploy locally — remote
+              nodes can't access local workspace files. Guard: `if (!host_peer_id && repo_url)`
+
+LOCAL SERVE FALLBACK (Tier 1, no S3):
+  When S3 credentials not contributed, Tier 1 deploys serve from local node:
+  - Files in ~/.pando/hosted-apps/{appId}/
+  - Served via GET /v1/apps/:id/serve/* with proper MIME types
+  - deploy_url = http://localhost:{port}/v1/apps/{id}/serve/index.html
+  - Path traversal protection, public/ dir preference, 1h cache headers
 ```
 
 #### 5.8.2 Unified Git Operations (ALL PHASES COMPLETE)
@@ -1547,10 +1557,9 @@ BOARD STATE (N active tasks):
 ```
 Priority ordering: CRITICAL > BUG:user > WARNING > FEATURE:user > other. Limit 20 tasks.
 
-**Lead vs non-lead tick asymmetry (by design):**
-- **Lead agents** use a **custom setInterval** (not the PandoTeams Scheduler) because they need dynamic inbox+board injection into every tick message. The lead tick reads `getTeamInbox()` + `getBoardSnapshot()` fresh and wraps the tick prompt with this live state data.
-- **Non-lead agents** (observer, QA) use the **PandoTeams Scheduler** with static prompts — their tick message is the same every time (e.g., "Check network health and report issues").
-- This asymmetry is intentional: leads need fresh state data per tick to make triage decisions, while observers/QA just need their base prompt to perform their fixed role.
+**All agents use sendToTeamAgent() with custom setInterval** (commit `975b4f50`):
+- **Lead agents** get dynamic inbox+board injection into every tick message. The lead tick reads `getTeamInbox()` + `getBoardSnapshot()` fresh and wraps the tick prompt with this live state data.
+- **Non-lead agents** (observer, QA, explorer) also use `sendToTeamAgent()` with proper `agentOverride` for identity. Previously they used the PandoTeams Scheduler's `pool.send()` which didn't pass agent context, resulting in zero activity. Now all agents have timeout (10 min), concurrent execution guards, and error recovery with engine restart after 3 consecutive failures.
 
 **Team inbox key structure:** Messages between agents are stored in the `.pando-teams.db` `state` table:
 - Schema: `state(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT, expires_at TEXT)` — NOTE: NO `engine_id` column (was a bug, fixed)
