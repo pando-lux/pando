@@ -279,7 +279,9 @@ export async function registerPlatformRoutes(
                 claimedAt: Date.now(),
               });
               console.log(`[router] Registered team for project ${newProjectId}`);
-            } catch (e) { /* team may already exist */ }
+            } catch (e: any) {
+              console.warn(`[router] Failed to register team for project ${newProjectId}: ${e?.message || e}`);
+            }
           }
 
           console.log(`[router] Created project ${newProjectId}: ${projName} (tier ${deployTier}, builder: ${builder.isLocal ? 'local' : builder.peerId})`);
@@ -605,7 +607,10 @@ export async function registerPlatformRoutes(
               const chunks: string[] = [];
               if (adapter) {
                 for await (const event of adapter.sendToTeamAgent(threadMeta.projectId!, 'lead', plaintextForProcessing)) {
-                  if (event.type === 'stream:chunk' && event.content) chunks.push(event.content);
+                  if (event.type === 'stream:chunk' && event.content) {
+                    chunks.push(event.content);
+                    deps.pushEvent('chat_progress', { threadId: id, projectId: threadMeta.projectId, content: event.content });
+                  }
                 }
               }
               const engineReply = chunks.join('') || 'Done.';
@@ -742,7 +747,10 @@ export async function registerPlatformRoutes(
             const chunks: string[] = [];
             if (adapter) {
               for await (const event of adapter.sendToTeamAgent(targetProjectId, 'lead', plaintextForProcessing)) {
-                if (event.type === 'stream:chunk' && event.content) chunks.push(event.content);
+                if (event.type === 'stream:chunk' && event.content) {
+                  chunks.push(event.content);
+                  deps.pushEvent('chat_progress', { threadId: id, projectId: targetProjectId, content: event.content });
+                }
               }
             }
             const engineReply = chunks.join('') || 'Build complete.';

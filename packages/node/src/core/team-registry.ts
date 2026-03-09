@@ -162,6 +162,14 @@ export class TeamRegistry {
   // -----------------------------------------------------------------------
 
   createTeam(config: Omit<TeamConfig, 'createdAt'>): TeamConfig {
+    const existing = this.getTeam(config.id);
+    if (existing) {
+      // Team already exists (e.g. from P2P sync) — update instead of failing
+      this.updateTeam(config.id, config as Partial<TeamConfig>);
+      log('createTeam: updated existing team ' + config.id);
+      return this.getTeam(config.id)!;
+    }
+
     const now = Date.now();
     const full: TeamConfig = { ...config, createdAt: now };
 
