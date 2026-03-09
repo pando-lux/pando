@@ -522,7 +522,8 @@ export async function registerPlatformRoutes(
       const threadUserPeerId = await deps.verifyUserJwt(request);
 
       // Check thread exists before processing — don't auto-create on non-existent IDs
-      const existingThread = threadStore.getThread(id);
+      // Use async fallback: sync cache may not be populated yet for newly created threads
+      const existingThread = threadStore.getThread(id) || await threadStore.getThreadAsync(id);
       if (!existingThread) {
         return reply.code(404).send({ error: 'Thread not found' });
       }
@@ -585,14 +586,31 @@ export async function registerPlatformRoutes(
           return { status: 'ok', threadId: id, reply: 'No PandoTeams-capable nodes available.', tier: 'simple' };
         }
         if (builder.isLocal) {
-          // Local PandoTeams — async engine
+          // Local PandoTeams — route through team agent (not raw engine)
           (async () => {
             try {
-              const engineResult = await sendToEngine(plaintextForProcessing, threadMeta.projectId!);
-              if (engineResult.response) {
-                await threadStore.addMessage(id, { role: 'assistant', content: engineResult.response, timestamp: Date.now(), tier: 'complex' });
+              const adapter = node.getEngineAdapter();
+              // Ensure team is active for this project
+              if (adapter && !adapter.isTeamActive?.(threadMeta.projectId!)) {
+                await adapter.startTeam(threadMeta.projectId!, [{
+                  id: 'lead',
+                  role: 'lead',
+                  displayName: 'Project Lead',
+                  prompt: '',
+                  promptTemplate: 'lead-universal',
+                  model: 'claude-code',
+                  tickIntervalMs: 15 * 60_000,
+                }]);
               }
-              deps.pushEvent('chat_message', { threadId: id, projectId: threadMeta.projectId, role: 'assistant', content: engineResult.response || 'Done.', timestamp: Date.now(), tier: 'complex' });
+              const chunks: string[] = [];
+              if (adapter) {
+                for await (const event of adapter.sendToTeamAgent(threadMeta.projectId!, 'lead', plaintextForProcessing)) {
+                  if (event.type === 'stream:chunk' && event.content) chunks.push(event.content);
+                }
+              }
+              const engineReply = chunks.join('') || 'Done.';
+              await threadStore.addMessage(id, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
+              deps.pushEvent('chat_message', { threadId: id, projectId: threadMeta.projectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
               // Trigger app-manager update after build
               const appMgr = node.getAppManager?.();
               if (appMgr && threadMeta.projectId) {
@@ -704,11 +722,30 @@ export async function registerPlatformRoutes(
 
       const targetProjectId = newProjectId || threadMeta?.projectId;
       if (builder.isLocal && targetProjectId) {
-        // Local PandoTeams — async engine (don't block HTTP response)
+        // Local PandoTeams — route through team agent (not raw engine)
         (async () => {
           try {
-            const result = await sendToEngine(plaintextForProcessing, targetProjectId);
-            const engineReply = result.response || 'Build complete.';
+            const adapter = node.getEngineAdapter();
+            // Ensure team is active for this project
+            if (adapter && !adapter.isTeamActive?.(targetProjectId)) {
+              const projLabel = (classification.description || trimmed).slice(0, 60).replace(/[^a-zA-Z0-9 -]/g, '').trim() || 'Project';
+              await adapter.startTeam(targetProjectId, [{
+                id: 'lead',
+                role: 'lead',
+                displayName: `${projLabel} Lead`,
+                prompt: '',
+                promptTemplate: 'lead-universal',
+                model: 'claude-code',
+                tickIntervalMs: 15 * 60_000,
+              }]);
+            }
+            const chunks: string[] = [];
+            if (adapter) {
+              for await (const event of adapter.sendToTeamAgent(targetProjectId, 'lead', plaintextForProcessing)) {
+                if (event.type === 'stream:chunk' && event.content) chunks.push(event.content);
+              }
+            }
+            const engineReply = chunks.join('') || 'Build complete.';
             await threadStore.addMessage(id, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
             deps.pushEvent('chat_message', { threadId: id, projectId: targetProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
             // Trigger app-manager update after build
