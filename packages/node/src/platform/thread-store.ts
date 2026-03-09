@@ -42,6 +42,7 @@ const MAX_THREADS = 200;
 export class ThreadStore {
   private index: ThreadMeta[] = [];
   private backend: StorageBackend;
+  private writeLocks = new Map<string, Promise<void>>();
 
   constructor(storageBackend: StorageBackend) {
     this.backend = storageBackend;
@@ -159,25 +160,37 @@ export class ThreadStore {
     this.persistMessage(threadId, meta, message);
   }
 
-  /** Background persist — writes meta + message to storage backend. */
-  private async persistMessage(threadId: string, meta: ThreadMeta, message: ThreadMessage): Promise<void> {
-    try {
-      await this.backend.putRecord('threads', threadId, meta);
-    } catch (err: any) {
-      console.error(`[threads] Backend update meta failed: ${err.message}`);
-    }
-    // Read-modify-write for messages. pushToArray via P2P was unreliable:
-    // (a) split-brain: write to EC2-1, read from EC2-2 (separate MongoDB instances)
-    // (b) $push fails if document has a non-array messages field (old schema remnants)
-    // putRecord ($set) is proven to work and handles both cases correctly.
-    try {
-      const existing = await this.backend.getRecord('messages', threadId);
-      const messages = Array.isArray(existing?.messages) ? existing.messages as ThreadMessage[] : [];
-      messages.push(message);
-      await this.backend.putRecord('messages', threadId, { messages });
-    } catch (err: any) {
-      console.error(`[threads] Backend addMessage failed: ${err.message}`);
-    }
+  /** Background persist — writes meta + message to storage backend.
+   *  Uses per-thread write lock to prevent read-modify-write race conditions. */
+  private persistMessage(threadId: string, meta: ThreadMeta, message: ThreadMessage): void {
+    // Chain writes per thread to prevent concurrent read-modify-write races
+    const prev = this.writeLocks.get(threadId) || Promise.resolve();
+    const next = prev.then(async () => {
+      try {
+        await this.backend.putRecord('threads', threadId, meta);
+      } catch (err: any) {
+        console.error(`[threads] Backend update meta failed: ${err.message}`);
+      }
+      // Read-modify-write for messages. pushToArray via P2P was unreliable:
+      // (a) split-brain: write to EC2-1, read from EC2-2 (separate MongoDB instances)
+      // (b) $push fails if document has a non-array messages field (old schema remnants)
+      // putRecord ($set) is proven to work and handles both cases correctly.
+      try {
+        const existing = await this.backend.getRecord('messages', threadId);
+        const messages = Array.isArray(existing?.messages) ? existing.messages as ThreadMessage[] : [];
+        messages.push(message);
+        await this.backend.putRecord('messages', threadId, { messages });
+      } catch (err: any) {
+        console.error(`[threads] Backend addMessage failed: ${err.message}`);
+      }
+    }).catch(() => {});
+    this.writeLocks.set(threadId, next);
+    // Clean up lock after chain completes to prevent memory leak
+    next.then(() => {
+      if (this.writeLocks.get(threadId) === next) {
+        this.writeLocks.delete(threadId);
+      }
+    });
   }
 
   /** Get all messages for a thread (sync — returns empty, use getMessagesAsync). */
