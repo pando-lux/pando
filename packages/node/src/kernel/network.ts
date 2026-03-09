@@ -224,7 +224,7 @@ export class PandoNetwork {
         // Single address: just dial it
         try {
           const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 3_000);
+          const timer = setTimeout(() => ac.abort(), 5_000);
           await this.node!.dial(multiaddr(peer.addrs[0]), { signal: ac.signal });
           clearTimeout(timer);
           console.log(`[known-peers] Connected to ${peer.peerId.slice(0, 16)}...`);
@@ -235,7 +235,7 @@ export class PandoNetwork {
       }
       // Multiple addresses: race them all — first success wins
       const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 3_000);
+      const timer = setTimeout(() => ac.abort(), 5_000);
       try {
         await Promise.any(peer.addrs.map(async (addr) => {
           const conn = await this.node!.dial(multiaddr(addr), { signal: ac.signal });
@@ -388,10 +388,10 @@ export class PandoNetwork {
     // that weren't ready during the initial dialKnownPeers call)
     setTimeout(() => this.dialKnownPeers().catch(() => {}), 1_000);
 
-    // Auto-reconnect and discovery sweep: dial bootstrap + known peers every 5s
-    // (reduced from 10s for faster new-node discovery)
+    // Auto-reconnect and discovery sweep: dial bootstrap + known peers every 2s
+    // (reduced from 5s for faster new-node discovery, especially when isolated)
     if (this.config.bootstrapPeers.length > 0) {
-      this.reconnectTimer = setInterval(() => this.checkAndReconnect().catch(err => console.error('[p2p] checkAndReconnect error:', err.message)), 5_000);
+      this.reconnectTimer = setInterval(() => this.checkAndReconnect().catch(err => console.error('[p2p] checkAndReconnect error:', err.message)), 2_000);
     }
 
     // Health check: remove stale peers every 60s
@@ -412,7 +412,7 @@ export class PandoNetwork {
       const bootstrapDials = this.config.bootstrapPeers.map(async (addr) => {
         try {
           const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 3_000);
+          const timer = setTimeout(() => ac.abort(), 5_000);
           await this.node!.dial(multiaddr(addr), { signal: ac.signal });
           clearTimeout(timer);
           console.log(`[reconnect] Dialed bootstrap ${addr.slice(0, 40)}...`);
