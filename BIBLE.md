@@ -2115,10 +2115,11 @@ Observer and QA agents also use claude-code — all 3 pando-infra agents run on 
 
    (User project teams with governanceRequired: false skip this step — deploy directly)
 
-5. UPGRADE (all nodes, 3 paths)
-   Path A: Governance approval callback (proposing node)
-   Path B: GossipSub broadcast on topic "pando/upgrades" (peers)
-   Path C: Catchup timer every 5min scans governance for passed upgrade proposals (missed broadcasts)
+5. UPGRADE (all nodes, 4 paths — most reliable first)
+   Path A: Direct P2P notification to each peer (TCP, reliable — primary)
+   Path B: GossipSub broadcast on topic "pando/upgrades" (bonus, unreliable in small networks)
+   Path C: Governance sync every 2min with random peer (direct P2P, includes decisions)
+   Path D: Catchup timer every 2min scans governance for passed upgrade proposals (safety net)
 
    All three call UpgradeProtocol.pullAndUpgrade(commitHash):
      1. git config --global --add safe.directory <repoDir>

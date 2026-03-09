@@ -1,5 +1,5 @@
 /**
- * Upgrade Protocol — Governance gate + security validation for infrastructure upgrades.
+ * Upgrade Protocol — Governance-gated infrastructure upgrades with reliable P2P delivery.
  *
  * This is a THIN WRAPPER around the unified pipeline (AppManager + GitOps).
  * It provides:
