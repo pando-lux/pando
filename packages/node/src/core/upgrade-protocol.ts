@@ -289,18 +289,20 @@ export class UpgradeProtocol {
       return { success: true, message: 'Already incorporated (local ahead of origin).' };
     }
 
-    // Step 6a: Preserve @pando-code/core (not in package.json, installed manually on PandoCode nodes)
+    // Step 6a: Detect npm-linked packages before npm install wipes them.
+    // npm link creates symlinks that npm install removes. We re-establish them after.
     const pandoCodeCorePath = join(this.repoDir, 'node_modules', '@pando-code', 'core');
-    const pandoCodeBackupPath = join(this.repoDir, 'node_modules', '.pando-code-core-backup');
-    let hadPandoCodeCore = false;
+    let wasLinked = false;
+    let linkTarget = '';
     try {
-      const { existsSync, cpSync, lstatSync } = await import('node:fs');
-      // Only backup if it's a real directory (not a broken symlink)
-      if (existsSync(pandoCodeCorePath) && !lstatSync(pandoCodeCorePath).isSymbolicLink()) {
-        cpSync(pandoCodeCorePath, pandoCodeBackupPath, { recursive: true });
-        hadPandoCodeCore = true;
+      const { lstatSync, readlinkSync } = await import('node:fs');
+      const stat = lstatSync(pandoCodeCorePath);
+      if (stat.isSymbolicLink()) {
+        linkTarget = readlinkSync(pandoCodeCorePath, 'utf-8');
+        wasLinked = true;
+        console.log(`[upgrade] @pando-code/core is npm-linked → ${linkTarget}`);
       }
-    } catch {}
+    } catch { /* not installed or not a symlink */ }
 
     // Step 6b: Install dependencies
     console.log('[upgrade] Installing dependencies...');
@@ -312,21 +314,19 @@ export class UpgradeProtocol {
       console.warn(`[upgrade] npm install warning: ${(err.stderr?.toString() || err.message)?.slice(0, 200)}`);
     }
 
-    // Step 6c: Restore @pando-code/core if it was backed up and npm install wiped it
-    if (hadPandoCodeCore) {
+    // Step 6c: Re-establish npm link if it was linked before npm install wiped it
+    if (wasLinked) {
       try {
-        const { existsSync, cpSync, rmSync, lstatSync, mkdirSync, unlinkSync } = await import('node:fs');
-        const coreExists = existsSync(pandoCodeCorePath);
-        const isBrokenLink = coreExists ? false : (() => { try { lstatSync(pandoCodeCorePath); return true; } catch { return false; } })();
-        if (!coreExists || isBrokenLink) {
-          if (isBrokenLink) try { unlinkSync(pandoCodeCorePath); } catch {}
-          mkdirSync(join(this.repoDir, 'node_modules', '@pando-code'), { recursive: true });
-          cpSync(pandoCodeBackupPath, pandoCodeCorePath, { recursive: true });
-          console.log('[upgrade] Restored @pando-code/core after npm install');
+        const { existsSync } = await import('node:fs');
+        if (!existsSync(pandoCodeCorePath)) {
+          console.log('[upgrade] Re-linking @pando-code/core...');
+          execSync('npm link @pando-code/core', {
+            cwd: this.repoDir, timeout: 60_000, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+          });
+          console.log('[upgrade] @pando-code/core re-linked successfully');
         }
-        rmSync(pandoCodeBackupPath, { recursive: true, force: true });
       } catch (err: any) {
-        console.warn(`[upgrade] Failed to restore @pando-code/core: ${err.message}`);
+        console.warn(`[upgrade] Failed to re-link @pando-code/core: ${(err.stderr?.toString() || err.message)?.slice(0, 200)}`);
       }
     }
 

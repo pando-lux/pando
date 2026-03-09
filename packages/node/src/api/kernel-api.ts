@@ -317,6 +317,39 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       };
     });
 
+    // GET /services — diagnostic endpoint for service loader and engine adapter status
+    fastify.get('/services', async () => {
+      const adapter = node.getEngineAdapter?.();
+      const serviceLoader = node.getServiceLoader?.();
+      const pandoCodeCorePath = 'node_modules/@pando-code/core';
+      let pandoCodeInstalled = false;
+      let pandoCodeIsLink = false;
+      try {
+        const { existsSync, lstatSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        const fullPath = join(process.cwd(), pandoCodeCorePath);
+        pandoCodeInstalled = existsSync(fullPath);
+        if (pandoCodeInstalled) {
+          pandoCodeIsLink = lstatSync(fullPath).isSymbolicLink();
+        }
+      } catch {}
+      return {
+        engineAdapter: {
+          available: adapter?.available ?? false,
+          linked: adapter?.linked ?? false,
+        },
+        serviceLoader: {
+          initialized: !!serviceLoader,
+          services: serviceLoader?.getIds?.() ?? [],
+          healthyServices: serviceLoader?.getAll?.()?.filter((s: any) => s.healthy())?.map((s: any) => s.id) ?? [],
+        },
+        pandoCodeCore: {
+          installed: pandoCodeInstalled,
+          isSymlink: pandoCodeIsLink,
+        },
+      };
+    });
+
     // GET /wallet — ownership info for this node
     fastify.get('/wallet', async () => {
       const identity = node.getIdentity();
