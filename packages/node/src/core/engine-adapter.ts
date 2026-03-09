@@ -1317,16 +1317,25 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
   /**
    * Trigger a team agent in the background. Returns immediately.
+   * Includes a 10-minute safety timeout to prevent hung subprocesses from
+   * blocking the agent permanently.
    */
   triggerTeamAgentBackground(teamId: string, agentId: string, message: string): void {
+    const TRIGGER_TIMEOUT_MS = 10 * 60_000;
     (async () => {
       try {
         console.log(`[team:${teamId}] Background trigger: ${agentId}`);
-        for await (const event of this.sendToTeamAgent(teamId, agentId, message)) {
-          if (event.type === 'stream:chunk' && event.content) {
-            process.stdout.write(event.content);
+        const sendPromise = (async () => {
+          for await (const event of this.sendToTeamAgent(teamId, agentId, message)) {
+            if (event.type === 'stream:chunk' && event.content) {
+              process.stdout.write(event.content);
+            }
           }
-        }
+        })();
+        const timeoutPromise = new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error('Background trigger timed out after 10 minutes')), TRIGGER_TIMEOUT_MS)
+        );
+        await Promise.race([sendPromise, timeoutPromise]);
         console.log(`\n[team:${teamId}] ${agentId} trigger complete.`);
       } catch (err: any) {
         console.error(`[team:${teamId}] ${agentId} trigger error: ${err.message}`);
@@ -1919,6 +1928,9 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         if (agent.role === 'lead') {
           let consecutiveFailures = 0;
           let tickRunning = false;
+          // Safety timeout: kill the tick if it exceeds this duration.
+          // Prevents a hung claude-code subprocess from blocking all future ticks.
+          const TICK_TIMEOUT_MS = 10 * 60_000; // 10 minutes max per tick
           const interval = setInterval(async () => {
             if (tickRunning) {
               console.log(`[${label}] Tick skipped — previous tick still running`);
@@ -1927,14 +1939,21 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
             tickRunning = true;
             try {
               const msg = 'Check your inbox and review board tasks now.';
-              for await (const event of this.sendToTeamAgent(teamId, agent.id, msg)) {
-                logEvent(label)(event);
-              }
+              // Wrap the send in a timeout race — if the stream hangs, we still recover
+              const tickPromise = (async () => {
+                for await (const event of this.sendToTeamAgent(teamId, agent.id, msg)) {
+                  logEvent(label)(event);
+                }
+              })();
+              const timeoutPromise = new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error('Tick timed out after 10 minutes')), TICK_TIMEOUT_MS)
+              );
+              await Promise.race([tickPromise, timeoutPromise]);
               consecutiveFailures = 0;
               console.log(`\n[${label}] Tick complete.`);
             } catch (err: any) {
               consecutiveFailures++;
-              const isFatal = /ENOENT|EPERM|spawn|session.*expired|not found|process.*exit/i.test(err.message);
+              const isFatal = /ENOENT|EPERM|spawn|session.*expired|not found|process.*exit|timed out/i.test(err.message);
               if (isFatal || consecutiveFailures >= 3) {
                 console.error(`[${label}] CRITICAL: Engine appears dead (${consecutiveFailures} consecutive failures): ${err.message}`);
                 console.error(`[${label}] CRITICAL: Agent "${agent.id}" — watchdog will attempt auto-restart.`);
