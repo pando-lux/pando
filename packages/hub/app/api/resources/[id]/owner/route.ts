@@ -20,7 +20,7 @@ function authHeaders(request?: Request, extra?: Record<string, string>): Record<
 export async function PATCH(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    const res = await fetch(`${getNodeUrl()}/v1/resources/${id}/owner`, {
+    const res = await fetch(`${getNodeUrl('primary')}/v1/resources/${id}/owner`, {
       method: "PATCH",
       headers: authHeaders(request, { "Content-Type": "application/json" }),
     });

@@ -7,7 +7,7 @@
 import { getNodeUrl, getApiToken } from "@/lib/node-connection";
 
 export async function GET() {
-  const nodeUrl = getNodeUrl();
+  const nodeUrl = getNodeUrl('primary');
   const token = getApiToken();
 
   const headers: Record<string, string> = { Accept: "text/event-stream" };

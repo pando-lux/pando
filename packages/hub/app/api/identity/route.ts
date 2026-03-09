@@ -35,7 +35,7 @@ export async function GET() {
 
 async function fetchWallet(node: any): Promise<any> {
   try {
-    const nodeUrl = getNodeUrl();
+    const nodeUrl = getNodeUrl('primary');
     const res = await fetch(`${nodeUrl}/v1/wallet`, {
       signal: AbortSignal.timeout(5000),
     });

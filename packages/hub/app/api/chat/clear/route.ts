@@ -3,7 +3,7 @@ import { getNodeUrl, getApiToken } from "@/lib/node-connection";
 
 export async function POST() {
   try {
-    const nodeUrl = getNodeUrl();
+    const nodeUrl = getNodeUrl('primary');
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     const token = getApiToken();
     if (token) {

@@ -216,7 +216,7 @@ async function validateProjectKey(
 
   // Call node to validate
   try {
-    const res = await fetch(`${getNodeUrl()}/v1/resource-proxy/validate`, {
+    const res = await fetch(`${getNodeUrl('primary')}/v1/resource-proxy/validate`, {
       method: "POST",
       headers: nodeHeaders(),
       body: JSON.stringify({ projectKey }),
@@ -250,7 +250,7 @@ async function validateProjectKey(
 
 async function meterUsage(projectId: string, resourceId: string, operation: string, count: number, bytes: number): Promise<void> {
   try {
-    await fetch(`${getNodeUrl()}/v1/resource-proxy/meter`, {
+    await fetch(`${getNodeUrl('primary')}/v1/resource-proxy/meter`, {
       method: "POST",
       headers: nodeHeaders(),
       body: JSON.stringify({ projectId, resourceId, operation, count, bytes }),

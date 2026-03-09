@@ -1,22 +1,19 @@
 import { NextResponse } from "next/server";
-import { getNodeUrl, getApiToken } from "@/lib/node-connection";
-
-function nodeHeaders(): Record<string, string> {
-  const headers: Record<string, string> = { "Content-Type": "application/json" };
-  const token = getApiToken();
-  if (token) headers["Authorization"] = `Bearer ${token}`;
-  return headers;
-}
+import { fetchFromNode, getApiToken } from "@/lib/node-connection";
 
 export async function GET(req: Request) {
   try {
     const { searchParams } = new URL(req.url);
     const qs = searchParams.toString();
-    const url = `${getNodeUrl()}/v1/marketplace${qs ? `?${qs}` : ''}`;
-    const res = await fetch(url, {
-      headers: nodeHeaders(),
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const token = getApiToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+
+    const res = await fetchFromNode(`/v1/marketplace${qs ? `?${qs}` : ''}`, {
+      headers,
       signal: AbortSignal.timeout(10000),
-    });
+    }, 'primary');
+
     if (!res.ok) {
       return NextResponse.json({ projects: [], total: 0 }, { status: res.status });
     }

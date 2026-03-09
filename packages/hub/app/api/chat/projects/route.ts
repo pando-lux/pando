@@ -3,7 +3,7 @@ import { getNodeUrl, getApiToken } from "@/lib/node-connection";
 
 export async function GET() {
   try {
-    const nodeUrl = getNodeUrl();
+    const nodeUrl = getNodeUrl('primary');
     const headers: Record<string, string> = {};
     const token = getApiToken();
     if (token) {

@@ -20,7 +20,7 @@ function authHeaders(request?: Request, extra?: Record<string, string>): Record<
 export async function GET(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    const res = await fetch(`${getNodeUrl()}/v1/resources/${id}`, {
+    const res = await fetch(`${getNodeUrl('primary')}/v1/resources/${id}`, {
       headers: authHeaders(request),
       cache: "no-store",
     });
@@ -34,7 +34,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ id: 
 export async function DELETE(request: Request, { params }: { params: Promise<{ id: string }> }) {
   try {
     const { id } = await params;
-    const res = await fetch(`${getNodeUrl()}/v1/resources/${id}/revoke`, {
+    const res = await fetch(`${getNodeUrl('primary')}/v1/resources/${id}/revoke`, {
       method: "POST",
       headers: authHeaders(request, { "Content-Type": "application/json" }),
     });

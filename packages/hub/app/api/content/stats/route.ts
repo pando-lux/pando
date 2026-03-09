@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { getNodeUrl } from "@/lib/node-connection";
 
-const NODE_URL = getNodeUrl();
+const NODE_URL = getNodeUrl('primary');
 
 export async function GET() {
   try {

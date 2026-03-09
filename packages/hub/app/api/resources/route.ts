@@ -20,7 +20,7 @@ function authHeaders(request?: Request, extra?: Record<string, string>): Record<
 
 export async function GET() {
   try {
-    const res = await fetch(`${getNodeUrl()}/v1/resources`, {
+    const res = await fetch(`${getNodeUrl('primary')}/v1/resources`, {
       headers: authHeaders(),
       cache: "no-store",
     });
@@ -34,7 +34,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const res = await fetch(`${getNodeUrl()}/v1/resources/register`, {
+    const res = await fetch(`${getNodeUrl('primary')}/v1/resources/register`, {
       method: "POST",
       headers: authHeaders(request, { "Content-Type": "application/json" }),
       body: JSON.stringify(body),
