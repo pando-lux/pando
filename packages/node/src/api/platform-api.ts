@@ -2151,9 +2151,13 @@ export async function registerPlatformRoutes(
       if (!body.name || body.name.trim().length === 0) {
         return reply.code(400).send({ error: 'Project name is required' });
       }
+      const sanitizedName = body.name.trim().slice(0, 200);
+      if (body.description && body.description.length > 2000) {
+        return reply.code(400).send({ error: 'Description too long (max 2000 chars)' });
+      }
 
       const project = await ps.createProject({
-        name: body.name.trim(),
+        name: sanitizedName,
         description: body.description || '',
         ownerId,
         type: (body.type as any) || 'private',
