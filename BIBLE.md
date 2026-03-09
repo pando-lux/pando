@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-09 (Security audit: P2P Infinity/negative-fee exploit fixes, deploy-manager shell injection fix, 7 financial validation patches. Phase 8 gateway. 9/9 E2E pass.). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-09 (Unified Pipeline: credential resolution via resolveGitCredential, infrastructure-as-apps (pando-node + pando-code = tier 3), AppManager gains governance gate + deployAction + 3 tiers. See Section 5.8 + 5.12.1.). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -419,15 +419,15 @@ Reads from @pando/node HTTP API. No direct database access.
 | Component | File | Status | What it does |
 |---|---|---|---|
 | **EngineAdapter** | `core/engine-adapter.ts` | DONE | The ONE pando-code integration point. PandoCode contributor nodes only. Multi-engine, routing, Pando tools, Lux budget. |
-| **AppManager** | `core/app-manager.ts` | DONE | Unified app lifecycle: SQLite registry (apps.db), blue-green deploy, PM2+nginx (Tier 2), S3 (Tier 1), health monitoring, rollback, P2P dispatch. pando-node = app[0]. |
+| **AppManager** | `core/app-manager.ts` | DONE | Unified app lifecycle: SQLite registry (apps.db), three tiers (1=static/S3, 2=server/PM2, 3=infrastructure), governance gate, blue-green deploy, health monitoring, rollback, P2P dispatch. pando-node + pando-code registered as tier 3 apps on startup. See Section 5.8. |
 | **CredentialStore** | `core/credential-store.ts` | DONE | AES-256-GCM encrypt/decrypt. Secure compute nodes (EC2) only. |
 | **StorageBackend** | `core/storage-backend.ts` | DONE | MongoDB direct or HTTP proxy to compute nodes |
-| **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Git pull + build + restart. GossipSub broadcast. |
+| **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Governance gate + security validation + safe restart for infrastructure upgrades. Git/build/deploy logic being migrated to AppManager (see Section 5.8.2). |
 | **PaymentGate** | `core/payment-gate.ts` | DONE | Lux escrow for task execution |
 | **RequestReply** | `core/request-reply.ts` | DONE | Handler registry + broadcast queries only. Unicast removed (Phase A). |
 | **HttpPeerClient** | `core/http-peer-client.ts` | DONE | Direct HTTP for all inter-node operations. Ed25519-signed requests. See Section 4.5. |
 | **CloudInstanceManager** | `core/cloud-instance-manager.ts` | DONE | EC2 instance provisioning, security groups, IP polling (~961 lines) |
-| **DeployManager** | `core/deploy-manager.ts` | DONE | Deployment coordination (~433 lines) |
+| **DeployManager** | `core/deploy-manager.ts` | DONE | PatchSet git commit/revert for CodePipeline. Backup/restore being removed (AppManager handles). See Section 5.8.2. |
 | **VersionProtocol** | `core/version-protocol.ts` | DONE | Version negotiation between nodes (~222 lines) |
 | **MongoBackend** | `core/mongo-backend.ts` | DONE | MongoDB storage backend implementation (~239 lines) |
 | **P2PStorageBackend** | `core/p2p-storage-backend.ts` | DONE | P2P storage proxy for non-MongoDB nodes (~171 lines) |
@@ -448,7 +448,7 @@ Reads from @pando/node HTTP API. No direct database access.
 | **QARunner** | `platform/qa-runner.ts` | DONE | QA test execution (~743 lines) |
 | **UserAccounts** | `platform/user-accounts.ts` | DONE | Guest/claim auth, ban checking (~617 lines) |
 | **ContributionTracker** | `platform/contribution-tracker.ts` | DONE | Contribution tracking (~522 lines) |
-| **ResourceRegistry** | `platform/resource-registry.ts` | DONE | Credential metadata, usage tracking (~439 lines) |
+| **ResourceRegistry** | `platform/resource-registry.ts` | DONE | Credential metadata, usage tracking, `resolveGitCredential()` for dynamic PAT resolution (~439 lines). See Section 5.12.1. |
 
 ### 4.4 HTTP API
 
@@ -959,11 +959,41 @@ No tick loop. No orchestrator. No message bus. The engine runs when it has somet
 | **Observer** | Long-running engine. Read-only. Monitors network health, peer status. Sends issues to council via send_message. | Scheduler tick (every 60 min) |
 | **QA** | Long-running engine. Runs health checks, API validation. Sends findings to council via send_message. | Scheduler tick (every 120 min) |
 
-### 5.8 App Lifecycle (AppManager) — Unified Deploy/Update/Monitor
+### 5.8 App Lifecycle (AppManager) — Unified Pipeline
 
-**AppManager replaces 3 separate systems** (DeployPipeline, HostingService, init-platform deploy handlers) with a single unified app lifecycle manager. SQLite `apps.db` is the single source of truth per node. See `docs/APP-LIFECYCLE-ROADMAP.md` for detailed implementation phases, algorithms, and SQL schemas.
+**Everything is an app.** pando-node, pando-code, and user apps all run through the same AppManager pipeline. SQLite `apps.db` is the single source of truth per node. See `docs/UNIFIED-PIPELINE-ROADMAP.md` for the full roadmap.
 
-**pando-node is app[0].** At boot, AppManager registers pando-node itself as the first app (`app_id: 'pando-node'`) with status `live`, current port, and commit hash. This means the same system that manages user apps also tracks the node itself.
+#### 5.8.1 The Unified Pipeline
+
+One pipeline for all code on the network:
+
+```
+credential resolve → git pull → npm install → build → health check → deploy
+```
+
+Governance is a gate BEFORE the pipeline, not a separate pipeline. If `app.governance === true`, an approved governance proposal is required before the pipeline runs. If `false`, the pipeline runs immediately.
+
+**Three tiers:**
+
+| Tier | Type | Deploy Action | Examples |
+|---|---|---|---|
+| 1 | Static | S3 upload | Portfolio sites, landing pages |
+| 2 | Server | PM2 start + nginx reverse proxy | Express apps, WebSocket servers |
+| 3 | Infrastructure | exit(75) → node restart | pando-node, pando-code |
+
+**Infrastructure as apps (IMPLEMENTED — Phase 2).** On node startup, `index.ts` registers pando-node and pando-code as tier 3 apps:
+
+```
+pando-node:  tier 3, governance: true,  deployAction: 'restart-node'
+pando-code:  tier 3, governance: true,  deployAction: 'restart-node'
+```
+
+`GET /v1/apps` shows infrastructure alongside user apps. Same registry. Same history table. Same API.
+
+**App schema fields (added in Phase 2):**
+- `tier: 1 | 2 | 3` — deployment strategy
+- `governance: boolean` — whether updates require governance approval before pipeline runs
+- `deployAction: 'pm2' | 'restart-node'` — PM2 process management or exit(75) for launcher restart
 
 ```
 App Lifecycle Flow
@@ -973,18 +1003,19 @@ REGISTER → DEPLOY → UPDATE → MONITOR
    │          │        │         │
    │          │        │         └─ 30s health checks, auto-restart, circuit breaker
    │          │        │
-   │          │        └─ git pull → blue-green swap:
+   │          │        └─ [governance gate if app.governance] → credential resolve → git pull → blue-green swap:
    │          │             1. Start new instance on temp port
    │          │             2. Health check new instance
-   │          │             3. Swap nginx upstream
+   │          │             3. Swap nginx upstream (Tier 2) or exit 75 (Tier 3)
    │          │             4. Graceful kill old instance
    │          │             5. Record in app_history
    │          │
    │          └─ Clone from GitHub → detect tier → deploy:
    │               Tier 1 (static): S3 upload (via contributed ResourceRegistry creds)
    │               Tier 2 (server): npm install → PM2 start → nginx reverse proxy
+   │               Tier 3 (infra):  npm install → build → exit(75) → restart
    │
-   └─ appManager.register({ projectId, repoUrl, tier, ... })
+   └─ appManager.register({ projectId, repoUrl, tier, governance, deployAction, ... })
        Auto-register: if update() called for unknown app, auto-registers from ProjectStore
 
 ROLLBACK: restore previous_commit → blue-green swap back → record in history
@@ -992,6 +1023,25 @@ ROLLBACK: restore previous_commit → blue-green swap back → record in history
 P2P DISPATCH: findDeployTarget() → CapabilityRegistry (credentialAccess + mongodb)
               → HttpPeerClient forwards deploy/update to EC2 secure node
 ```
+
+#### 5.8.2 Deprecation Plan (Phases 3-7 — PLANNED)
+
+The unified pipeline consolidates three systems that previously did overlapping work:
+
+| System | Keeps | Removes (migrates to AppManager) |
+|---|---|---|
+| **UpgradeProtocol** | Security validation, safe restart (wait for active workers), catch-up timer, governance gate | Git fetch/reset, npm install, build, deploy logic |
+| **DeployManager** | PatchSet commit for CodePipeline | Standalone backup/restore, direct git operations |
+| **Hardcoded PATs** | (nothing) | All replaced by `resolveGitCredential()` |
+
+**Planned phases (NOT YET IMPLEMENTED):**
+- **Phase 3:** Extract git operations into shared `GitOps` class — all git calls use `execFileSync`, all resolve credentials via credential system
+- **Phase 4:** AppManager.update() gains governance awareness — UpgradeProtocol becomes a thin governance gate calling AppManager
+- **Phase 5:** Agent-driven GitHub repo creation via API (not CLI)
+- **Phase 6:** pando-code upgrade pipeline (same as pando-node, already registered as tier 3 app)
+- **Phase 7:** Remove deprecated duplicate logic from UpgradeProtocol and DeployManager
+
+Until these phases are implemented, UpgradeProtocol still runs its own git/build/deploy logic for pando-node upgrades. The AppManager handles user app deployment independently. Both work, but the code is duplicated.
 
 **PROVEN LIVE (2026-03-06) — BOTH TIERS:**
 
@@ -1526,7 +1576,7 @@ Agent (own Ed25519 keypair, own peerId = wallet)
 
 #### Model A: Contributed Credentials (for the network)
 
-Used by Path A (simple AI). Contributor donates an API key for the network to use.
+Used by Path A (simple AI) and git operations (via credential resolution). Contributor donates an API key or GitHub PAT for the network to use.
 
 ```
 /contribute openai sk-xxx
@@ -1534,12 +1584,41 @@ Used by Path A (simple AI). Contributor donates an API key for the network to us
   → EC2 decrypts and uses server-side
   → Contributor doesn't need to run a node
   → Key NEVER leaves EC2
+
+/contribute github ghp_xxx
+  → Same encryption path → stored in MongoDB
+  → Used by resolveGitCredential() for all git clone/push ops
+  → User-scoped: /contribute github ghp_xxx --user → user:{userId}/github
 ```
 
 1. User runs `/contribute <service> <token>` in TUI
 2. Encrypted → stored in MongoDB `pando_credentials` on secure compute nodes
 3. `ResourceRegistry` stores metadata (type + status, NEVER the value)
 4. At use time: EC2 node decrypts locally → makes API call → returns result
+
+#### 5.12.1 Credential Resolution (IMPLEMENTED — Phase 1)
+
+All git operations resolve credentials dynamically via `ResourceRegistry.resolveGitCredential(repoUrl, userId?)`. No more hardcoded PATs in git remote URLs.
+
+```
+resolveGitCredential(repoUrl, userId?)
+  │
+  ├─ 1. Find active code_repository resources in ResourceRegistry
+  ├─ 2. If userId provided → look for user-scoped credential first (user:{userId}/github)
+  ├─ 3. Fall back to any active code_repository credential on this node
+  ├─ 4. Decrypt the PAT via getCredential(resourceId)
+  └─ 5. Inject PAT into URL → https://x-access-token:TOKEN@github.com/owner/repo
+       Returns authenticated URL or null if no credential available
+```
+
+**Who uses it:**
+- `pando_workspace` tool (engine-adapter.ts) — cloning/pulling any repo for agent work
+- All git clone/push operations in the unified pipeline (see Section 5.8)
+- User-scoped credentials: users contribute their own PAT for private repos
+
+**What it replaces:**
+- ~~Hardcoded PATs in git remote URLs~~ — DEPRECATED. Use credential resolution instead.
+- ~~Extracting PAT from `git remote get-url origin`~~ — DEPRECATED. The `pando_workspace` tool now calls `resolveGitCredential()`.
 
 #### Model B: Local Credentials (PandoCode contributor)
 
@@ -1564,6 +1643,7 @@ No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoCode'
 - NEVER store keys in docs, code, comments, agent reports
 - Contributed keys: ONLY decrypted and used on EC2 (server-side)
 - Local keys: ONLY used by local PandoCode process
+- NEVER hardcode PATs in git remote URLs — use `resolveGitCredential()`
 
 ---
 
@@ -1877,7 +1957,9 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | **Path B end-to-end** | Full pipeline | TESTED LIVE — "build me a portfolio website" → doorman classifies (HTTP to EC2) → project created → PandoCode builds → DeployPipeline → GitHub push → HTTP deploy to EC2 → S3 upload → live URL returned → marketplace listing. Full pipeline proven. |
 | **Unified build routing** | `api/platform-api.ts` | DONE — `findBestBuilder()` replaces the split `hasClaudeCodeAuth` logic. All 4 build handlers use unified flow: create project → find best PandoCode peer (including self) → route. `hasClaudeCodeAuth()` removed from routing (was Anthropic-only, broken for Gemini). |
 | **Circuit breaker fix** | `cli.ts`, `supervisor.ts`, `kernel/` | DONE — Port-conflict exits use code 78 (supervisor won't respawn). Immediate circuit breaker reset on successful boot. Thresholds raised (crash-guard 3→6, circuit-breaker 3→5). |
-| **App Lifecycle (AppManager)** | `core/app-manager.ts`, `api/app-api.ts` | DONE — Unified system replacing DeployPipeline + HostingService + init-platform handlers. SQLite registry, blue-green deploy, health monitoring, rollback, P2P dispatch. 5/5 pipeline E2E tests pass (71 total). |
+| **App Lifecycle (AppManager)** | `core/app-manager.ts`, `api/app-api.ts` | DONE — Unified pipeline with 3 tiers (static/server/infrastructure), governance gate, blue-green deploy, health monitoring, rollback, P2P dispatch. pando-node + pando-code registered as tier 3 infra apps on startup. See Section 5.8. |
+| **Credential Resolution** | `platform/resource-registry.ts` | DONE — `resolveGitCredential(repoUrl, userId?)` resolves GitHub PATs from contributed credentials. User-scoped support. Replaces hardcoded PATs in git remote URLs. See Section 5.12.1. |
+| **Infrastructure as Apps** | `index.ts`, `core/app-manager.ts` | DONE — AppManager schema extended with `tier: 3`, `governance: boolean`, `deployAction: 'pm2' \| 'restart-node'`. pando-node and pando-code registered on startup. `GET /v1/apps` shows all. |
 | **Deploy result push to chat** | `api/platform-api.ts` | DONE — Deploy result awaited (not fire-and-forget). Success/failure pushed to chat thread + SSE. Commit e6fe16b1. |
 | **Marketplace enrichment** | `api/platform-api.ts` | DONE — GET /v1/marketplace and GET /v1/marketplace/:id enriched with AppManager deployment data (status, url, tier, commit, deployedAt). Commit e6fe16b1. |
 | **Engine memory leak** | `core/engine-adapter.ts`, `api/app-api.ts` | DONE — stopTeamAgent/stopTeam/app DELETE now destroy PandoCode engine processes via engine.shutdown() + pool cleanup. Previously leaked zombie engines (13 at 95% memory). Commit 5b94cd77. |
@@ -1948,6 +2030,8 @@ The `resourceId` is generated when a credential is contributed (via `/contribute
 | **Deploy pipeline resilience** | `core/app-manager.ts` | AppManager provides blue-green deploy (no port collision) + rollback (restore previous commit). Retry on transient failures still TODO. S3 partial upload edge case mitigated by rollback capability. All deploy events persisted to `app_history` table in apps.db. |
 | **Chat-created projects lack repo_url** | `api/platform-api.ts` | Chat-created projects use workspace-based deploy (workspaceDir). EC2 deploy dispatch requires GitHub repo to clone. Workspace-to-GitHub push before deploy dispatch needed. Being fixed separately. |
 | ~~**deployPeerId not persisting**~~ | `platform-api.ts:3685` | **ALREADY HANDLED.** Saved to both ProjectStore (MongoDB) and ProjectRegistry (local). |
+| **Unified Pipeline Phases 3-7** | `core/app-manager.ts`, `core/upgrade-protocol.ts`, `core/deploy-manager.ts` | Phases 1-2 DONE (credential resolution + infrastructure-as-apps). Remaining: shared GitOps class (Phase 3), AppManager governance-aware update (Phase 4), agent-driven repo creation (Phase 5), pando-code pipeline (Phase 6), cleanup deprecated logic (Phase 7). See `docs/UNIFIED-PIPELINE-ROADMAP.md` and Section 5.8.2. |
+| **UpgradeProtocol/AppManager duplication** | `core/upgrade-protocol.ts`, `core/app-manager.ts` | Both have git/build/deploy logic. UpgradeProtocol handles pando-node upgrades, AppManager handles user apps. Will merge in Phase 4 — AppManager.update() gains governance gate, UpgradeProtocol becomes thin wrapper. |
 
 ### Stubs
 
@@ -2142,14 +2226,14 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 |---|---|
 | `core/team-registry.ts` | **NEW.** Team registry (SQLite), GossipSub sync, heartbeat, orphan detection, handoff, P2P board proxy. See Section 5.10. |
 | `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. Team agent setup via startTeam(). Does NOT handle model selection — that's PandoCode's job. |
-| `core/app-manager.ts` | Unified app lifecycle: register, deploy, update, rollback, health monitoring. SQLite apps.db. pando-node = app[0]. |
+| `core/app-manager.ts` | Unified pipeline: 3 tiers, governance gate, deploy/update/rollback/health. SQLite apps.db. pando-node + pando-code = tier 3 infra apps. See Section 5.8. |
 | `core/credential-store.ts` | AES-256-GCM encrypt/decrypt |
 | `core/http-peer-client.ts` | Direct HTTP for all inter-node operations. Ed25519-signed. See Section 4.5. |
 | `core/storage-backend.ts` | MongoDB or HTTP proxy |
-| `core/upgrade-protocol.ts` | Git pull + build + restart + broadcast |
+| `core/upgrade-protocol.ts` | Governance gate + security validation + safe restart. Git/build logic being migrated to AppManager (Section 5.8.2). |
 | `core/payment-gate.ts` | Lux escrow |
 | `core/cloud-instance-manager.ts` | EC2 instance provisioning, security groups, IP polling (~961 lines) |
-| `core/deploy-manager.ts` | Deployment coordination (~433 lines) |
+| `core/deploy-manager.ts` | PatchSet git commit/revert for CodePipeline. Backup/restore being removed (Section 5.8.2). |
 | `core/version-protocol.ts` | Version negotiation (~222 lines) |
 | `core/mongo-backend.ts` | MongoDB storage backend (~239 lines) |
 | `core/p2p-storage-backend.ts` | P2P storage proxy (~171 lines) |
@@ -2169,7 +2253,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 | `platform/qa-runner.ts` | QA test execution (~743 lines) |
 | `platform/user-accounts.ts` | Guest/claim auth, ban checking (~617 lines) |
 | `platform/contribution-tracker.ts` | Contribution tracking (~522 lines) |
-| `platform/resource-registry.ts` | Credential metadata, usage tracking (~439 lines) |
+| `platform/resource-registry.ts` | Credential metadata, usage tracking, `resolveGitCredential()` for dynamic PAT resolution. See Section 5.12.1. |
 
 ### API
 | File | Purpose |
@@ -2302,3 +2386,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 30. **Auto-upgrade has 3 trigger paths.** (a) `onUpgradeApproved` callback fires immediately on the proposing node when governance passes. (b) GossipSub broadcast on `pando/upgrades` topic notifies connected peers. (c) Catchup timer (every 5min, 30s startup delay) scans all governance proposals for `status:'passed' + category:'upgrade'` and calls `pullAndUpgrade` for any not yet applied. Path C is the safety net — handles offline peers, missed broadcasts, and nodes that joined after the broadcast. If upgrade isn't happening, check `journalctl` for `[upgrade] Catch-up:` messages.
 
 31. **EC2 pando directory is `/opt/pando`, NOT `/opt/pando/node`.** The repo is cloned directly into `/opt/pando`. The monorepo root IS `/opt/pando`. Agents assuming `/opt/pando/node` will get "No such file or directory" errors on every command.
+
+32. **pando-node and pando-code are apps in AppManager.** `GET /v1/apps` returns them alongside user apps. They are tier 3 (infrastructure) with `governance: true` and `deployAction: 'restart-node'`. This is the unified pipeline — same registry, same history table, same API. However, UpgradeProtocol still runs its own git/build/deploy logic for now (Phases 3-7 will merge them). Don't be confused by the temporary duplication.
+
+33. **Never hardcode PATs in git remote URLs.** Use `ResourceRegistry.resolveGitCredential(repoUrl, userId?)` instead. It resolves contributed credentials dynamically, supports user-scoped PATs for private repos, and injects the token into the URL at call time. The old pattern of extracting PATs from `git remote get-url origin` is deprecated.
