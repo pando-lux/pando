@@ -1588,20 +1588,18 @@ All board endpoints follow the same pattern:
 2. YES → operate on local PandoTeams SQLite
 3. NO → HTTP request to managing node
 
-**Legacy endpoints** (`/v1/council/*`) will be removed after migration. Do NOT build on them.
+**Legacy endpoints** (`/v1/council/*`) have been removed. Use `/v1/teams/*` instead.
 
-#### 5.10.13 What This Replaces
+#### 5.10.13 What This Replaced
 
-The following legacy code is being removed:
-- `core/council-prompts.ts` — prompts move to seed config constants in engine-adapter.ts
+The following legacy code has been removed:
+- `core/council-prompts.ts` — prompts moved to seed config constants in engine-adapter.ts
 - `startCouncilAgents()` in engine-adapter.ts — replaced by generic `startTeam(teamId)`
 - `isCouncilActive()`, `ensureCouncilStarted()`, `sendToCouncilAgent()` — replaced by `isTeamActive(teamId)`, `getActiveTeamIds()`, `triggerTeamAgentBackground(teamId, agentId, message)`
 - `getCouncilBoard()`, `getCouncilInbox()`, `sendCouncilMessage()` — replaced by `getTeamBoard(teamId)`, `getTeamInbox(teamId, agentId)`, `sendTeamMessage(teamId, fromAgentId, toAgentId, message)`, `addTeamBoardTask(teamId, title, description?)`, `updateTeamBoardTask(teamId, taskId, updates)`
 - `/v1/council/*` API endpoints — replaced by `/v1/teams/*`
 - `config.enableCouncil` flag — renamed to `config.enableTeams`
 - `--council` / `--no-council` CLI flags — removed
-
-See `docs/TEAM-ARCHITECTURE.md` Section 17 for the complete legacy code audit (120+ references across 11 files).
 
 #### 5.10.13 Failure Modes & Recovery
 

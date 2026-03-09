@@ -3735,23 +3735,6 @@ export async function registerPlatformRoutes(
       return true;
     }
 
-    // POST /council/veto/:id — veto a governance proposal
-    // Legacy route; kept until gateway migrates to /v1/governance/*.
-    fastify.post('/council/veto/:id', async (request: any, reply: any) => {
-      if (!requireOperator(request, reply)) return;
-      const governance = node.getGovernance();
-      if (!governance) return reply.code(503).send({ error: 'Governance not initialized' });
-      const { id } = request.params || {};
-      const { reason } = request.body || {};
-      try {
-        await governance.castVote(id, 'reject', reason || 'Operator veto');
-        return { status: 'vetoed', proposalId: id };
-      } catch (err: any) {
-        return reply.code(400).send({ error: 'Veto failed' });
-      }
-    });
-
-
     // ── Phase 51: Infrastructure Awareness ──────────────────────────────────
 
     // GET /capabilities/infrastructure — what infrastructure agents/apps can use
