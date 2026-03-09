@@ -289,7 +289,20 @@ export class UpgradeProtocol {
       return { success: true, message: 'Already incorporated (local ahead of origin).' };
     }
 
-    // Step 6a: Install dependencies
+    // Step 6a: Preserve @pando-code/core (not in package.json, installed manually on PandoCode nodes)
+    const pandoCodeCorePath = join(this.repoDir, 'node_modules', '@pando-code', 'core');
+    const pandoCodeBackupPath = join(this.repoDir, 'node_modules', '.pando-code-core-backup');
+    let hadPandoCodeCore = false;
+    try {
+      const { existsSync, cpSync, lstatSync } = await import('node:fs');
+      // Only backup if it's a real directory (not a broken symlink)
+      if (existsSync(pandoCodeCorePath) && !lstatSync(pandoCodeCorePath).isSymbolicLink()) {
+        cpSync(pandoCodeCorePath, pandoCodeBackupPath, { recursive: true });
+        hadPandoCodeCore = true;
+      }
+    } catch {}
+
+    // Step 6b: Install dependencies
     console.log('[upgrade] Installing dependencies...');
     try {
       execSync('npm install', {
@@ -297,6 +310,24 @@ export class UpgradeProtocol {
       });
     } catch (err: any) {
       console.warn(`[upgrade] npm install warning: ${(err.stderr?.toString() || err.message)?.slice(0, 200)}`);
+    }
+
+    // Step 6c: Restore @pando-code/core if it was backed up and npm install wiped it
+    if (hadPandoCodeCore) {
+      try {
+        const { existsSync, cpSync, rmSync, lstatSync, mkdirSync, unlinkSync } = await import('node:fs');
+        const coreExists = existsSync(pandoCodeCorePath);
+        const isBrokenLink = coreExists ? false : (() => { try { lstatSync(pandoCodeCorePath); return true; } catch { return false; } })();
+        if (!coreExists || isBrokenLink) {
+          if (isBrokenLink) try { unlinkSync(pandoCodeCorePath); } catch {}
+          mkdirSync(join(this.repoDir, 'node_modules', '@pando-code'), { recursive: true });
+          cpSync(pandoCodeBackupPath, pandoCodeCorePath, { recursive: true });
+          console.log('[upgrade] Restored @pando-code/core after npm install');
+        }
+        rmSync(pandoCodeBackupPath, { recursive: true, force: true });
+      } catch (err: any) {
+        console.warn(`[upgrade] Failed to restore @pando-code/core: ${err.message}`);
+      }
     }
 
     // Step 6b: Build (with fallback)
