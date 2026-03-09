@@ -728,12 +728,29 @@ export async function initKernel(node: any): Promise<void> {
     if (node.upgradeProtocol) {
       const upgradeProtocol = node.upgradeProtocol;
 
-      // Wire broadcast: publish to pando/upgrades topic
+      // Wire broadcast: direct P2P to each peer (reliable) + GossipSub (bonus)
       upgradeProtocol.setBroadcast(async (msg: Record<string, unknown>) => {
-        const { TOPIC_UPGRADES } = await import('./core/upgrade-protocol.js');
-        await node.network!.publishToTopic(TOPIC_UPGRADES, {
-          type: 'agent_event' as any, from: node.identity!.peerId, timestamp: Date.now(), payload: msg,
-        } as any);
+        // Primary: Direct P2P to each connected peer (TCP, guaranteed delivery)
+        const peers = node.network!.getPeers();
+        if (peers.length > 0) {
+          const results = await Promise.allSettled(peers.map((p: any) =>
+            node.network!.sendMessage(p.peerId, {
+              type: MessageType.UPGRADE_NOTIFICATION, from: node.identity!.peerId,
+              timestamp: Date.now(), payload: msg,
+            })
+          ));
+          const sent = results.filter(r => r.status === 'fulfilled').length;
+          console.log(`[upgrade] Direct P2P notification sent to ${sent}/${peers.length} peers`);
+        }
+        // Secondary: GossipSub broadcast (may not reach all peers in small networks)
+        try {
+          const { TOPIC_UPGRADES } = await import('./core/upgrade-protocol.js');
+          await node.network!.publishToTopic(TOPIC_UPGRADES, {
+            type: 'agent_event' as any, from: node.identity!.peerId, timestamp: Date.now(), payload: msg,
+          } as any);
+        } catch (err: any) {
+          console.warn(`[upgrade] GossipSub broadcast failed (direct P2P already sent): ${err.message?.slice(0, 100)}`);
+        }
       });
 
       // Wire restart
@@ -842,7 +859,7 @@ export async function initKernel(node: any): Promise<void> {
 
       console.log('[upgrade] Phase 82 simple self-upgrade wired (with catch-up timer)');
 
-      // Periodic governance re-sync: every 5 min, re-sync with a random connected peer.
+      // Periodic governance re-sync: every 2 min, re-sync with a random connected peer.
       // Handles thin GossipSub meshes where governance votes/decisions don't propagate.
       setInterval(() => {
         if (!node.governance || !node.network) return;
@@ -850,7 +867,7 @@ export async function initKernel(node: any): Promise<void> {
         if (peers.length === 0) return;
         const randomPeer = peers[Math.floor(Math.random() * peers.length)];
         node.governance.requestSync(randomPeer.peerId).catch(() => {});
-      }, 5 * 60 * 1000);
+      }, 2 * 60 * 1000);
 
       // Peer discovery sweep: share full peer list with all connected peers.
       // Staggered early sweeps catch peers that connected after initial exchange.

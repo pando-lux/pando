@@ -176,6 +176,8 @@ export enum MessageType {
   REQUEST_REPLY_REPLY = 'request_reply_reply',
   // Peer exchange: share known peer addresses so nodes can form a full mesh
   PEER_EXCHANGE = 'peer_exchange',
+  // Direct P2P upgrade notification (reliable delivery, supplements GossipSub)
+  UPGRADE_NOTIFICATION = 'upgrade_notification',
 }
 
 export enum NodeTier {

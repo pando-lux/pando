@@ -771,6 +771,28 @@ Be friendly and helpful. Keep answers short.`
         node.governance?.handleSyncResponse(message);
       }
 
+      // Handle direct P2P upgrade notifications (reliable delivery from proposer)
+      if (message.type === MessageType.UPGRADE_NOTIFICATION) {
+        const payload = message.payload as any;
+        if (payload?.type === 'upgrade_available' && payload.commitHash) {
+          const { commitHash, description } = payload;
+          if (/^[0-9a-f]{6,40}$/i.test(commitHash) && node.upgradeProtocol) {
+            if (!node.upgradeProtocol.hasApplied(commitHash) && !node.upgradeInProgress && !node.restartPending) {
+              console.log(`[upgrade] Direct P2P: upgrade available (${commitHash.slice(0, 8)}): ${description || ''}`);
+              node.upgradeInProgress = true;
+              try {
+                const result = await node.upgradeProtocol.pullAndUpgrade(commitHash);
+                if (!result.success) console.error(`[upgrade] Direct P2P pull failed: ${result.message}`);
+              } catch (err: any) {
+                console.error(`[upgrade] Direct P2P upgrade failed: ${err.message}`);
+              } finally {
+                node.upgradeInProgress = false;
+              }
+            }
+          }
+        }
+      }
+
       // Handle task sync requests/responses (direct P2P messages)
       if (message.type === MessageType.TASK_SYNC_REQUEST) {
         node.getActiveTaskQueue()?.handleSyncRequest(from);
@@ -876,7 +898,7 @@ Be friendly and helpful. Keep answers short.`
         MessageType.GOVERNANCE_SYNC_REQUEST, MessageType.GOVERNANCE_SYNC_RESPONSE,
         MessageType.TASK_SYNC_REQUEST, MessageType.TASK_SYNC_RESPONSE,
         MessageType.BALANCE_REQUEST, MessageType.CAPABILITY_PROFILE_DIRECT,
-        MessageType.PEER_EXCHANGE,
+        MessageType.PEER_EXCHANGE, MessageType.UPGRADE_NOTIFICATION,
       ]);
       if (!handledTypes.has(message.type)) {
         console.log(`[P2P] Unhandled message type: ${message.type}`);

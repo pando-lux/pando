@@ -7,7 +7,7 @@
  *   - Security validation (dangerous patterns, immutable kernel, protocol changes)
  *   - Version pinning
  *   - Safe restart (wait for active workers)
- *   - Catch-up timer for missed upgrades (governance-based + git-fetch fallback)
+ *   - Catch-up timer for missed upgrades
  *   - P2P broadcast of upgrade notifications
  *
  * The actual git/build/deploy work is done by GitOps.
@@ -571,8 +571,8 @@ export class UpgradeProtocol {
    * Periodically scan governance for passed upgrade proposals this node hasn't applied.
    */
   private catchupTimer: ReturnType<typeof setInterval> | null = null;
-  private static CATCHUP_INTERVAL_MS = 5 * 60 * 1000;
-  private static CATCHUP_STARTUP_DELAY_MS = 30 * 1000;
+  private static CATCHUP_INTERVAL_MS = 2 * 60 * 1000;    // 2 min (safety net — direct P2P is primary)
+  private static CATCHUP_STARTUP_DELAY_MS = 10 * 1000;   // 10s startup delay
 
   startCatchupTimer(pullAndUpgradeFn: (commitHash: string) => Promise<{ success: boolean; message: string }>): void {
     setTimeout(() => this.checkForMissedUpgrades(pullAndUpgradeFn), UpgradeProtocol.CATCHUP_STARTUP_DELAY_MS);
@@ -634,32 +634,6 @@ export class UpgradeProtocol {
         }
       }
 
-      // ── Git-based fallback: detect new code on origin/master even without governance ──
-      // This makes upgrades bulletproof — nodes converge to origin/master regardless of
-      // whether governance proposals propagated via GossipSub.
-      if (!this.pinnedVersion) {
-        try {
-          this.git.addSafeDirectory();
-          this.git.fetch('origin', 'master');
-          const localHead = this.git.getCurrentCommit();
-          const remoteHead = this.git.getRemoteCommit('origin', 'master');
-          if (localHead !== remoteHead && !this.git.isAncestor(remoteHead, 'HEAD')) {
-            const behind = this.git.revListCount('HEAD', 'origin/master');
-            console.log(`[upgrade] Git catch-up: origin/master is ${behind} commit(s) ahead (local ${localHead.slice(0, 8)}, remote ${remoteHead.slice(0, 8)}) — upgrading`);
-            const result = await pullAndUpgradeFn(remoteHead);
-            if (result.success) {
-              console.log(`[upgrade] Git catch-up: upgraded to ${remoteHead.slice(0, 8)}`);
-            } else {
-              console.warn(`[upgrade] Git catch-up: upgrade failed: ${result.message}`);
-            }
-          }
-        } catch (fetchErr: any) {
-          // Non-fatal — git fetch may fail if offline or repo not configured
-          if (!fetchErr.message?.includes('Could not resolve host')) {
-            console.warn(`[upgrade] Git catch-up fetch failed: ${fetchErr.message?.slice(0, 100)}`);
-          }
-        }
-      }
     } catch (err: any) {
       console.error(`[upgrade] Catch-up check failed: ${err.message}`);
     }
