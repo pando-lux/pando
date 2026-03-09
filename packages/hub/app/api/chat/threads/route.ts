@@ -19,7 +19,7 @@ export async function GET(request: Request) {
     const res = await fetchFromNode("/v1/chat/threads", {
       headers: nodeHeaders(request),
       signal: AbortSignal.timeout(10000),
-    });
+    }, 'primary');
     if (!res.ok) {
       return NextResponse.json({ threads: [] }, { status: res.status });
     }
@@ -39,7 +39,7 @@ export async function POST(request: Request) {
       headers: nodeHeaders(request),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(10000),
-    });
+    }, 'primary');
     const data = await res.json();
     return NextResponse.json(data, { status: res.status });
   } catch (err: any) {

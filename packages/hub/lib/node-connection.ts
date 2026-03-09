@@ -70,7 +70,7 @@ class NodeConnection {
    */
   private async fetchWithFailover(path: string, options?: RequestInit): Promise<Response> {
     const pool = getNodePool();
-    const url = pool.getBestNodeUrl();
+    const url = pool.getBestNodeUrl('primary');
     const start = Date.now();
     try {
       const res = await fetch(`${url}${path}`, {

@@ -15,7 +15,7 @@ export async function GET(_req: Request, { params }: { params: Promise<{ id: str
     const res = await fetchFromNode(`/v1/chat/threads/${encodeURIComponent(id)}`, {
       headers: nodeHeaders(),
       signal: AbortSignal.timeout(10000),
-    });
+    }, 'primary');
     if (!res.ok) {
       return NextResponse.json({ id, messages: [] }, { status: res.status });
     }
@@ -36,7 +36,7 @@ export async function PATCH(req: Request, { params }: { params: Promise<{ id: st
       headers: nodeHeaders(),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(10000),
-    });
+    }, 'primary');
     if (!res.ok) {
       return NextResponse.json({ error: 'Failed to update thread' }, { status: res.status });
     }

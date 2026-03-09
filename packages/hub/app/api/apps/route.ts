@@ -1,46 +1,55 @@
 import { NextResponse } from "next/server";
-import { getNodeConnection } from "@/lib/node-connection";
+import { fetchFromNode, getApiToken } from "@/lib/node-connection";
 
 /**
- * Phase 53.7 — App Directory API
- * Returns deployed apps (projects with a deploymentUrl).
+ * App Directory API
+ * Returns apps from the AppManager (/v1/apps), filtered to live/deploying status.
  * Public endpoint — no auth required.
  */
 export async function GET() {
   try {
-    const node = getNodeConnection();
-    const projects: any[] = (await node.getProjects(undefined)) ?? [];
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const token = getApiToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
 
-    const deployed = projects
-      .filter((p: any) => p.deploymentUrl && p.deploymentUrl !== "")
-      .map((p: any) => {
-        // Classify deployment host
+    const res = await fetchFromNode("/v1/apps", {
+      headers,
+      signal: AbortSignal.timeout(10000),
+    }, 'primary');
+
+    if (!res.ok) return NextResponse.json({ apps: [], total: 0 });
+
+    const data = await res.json();
+    const allApps: any[] = data.apps || [];
+
+    // Show live and deploying apps (not failed/registered)
+    const deployed = allApps
+      .filter((a: any) => a.status === "live" || a.status === "deploying")
+      .map((a: any) => {
         let hostType: "s3" | "ec2" | "gateway" | "other" = "other";
-        const url: string = p.deploymentUrl || "";
+        const url: string = a.deploy_url || "";
         if (url.includes("s3-website") || url.includes("s3.amazonaws.com")) {
           hostType = "s3";
         } else if (url.includes("vercel.app") || url.includes("/apps/")) {
           hostType = "gateway";
-        } else if (p.deployPeerId) {
+        } else if (a.host_peer_id) {
           hostType = "ec2";
         }
 
         return {
-          id: p.id,
-          name: p.name,
-          description: p.description,
-          deploymentUrl: url,
-          deploymentStatus: p.deploymentStatus,
-          deploymentType: p.deploymentType || hostType,
+          id: a.id,
+          name: a.name,
+          description: a.name,
+          deploymentUrl: url || null,
+          deploymentStatus: a.status,
           hostType,
-          visibility: p.visibility,
-          createdAt: p.createdAt,
-          updatedAt: p.updatedAt,
-          ownerId: p.ownerId,
-          deployPeerId: p.deployPeerId,
+          port: a.port,
+          createdAt: a.created_at,
+          updatedAt: a.created_at,
+          hostPeerId: a.host_peer_id,
         };
       })
-      .sort((a: any, b: any) => (b.updatedAt || 0) - (a.updatedAt || 0));
+      .sort((a: any, b: any) => (b.createdAt || 0) - (a.createdAt || 0));
 
     return NextResponse.json({ apps: deployed, total: deployed.length });
   } catch {
