@@ -1,0 +1,14 @@
+{
+  "savedAt": "2026-03-09T21:20:17.940Z",
+  "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
+  "tasks": [
+    {
+      "id": "task-11e3e752-c45d-4c7c-a8f4-78c6d4715ab0",
+      "title": "[subtask] Express API with CRUD endpoints",
+      "description": "Create Express server with GET/POST/PUT/DELETE /api/books endpoints, in-memory storage, CORS enabled",
+      "status": "pending",
+      "created_at": "2026-03-09 21:20:17",
+      "progress": ""
+    }
+  ]
+}
