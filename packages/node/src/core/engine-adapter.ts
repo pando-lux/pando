@@ -16,7 +16,7 @@
  */
 
 import { join as pathJoin } from 'node:path';
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { ResourceRegistry } from '../platform/resource-registry.js';
@@ -720,6 +720,11 @@ export class EngineAdapter {
   private projectIntervals = new Map<string, NodeJS.Timeout>();  // projectId → tick interval (keyed to prevent leaks)
   private activeTeams = new Map<string, { dbPath: string; agents: TeamAgentConfig[]; intervals: any[] }>();
 
+  // ─── Watchdog state ──────────────────────────────────────────────────
+  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
+  private watchdogRestarts = new Map<string, { count: number; firstRestartAt: number }>();
+  private stoppedEngines = new Set<string>();  // engines intentionally stopped — don't restart
+
   /** Whether the adapter is ready (pando-code loaded + pool started). */
   get available(): boolean { return this.started; }
 
@@ -804,6 +809,10 @@ export class EngineAdapter {
     }
 
     this.started = true;
+
+    // Start engine watchdog to auto-restart dead team engines
+    this.startWatchdog();
+
     console.log('[EngineAdapter] Started. System engine ready.');
   }
 
@@ -1071,7 +1080,9 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
    */
   addTeamBoardTask(teamId: string, title: string, description?: string): string | null {
     const teamData = this.activeTeams.get(teamId);
-    return this.insertBoardTask(teamData?.dbPath ?? null, title, description);
+    const taskId = this.insertBoardTask(teamData?.dbPath ?? null, title, description);
+    if (taskId) this.persistBoardState(teamId);
+    return taskId;
   }
 
   /**
@@ -1154,9 +1165,96 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       vals.push(taskId);
       const result = db.prepare(`UPDATE board_tasks SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
       db.close();
-      return result.changes > 0;
+      const changed = result.changes > 0;
+      if (changed) this.persistBoardState(teamId);
+      return changed;
     } catch (err: any) {
       console.warn(`[EngineAdapter] updateTeamBoardTask failed: ${err.message}`);
+      return false;
+    }
+  }
+
+  // -----------------------------------------------------------------------
+  // Board state persistence (Phase 3 — crash recovery)
+  // -----------------------------------------------------------------------
+
+  /**
+   * Persist the current board state to a JSON file for crash recovery.
+   * Called after every board task create/update. Uses atomic write (temp + rename).
+   * Failures are logged but never break board operations.
+   */
+  private persistBoardState(teamId: string): void {
+    try {
+      const teamData = this.activeTeams.get(teamId);
+      if (!teamData?.dbPath) return;
+
+      const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
+      const teamDir = pathJoin(baseDir, 'teams', teamId);
+      mkdirSync(teamDir, { recursive: true });
+
+      const tasks = this.getTeamBoard(teamId, true); // include done for full snapshot
+      const snapshot = {
+        savedAt: new Date().toISOString(),
+        nodeId: this.config?.nodeId || 'unknown',
+        tasks,
+      };
+
+      const filePath = pathJoin(teamDir, 'board-state.json');
+      const tmpPath = filePath + '.tmp';
+      writeFileSync(tmpPath, JSON.stringify(snapshot, null, 2), 'utf-8');
+      renameSync(tmpPath, filePath);
+    } catch (err: any) {
+      console.warn(`[board-persist] Failed to persist board state for team ${teamId}: ${err.message}`);
+    }
+  }
+
+  /**
+   * Restore board state from a persisted JSON file.
+   * Called during startTeam() before agents begin processing.
+   * Skips tasks with status "done" and tasks that already exist in the board.
+   * Returns true if any tasks were restored.
+   */
+  restoreBoardState(teamId: string): boolean {
+    try {
+      const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
+      const filePath = pathJoin(baseDir, 'teams', teamId, 'board-state.json');
+
+      if (!existsSync(filePath)) return false;
+
+      const raw = readFileSync(filePath, 'utf-8');
+      const snapshot = JSON.parse(raw);
+      const savedTasks: any[] = snapshot.tasks || [];
+
+      if (savedTasks.length === 0) return false;
+
+      // Get current board (including done) to check for existing tasks
+      const currentTasks = this.getTeamBoard(teamId, true);
+      const existingIds = new Set(currentTasks.map((t: any) => t.id));
+      const existingTitles = new Set(currentTasks.map((t: any) => t.title));
+
+      let restoredCount = 0;
+      for (const task of savedTasks) {
+        // Skip done tasks — no point restoring completed work
+        if (task.status === 'done') continue;
+        // Skip if already exists by ID or title (dedup)
+        if (existingIds.has(task.id) || existingTitles.has(task.title)) continue;
+
+        const taskId = this.addTeamBoardTask(teamId, task.title, task.description || '');
+        if (taskId) {
+          // Restore original status if it was in_progress
+          if (task.status === 'in_progress' || task.status === 'in-progress') {
+            this.updateTeamBoardTask(teamId, taskId, { status: 'in_progress', progress: task.progress || '' });
+          }
+          restoredCount++;
+        }
+      }
+
+      if (restoredCount > 0) {
+        console.log(`[board-restore] Restored ${restoredCount} task(s) for team ${teamId} from board-state.json`);
+      }
+      return restoredCount > 0;
+    } catch (err: any) {
+      console.warn(`[board-restore] Failed to restore board state for team ${teamId}: ${err.message}`);
       return false;
     }
   }
@@ -1361,6 +1459,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
   /** Shutdown everything gracefully. */
   async shutdown(): Promise<void> {
+    this.stopWatchdog();
     for (const [teamId, teamData] of this.activeTeams) {
       for (const interval of teamData.intervals) clearInterval(interval);
     }
@@ -1371,6 +1470,174 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
     this.started = false;
     console.log('[EngineAdapter] Shut down.');
+  }
+
+  // ─── Engine Watchdog ─────────────────────────────────────────────────
+
+  /**
+   * Start the engine watchdog — monitors team engines and restarts dead ones.
+   *
+   * Runs every 60 seconds. For each active team, checks if each agent's engine
+   * is still alive in the pool. If an engine has disappeared (process died,
+   * evicted by TTL, etc.), the watchdog restarts it via pool.getOrCreate() and
+   * re-registers tools and session.
+   *
+   * Circuit breaker: if an engine has been restarted 3+ times in the last hour,
+   * the watchdog gives up to avoid restart loops.
+   */
+  private startWatchdog(): void {
+    if (this.watchdogTimer) return;
+
+    const WATCHDOG_INTERVAL_MS = 60_000;    // check every 60 seconds
+    const CIRCUIT_BREAKER_MAX = 3;          // max restarts per engine per hour
+    const CIRCUIT_BREAKER_WINDOW_MS = 60 * 60_000; // 1 hour
+
+    this.watchdogTimer = setInterval(async () => {
+      if (!this.pool || !this.started) return;
+
+      for (const [teamId, teamData] of this.activeTeams) {
+        for (const agent of teamData.agents) {
+          const engineId = `${teamId}:${agent.id}`;
+
+          // Skip engines that were intentionally stopped
+          if (this.stoppedEngines.has(engineId)) continue;
+
+          // Check if engine still exists in pool
+          const engine = this.pool.get(engineId);
+          const engineExists = this.pool.has(engineId);
+
+          // Engine is alive — skip
+          if (engineExists && engine) continue;
+
+          // Engine is missing — check circuit breaker before restarting
+          const restartInfo = this.watchdogRestarts.get(engineId);
+          if (restartInfo) {
+            const elapsed = Date.now() - restartInfo.firstRestartAt;
+            if (elapsed > CIRCUIT_BREAKER_WINDOW_MS) {
+              // Window expired — reset counter
+              this.watchdogRestarts.delete(engineId);
+            } else if (restartInfo.count >= CIRCUIT_BREAKER_MAX) {
+              // Circuit breaker tripped — too many restarts in the window
+              console.error(`[watchdog] Circuit breaker: ${engineId} restarted ${restartInfo.count} times in 1 hour — giving up`);
+              continue;
+            }
+          }
+
+          // Attempt restart
+          console.warn(`[watchdog] Engine for team "${teamId}" agent "${agent.id}" is dead — restarting`);
+          try {
+            await this.restartTeamEngine(teamId, agent, teamData);
+
+            // Track restart
+            const existing = this.watchdogRestarts.get(engineId);
+            if (existing) {
+              existing.count++;
+            } else {
+              this.watchdogRestarts.set(engineId, { count: 1, firstRestartAt: Date.now() });
+            }
+            console.log(`[watchdog] Engine "${engineId}" restarted successfully`);
+          } catch (err: any) {
+            console.error(`[watchdog] Failed to restart engine "${engineId}": ${err.message}`);
+            // Track the failed attempt too
+            const existing = this.watchdogRestarts.get(engineId);
+            if (existing) {
+              existing.count++;
+            } else {
+              this.watchdogRestarts.set(engineId, { count: 1, firstRestartAt: Date.now() });
+            }
+          }
+        }
+      }
+    }, WATCHDOG_INTERVAL_MS);
+
+    // Unref so watchdog doesn't keep the process alive during shutdown
+    if (typeof this.watchdogTimer === 'object' && 'unref' in this.watchdogTimer) {
+      (this.watchdogTimer as any).unref();
+    }
+
+    console.log('[EngineAdapter] Watchdog started (60s interval, circuit breaker: 3/hour).');
+  }
+
+  /** Stop the engine watchdog. */
+  private stopWatchdog(): void {
+    if (this.watchdogTimer) {
+      clearInterval(this.watchdogTimer);
+      this.watchdogTimer = null;
+    }
+    this.watchdogRestarts.clear();
+    this.stoppedEngines.clear();
+  }
+
+  /**
+   * Restart a single team engine — recreates the engine in the pool,
+   * re-registers tools, and restarts the session.
+   */
+  private async restartTeamEngine(
+    teamId: string,
+    agent: TeamAgentConfig,
+    teamData: { dbPath: string; agents: TeamAgentConfig[]; intervals: any[] },
+  ): Promise<void> {
+    if (!this.pool || !this.config) throw new Error('Adapter not started');
+
+    const { resolve, dirname } = await import('node:path');
+    const { fileURLToPath } = await import('node:url');
+    const thisDir = dirname(fileURLToPath(import.meta.url));
+    const nodeRepoRoot = resolve(thisDir, '..', '..', '..', '..');
+
+    const engineId = `${teamId}:${agent.id}`;
+    const isLead = agent.role === 'lead';
+
+    // Clean up any stale pool entries before recreating
+    this.pool.engines?.delete(engineId);
+    this.pool.lastUsed?.delete(engineId);
+    this.pool.createdAt?.delete(engineId);
+
+    // Recreate engine via pool
+    const engine = await this.pool.getOrCreate(engineId, {
+      projectPath: isLead ? nodeRepoRoot : teamData.dbPath.replace(/[/\\][^/\\]+$/, ''),
+      dbPath: teamData.dbPath,
+      role: agent.role,
+      skipKnowledgeSync: true,
+      ...(agent.model ? { model: agent.model } : {}),
+    });
+
+    // Start session
+    if (!engine.getSessionId()) {
+      await engine.startSession(`${teamId}: ${agent.id}`);
+    }
+
+    // Save Claude CLI session ID for persistence across restarts
+    if (engine.getCliSessionId?.() && this.Database) {
+      try {
+        const db = new this.Database(teamData.dbPath);
+        db.prepare(
+          `INSERT OR REPLACE INTO state (key, value, updated_at)
+           VALUES (?, ?, datetime('now'))`
+        ).run(`cli-session:${agent.id}`, engine.getCliSessionId());
+        db.close();
+      } catch { /* state table may not exist yet */ }
+    }
+
+    // Re-register tools with correct agent IDs
+    const { createCheckAgentsTool, createSendMessageTool, createManageTasksTool } =
+      await import('@pando-code/core');
+
+    if (engine?.db) {
+      engine.tools.unregister('check_agents');
+      engine.tools.unregister('send_message');
+      engine.tools.unregister('manage_tasks');
+
+      const engineSessionId = engine.getSessionId()!;
+      engine.tools.register(createCheckAgentsTool({ db: engine.db, agentId: agent.id }));
+      engine.tools.register(createSendMessageTool({ db: engine.db, agentId: agent.id, senderRole: agent.role }));
+      engine.tools.register(createManageTasksTool({ db: engine.db, sessionId: engineSessionId }));
+    }
+
+    // Register manage_team tool on lead agents
+    if (agent.role === 'lead') {
+      const manageTeamTool = await createManageTeamTool(this, teamId);
+      engine.tools.register(manageTeamTool);
+    }
   }
 
   // ─── Team Management ──────────────────────────────────────────────────
@@ -1467,6 +1734,12 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         }
       } catch { /* ok — fresh start */ }
     }
+
+    // Update reservation with real dbPath so restoreBoardState can read the board
+    this.activeTeams.set(teamId, { dbPath: teamDbPath, agents: [], intervals: [] });
+
+    // Restore board state from persisted JSON (crash recovery — Phase 3)
+    this.restoreBoardState(teamId);
 
     // Create one engine per agent with shared DB
     for (const agent of agents) {
@@ -1608,7 +1881,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
               const isFatal = /ENOENT|EPERM|spawn|session.*expired|not found|process.*exit/i.test(err.message);
               if (isFatal || consecutiveFailures >= 3) {
                 console.error(`[${label}] CRITICAL: Engine appears dead (${consecutiveFailures} consecutive failures): ${err.message}`);
-                console.error(`[${label}] CRITICAL: Agent "${agent.id}" needs manual restart or node restart to recover.`);
+                console.error(`[${label}] CRITICAL: Agent "${agent.id}" — watchdog will attempt auto-restart.`);
               } else {
                 console.warn(`[${label}] Tick error (${consecutiveFailures}/3): ${err.message}`);
               }
@@ -1649,6 +1922,11 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   async stopTeam(teamId: string): Promise<void> {
     const teamData = this.activeTeams.get(teamId);
     if (!teamData) return;
+
+    // Mark all engines as intentionally stopped so watchdog ignores them
+    for (const agent of teamData.agents) {
+      this.stoppedEngines.add(`${teamId}:${agent.id}`);
+    }
 
     for (const interval of teamData.intervals) clearInterval(interval);
 
@@ -1779,6 +2057,11 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     const teamData = this.activeTeams.get(teamId);
     if (!teamData) throw new Error(`Team "${teamId}" not running`);
 
+    const engineId = `${teamId}:${agentId}`;
+
+    // Mark as intentionally stopped so watchdog doesn't restart it
+    this.stoppedEngines.add(engineId);
+
     // Unregister scheduler tick
     if (this.scheduler) {
       this.scheduler.unregister(`${teamId}-${agentId}-tick`);
@@ -1801,7 +2084,6 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     } catch { /* ok */ }
 
     // Destroy the engine process to free memory
-    const engineId = `${teamId}:${agentId}`;
     try {
       const engine = this.pool.get(engineId);
       if (engine) {
