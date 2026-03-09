@@ -1,0 +1,174 @@
+{
+  "savedAt": "2026-03-09T19:32:39.892Z",
+  "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
+  "tasks": [
+    {
+      "id": "a49cc7d6-c1fe-4b66-b29c-c47f5a6b7019",
+      "title": "Implement: You just completed: \"Check your inbox and review board tasks now.\n\nINBOX: Empty ",
+      "description": null,
+      "status": "pending",
+      "created_at": "2026-03-09T19:23:17.300Z",
+      "progress": null
+    },
+    {
+      "id": "720cb073-237e-4d2f-b6d0-8fcdd2637883",
+      "title": "Explore codebase for: You just completed: \"Check your inbox and review board tasks now.\n\nINBOX: Empty ",
+      "description": null,
+      "status": "in_progress",
+      "created_at": "2026-03-09T19:23:17.299Z",
+      "progress": null
+    },
+    {
+      "id": "23409a9a-1319-41d0-83e8-75d1e53a89e6",
+      "title": "Verify with test suite",
+      "description": null,
+      "status": "done",
+      "created_at": "2026-03-09T19:21:10.994Z",
+      "progress": "Stale auto-generated task. Cleaned up."
+    },
+    {
+      "id": "ad1c8ffb-dab6-4b75-adbb-47e2fb6bfb2b",
+      "title": "Find similar patterns in codebase",
+      "description": null,
+      "status": "done",
+      "created_at": "2026-03-09T19:21:10.993Z",
+      "progress": "Stale auto-generated task. Cleaned up."
+    },
+    {
+      "id": "14578ed0-c40c-4cc2-9120-36dba953715d",
+      "title": "Implement: Check your inbox and review board tasks now.\n\nINBOX: Empty — no new messages.\n\nB",
+      "description": null,
+      "status": "done",
+      "created_at": "2026-03-09T19:21:10.993Z",
+      "progress": "Stale auto-generated task. Cleaned up."
+    },
+    {
+      "id": "72f63e08-055e-4513-b34a-18947649eb9e",
+      "title": "Write or update tests",
+      "description": null,
+      "status": "done",
+      "created_at": "2026-03-09T19:21:10.993Z",
+      "progress": "Stale auto-generated task. Cleaned up."
+    },
+    {
+      "id": "fb9dda23-fe58-4196-9544-fd10addc3645",
+      "title": "Explore codebase for: Check your inbox and review board tasks now.\n\nINBOX: Empty — no new messages.\n\nB",
+      "description": null,
+      "status": "done",
+      "created_at": "2026-03-09T19:21:10.992Z",
+      "progress": "Stale auto-generated task. Cleaned up."
+    },
+    {
+      "id": "8fc7b35a-f4df-4903-8a36-5285edc5e315",
+      "title": "Implement: Check your inbox and review board tasks now.\n\nINBOX: Empty — no new messages.\n\nB",
+      "description": null,
+      "status": "done",
+      "created_at": "2026-03-09T19:03:40.233Z",
+      "progress": "Auto-generated task, not real. Closed."
+    },
+    {
+      "id": "1b5440f5-2f2c-4621-a05d-b1bbf4f8b522",
+      "title": "Write or update tests",
+      "description": null,
+      "status": "done",
+      "created_at": "2026-03-09T19:03:40.233Z",
+      "progress": "Auto-generated, not real. Closed."
+    },
+    {
+      "id": "a20e35c3-1eaf-4b4a-8f85-e905c7d5d91e",
+      "title": "Verify with test suite",
+      "description": null,
+      "status": "done",
+      "created_at": "2026-03-09T19:03:40.233Z",
+      "progress": "Auto-generated, not real. Closed."
+    },
+    {
+      "id": "e12c691b-5b7e-4063-8fb8-85e3d6b92ca4",
+      "title": "Explore codebase for: Check your inbox and review board tasks now.\n\nINBOX: Empty — no new messages.\n\nB",
+      "description": null,
+      "status": "done",
+      "created_at": "2026-03-09T19:03:40.232Z",
+      "progress": "Auto-generated, not real. Closed."
+    },
+    {
+      "id": "ea7da993-1eb2-453b-bc14-96229a9546b3",
+      "title": "Find similar patterns in codebase",
+      "description": null,
+      "status": "done",
+      "created_at": "2026-03-09T19:03:40.232Z",
+      "progress": "Auto-generated, not real. Closed."
+    },
+    {
+      "id": "task-e7587281-9bde-478b-ad40-3184389676dd",
+      "title": "[BUG:critical] Fix chat thread POST Thread not found � 1-line fix",
+      "description": "File: packages/node/src/api/platform-api.ts, line ~525.\n\nBUG: POST /v1/chat/threads/:id/message returns 404 Thread not found for ALL newly created threads. This breaks the core chat UX � every new conversation fails on first message.\n\nROOT CAUSE: Line ~525 uses sync-only cache lookup:\n  const existingThread = threadStore.getThread(id);\nBut createThread() writes to storage async (fire-and-forget), so the sync cache has not been populated yet.\n\nFIX: Change line ~525 to use async fallback (matching the GET handler at line ~448):\n  const existingThread = threadStore.getThread(id) || await threadStore.getThreadAsync(id);\n\nThe GET handler already does this correctly. The POST handler just needs the same pattern.\n\nVERIFY: After fix, send a new chat message in the hub (http://localhost:3003/chat) � it should respond instead of showing Thread not found.",
+      "status": "pending",
+      "created_at": "2026-03-09 19:32:39",
+      "progress": ""
+    },
+    {
+      "id": "task-215b3934-c347-429a-b22f-62a876aed772",
+      "title": "Implement board state git commit for team handoff recovery",
+      "description": "RESILIENCE GAP #2: When board state changes (task created/updated/completed), commit board-state.json to the node git repo so handoff to another node preserves task history.\n\nCURRENT STATE: persistBoardState() in engine-adapter.ts already writes board-state.json to ~/.pando/teams/{teamId}/board-state.json after mutations. But this file is LOCAL ONLY � if the node dies and another node claims the team, the board state is lost.\n\nWHAT TO BUILD:\n1. Add a commitBoardState(teamId) method in engine-adapter.ts that:\n   - Reads the current board-state.json from ~/.pando/teams/{teamId}/\n   - Copies it to the node repo at a known path (e.g., .pando-state/{teamId}/board-state.json)\n   - Git add + commit with message \"chore: persist board state for {teamId}\"\n   - Use the existing commit-and-propose endpoint (POST /v1/infra/commit-and-propose) OR direct git operations via GitOps class\n   - IMPORTANT: Do NOT push on every board change � just commit locally. Push happens via governance on meaningful changes.\n2. Call commitBoardState() from persistBoardState() � but debounce it (at most once per 5 minutes) to avoid commit spam.\n3. On team handoff (orphan claim in init-platform.ts ~line 740), the claiming node should check if board-state.json exists in the cloned repo at .pando-state/{teamId}/board-state.json and use it as fallback if P2P BOARD_STATE_REQUEST gets no response.\n\nFILES TO MODIFY:\n- packages/node/src/core/engine-adapter.ts (add commitBoardState method, call from persistBoardState with debounce)\n- packages/node/src/init-platform.ts (add git-based board state recovery fallback in orphan handler ~line 740-760)\n\nCONSTRAINTS:\n- Do not break existing persistBoardState() behavior\n- Do not break commit-and-propose pipeline\n- Debounce commits (max 1 per 5 min per team)\n- Use existing GitOps class for git operations\n- tsc --noEmit must pass\n- Server must boot normally after changes",
+      "status": "done",
+      "created_at": "2026-03-09 18:55:16",
+      "progress": "Committed c3c128469569fef1c6860c6c608dbd9bc9cb617e, proposal 72f0646aba721a0428d577ca6ca4c73f919630deafb6b052a886191e7e3f18e3 — push pending governance approval"
+    },
+    {
+      "id": "task-23f1238a-cf2a-47ad-8ed5-e20d92226f64",
+      "title": "Update BIBLE: engine-adapter line count and watchdog documentation",
+      "description": "BIBLE has 3 stale entries: (1) Lines 107 and 1787 say engine-adapter.ts is ~1393 lines but it is now 2561 lines. (2) Line 2161 says No engine watchdog but a watchdog EXISTS at lines 1545-1627 with 60s interval, circuit breaker (3/hour), and restartTeamEngine(). Remove the stale bug entry. (3) Section 5.10.10 should mention the watchdog: startWatchdog() runs every 60s, checks pool.has() for each active team engine, restarts dead ones via restartTeamEngine(), circuit breaker stops after 3 restarts per hour.",
+      "status": "done",
+      "created_at": "2026-03-09 18:45:29",
+      "progress": "Committed 245e2ca3b5e7310888dc41aa4a7f4bd2058b2a34, proposal c49035889ba0e8a33f0cd69503d372d3a15cb5e7dae9524fe1f4350dab56b785 — push pending governance approval"
+    },
+    {
+      "id": "task-9180d644-5082-4f97-ba6c-eb1f6e1dc84f",
+      "title": "Fix getTeamActivity truncation",
+      "description": "In engine-adapter.ts getTeamActivity() function, add support for ?full=true query param. When full=true, return m.content instead of substr(m.content,1,500). Keep default truncation for backward compat. Then build and commit-and-propose.",
+      "status": "done",
+      "created_at": "2026-03-09 17:08:17",
+      "progress": "Fixed in commit c9e47507 � added ?full=true param to getTeamActivity to return untruncated content."
+    },
+    {
+      "id": "task-7ad62660-8bfd-42bd-ba1b-9eeb90495783",
+      "title": "Fix getTeamActivity truncation - return full content",
+      "description": "The getTeamActivity() function in packages/node/src/core/engine-adapter.ts truncates message content to 500 chars via substr(m.content, 1, 500). This hides useful debugging info. Fix: add a ?full=true query parameter that returns m.content without truncation. When full=true, return the complete content. Keep the default 500-char truncation for backward compatibility. The API route is in packages/node/src/api/core-api.ts around the /teams/:teamId/activity endpoint. After fixing, run tsc --noEmit to verify the build passes, then use commit-and-propose to deploy.",
+      "status": "done",
+      "created_at": "2026-03-09 17:00:39",
+      "progress": "Committed c9e475078256e00043effcf459d29fd37a0ddb92, proposal 6dd32a2b39fea3da31f8467746882cb656435ff155071b78f72d65007fb56d5d — push pending governance approval"
+    },
+    {
+      "id": "task-01275785-e8cc-4088-823f-1ab03383e658",
+      "title": "Update BIBLE section 1.1 - step 4 is now WORKING",
+      "description": "The BIBLE at BIBLE.md section 1.1 has a self-evolution loop status block. Step 4 currently says BROKEN but it has been fixed (commit b099106 in pando-teams fixed the timeout). Update step 4 from BROKEN to WORKING. Then use commit-and-propose to push the change through governance.",
+      "status": "done",
+      "created_at": "2026-03-09 16:30:19",
+      "progress": "Committed 4755937ea7f95871a64b592e6f387a3a5fe4b6c5, proposal 519a67c87b68379c5f6130a048ba25cf4fc8978bfa7306a1cac7660c7ddbe4e9 — push pending governance approval"
+    },
+    {
+      "id": "task-78704618-69c4-4cb1-a8d9-0701f262a292",
+      "title": "test task",
+      "description": "test",
+      "status": "done",
+      "created_at": "2026-03-09 16:30:09",
+      "progress": "Stale test task, closing."
+    },
+    {
+      "id": "task-b02a76d0-4515-4be8-a467-9662ec1e9209",
+      "title": "test: verify self-evolution pipeline",
+      "description": "Read the BIBLE section 1.1 and report what the current self-evolution loop status is. No code changes needed � just read and summarize.",
+      "status": "done",
+      "created_at": "2026-03-09 16:23:51",
+      "progress": "Verified: Steps 1-3 (monitoring) WORKING, Step 4 (lead spawns builder) BROKEN (no response from engine), Step 5 (commit-and-propose) WORKING, Steps 6-7 (governance+deploy) WORKING, Steps 8-10 NOT TESTED (blocked by 4). Blocker is engine-adapter/claude-code integration for step 4."
+    },
+    {
+      "id": "task-d802716c-87ec-494a-8e4f-3c937a175caf",
+      "title": "test: verify the network page stats rendering",
+      "description": "The hub network page at /network shows dashes instead of real stats (peers, uptime, etc) even though the API returns correct data. This is likely a client-side rendering delay or hydration issue. Investigate and fix.",
+      "status": "done",
+      "created_at": "2026-03-09 15:57:29",
+      "progress": "Not a bug � data loads after client-side fetch (2-3s delay). Dashes are the initial SSR state before hydration completes. No fix needed."
+    }
+  ]
+}
