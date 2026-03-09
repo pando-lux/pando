@@ -64,14 +64,14 @@ class NodePool {
     // Phase 99: Only seed with trusted compute nodes that have stable public IPs.
     // Discovery via /network/capabilities will find the rest.
     const FALLBACK_SEEDS = [
-      'http://54.160.217.16:4000',   // EC2-1 (pando-compute-1)
-      'http://34.201.82.126:4000',   // EC2-2 (pando-compute-2)
+      'http://44.196.69.210:4000',   // EC2-1 (pando-compute-1)
+      'http://3.226.89.40:4000',     // EC2-2 (pando-compute-2)
     ];
     const nodeList = process.env.PANDO_NODES?.split(',').map(s => s.trim()).filter(Boolean);
     const singleNode = process.env.PANDO_NODE_URL;
     // Always include fallback seeds for redundancy — primary from env var takes priority
     const envUrls = nodeList?.length ? nodeList : singleNode ? [singleNode] : [];
-    const combined = new Set([...envUrls, ...FALLBACK_SEEDS]);
+    const combined = envUrls.length > 0 ? new Set(envUrls) : new Set(FALLBACK_SEEDS);
     const urls = combined.size > 0 ? Array.from(combined) : ['http://127.0.0.1:4000'];
     // Sanitize: replace 'localhost' with '127.0.0.1' to avoid IPv6 resolution issues on Windows
     const sanitized = urls.map(u => u.replace('://localhost', '://127.0.0.1'));
