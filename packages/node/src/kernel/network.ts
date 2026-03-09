@@ -1039,7 +1039,7 @@ export class PandoNetwork {
             const message: PandoMessage = JSON.parse(decoded);
             const fromPeer = connection.remotePeer.toString();
 
-            // Verify signature if present
+            // Verify signature if present and public key is known
             if (message.signature) {
               const peer = this.peers.get(fromPeer);
               if (peer?.publicKey) {
@@ -1048,11 +1048,10 @@ export class PandoNetwork {
                   console.warn(`[REJECTED] Invalid signature from ${fromPeer.slice(0, 16)}...`);
                   continue;
                 }
-              } else {
-                // Signed message from unknown peer — reject (cannot verify without public key)
-                console.warn(`[REJECTED] Signed message from unknown peer ${fromPeer.slice(0, 16)}... (no public key on file)`);
-                continue;
               }
+              // If peer has no public key yet, allow through — peer is already
+              // authenticated at libp2p transport level (Noise encryption).
+              // Public key will be populated once capability exchange completes.
             }
 
             // Update last seen
