@@ -2921,7 +2921,8 @@ export async function registerPlatformRoutes(
     };
 
     // Periodic cleanup for report rate limiter (every 10 minutes)
-    setInterval(() => {
+    // #audit: Store ref and clear on server close to prevent leak
+    const reportRateCleanupTimer = setInterval(() => {
       const cutoff = Date.now() - 60 * 60 * 1000;
       for (const [key, timestamps] of reportRateMap) {
         while (timestamps.length > 0 && timestamps[0] <= cutoff) {
@@ -2932,6 +2933,8 @@ export async function registerPlatformRoutes(
         }
       }
     }, 10 * 60 * 1000);
+    reportRateCleanupTimer.unref();
+    fastify.addHook('onClose', () => clearInterval(reportRateCleanupTimer));
 
     // POST /projects/:id/report — Report a project (user token required)
     fastify.post('/projects/:id/report', async (request: any, reply: any) => {
@@ -3459,6 +3462,8 @@ export async function registerPlatformRoutes(
     });
 
     // POST /projects/:id/github/push — Push workspace code to GitHub
+    // GOVERNANCE ENFORCEMENT: Blocks push if the workspace is a governance-required
+    // repo (e.g., the pando node repo itself). User project repos are unaffected.
     fastify.post('/projects/:id/github/push', async (request: any, reply: any) => {
       const ps = node.getProjectStore();
       if (!ps) return reply.code(503).send({ error: 'Project store not available' });
@@ -3471,6 +3476,28 @@ export async function registerPlatformRoutes(
       const { id } = request.params as { id: string };
       const body = (request.body || {}) as { workspaceDir?: string };
       if (!body.workspaceDir) return reply.code(400).send({ error: 'workspaceDir required' });
+
+      // Governance guard: check if the workspace is a governance-required repo.
+      // Teams with governanceRequired=true must go through commit-and-propose,
+      // not this direct push endpoint.
+      const teamRegistry = node.getTeamRegistry();
+      if (teamRegistry) {
+        const allTeams = teamRegistry.listTeams();
+        const normalizedWorkDir = body.workspaceDir.replace(/\\/g, '/').toLowerCase();
+        const cwd = process.cwd().replace(/\\/g, '/').toLowerCase();
+        for (const team of allTeams) {
+          if (!team.governanceRequired) continue;
+          // Block if workspaceDir IS the node's own repo (governance-protected)
+          if (normalizedWorkDir === cwd || normalizedWorkDir.startsWith(cwd + '/')) {
+            console.warn(`[github] Push BLOCKED: workspace ${body.workspaceDir} is within governance-required repo (team: ${team.id})`);
+            return reply.code(403).send({
+              error: `Push blocked: this repository requires governance approval. Use POST /v1/infra/commit-and-propose instead.`,
+              team: team.id,
+              governanceRequired: true,
+            });
+          }
+        }
+      }
 
       let project: any;
       try { project = await ps.getProjectAsync(id); } catch {}

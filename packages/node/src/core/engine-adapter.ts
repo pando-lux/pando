@@ -20,7 +20,7 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync, rename
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { ResourceRegistry } from '../platform/resource-registry.js';
-import { STREAM_EVENT_VERSION } from '@pando/shared';
+import { STREAM_EVENT_VERSION, LUX_PER_USD, DAILY_EMISSION_CAP } from '@pando/shared';
 import type { StreamEvent } from '@pando/shared';
 
 // Two Laws Content Filter — imported from shared constants (defense-in-depth at storage level)
@@ -63,10 +63,7 @@ const MODEL_PRICING: Record<string, [number, number]> = {
   'gemini-2.0-flash': [0.0000001,  0.0000004],
 };
 
-// Daily emission cap — mirrors DAILY_EMISSION_CAP from @pando/shared for budget boundary enforcement
-const DAILY_EMISSION_CAP_LUX = 500;
-
-function createLuxBudgetProvider(luxPerUsd = 100) {
+function createLuxBudgetProvider(luxPerUsd = LUX_PER_USD) {
   return {
     currency: 'lux' as const,
     calculateCost(usage: { model: string; inputTokens: number; outputTokens: number }): number {
@@ -78,15 +75,7 @@ function createLuxBudgetProvider(luxPerUsd = 100) {
       }
       if (!prices) prices = [0.0000025, 0.00001];
       const usd = (usage.inputTokens * prices[0]) + (usage.outputTokens * prices[1]);
-      let luxCost = usd * luxPerUsd;
-
-      // H-1: Cap converted amount so a single task can't exceed DAILY_EMISSION_CAP
-      if (luxCost > DAILY_EMISSION_CAP_LUX) {
-        console.warn(`[LuxBudget] Task Lux cost ${luxCost.toFixed(2)} exceeds daily emission cap (${DAILY_EMISSION_CAP_LUX}). Capping to ${DAILY_EMISSION_CAP_LUX} Lux.`);
-        luxCost = DAILY_EMISSION_CAP_LUX;
-      }
-
-      return luxCost;
+      return usd * luxPerUsd;
     },
   };
 }
@@ -2223,7 +2212,10 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         totalTokens += row.tokens || 0;
         totalCostUsd += row.cost || 0;
       }
-      return { totalTokens, totalCostUsd, totalCostLux: totalCostUsd, byAgent };
+      // PandoCode records costs via our Lux budget provider, so estimated_cost_usd
+      // actually contains Lux values. Convert back to USD for the USD field.
+      const totalCostLux = totalCostUsd;  // DB value is in Lux (from our budget provider)
+      return { totalTokens, totalCostUsd: totalCostLux / LUX_PER_USD, totalCostLux, byAgent };
     } catch {
       return { totalTokens: 0, totalCostUsd: 0, totalCostLux: 0, byAgent: {} };
     }

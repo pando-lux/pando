@@ -1089,8 +1089,13 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
     // ── Atomic Commit + Propose (Self-Upgrade Pipeline) ─────────────────────
 
     // POST /infra/commit-and-propose — One-call atomic pipeline:
-    //   git add → npm run build → git commit → git push → governance propose → update task
+    //   git add → npm run build → git commit → [governance propose → push] or [push]
     // Used by pando-infra lead agent after editing code. Single curl call replaces 5+ sequential bash commands.
+    //
+    // GOVERNANCE ENFORCEMENT: If the team has governanceRequired=true, push is
+    // DEFERRED until the governance proposal passes. The onUpgradeApproved
+    // callback handles the push. Code is committed locally and a proposal created,
+    // but the remote repo is NOT updated until governance approves.
     fastify.post('/infra/commit-and-propose', async (request: any, reply: any) => {
       const authHeader = request.headers.authorization || '';
       if (!authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
@@ -1107,6 +1112,11 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
 
       const lawViolation = violatesTwoLaws(message);
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
+
+      // Check if this team requires governance approval before push
+      const teamRegistry = node.getTeamRegistry();
+      const teamConfig = teamRegistry?.getTeam(teamId);
+      const governanceRequired = teamConfig?.governanceRequired ?? false;
 
       const repoDir = process.cwd();
       const git = new GitOps(repoDir);
@@ -1138,43 +1148,72 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         const commitHash = git.commit(message);
         steps.push(`committed:${commitHash}`);
 
-        // Step 5: Push to GitHub
-        try {
-          git.push('origin', 'master');
-          steps.push('pushed');
-        } catch (pushErr: any) {
-          // Push failed — commit is local only. Agent should investigate.
-          console.error('[api] Git push failed:', pushErr.message);
-          return reply.code(500).send({ error: 'Push failed', commitHash, steps });
-        }
-
-        // Step 6: Create governance proposal
+        // Step 5: Create governance proposal BEFORE push (if governance required)
         let proposalId = '';
-        try {
-          const gov = node.getGovernance();
-          if (gov) {
-            const title = `Upgrade: ${message.slice(0, 150)}`;
-            const proposal = await gov.createProposal(title, message, 300_000, {
-              category: 'upgrade' as any,
-              upgradePayload: { commitHash, description: message },
-            });
-            proposalId = proposal.id;
-            steps.push(`proposed:${proposalId}`);
+        if (governanceRequired) {
+          // Governance-gated flow: propose first, push is deferred until approval.
+          // The onUpgradeApproved callback in init-kernel.ts handles the push
+          // when the proposal passes.
+          try {
+            const gov = node.getGovernance();
+            if (gov) {
+              const title = `Upgrade: ${message.slice(0, 150)}`;
+              const proposal = await gov.createProposal(title, message, 300_000, {
+                category: 'upgrade' as any,
+                upgradePayload: { commitHash, description: message },
+              });
+              proposalId = proposal.id;
+              steps.push(`proposed:${proposalId}`);
+              steps.push('push-deferred:governance-required');
+              console.log(`[api] Governance required — push deferred until proposal ${proposalId.slice(0, 8)} passes (commit ${commitHash.slice(0, 8)})`);
+            } else {
+              // No governance module available — block the push entirely
+              console.error('[api] Governance required but governance module not available — push blocked');
+              return reply.code(503).send({ error: 'Governance required but governance module not available', commitHash, steps });
+            }
+          } catch (govErr: any) {
+            console.error('[api] Governance proposal failed:', govErr.message);
+            return reply.code(500).send({ error: 'Governance proposal failed — push blocked', commitHash, steps });
           }
-        } catch (govErr: any) {
-          // Governance proposal failed — code is pushed, just no auto-upgrade
-          console.error('[api] Governance proposal failed:', govErr.message);
-          steps.push('proposal-failed');
+        } else {
+          // No governance required — push immediately, then propose (informational)
+          try {
+            git.push('origin', 'master');
+            steps.push('pushed');
+          } catch (pushErr: any) {
+            console.error('[api] Git push failed:', pushErr.message);
+            return reply.code(500).send({ error: 'Push failed', commitHash, steps });
+          }
+
+          // Informational governance proposal (non-blocking)
+          try {
+            const gov = node.getGovernance();
+            if (gov) {
+              const title = `Upgrade: ${message.slice(0, 150)}`;
+              const proposal = await gov.createProposal(title, message, 300_000, {
+                category: 'upgrade' as any,
+                upgradePayload: { commitHash, description: message },
+              });
+              proposalId = proposal.id;
+              steps.push(`proposed:${proposalId}`);
+            }
+          } catch (govErr: any) {
+            console.error('[api] Governance proposal failed:', govErr.message);
+            steps.push('proposal-failed');
+          }
         }
 
-        // Step 7: Update board task to done (if taskId provided)
+        // Step 6: Update board task (if taskId provided)
         if (taskId) {
           try {
             const adapter = node.getEngineAdapter();
             if (adapter?.available) {
+              const progress = governanceRequired
+                ? `Committed ${commitHash}, proposal ${proposalId} — push pending governance approval`
+                : `Committed ${commitHash}, proposal ${proposalId || 'skipped'}`;
               adapter.updateTeamBoardTask(teamId, taskId, {
                 status: 'done',
-                progress: `Committed ${commitHash}, proposal ${proposalId || 'skipped'}`,
+                progress,
               });
               steps.push('task-completed');
             }
@@ -1185,6 +1224,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
           status: 'success',
           commitHash,
           proposalId,
+          governanceRequired,
+          pushDeferred: governanceRequired,
           steps,
         };
       } catch (err: any) {

@@ -15,7 +15,7 @@
 // }
 // @end
 
-import { loadOrCreateIdentity, loadRawIdentityFile, saveIdentity, type NodeIdentity, type NodeConfig, WorkType, MessageType, NodeCapability, type CapabilityDeclaration, type NodeHealth, type OperationalMode } from '@pando/shared';
+import { loadOrCreateIdentity, loadRawIdentityFile, saveIdentity, type NodeIdentity, type NodeConfig, WorkType, MessageType, NodeCapability, type CapabilityDeclaration, type NodeHealth, type OperationalMode, DAILY_EMISSION_CAP } from '@pando/shared';
 import { PandoLedger } from '@pando/ledger';
 import { PandoNetwork } from './kernel/network.js';
 import { ApiServer } from './api/api-server.js';
@@ -178,6 +178,11 @@ export class PandoNode {
   private storageBackend: StorageBackend | null = null;
   // Phase 83: Track whether P2P deferred data loading has completed
   private _p2pDataLoaded = false;
+  // #audit: Timers from init-kernel that must be cleared on shutdown
+  private governanceSyncTimer: ReturnType<typeof setInterval> | null = null;
+  private peerExchangeTimer: ReturnType<typeof setInterval> | null = null;
+  // #audit: Timer from init-platform (team heartbeat) that must be cleared on shutdown
+  private _teamHeartbeatTimer: ReturnType<typeof setInterval> | null = null;
   // Phase 55: Linked user account — rewards flow to user, not node
   private linkedUser: { peerId: string; username?: string } | null = null;
 
@@ -349,8 +354,8 @@ export class PandoNode {
       this.dailyEmissionResetDate = today;
     }
 
-    // Daily cap: 500 Lux max per node per day
-    if (this.dailyEmissions >= 500) return;
+    // Daily cap: max Lux per node per day
+    if (this.dailyEmissions >= DAILY_EMISSION_CAP) return;
 
     // Max uptime reward: 7.2 Lux/day (144 epochs × 0.05)
     const MAX_UPTIME_EPOCHS_PER_DAY = 144;
@@ -1581,6 +1586,21 @@ export class PandoNode {
     if ((this as any)._guestReclaimTimer) {
       clearInterval((this as any)._guestReclaimTimer);
       (this as any)._guestReclaimTimer = null;
+    }
+    // #audit: Clear governance re-sync timer from init-kernel
+    if (this.governanceSyncTimer) {
+      clearInterval(this.governanceSyncTimer);
+      this.governanceSyncTimer = null;
+    }
+    // #audit: Clear peer exchange timer from init-kernel
+    if (this.peerExchangeTimer) {
+      clearInterval(this.peerExchangeTimer);
+      this.peerExchangeTimer = null;
+    }
+    // #audit: Clear team heartbeat timer from init-platform
+    if (this._teamHeartbeatTimer) {
+      clearInterval(this._teamHeartbeatTimer);
+      this._teamHeartbeatTimer = null;
     }
     if (this.governance) {
       this.governance.stopArchiveInterval();

@@ -790,7 +790,7 @@ export async function initKernel(node: any): Promise<void> {
         }
       });
 
-      // When governance approves an upgrade: pull locally, then broadcast to peers
+      // When governance approves an upgrade: push (if deferred), pull locally, then broadcast to peers
       if (node.governance) {
         node.governance.onUpgradeApproved(async (govProposal: any) => {
           const commitHash = govProposal.upgradePayload?.commitHash;
@@ -801,6 +801,27 @@ export async function initKernel(node: any): Promise<void> {
           }
           if (!/^[0-9a-f]{6,40}$/i.test(commitHash)) { console.warn(`[upgrade] REJECTED: invalid commitHash format in governance proposal`); return; }
           console.log(`[upgrade] Governance approved upgrade: ${commitHash.slice(0, 8)} — ${description}`);
+
+          // GOVERNANCE ENFORCEMENT: If this node has the commit locally (proposer),
+          // push it to origin now that governance has approved. This handles the
+          // deferred push from commit-and-propose when governanceRequired=true.
+          try {
+            const repoDir = process.cwd();
+            const pushGit = new GitOps(repoDir);
+            const localHead = pushGit.getCurrentCommit();
+            if (localHead === commitHash || localHead.startsWith(commitHash) || commitHash.startsWith(localHead.slice(0, commitHash.length))) {
+              console.log(`[upgrade] Proposer node: pushing approved commit ${commitHash.slice(0, 8)} to origin`);
+              try {
+                pushGit.push('origin', 'master');
+                console.log(`[upgrade] Push to origin successful after governance approval`);
+              } catch (pushErr: any) {
+                console.error(`[upgrade] Push to origin failed after governance approval: ${pushErr.message?.slice(0, 200)}`);
+                // Continue anyway — peers may still be able to pull if the push partially succeeded
+              }
+            }
+          } catch (err: any) {
+            console.warn(`[upgrade] Could not check/push local commit: ${err.message?.slice(0, 100)}`);
+          }
 
           // Broadcast to peers FIRST so they start pulling in parallel
           // (if we pull+build+restart locally first, the broadcast may never fire)
@@ -865,7 +886,8 @@ export async function initKernel(node: any): Promise<void> {
 
       // Periodic governance re-sync: every 2 min, re-sync with a random connected peer.
       // Handles thin GossipSub meshes where governance votes/decisions don't propagate.
-      setInterval(() => {
+      // #audit: Store ref so performStop() can clear it
+      node.governanceSyncTimer = setInterval(() => {
         if (!node.governance || !node.network) return;
         const peers = node.network.getPeers();
         if (peers.length === 0) return;
@@ -899,7 +921,8 @@ export async function initKernel(node: any): Promise<void> {
       }
 
       // Periodic peer exchange: every 3s, share peer lists to discover new nodes
-      setInterval(async () => {
+      // #audit: Store ref so performStop() can clear it
+      node.peerExchangeTimer = setInterval(async () => {
         if (!node.network) return;
         const peers = node.network.getPeers();
         const peerAddrs = await node.network.getConnectedPeerAddresses();

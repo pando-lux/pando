@@ -528,7 +528,8 @@ async function main() {
   // Ensure data directory exists for heartbeat file
   try { mkdirSync(heartbeatDir, { recursive: true }); } catch {}
 
-  setInterval(() => {
+  // #audit: .unref() so these don't prevent clean process exit after node.stop()
+  const heartbeatTimer = setInterval(() => {
     // Write heartbeat timestamp for external process supervisor
     try {
       writeFileSync(heartbeatPath, JSON.stringify({
@@ -548,10 +549,11 @@ async function main() {
       console.log(`[status] peers: ${peerCount} | balance: ${balance} Lux | supply: ${stats.totalSupply} Lux | uptime: ${Math.floor(process.uptime())}s`);
     }
   }, 30_000);
+  heartbeatTimer.unref();
 
   // If --ping flag, send a ping to all peers every 10 seconds
   if (args.includes('--ping')) {
-    setInterval(async () => {
+    const pingTimer = setInterval(async () => {
       const network = node.getNetwork();
       const identity = node.getIdentity();
       if (network && identity && network.getPeerCount() > 0) {
@@ -564,6 +566,7 @@ async function main() {
         });
       }
     }, 10_000);
+    pingTimer.unref();
   }
 }
 

@@ -281,6 +281,7 @@ export interface ApiContribution {
 
 // Token economics constants
 export const LUX_HARD_CAP = 10_000_000_000; // 10 billion Lux, immutable
+export const LUX_PER_USD = 100;             // 100 Lux = 1 USD (conversion rate for cost accounting)
 export const RELAY_FEE_RATE = 0.001;        // 0.1% relay fee per transfer (paid to relay node)
 export const LUX_PRECISION = 8;             // decimal places for Lux values
 

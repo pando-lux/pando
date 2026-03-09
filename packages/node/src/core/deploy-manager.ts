@@ -306,7 +306,27 @@ export class DeployManager {
 
   // ── 7. Push to Remote ──────────────────────────────────────────────────────
 
-  pushToRemote(remote = 'origin', branch = 'master'): CommitResult {
+  /**
+   * Push committed code to a remote repository.
+   *
+   * GOVERNANCE ENFORCEMENT: Callers must explicitly pass `governanceApproved: true`
+   * to confirm that governance approval has been obtained (or is not required).
+   * Without this flag, the push is blocked. This prevents accidental bypass of
+   * the governance pipeline.
+   */
+  pushToRemote(remote = 'origin', branch = 'master', opts?: { governanceApproved?: boolean }): CommitResult {
+    if (!opts?.governanceApproved) {
+      console.warn(`[deploy-manager] Push to ${remote}/${branch} BLOCKED: governanceApproved flag not set. ` +
+        `Callers must confirm governance approval before pushing.`);
+      return {
+        success: false,
+        commitHash: null,
+        message: `Push blocked: governance approval not confirmed. Pass { governanceApproved: true } to pushToRemote().`,
+        filesCommitted: [],
+        error: 'Governance approval required',
+      };
+    }
+
     try {
       this.git.push(remote, branch);
       return {

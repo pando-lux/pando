@@ -70,6 +70,9 @@ export const FALLBACK_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
 /** Maximum number of fallback reviewer attempts per proposal (Phase 30.5). */
 export const MAX_FALLBACK_ATTEMPTS = 2;
 
+/** Maximum age (in ms) for proposals received during sync. Proposals older than this are skipped. (7 days) */
+export const SYNC_PROPOSAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
+
 // ── Phase 73: P2P Self-Upgrade Auto-Approve ──────────────────────────────────
 const DEFAULT_UPGRADE_AUTO_APPROVE_THRESHOLD = 8;
 
@@ -2199,17 +2202,41 @@ export class GovernanceSync {
     if (!payload) return;
 
     let newProposals = 0, newVotes = 0, newComments = 0, newDecisions = 0, newReviews = 0;
+    let skippedStale = 0;
+
+    // Track which proposal IDs were accepted during sync so we can skip
+    // comments/votes/decisions/reviews for stale proposals we filtered out.
+    const acceptedProposalIds = new Set<string>();
+    // Also include proposals we already have locally (their associated data is still valid).
+    for (const id of this.proposals.keys()) {
+      acceptedProposalIds.add(id);
+    }
+
+    const now = Date.now();
 
     // Apply proposals first (comments/votes/reviews reference them)
     for (const proposal of payload.proposals || []) {
+      // Skip stale proposals: if older than SYNC_PROPOSAL_MAX_AGE_MS and not still active,
+      // don't bother processing them. Active proposals are always accepted regardless of age
+      // since they may still need votes.
+      const age = now - (proposal.createdAt || 0);
+      if (age > SYNC_PROPOSAL_MAX_AGE_MS && proposal.status !== 'active') {
+        skippedStale++;
+        continue;
+      }
+
       if (!this.processedIds.has(`proposal:${proposal.id}`)) {
         await this.handleProposal({ type: MessageType.GOVERNANCE_PROPOSAL, from: message.from, timestamp: proposal.createdAt, payload: proposal });
+        acceptedProposalIds.add(proposal.id);
         newProposals++;
+      } else {
+        acceptedProposalIds.add(proposal.id);
       }
     }
 
-    // Apply comments
+    // Apply comments (only for proposals we accepted or already have)
     for (const comment of payload.comments || []) {
+      if (!acceptedProposalIds.has(comment.proposalId)) continue;
       if (!this.processedIds.has(`comment:${comment.id}`)) {
         this.handleComment({ type: MessageType.GOVERNANCE_COMMENT, from: message.from, timestamp: comment.createdAt, payload: comment });
         newComments++;
@@ -2218,6 +2245,7 @@ export class GovernanceSync {
 
     // Apply votes (skip reward emission for synced votes — they're historical)
     for (const vote of payload.votes || []) {
+      if (!acceptedProposalIds.has(vote.proposalId)) continue;
       const key = `vote:${vote.proposalId}:${vote.voter}`;
       if (!this.processedIds.has(key)) {
         // Mark as already rewarded to prevent emission for historical votes
@@ -2227,16 +2255,18 @@ export class GovernanceSync {
       }
     }
 
-    // Apply decisions
+    // Apply decisions (only for proposals we accepted or already have)
     for (const decision of payload.decisions || []) {
+      if (!acceptedProposalIds.has(decision.proposalId)) continue;
       if (!this.processedIds.has(`decision:${decision.proposalId}`)) {
         this.handleDecision({ type: MessageType.GOVERNANCE_DECISION, from: message.from, timestamp: decision.decidedAt, payload: decision });
         newDecisions++;
       }
     }
 
-    // Phase 30.3: Apply reviews
+    // Phase 30.3: Apply reviews (only for proposals we accepted or already have)
     for (const review of payload.reviews || []) {
+      if (!acceptedProposalIds.has(review.proposalId)) continue;
       const key = `review:${review.id}`;
       if (!this.processedIds.has(key)) {
         this.handleProposalReview({ type: MessageType.PROPOSAL_REVIEW, from: message.from, timestamp: review.createdAt, payload: review });
@@ -2245,9 +2275,9 @@ export class GovernanceSync {
     }
 
     if (newProposals + newVotes + newComments + newDecisions + newReviews > 0) {
-      console.log(`[governance] Sync complete: +${newProposals} proposals, +${newVotes} votes, +${newComments} comments, +${newDecisions} decisions, +${newReviews} reviews`);
+      console.log(`[governance] Sync complete: +${newProposals} proposals, +${newVotes} votes, +${newComments} comments, +${newDecisions} decisions, +${newReviews} reviews${skippedStale > 0 ? ` (skipped ${skippedStale} stale)` : ''}`);
     } else {
-      console.log(`[governance] Sync complete: already up to date`);
+      console.log(`[governance] Sync complete: already up to date${skippedStale > 0 ? ` (skipped ${skippedStale} stale)` : ''}`);
     }
   }
 

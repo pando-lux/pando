@@ -726,13 +726,14 @@ Be friendly and helpful. Keep answers short.`
         }
 
         // Heartbeat for all teams we manage (every 5 minutes)
-        const heartbeatInterval = setInterval(() => {
+        // #audit: Store ref so performStop() can clear it
+        node._teamHeartbeatTimer = setInterval(() => {
           const myTeams = teamRegistry.getTeamsForNode(node.identity.peerId);
           for (const team of myTeams) {
             teamRegistry.updateHeartbeat(team.id);
           }
         }, 5 * 60_000);
-        heartbeatInterval.unref();
+        node._teamHeartbeatTimer.unref();
       }
 
       console.log('[team-registry] Initialized. Teams: ' + teamRegistry.listTeams().length);
