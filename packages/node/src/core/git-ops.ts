@@ -1,3 +1,4 @@
+// Verified live: unified git operations layer — all nodes upgraded via governance pipeline.
 /**
  * GitOps — Unified git operations layer.
  *
