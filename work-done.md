@@ -471,10 +471,27 @@
 ### E2E Tests
 - **9/9 pass** (22.2s) — all pipelines green after Phase 8 changes
 
+#### 39. Resource Price Accepts Infinity (INPUT VALIDATION)
+- **Root cause**: `POST /resources/prices` checked `pricePerUnit >= 0` without `isFinite()` — same pattern as the transfer bug.
+- **Fix**: Added `isFinite(pricePerUnit)` check.
+- **File**: `platform-api.ts:855`
+
+#### 40. Resource Registration Missing Numeric Validation (INPUT VALIDATION)
+- **Root cause**: `POST /resources/register` accepted `pricePerUnit` and `maxUsagePerDay` without type/range validation.
+- **Fix**: Validate both as non-negative finite numbers, maxUsagePerDay as integer.
+- **File**: `platform-api.ts:1127-1132`
+
+#### 41. Project Creation Missing Budget/Tier/Visibility Validation (INPUT VALIDATION)
+- **Root cause**: `POST /projects` accepted `budgetLimit` without `isFinite()`, `tier` without enum check, `visibility` without enum check (PATCH endpoint had all these checks already).
+- **Fix**: Added all three validations consistent with PATCH endpoint.
+- **File**: `platform-api.ts:2168-2178`
+
 ### Commits Pushed
 25. `059b3dc1` — Fix command injection in executeRollback: validate targetVersion format
 26. `189bc941` — Phase 8: Gateway team integration — API routes + Network page teams section
 27. `241166df` — Update BIBLE.md: Phase 2 complete, Phase 8 started
+28. `fe5f6c62` — Update work-done.md
+29. `4d19a31e` — Input validation: resource price/project budget/tier/visibility
 
 ### Pending
 - [ ] PandoCode web UI testing (UI not running currently — port 4873 down)
