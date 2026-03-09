@@ -26,13 +26,14 @@ export default function SearchPage() {
     setError(null);
 
     try {
-      const res = await fetch(`/api/content/search?query=${encodeURIComponent(trimmed)}`, {
-        method: "GET",
+      const res = await fetch("/api/search", {
+        method: "POST",
         headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ query: trimmed }),
       });
       const data: SearchResult = await res.json();
-      if (data.confidence === "none" && (data.respondedBy === "gateway-error" || data.respondedBy === "node-error")) {
-        setError(data.answer);
+      if (data.confidence === "none") {
+        setError(data.answer || "No AI resources available. Contribute an API key to enable search.");
       } else {
         setResult(data);
       }
