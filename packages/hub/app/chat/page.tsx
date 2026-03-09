@@ -139,6 +139,10 @@ function ChatPage() {
   const [nodePeerId, setNodePeerId] = useState<string | null>(null);
   const [encryptionReady, setEncryptionReady] = useState(false);
 
+  // Teams sessions from Pando Teams server
+  const [teamsSessions, setTeamsSessions] = useState<any[]>([]);
+  const [teamsSessionsLoading, setTeamsSessionsLoading] = useState(true);
+
   // Phase 68.4: User's projects + active project routing
   const [projects, setProjects] = useState<any[]>([]);
   const [projectsLoading, setProjectsLoading] = useState(false);
@@ -153,6 +157,15 @@ function ChatPage() {
   const projectIdParam = searchParams.get("projectId");
   // Effective project ID: URL param or user's selection
   const effectiveProjectId = activeProjectId || projectIdParam;
+
+  // Fetch Teams sessions from Pando Teams server
+  useEffect(() => {
+    fetch("/api/teams/sessions")
+      .then((r) => r.json())
+      .then((data) => setTeamsSessions(data.sessions || []))
+      .catch(() => {})
+      .finally(() => setTeamsSessionsLoading(false));
+  }, []);
 
   // Phase 41: Fetch node public key + peerId on mount for E2E encryption
   useEffect(() => {
@@ -681,6 +694,58 @@ function ChatPage() {
             {projectsLoading && !isGuest && (
               <p className="text-[10px] text-neutral-400 px-1 mb-2">Loading projects...</p>
             )}
+
+            {/* Teams Sessions from Pando Teams server */}
+            <div className="mb-3">
+              <div className="flex items-center justify-between mb-1.5 px-1">
+                <h3 className="text-[10px] font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wide">
+                  Teams Sessions
+                </h3>
+                <a
+                  href="http://localhost:5173"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-[10px] text-amber-500 hover:text-amber-400 transition"
+                >
+                  Open Teams
+                </a>
+              </div>
+              <div className="space-y-1">
+                {teamsSessionsLoading ? (
+                  <p className="text-[10px] text-neutral-400 px-3 py-1">Loading...</p>
+                ) : teamsSessions.length === 0 ? (
+                  <p className="text-[10px] text-neutral-400 px-3 py-1">No sessions</p>
+                ) : (
+                  teamsSessions.map((session: any) => (
+                    <a
+                      key={session.id}
+                      href={`http://localhost:5173/#/default/sessions/${session.id}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block w-full text-left px-3 py-2 rounded-lg text-sm transition hover:bg-neutral-100 dark:hover:bg-neutral-900 border border-transparent"
+                    >
+                      <div className="flex items-center gap-1.5 mb-0.5">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-amber-500 flex-shrink-0">
+                          <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+                          <circle cx="9" cy="7" r="4" />
+                          <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+                          <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+                        </svg>
+                        <span className="font-medium truncate text-xs text-neutral-700 dark:text-neutral-300">
+                          {session.label || "Untitled Session"}
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-neutral-400 flex items-center gap-1.5">
+                        <span className={`inline-block w-1.5 h-1.5 rounded-full ${session.active ? "bg-emerald-500" : "bg-neutral-400"}`} />
+                        {session.agents?.length || 0} agent{(session.agents?.length || 0) !== 1 ? "s" : ""}
+                        {session.taskCount > 0 && <span>· {session.taskCount} task{session.taskCount !== 1 ? "s" : ""}</span>}
+                        <span className="ml-auto">{formatRelativeTime(new Date(session.createdAt).getTime())}</span>
+                      </div>
+                    </a>
+                  ))
+                )}
+              </div>
+            </div>
 
             <h3 className="text-[10px] font-semibold text-neutral-500 dark:text-neutral-400 uppercase tracking-wide mb-2 px-1">
               Conversations
