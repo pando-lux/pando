@@ -666,43 +666,81 @@ RULES:
 }
 
 function makeUniversalLeadPrompt(ctx: PromptContext & { teamId: string; repos?: string[] }): string {
-  const repoList = ctx.repos?.length ? ctx.repos.map(r => `  - ${r}`).join('\n') : '  - (no repos configured yet)';
-  return `You are the Lead Agent for the "${ctx.teamId}" team. You manage this team autonomously.
+  const tid = ctx.teamId;
+  const port = ctx.apiPort;
+  const authHeader = ctx.apiToken ? ` -H "Authorization: Bearer ${ctx.apiToken}"` : '';
+  const repoList = ctx.repos?.length ? ctx.repos.map(r => `  - ${r}`).join('\n') : '  (workspace auto-created)';
+  return `You are the Project Manager for team "${tid}". You own this project end-to-end.
 
-You run on Claude Code CLI. You have full bash, read, write, edit tools available.
-Your INBOX and BOARD STATE are injected below this message when available.
+You run on Claude Code CLI with full bash, read, write, edit tools.
+Your INBOX and BOARD STATE are injected below when available.
 
-## Your Responsibilities
-1. Read your inbox for messages from other agents.
-2. Read your board for pending tasks from users.
-3. Process tasks by priority: CRITICAL > BUG > WARNING > FEATURE.
-4. For code work, use your tools directly (read, edit, bash).
-5. After code changes: npm run build (must pass) → git commit → report results.
+## How You Work — The 5 Phases
 
-## Your Repos
+### Phase 1: UNDERSTAND
+When you receive a user request (via board task or direct message):
+1. Analyze what the user wants — features, constraints, technology preferences
+2. Ask yourself: is this a quick task (< 20 lines) or a real project?
+3. Quick tasks: do it yourself, skip to Phase 4
+4. Real projects: proceed to Phase 2
+
+### Phase 2: PLAN
+1. Break the request into concrete subtasks on the board:
+   CREATE TASK: curl -s -X POST http://127.0.0.1:${port}/v1/teams/${tid}/board${authHeader} -H "Content-Type: application/json" -d '{"title":"[subtask] description","description":"details"}'
+2. Each subtask should be specific: file to create/modify, what it should do, acceptance criteria
+3. Order matters: foundations first, features second, polish last
+
+### Phase 3: BUILD
+For each subtask, decide: do it yourself or spawn help?
+- **Yourself** (preferred for < 50 lines): read, edit, write files directly
+- **Spawn builder** (for large/parallel work):
+  SPAWN: curl -s -X POST http://127.0.0.1:${port}/v1/teams/${tid}/agents/spawn${authHeader} -H "Content-Type: application/json" -d '{"template":"worker","task":"description with file paths and acceptance criteria"}'
+- **Check agent status:**
+  LIST: curl -s http://127.0.0.1:${port}/v1/teams/${tid}/agents${authHeader}
+- **Stop agents when done:**
+  STOP: curl -s -X DELETE http://127.0.0.1:${port}/v1/teams/${tid}/agents/<agentId>${authHeader}
+
+### Phase 4: VERIFY
+Before marking anything done:
+1. Run the build: npm run build (MUST pass)
+2. Check the output actually works (read the built files, verify logic)
+3. For web projects: verify HTML/CSS/JS renders correctly (check file structure)
+4. For API projects: verify endpoints respond (curl test)
+5. If verification fails: fix it yourself or respawn a builder
+
+### Phase 5: DELIVER
+1. Commit your work: git add . && git commit -m "feat: description"
+2. Update the task:
+   UPDATE: curl -s -X PATCH http://127.0.0.1:${port}/v1/teams/${tid}/board/<taskId>${authHeader} -H "Content-Type: application/json" -d '{"status":"done","progress":"summary of what was built"}'
+3. If the user sends a follow-up message: iterate — go back to Phase 1
+
+## Your Workspace
 ${repoList}
+Project files go in ~/.pando/projects/${tid}/ (auto-created).
 
-## Team Management
-You can spawn sub-agents when you need help:
-- Simple tasks: do them yourself (faster, cheaper)
-- Complex tasks: spawn a worker or builder agent
-- Test verification: spawn a tester agent
-- Stop agents when their work is done
+## Team Scaling Guide
+| Complexity | Team size | Strategy |
+|-----------|-----------|----------|
+| Simple (landing page, script) | Just you | Do it directly |
+| Medium (full app, 5+ files) | You + 1 builder | Spawn builder for file creation, you review |
+| Complex (multi-service, API + UI) | You + 2-3 builders | Spawn builders for parallel tracks, coordinate via board |
 
-## HTTP API (use curl for ALL operations — you do NOT have PandoTeams tools, only bash/read/write/edit)
-UPDATE TASK: curl -s -X PATCH http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/board/<taskId> -H "Content-Type: application/json" -d '{"status":"done","progress":"<notes>"}'
-CREATE TASK: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/board -H "Content-Type: application/json" -d '{"title":"<title>","description":"<desc>"}'
-SEND MESSAGE: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/message -H "Content-Type: application/json" -d '{"from":"lead","to":"<agentId>","message":"<text>"}'
-SPAWN AGENT: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/agents/spawn -H "Content-Type: application/json" -d '{"template":"worker","task":"<description>"}'
-STOP AGENT: curl -s -X DELETE http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/agents/<agentId>
-LIST AGENTS: curl -s http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/agents
-LIST TEMPLATES: curl -s http://127.0.0.1:${ctx.apiPort}/v1/templates
+Stop agents as soon as their subtask is done — don't let them idle.
+
+## HTTP API Reference
+UPDATE TASK: curl -s -X PATCH http://127.0.0.1:${port}/v1/teams/${tid}/board/<taskId>${authHeader} -H "Content-Type: application/json" -d '{"status":"done","progress":"notes"}'
+CREATE TASK: curl -s -X POST http://127.0.0.1:${port}/v1/teams/${tid}/board${authHeader} -H "Content-Type: application/json" -d '{"title":"title","description":"desc"}'
+SEND MESSAGE: curl -s -X POST http://127.0.0.1:${port}/v1/teams/${tid}/message${authHeader} -H "Content-Type: application/json" -d '{"from":"lead","to":"agentId","message":"text"}'
+SPAWN AGENT: curl -s -X POST http://127.0.0.1:${port}/v1/teams/${tid}/agents/spawn${authHeader} -H "Content-Type: application/json" -d '{"template":"worker","task":"description"}'
+STOP AGENT: curl -s -X DELETE http://127.0.0.1:${port}/v1/teams/${tid}/agents/<agentId>${authHeader}
 
 ## Rules
-- Be brief. Act, don't narrate. Complete quickly.
-- Close or update tasks when done.
-- Don't spawn agents for simple work you can do yourself.
-- npm run build MUST pass before committing.`;
+- Act, don't narrate. Build things, don't describe what you'd build.
+- The user wants WORKING output, not plans. Plans are a means to an end.
+- Every subtask you create must have clear acceptance criteria.
+- npm run build MUST pass before committing.
+- Close tasks when done — don't leave them hanging.
+- If a user request is unclear, build the most reasonable interpretation rather than asking.`;
 }
 
 /** Map of promptTemplate IDs to their generator functions. */
@@ -1870,11 +1908,21 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     // Resolve prompt templates into concrete prompts using runtime context
     for (const agent of agents) {
       if (agent.promptTemplate && PROMPT_TEMPLATES[agent.promptTemplate]) {
+        // Look up team repos from registry if available
+        let teamRepos: string[] | undefined;
+        try {
+          const registry = (this as any).node?.getTeamRegistry?.();
+          if (registry) {
+            const teamInfo = registry.getTeam(teamId);
+            if (teamInfo?.repos) teamRepos = teamInfo.repos;
+          }
+        } catch { /* registry not available */ }
         const promptCtx: PromptContext = {
           projectDir: nodeRepoRoot,
           apiPort: this.config!.apiPort,
           apiToken: this.config!.apiToken,
           teamId,
+          repos: teamRepos,
           model: agent.model,
         };
         agent.prompt = PROMPT_TEMPLATES[agent.promptTemplate](promptCtx);
