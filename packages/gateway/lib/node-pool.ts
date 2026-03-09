@@ -64,8 +64,8 @@ class NodePool {
     // Phase 99: Only seed with trusted compute nodes that have stable public IPs.
     // Discovery via /network/capabilities will find the rest.
     const FALLBACK_SEEDS = [
-      'http://54.82.241.132:4000',   // EC2-1
-      'http://34.201.82.126:4000',   // EC2-2
+      'http://54.160.217.16:4000',   // EC2-1 (pando-compute-1)
+      'http://34.201.82.126:4000',   // EC2-2 (pando-compute-2)
     ];
     const nodeList = process.env.PANDO_NODES?.split(',').map(s => s.trim()).filter(Boolean);
     const singleNode = process.env.PANDO_NODE_URL;

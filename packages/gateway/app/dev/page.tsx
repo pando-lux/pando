@@ -15,7 +15,7 @@ interface Endpoint {
 }
 
 /* -- Data -------------------------------------------------- */
-const EC2_NODE = process.env.PANDO_NODE_URL || "http://54.82.241.132:4000";
+const EC2_NODE = process.env.PANDO_NODE_URL || "http://54.160.217.16:4000";
 
 const endpoints: Endpoint[] = [
   {
