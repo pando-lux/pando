@@ -14,7 +14,7 @@
 - **204 E2E tests passing** (Playwright, public gateway)
 - **Full agent identity**: Ed25519, certificates, signed actions, Pando Login
 
-## Phase 1: Security Hardening
+## Phase 1: Security Hardening — COMPLETE (2026-03-09)
 
 Priority: **CRITICAL** — can't ship with these.
 
@@ -22,15 +22,15 @@ Source: `docs/archive/audit.md`
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
-| 1 | Shell injection in git branch params | CRITICAL | Likely fixed (execFileSync) — VERIFY |
-| 2 | Weak randomness (Math.random for DB keys) | CRITICAL | TODO — use crypto.randomUUID() |
-| 3 | Error messages leak system internals | HIGH | TODO — sanitize HTTP error responses |
-| 4 | Lux budget cap math broken (100 Lux/USD vs 500 cap) | HIGH | TODO — fix budget logic |
-| 5 | Unbounded interval accumulation (memory leak) | HIGH | TODO — audit all setInterval calls |
-| 6 | Stale governance proposals flood on first sync | MEDIUM | TODO — add max-age filter |
-| 7 | governanceRequired not enforced before push | MEDIUM | TODO — block push until approved |
+| 1 | Shell injection in buildCmd (app-manager.ts) | CRITICAL | **FIXED** — allowlist regex + execFileSync (4ef3490) |
+| 2 | Weak randomness (Math.random for DB keys) | CRITICAL | **FIXED** — crypto.randomBytes/randomUUID in 8 locations (4ef3490) |
+| 3 | Error messages leak system internals | HIGH | **FIXED** — 83 catch blocks sanitized across 7 API files (4ef3490) |
+| 4 | Lux budget cap math broken (100 Lux/USD vs 500 cap) | HIGH | **FIXED** — removed silent cost cap, fixed USD/Lux field, LUX_PER_USD constant (e161cf3) |
+| 5 | Unbounded interval accumulation (memory leak) | HIGH | **FIXED** — 6 leaked intervals now stored + cleared on shutdown (e161cf3) |
+| 6 | Stale governance proposals flood on first sync | MEDIUM | **FIXED** — 7-day max-age filter on sync receive (e161cf3) |
+| 7 | governanceRequired not enforced before push | MEDIUM | **FIXED** — push deferred until governance passes, 3 bypass paths blocked (e161cf3) |
 
-**Done when:** All CRITICAL/HIGH issues verified fixed. `audit.md` findings resolved or documented as intentional.
+All issues verified fixed and deployed to network via governance pipeline.
 
 ## Phase 2: Cross-Node Failover (Test & Fix)
 
@@ -38,22 +38,23 @@ Priority: **HIGH** — needed for production reliability.
 
 The code for team migration EXISTS but has **never been tested** under real conditions.
 
+**Key discovery (2026-03-09):** Board state is LOCAL ONLY — `~/.pando/teams/{teamId}/board-state.json` is not synced via P2P. Claiming node starts with an empty board unless it has local board file. This is a gap that needs P2P board sync for true failover.
+
+**Mechanics:** Orphan scan every 5 min. Team stale after 20 min without heartbeat. Claiming node must have PandoCode capability. Conflict resolution: latest `claimedAt` wins.
+
 | # | Test | Status |
 |---|------|--------|
 | 1 | Kill managing node → orphan detection triggers on another node | NOT TESTED |
-| 2 | New node claims team → board-state.json restored → agents resume | NOT TESTED |
+| 2 | New node claims team → agents started (board empty without P2P sync) | NOT TESTED |
 | 3 | Split-brain: two nodes both claim same team → latest claimedAt wins | NOT TESTED |
 | 4 | Network partition: node disconnects but comes back → graceful reconciliation | NOT TESTED |
+| 5 | P2P board sync — transfer board-state.json to claiming node | NOT IMPLEMENTED |
 
-**How to test:**
-1. Submit a task to pando-infra team on Windows
-2. Kill the Windows node process
-3. Wait 5 min — Mac should detect orphan and claim the team
-4. Verify board tasks are preserved
-5. Submit a new task — Mac should process it
-6. Restart Windows — verify no conflict
+**Prerequisites for test:**
+- At least 2 nodes with PandoCode capability (currently: Windows + Mac)
+- Mac must have Claude Code installed and API key configured
 
-**Done when:** Full node-death-and-recovery cycle proven E2E.
+**Done when:** Full node-death-and-recovery cycle proven E2E, including board state transfer.
 
 ## Phase 3: Gateway Dashboard Integration
 
