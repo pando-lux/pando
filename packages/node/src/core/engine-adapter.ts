@@ -1070,6 +1070,8 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   getTeamInbox(teamId: string, agentId: string): { from: string; message: string; timestamp: string }[] {
     const teamData = this.activeTeams.get(teamId);
     if (!teamData?.dbPath || !this.Database) return [];
+    // Sanitize agentId to prevent LIKE wildcard injection (% or _)
+    if (!agentId || typeof agentId !== 'string' || /[%_]/.test(agentId)) return [];
     try {
       const db = new this.Database(teamData.dbPath);
       const prefix = `msg:${agentId}:%`;

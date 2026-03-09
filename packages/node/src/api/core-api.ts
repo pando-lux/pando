@@ -701,6 +701,9 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         if (!from || !to || !message) {
           return reply.code(400).send({ error: 'Required fields: from, to, message' });
         }
+        if (typeof from !== 'string' || typeof to !== 'string') {
+          return reply.code(400).send({ error: 'from and to must be strings' });
+        }
         if (typeof message !== 'string' || message.length < 1 || message.length > 2000) {
           return reply.code(400).send({ error: 'Message must be 1-2000 chars' });
         }
@@ -1060,6 +1063,9 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const body = request.body as any;
       const { from, to, message } = body || {};
       if (!from || !to || !message) return reply.code(400).send({ error: 'Required: from, to, message' });
+      if (typeof from !== 'string' || typeof to !== 'string') {
+        return reply.code(400).send({ error: 'from and to must be strings' });
+      }
       if (typeof message !== 'string' || message.length < 1 || message.length > 2000) {
         return reply.code(400).send({ error: 'Message must be 1-2000 chars' });
       }
