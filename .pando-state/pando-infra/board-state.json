@@ -1,5 +1,5 @@
 {
-  "savedAt": "2026-03-09T19:56:31.138Z",
+  "savedAt": "2026-03-09T20:04:12.597Z",
   "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
   "tasks": [
     {
@@ -97,6 +97,14 @@
       "status": "done",
       "created_at": "2026-03-09T19:03:40.232Z",
       "progress": "Auto-generated, not real. Closed."
+    },
+    {
+      "id": "task-eb530605-50ee-4c1c-a749-5e8cecb2e70e",
+      "title": "[FEATURE:critical] Consolidate chat routing — thread continuation must use sendToTeamAgent not sendToEngine",
+      "description": "File: packages/node/src/api/platform-api.ts\n\nPROBLEM: Three parallel paths exist for routing chat messages to engines. Only Path 1 (build intent, first message) correctly uses the team registry via startTeam() + sendToTeamAgent(). Paths 2 and 3 bypass the team entirely via sendToEngine(). Follow-up messages in project threads skip the team lead agent entirely.\n\nFIX (2 changes in platform-api.ts):\n\n1. THREAD CONTINUATION (line ~588-607): Replace sendToEngine() at line ~592 with sendToTeamAgent(). Pattern: check adapter.isTeamActive(projectId), if not active call startTeam() with lead-universal template, then use adapter.sendToTeamAgent(projectId, 'lead', message). Match the existing build intent path at lines 312-336.\n\n2. PROJECTID SHORTCUT (line ~125-193): Same fix at line ~148. Replace sendToEngine(trimmed, projectId) with the team-based routing pattern.\n\nVERIFY: Send a build chat message, then a follow-up in same thread. Both should appear in /v1/teams/<projectId>/activity. Second message must NOT create a raw engine instance.",
+      "status": "pending",
+      "created_at": "2026-03-09 20:04:12",
+      "progress": ""
     },
     {
       "id": "task-504f1853-c44f-47fe-a799-8f73035ac9b0",
