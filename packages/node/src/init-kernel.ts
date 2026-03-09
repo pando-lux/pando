@@ -588,9 +588,9 @@ export async function initKernel(node: any): Promise<void> {
       }, 2_000);
 
       // Peer exchange: share our peer list so new nodes can form a full mesh.
-      // Delayed 50ms to let the connection settle before sending.
+      // Delayed 10ms to let connection settle (was 50ms — connection is ready sooner).
       // Also immediately notify ALL existing peers about the new peer so they
-      // don't have to wait for the next periodic exchange (was up to 10s delay).
+      // don't have to wait for the next periodic exchange.
       setTimeout(async () => {
         try {
           if (!node.network) return;
@@ -625,10 +625,10 @@ export async function initKernel(node: any): Promise<void> {
             console.log(`[peer-exchange] Broadcast new peer to ${existingPeers.length} existing peer(s)`);
           }
         } catch {}
-      }, 50);
+      }, 10);
 
-      // Second peer exchange at 500ms: re-share after mesh settles to catch peers
-      // the first round missed. (Was 2s but mesh forms within ~200ms.)
+      // Second peer exchange at 300ms: re-share after mesh settles to catch peers
+      // the first round missed. (Was 500ms — mesh forms within ~200ms.)
       setTimeout(async () => {
         try {
           if (!node.network) return;
@@ -644,7 +644,7 @@ export async function initKernel(node: any): Promise<void> {
             });
           }
         } catch {}
-      }, 500);
+      }, 300);
 
       // Phase 69: Auto-wrap removed — credentials in MongoDB, not per-node.
 
@@ -847,9 +847,9 @@ export async function initKernel(node: any): Promise<void> {
       }, 5 * 60 * 1000);
 
       // Peer discovery sweep: share full peer list with all connected peers.
-      // Early sweeps (500ms, 2s, 4s, 8s) catch peers that connected after initial exchange.
-      // Faster sweeps accelerate new-node mesh formation.
-      for (const delay of [500, 2_000, 4_000, 8_000]) {
+      // Staggered early sweeps catch peers that connected after initial exchange.
+      // Tighter intervals (200ms, 1s, 3s, 6s) accelerate new-node mesh formation.
+      for (const delay of [200, 1_000, 3_000, 6_000]) {
         setTimeout(async () => {
           if (!node.network) return;
           const peers = node.network.getPeers();

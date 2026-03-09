@@ -231,7 +231,7 @@ export class PandoNetwork {
         // Single address: just dial it
         try {
           const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 1_000);
+          const timer = setTimeout(() => ac.abort(), 800); // 800ms (was 1s)
           await this.node!.dial(multiaddr(peer.addrs[0]), { signal: ac.signal });
           clearTimeout(timer);
           console.log(`[known-peers] Connected to ${peer.peerId.slice(0, 16)}...`);
@@ -242,7 +242,7 @@ export class PandoNetwork {
       }
       // Multiple addresses: race them all — first success wins
       const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 2_500);
+      const timer = setTimeout(() => ac.abort(), 1_500); // 1.5s (was 2.5s)
       try {
         await Promise.any(peer.addrs.map(async (addr) => {
           const conn = await this.node!.dial(multiaddr(addr), { signal: ac.signal });
@@ -261,7 +261,8 @@ export class PandoNetwork {
     const privateKey = getPrivateKeyFromIdentity(this.identity);
 
     // Set up peer discovery: MDNS for local + bootstrap for known peers
-    const peerDiscovery: any[] = [mdns({ interval: 2_000 })];
+    // mDNS at 1s for faster LAN discovery (was 2s)
+    const peerDiscovery: any[] = [mdns({ interval: 1_000 })];
     if (this.config.bootstrapPeers.length > 0) {
       peerDiscovery.push(bootstrap({ list: this.config.bootstrapPeers }));
     }
@@ -371,9 +372,9 @@ export class PandoNetwork {
         connectedAt: Date.now(),
         lastSeen: Date.now(),
       });
-      // Phase 54.2: Persist known peer — delay 50ms to allow identify protocol to populate
-      // peerStore with announce addresses (public IPs). Identify typically completes in <50ms.
-      setTimeout(() => this.updateKnownPeer(peerId).catch(() => {}), 50);
+      // Phase 54.2: Persist known peer — delay 30ms to allow identify protocol to populate
+      // peerStore with announce addresses (public IPs). Identify typically completes in <30ms.
+      setTimeout(() => this.updateKnownPeer(peerId).catch(() => {}), 30);
       // Notify handlers
       for (const handler of this.peerConnectHandlers) {
         try { handler(peerId); } catch {}
@@ -395,7 +396,7 @@ export class PandoNetwork {
       startupDials.push(...this.config.bootstrapPeers.map(async (addr) => {
         try {
           const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 1_500);
+          const timer = setTimeout(() => ac.abort(), 1_000); // 1s timeout (was 1.5s)
           await this.node!.dial(multiaddr(addr), { signal: ac.signal });
           clearTimeout(timer);
           console.log(`[startup] Connected to bootstrap ${addr.slice(0, 40)}...`);
@@ -406,18 +407,30 @@ export class PandoNetwork {
     }
     Promise.allSettled(startupDials).catch(() => {});
 
-    // Early discovery: re-sweep known peers 500ms after start (catches peers
-    // that weren't ready during the initial dialKnownPeers call)
-    setTimeout(() => this.dialKnownPeers().catch(() => {}), 500);
+    // Aggressive early discovery: staggered re-sweeps at 200ms and 600ms
+    // to catch peers that weren't ready during initial dial
+    setTimeout(() => this.dialKnownPeers().catch(() => {}), 200);
+    setTimeout(() => this.dialKnownPeers().catch(() => {}), 600);
 
-    // Fast startup reconnect: 1s interval for first 30s, then settle to 2s.
-    // Aggressive early sweeps help new nodes form mesh quickly.
+    // Kick DHT routing table refresh after startup for faster DHT-based discovery
+    setTimeout(() => {
+      try {
+        const dht = (this.node as any)?.services?.dht;
+        if (dht && typeof dht.refreshRoutingTable === 'function') {
+          dht.refreshRoutingTable().catch(() => {});
+          console.log('[discovery] DHT routing table refresh triggered');
+        }
+      } catch {}
+    }, 1_000);
+
+    // Fast startup reconnect: 1s interval for first 60s, then settle to 2s.
+    // Extended fast phase (was 30s) helps new nodes form mesh quickly.
     this.reconnectTimer = setInterval(() => this.checkAndReconnect().catch(err => console.error('[p2p] checkAndReconnect error:', err.message)), 1_000);
     setTimeout(() => {
       if (this.stopped || !this.reconnectTimer) return;
       clearInterval(this.reconnectTimer);
       this.reconnectTimer = setInterval(() => this.checkAndReconnect().catch(err => console.error('[p2p] checkAndReconnect error:', err.message)), 2_000);
-    }, 30_000);
+    }, 60_000);
 
     // Health check: remove stale peers every 60s
     this.healthTimer = setInterval(() => this.healthCheck(), 60_000);
@@ -456,11 +469,9 @@ export class PandoNetwork {
     // Connected — reset backoff
     this.reconnectBackoff = 1;
 
-    // Periodic discovery sweep: every 6s, try dialing any known peers
+    // Periodic discovery sweep: every tick (1-2s), try dialing any known peers
     // we're not yet connected to. Catches new nodes added via peer exchange.
-    if (this.reconnectTick % 2 === 0) {
-      this.dialKnownPeers().catch(() => {});
-    }
+    this.dialKnownPeers().catch(() => {});
   }
 
   /**
