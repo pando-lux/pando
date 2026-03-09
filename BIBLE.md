@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-09 (Hub simplified to 26 pages, chat-teams gateway added, legacy council deleted, self-evolution loop COMPLETE — all 10 steps working). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-10 (Hub: encryption routing fixed to 'primary', Apps page wired to AppManager, Agents page wired to team registry. All 26 hub pages showing real data. Self-evolution loop COMPLETE — 5/5 internal team commits). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -441,11 +441,14 @@ api/       HTTP API (kernel-api, core-api, platform-api, testing-api, server, mi
 **Stack:** Next.js 16 + Tailwind
 **Status:** DONE (26 pages — simplified from 36, 10 internal/operator pages removed)
 
-Reads from @pando/node HTTP API via NodePool (multi-node failover). No direct database access.
+Reads from @pando/node HTTP API via NodePool. Chat API routes use `'primary'` routing (single node identity required for E2E encryption). Other routes use failover.
 **Public deployment:** https://gateway-one-mu.vercel.app
+**Required env var:** `PANDO_NODES=http://localhost:4000` (or comma-separated node URLs). Without this, hub falls back to EC2 fallback seeds which may cause encryption identity mismatches.
 
 **Pages (26):** `/` (landing), `/chat`, `/search`, `/projects`, `/apps`, `/wallet`, `/network`, `/governance`, `/agents`, `/marketplace`, `/explore` (+6 sub-pages: activity, economy, governance, health→redirect, how-it-works, network), `/dev`, `/login`, `/register`, `/services`, `/testing`, `/node-setup`, `/resources` (+guide)
 **Removed (Phase 3 simplification):** strategy, council, dashboard, monitor, scheduler, capacity, content, explore/strategy, explore/tasks
+
+**Data sources:** Apps page reads from AppManager (`/v1/apps`), Agents page aggregates from team registry (`/v1/teams` + `/v1/teams/:id/agents`), Network page reads from `/v1/status` + `/v1/peers` + `/v1/reputation/peers` + `/v1/capabilities/network`.
 
 ---
 
