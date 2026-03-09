@@ -903,7 +903,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       const gov = node.getGovernance();
       if (!gov) return reply.code(503).send({ error: 'Governance not ready' });
       const { proposalId, content } = request.body || {};
-      if (!proposalId || !content) return reply.code(400).send({ error: 'proposalId and content required' });
+      if (!proposalId || !content || typeof content !== 'string') return reply.code(400).send({ error: 'proposalId and content required' });
+      if (content.length > 5000) return reply.code(400).send({ error: 'Comment too long (max 5000 chars)' });
       const proposal = gov.getProposal(proposalId);
       if (!proposal) return reply.code(404).send({ error: 'Proposal not found' });
       try {
@@ -957,7 +958,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       const gov = node.getGovernance();
       if (!gov) return reply.code(503).send({ error: 'Governance not ready' });
       const { content, to } = request.body || {};
-      if (!content) return reply.code(400).send({ error: 'content required' });
+      if (!content || typeof content !== 'string') return reply.code(400).send({ error: 'content required' });
+      if (content.length > 5000) return reply.code(400).send({ error: 'Message too long (max 5000 chars)' });
       await gov.sendAgentMessage(content, to || 'all');
       return { success: true };
     });
