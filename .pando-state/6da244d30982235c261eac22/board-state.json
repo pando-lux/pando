@@ -1,0 +1,14 @@
+{
+  "savedAt": "2026-03-09T21:05:47.192Z",
+  "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
+  "tasks": [
+    {
+      "id": "task-d10f20c2-64c8-44bd-8c97-95aa30665634",
+      "title": "[recipe-app] Build complete recipe book SPA",
+      "description": "Single HTML file with embedded CSS/JS. Features: landing page, add recipe form, search/filter, detail pages. localStorage. Modern food-themed design.",
+      "status": "pending",
+      "created_at": "2026-03-09 21:05:47",
+      "progress": ""
+    }
+  ]
+}
