@@ -852,7 +852,7 @@ export async function registerPlatformRoutes(
       }
 
       for (const [resourceType, pricePerUnit] of Object.entries(prices)) {
-        if (typeof pricePerUnit === 'number' && pricePerUnit >= 0) {
+        if (typeof pricePerUnit === 'number' && isFinite(pricePerUnit) && pricePerUnit >= 0) {
           marketplace.setPrice(resourceType, pricePerUnit);
         }
       }
@@ -1122,6 +1122,14 @@ export async function registerPlatformRoutes(
       const VALID_RESOURCE_TYPES = ['ai_api_key', 'storage_db', 'storage_blob', 'cloud_compute', 'hosting_platform', 'code_repository'];
       if (!VALID_RESOURCE_TYPES.includes(type)) {
         return reply.code(400).send({ error: `Invalid resource type '${type}'. Valid types: ${VALID_RESOURCE_TYPES.join(', ')}` });
+      }
+
+      // Validate optional numeric fields
+      if (body.pricePerUnit !== undefined && (typeof body.pricePerUnit !== 'number' || !isFinite(body.pricePerUnit) || body.pricePerUnit < 0)) {
+        return reply.code(400).send({ error: 'pricePerUnit must be a non-negative finite number' });
+      }
+      if (body.maxUsagePerDay !== undefined && (typeof body.maxUsagePerDay !== 'number' || !isFinite(body.maxUsagePerDay) || body.maxUsagePerDay < 0 || !Number.isInteger(body.maxUsagePerDay))) {
+        return reply.code(400).send({ error: 'maxUsagePerDay must be a non-negative integer' });
       }
 
       // Resolve authenticated user (resources belong to USERS, not nodes)
@@ -2158,6 +2166,15 @@ export async function registerPlatformRoutes(
       const sanitizedName = body.name.trim().slice(0, 200);
       if (body.description && body.description.length > 2000) {
         return reply.code(400).send({ error: 'Description too long (max 2000 chars)' });
+      }
+      if (body.budgetLimit !== undefined && (typeof body.budgetLimit !== 'number' || !isFinite(body.budgetLimit) || body.budgetLimit < 0)) {
+        return reply.code(400).send({ error: 'Budget limit must be a non-negative finite number' });
+      }
+      if (body.tier !== undefined && body.tier !== 1 && body.tier !== 2) {
+        return reply.code(400).send({ error: 'Tier must be 1 (static) or 2 (server)' });
+      }
+      if (body.visibility !== undefined && !['public', 'private', 'listed', 'unlisted', 'owner_only'].includes(body.visibility)) {
+        return reply.code(400).send({ error: 'Visibility must be one of: public, private, listed, unlisted, owner_only' });
       }
 
       const project = await ps.createProject({
