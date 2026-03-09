@@ -1,5 +1,5 @@
 {
-  "savedAt": "2026-03-09T21:10:18.194Z",
+  "savedAt": "2026-03-09T21:32:36.824Z",
   "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
   "tasks": [
     {
@@ -99,12 +99,28 @@
       "progress": "Auto-generated, not real. Closed."
     },
     {
+      "id": "task-7e3120af-147a-478e-8bdf-36667ed20216",
+      "title": "[BUG:medium] Doorman misclassifies non-build messages as build intent",
+      "description": "The doorman in platform-api.ts classifies too aggressively. Messages like \"The encryption issue has been resolved\" get classified as build intent, creating unnecessary projects. The doorman classification logic is in the classifyIntent() function or the system prompt that tells the doorman how to classify.\n\nFix: Make the doorman classification more conservative. Only classify as \"build\" or \"complex\" when the user is clearly requesting something to be built (e.g., \"build me\", \"create a\", \"make a\"). Status updates, questions, and informational messages should be classified as \"simple\" or \"question\".\n\nFile: packages/node/src/api/platform-api.ts � search for classifyIntent, doorman prompt, or intent classification logic.\nAlso check: the doorman system prompt in engine-adapter.ts if classification happens there.\n\nAcceptance: Sending \"The encryption issue has been resolved\" or \"How do I deploy?\" should NOT create a project. Only explicit build requests should trigger project creation.",
+      "status": "pending",
+      "created_at": "2026-03-09 21:32:36",
+      "progress": ""
+    },
+    {
+      "id": "task-8b9147eb-ae52-4029-bd2c-790638905dc4",
+      "title": "Add chat_progress streaming to sendToTeamAgent paths in platform-api.ts",
+      "description": "Currently platform-api.ts collects all stream chunks silently from sendToTeamAgent() before pushing a single chat_message event. The hub already handles chat_progress events (chat/page.tsx:258-293) and shows a streaming activity log. Fix: in the for-await loop at lines 744, 607, emit deps.pushEvent(\"chat_progress\", { threadId, projectId, content: event.content }) for each stream:chunk event. This will give users real-time build progress in hub chat instead of waiting 30+ seconds blind. Three locations to fix: Path 1 (line 744), Path 3 (line 607), and optionally Path 2 (line 148, uses sendToEngine which needs separate refactor). File: packages/node/src/api/platform-api.ts",
+      "status": "done",
+      "created_at": "2026-03-09 21:11:08",
+      "progress": "Added chat_progress streaming to both sendToTeamAgent for-await loops in platform-api.ts (lines ~607 and ~744). Each stream:chunk now emits a chat_progress event with threadId, projectId, content. Deployed in commit a1115ed9 alongside the createTeam fix."
+    },
+    {
       "id": "task-4cb4c233-8357-4513-8fa0-e21dc8b9360d",
       "title": "[BUG:medium] Fix team registry createTeam for user project teams",
       "description": "User project teams fail to register in team registry. platform-api.ts:269 calls teamRegistry.createTeam() but it silently fails (catch at line 282 swallows error). Result: GET /v1/teams/:id returns 404 for project teams, even though they appear in GET /v1/teams (which has fallback for active engines not in registry at core-api.ts:447-453).\n\nFix: Debug why createTeam() throws for user project teams. Likely the team object at lines 269-280 is missing required fields or the registry rejects duplicates. Log the error instead of swallowing it, then fix the root cause.\n\nFile: packages/node/src/api/platform-api.ts:266-283\nAlso check: the TeamRegistry class createTeam method for validation requirements.\n\nAcceptance: After fix, GET /v1/teams/<projectId> should return team details for any project created via doorman build-intent flow.",
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09 21:10:18",
-      "progress": ""
+      "progress": "Committed a1115ed973f85bf05ce3694c7ec317e25545f4eb, proposal 3b6333538ae95437011ce3f7c1a8664779cc7b809cce5e8defee85b5d00729ed — push pending governance approval"
     },
     {
       "id": "task-078c52fc-2994-458d-9093-c78878e9f9ee",
