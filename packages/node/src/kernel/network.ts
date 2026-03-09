@@ -123,6 +123,10 @@ export class PandoNetwork {
   private dataDir: string;
   // Tick counter for periodic discovery sweep
   private reconnectTick = 0;
+  // In-memory known-peers cache to avoid disk reads every 2s
+  private knownPeersCache: KnownPeer[] | null = null;
+  // Exponential backoff for reconnect when no peers (2s → 4s → 8s → max 30s)
+  private reconnectBackoff = 1;
 
   constructor(identity: NodeIdentity, config: NodeConfig) {
     this.identity = identity;
@@ -137,11 +141,13 @@ export class PandoNetwork {
   }
 
   private loadKnownPeers(): KnownPeer[] {
+    if (this.knownPeersCache) return this.knownPeersCache;
     try {
       const data = readFileSync(this.knownPeersPath, 'utf-8');
       const peers: KnownPeer[] = JSON.parse(data);
       const cutoff = Date.now() - KNOWN_PEERS_TTL_MS;
-      return peers.filter(p => p.lastSeen > cutoff).slice(0, KNOWN_PEERS_MAX);
+      this.knownPeersCache = peers.filter(p => p.lastSeen > cutoff).slice(0, KNOWN_PEERS_MAX);
+      return this.knownPeersCache;
     } catch {
       return [];
     }
@@ -154,6 +160,7 @@ export class PandoNetwork {
         .filter(p => p.lastSeen > Date.now() - KNOWN_PEERS_TTL_MS)
         .sort((a, b) => b.lastSeen - a.lastSeen)
         .slice(0, KNOWN_PEERS_MAX);
+      this.knownPeersCache = pruned;
       writeFileSync(this.knownPeersPath, JSON.stringify(pruned, null, 2));
     } catch (err: any) {
       console.error(`[known-peers] Failed to save: ${err.message}`);
@@ -224,7 +231,7 @@ export class PandoNetwork {
         // Single address: just dial it
         try {
           const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 8_000);
+          const timer = setTimeout(() => ac.abort(), 3_000);
           await this.node!.dial(multiaddr(peer.addrs[0]), { signal: ac.signal });
           clearTimeout(timer);
           console.log(`[known-peers] Connected to ${peer.peerId.slice(0, 16)}...`);
@@ -363,9 +370,9 @@ export class PandoNetwork {
         connectedAt: Date.now(),
         lastSeen: Date.now(),
       });
-      // Phase 54.2: Persist known peer — delay 500ms to allow identify protocol to populate
-      // peerStore with announce addresses (public IPs). Identify typically completes in <500ms.
-      setTimeout(() => this.updateKnownPeer(peerId).catch(() => {}), 500);
+      // Phase 54.2: Persist known peer — delay 250ms to allow identify protocol to populate
+      // peerStore with announce addresses (public IPs). Identify typically completes in <250ms.
+      setTimeout(() => this.updateKnownPeer(peerId).catch(() => {}), 250);
       // Notify handlers
       for (const handler of this.peerConnectHandlers) {
         try { handler(peerId); } catch {}
@@ -406,11 +413,13 @@ export class PandoNetwork {
     this.reconnectTick++;
 
     if (this.peers.size === 0) {
-      console.log('[reconnect] No peers — attempting to re-dial bootstrap + known peers in parallel...');
+      // Exponential backoff: skip ticks until backoff counter expires
+      if (this.reconnectTick % this.reconnectBackoff !== 0) return;
+      console.log(`[reconnect] No peers — re-dialing bootstrap + known peers (backoff=${this.reconnectBackoff})...`);
       const bootstrapDials = this.config.bootstrapPeers.map(async (addr) => {
         try {
           const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 8_000);
+          const timer = setTimeout(() => ac.abort(), 3_000);
           await this.node!.dial(multiaddr(addr), { signal: ac.signal });
           clearTimeout(timer);
           console.log(`[reconnect] Dialed bootstrap ${addr.slice(0, 40)}...`);
@@ -419,12 +428,19 @@ export class PandoNetwork {
         }
       });
       await Promise.allSettled([...bootstrapDials, this.dialKnownPeers()]);
+      // Increase backoff up to 15 ticks (30s at 2s interval)
+      if (this.reconnectBackoff < 15) this.reconnectBackoff = Math.min(this.reconnectBackoff * 2, 15);
       return;
     }
 
-    // Periodic discovery sweep: every 10s, try dialing any known peers
+    // Connected — reset backoff
+    this.reconnectBackoff = 1;
+
+    // Periodic discovery sweep: every 6s, try dialing any known peers
     // we're not yet connected to. Catches new nodes added via peer exchange.
-    this.dialKnownPeers().catch(() => {});
+    if (this.reconnectTick % 3 === 0) {
+      this.dialKnownPeers().catch(() => {});
+    }
   }
 
   /**

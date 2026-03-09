@@ -628,8 +628,8 @@ export async function initKernel(node: any): Promise<void> {
         } catch {}
       }, 50);
 
-      // Second peer exchange at 2s: GossipSub mesh may not be ready at 50ms,
-      // so re-share after mesh formation to catch peers the first round missed.
+      // Second peer exchange at 500ms: re-share after mesh settles to catch peers
+      // the first round missed. (Was 2s but mesh forms within ~200ms.)
       setTimeout(async () => {
         try {
           if (!node.network) return;
@@ -645,7 +645,7 @@ export async function initKernel(node: any): Promise<void> {
             });
           }
         } catch {}
-      }, 2_000);
+      }, 500);
 
       // Phase 69: Auto-wrap removed — credentials in MongoDB, not per-node.
 
@@ -848,9 +848,9 @@ export async function initKernel(node: any): Promise<void> {
       }, 5 * 60 * 1000);
 
       // Peer discovery sweep: share full peer list with all connected peers.
-      // Early sweeps (1s, 3s, 5s, 10s) catch peers that connected after initial exchange.
+      // Early sweeps (500ms, 2s, 4s, 8s) catch peers that connected after initial exchange.
       // Faster sweeps accelerate new-node mesh formation.
-      for (const delay of [1_000, 3_000, 5_000, 10_000]) {
+      for (const delay of [500, 2_000, 4_000, 8_000]) {
         setTimeout(async () => {
           if (!node.network) return;
           const peers = node.network.getPeers();
