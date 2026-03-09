@@ -544,13 +544,12 @@ TEST LIKE A HUMAN:
 - Look at the console for errors: mcp__plugin_playwright_playwright__browser_console_messages
 
 REPORTING:
-For each bug found, send a message to the lead with:
-- Page URL and what you clicked
-- What happened vs what should have happened
-- Console errors if any
-- Severity: CRITICAL (page crashes/unusable), BUG (wrong behavior), MINOR (cosmetic)
+For each bug found, create a board task so the lead can fix it:
+  Use the manage_tasks tool with action "create", title "[BUG:severity] description", and a description with details.
+  Example: manage_tasks({ action: "create", title: "[BUG:critical] Chat page crashes on send", description: "Page: http://localhost:3003/chat — clicking Send button throws TypeError. Console: Cannot read property 'encrypt' of undefined." })
 
-curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"explorer","to":"lead","message":"[SEVERITY:ui] Page: <url> — <what broke>"}'
+Also send a message to the lead summarizing what you found:
+  curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"explorer","to":"lead","message":"[SEVERITY:ui] Page: <url> — <what broke>"}'
 
 If everything works on the pages you tested, say "All tested pages healthy: <list>" and STOP.
 
@@ -570,12 +569,14 @@ IMPORTANT: Complete in 5 tool calls or fewer. Do NOT loop or recheck.
 STEP 1: Call pando_status to get node health (peer count, uptime, health status).
 STEP 2: Call pando_peers to get connected peer details.
 STEP 3: Analyze the results IN ONE PASS:
-  - If peer count is 0: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"observer","to":"lead","message":"[CRITICAL:health] No peers connected. Node is isolated."}'
+  - If peer count is 0: Create a board task AND send message to lead:
+    manage_tasks({ action: "create", title: "[CRITICAL:health] No peers connected — node is isolated", description: "Peer count dropped to 0. Node cannot participate in network. Check libp2p, firewall, bootstrap peers." })
+    curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"observer","to":"lead","message":"[CRITICAL:health] No peers connected. Board task created."}'
   - If peer count is 1: send message to lead: "[WARNING:health] Only 1 peer connected. Expected 2+. Peer: ..."
-  - If health status is degraded: send message to lead: "[WARNING:health] Degraded: ..."
+  - If health status is degraded: Create a board task with details and send message to lead.
   - If peer count >= 2 AND health is good: say "All healthy. No issues to report." and STOP.
 
-SEND MESSAGE TO LEAD: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"observer","to":"lead","message":"<your report>"}'
+For CRITICAL or WARNING issues, ALWAYS create a board task using manage_tasks so the lead can track and fix it.
 
 RULES:
 - 2+ peers is HEALTHY for the current network size.
@@ -603,10 +604,11 @@ STEP 3: Run E2E tests (if build passed):
   bash: cd ${ctx.projectDir} && npx playwright test --project pando-node tests/e2e/pando-node/pando-e2e.spec.ts 2>&1 | tail -30
   - Note: Tests may take 2+ minutes. This is normal.
 
-STEP 4: Analyze ALL results and send ONE report to lead:
+STEP 4: Analyze ALL results and send ONE report:
   - If all passed: say "All checks passed. Build OK. Tests OK." and STOP.
-  - If anything failed: send report to lead:
-    curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"qa","to":"lead","message":"[SEVERITY:category] What failed — details"}'
+  - If anything failed: Create a board task for each failure AND send a summary message to lead:
+    manage_tasks({ action: "create", title: "[BUG:severity] category — what failed", description: "Build output or test failure details. Include error messages and file paths." })
+    curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"qa","to":"lead","message":"[SEVERITY:category] What failed — details. Board task created."}'
 
 RULES:
 - Run REAL commands, not just API checks.
