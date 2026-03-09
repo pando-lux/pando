@@ -1,22 +1,22 @@
 {
-  "savedAt": "2026-03-09T19:32:39.892Z",
+  "savedAt": "2026-03-09T19:56:31.138Z",
   "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
   "tasks": [
     {
       "id": "a49cc7d6-c1fe-4b66-b29c-c47f5a6b7019",
       "title": "Implement: You just completed: \"Check your inbox and review board tasks now.\n\nINBOX: Empty ",
       "description": null,
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09T19:23:17.300Z",
-      "progress": null
+      "progress": "Stale auto-generated task. Cleaned up by lead."
     },
     {
       "id": "720cb073-237e-4d2f-b6d0-8fcdd2637883",
       "title": "Explore codebase for: You just completed: \"Check your inbox and review board tasks now.\n\nINBOX: Empty ",
       "description": null,
-      "status": "in_progress",
+      "status": "done",
       "created_at": "2026-03-09T19:23:17.299Z",
-      "progress": null
+      "progress": "Stale auto-generated task. Cleaned up by lead."
     },
     {
       "id": "23409a9a-1319-41d0-83e8-75d1e53a89e6",
@@ -97,6 +97,14 @@
       "status": "done",
       "created_at": "2026-03-09T19:03:40.232Z",
       "progress": "Auto-generated, not real. Closed."
+    },
+    {
+      "id": "task-504f1853-c44f-47fe-a799-8f73035ac9b0",
+      "title": "[BUG:critical] Board state git commits trigger unnecessary node restarts � restart loop",
+      "description": "File: packages/node/src/init-platform.ts (self-restart watchdog section).\n\nBUG: The self-restart watchdog compares HEAD vs built commit hash. Board state commits (chore: persist board state for {teamId}) change HEAD, triggering a stale-build restart even though no code changed. With 5-min debounced board commits, the node restarts every ~10 min in a loop.\n\nROOT CAUSE: The stale-build watchdog only checks if HEAD hash differs from built hash. It does not check WHAT files changed.\n\nFIX OPTIONS (pick simplest):\n1. Before triggering restart, check if the diff between built and HEAD includes any files in packages/ (compiled code). If only .pando-state/ or docs files changed, skip restart.\n2. Or: after detecting stale build, run npm run build and compare output. If build output unchanged, update the built marker without restarting.\n3. Or: move board state commits to a separate git ref/branch that does not affect HEAD.\n\nOption 1 is simplest. In the stale-build detection code, add:\n  git diff --name-only builtHash..HEAD | grep ^packages/\nIf no packages/ files changed, update the built hash marker and skip restart.\n\nVERIFY: After fix, board state commits should NOT trigger node restarts. Node should only restart when actual code in packages/ changes.",
+      "status": "done",
+      "created_at": "2026-03-09 19:37:34",
+      "progress": "Fixed by external ops (commit f7b7a333). Deadlock: internal team could not fix because restart loop prevented 15-min tick from completing. Watchdog now checks git diff for packages/ changes before triggering restart."
     },
     {
       "id": "task-e7587281-9bde-478b-ad40-3184389676dd",
