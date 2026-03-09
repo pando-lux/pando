@@ -530,6 +530,9 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       }
 
       const message = (request.body as any)?.message || 'Check your inbox and review board tasks now.';
+      if (typeof message !== 'string' || message.length > 5000) {
+        return reply.code(400).send({ error: 'Message must be a string (max 5000 chars)' });
+      }
       const agentId = (request.body as any)?.agentId || 'lead';
 
       // Two Laws check on trigger message
@@ -831,6 +834,9 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
           return reply.status(404).send({ error: 'Team not running' });
         }
         const message = (request.body as any)?.message || 'Manual trigger: check your inbox and process board tasks.';
+        if (typeof message !== 'string' || message.length > 5000) {
+          return reply.code(400).send({ error: 'Message must be a string (max 5000 chars)' });
+        }
         // Two Laws check on trigger message
         const lawViolation = violatesTwoLaws(message);
         if (lawViolation) return reply.code(403).send({ error: lawViolation });
@@ -1013,6 +1019,9 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
       if (!adapter.isTeamActive('pando-infra')) return reply.code(503).send({ error: 'pando-infra team not running' });
       const message = (request.body as any)?.message || 'Run your checks now.';
+      if (typeof message !== 'string' || message.length > 5000) {
+        return reply.code(400).send({ error: 'Message must be a string (max 5000 chars)' });
+      }
       const lawViolation = violatesTwoLaws(message);
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
       adapter.triggerTeamAgentBackground('pando-infra', agentId, message);
@@ -1051,6 +1060,9 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const body = request.body as any;
       const { from, to, message } = body || {};
       if (!from || !to || !message) return reply.code(400).send({ error: 'Required: from, to, message' });
+      if (typeof message !== 'string' || message.length < 1 || message.length > 2000) {
+        return reply.code(400).send({ error: 'Message must be 1-2000 chars' });
+      }
       const lawViolation = violatesTwoLaws(message);
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
       const adapter = node.getEngineAdapter();
