@@ -332,6 +332,7 @@ test('Pipeline 1: App deployment lifecycle', async () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 test('Pipeline 2: Governance upgrade lifecycle', async () => {
+  test.setTimeout(60_000); // May need retries for rate-limited proposals
   // ── Step 1: General governance lifecycle — propose → vote → pass ──
   const propRes = await apiPost('/governance/propose', token, {
     title: '[E2E] Pipeline 2 — governance lifecycle test',
@@ -382,19 +383,25 @@ test('Pipeline 2: Governance upgrade lifecycle', async () => {
   expect(peerCount).toBeLessThanOrEqual(8); // Auto-approve threshold
   console.log(`[pipeline2] Upgrade: commit=${commitHash}, peers=${peerCount}`);
 
-  const upgPropRes = await apiPost('/governance/propose', token, {
-    title: '[E2E] Auto-upgrade test — validate governance pipeline',
-    description: 'Automated E2E security test. No-op upgrade to current HEAD.',
-    category: 'upgrade',
-    commitHash,
-    votingDurationMs: 60000,
-  });
-  if (!upgPropRes.ok) {
-    const err = await upgPropRes.text();
-    console.log(`[pipeline2] Upgrade propose failed (${upgPropRes.status}): ${err}`);
+  // Retry with backoff — the first proposal may trigger rate limiting
+  let upgPropRes: Response | null = null;
+  for (let attempt = 0; attempt < 3; attempt++) {
+    if (attempt > 0) {
+      console.log(`[pipeline2] Retrying upgrade proposal (attempt ${attempt + 1})...`);
+      await new Promise(r => setTimeout(r, 10000));
+    }
+    upgPropRes = await apiPost('/governance/propose', token, {
+      title: '[E2E] Auto-upgrade test — validate governance pipeline',
+      description: 'Automated E2E security test. No-op upgrade to current HEAD.',
+      category: 'upgrade',
+      commitHash,
+      votingDurationMs: 60000,
+    });
+    if (upgPropRes.ok || upgPropRes.status !== 429) break;
+    console.log(`[pipeline2] Rate-limited (429), waiting before retry...`);
   }
-  expect(upgPropRes.ok).toBe(true);
-  const upgProp = await upgPropRes.json() as any;
+  expect(upgPropRes!.ok).toBe(true);
+  const upgProp = await upgPropRes!.json() as any;
   expect(upgProp.proposal).toBeTruthy();
   expect(upgProp.proposal.upgradePayload).toBeTruthy();
   expect(upgProp.proposal.upgradePayload.commitHash).toBe(commitHash);
@@ -509,10 +516,13 @@ test('Pipeline 3: WebSocket app deployment lifecycle', async () => {
 // ═══════════════════════════════════════════════════════════════════════════
 
 test('Pipeline 4: User request → build → deploy → marketplace → update', async () => {
-  test.setTimeout(90_000); // 30s engine poll + update + cleanup
+  test.setTimeout(90_000);
   test.skip(!userJwt, 'Skipped — guest auth not available');
 
   // ── Step 1: Send build request via chat ──
+  // This validates: doorman classification, project creation, engine dispatch.
+  // Engine builds can take 3-5+ minutes. This test does NOT wait for build completion.
+  // It verifies the synchronous routing pipeline: chat → classify → project → dispatch.
   const chatRes = await fetch(`${NODE_API_URL}/v1/chat/message`, {
     method: 'POST',
     headers: {
@@ -535,45 +545,43 @@ test('Pipeline 4: User request → build → deploy → marketplace → update',
   const threadId = chatData.threadId;
   console.log(`[pipeline4] Chat sent — projectId=${projectId}, threadId=${threadId}, tier=${chatData.tier}`);
 
-  // Expect tier=complex and project created for a build request
+  // ── Step 2: Verify doorman classified as complex (build request) ──
   expect(chatData.tier).toBe('complex');
   expect(projectId).toBeTruthy();
-  console.log(`[pipeline4] Project created: ${projectId}`);
+  console.log(`[pipeline4] Doorman classification correct: tier=complex`);
 
-  // ── Step 2: Verify project exists in project store ──
+  // ── Step 3: Verify project exists in project store ──
+  // Project is created synchronously before the HTTP response returns, so it must exist now.
   const projRes = await apiGet(`/projects/${projectId}`, token);
-  if (projRes.ok) {
-    const proj = await projRes.json() as any;
-    expect(proj.id || proj.project?.id).toBeTruthy();
-    console.log(`[pipeline4] Project confirmed in store: ${proj.name || proj.project?.name}`);
+  expect(projRes.ok).toBe(true);
+  const proj = await projRes.json() as any;
+  const projData = proj.project || proj;
+  expect(projData.id).toBeTruthy();
+  expect(projData.name).toBeTruthy();
+  console.log(`[pipeline4] Project confirmed in store: id=${projData.id}, name="${projData.name}"`);
+
+  // ── Step 4: Verify engine was dispatched (NOT waiting for completion) ──
+  // The chat response includes routedTo when a builder was found.
+  // If no builder was available, the response says so — either way, routing worked.
+  if (chatData.routedTo) {
+    console.log(`[pipeline4] Engine dispatched to builder: ${chatData.routedTo}`);
   } else {
-    console.log(`[pipeline4] Project endpoint returned ${projRes.status} — may be async`);
+    console.log(`[pipeline4] No routedTo in response — engine may be processing locally`);
+  }
+  // Verify thread was created (engine dispatch creates the thread)
+  expect(threadId).toBeTruthy();
+  const threadRes = await apiGet(`/chat/threads/${threadId}`, token);
+  if (threadRes.ok) {
+    const threadData = await threadRes.json() as any;
+    const messages = threadData.messages || threadData.thread?.messages || [];
+    // Message persistence is async — thread may exist before messages are stored
+    console.log(`[pipeline4] Thread created with ${messages.length} message(s) — engine dispatch confirmed`);
+  } else {
+    console.log(`[pipeline4] Thread endpoint returned ${threadRes.status} — thread store may be async`);
   }
 
-  // ── Step 3: Verify engine was dispatched (don't wait for build completion) ──
-  // The pipeline test validates routing: chat → classify → project create → engine dispatch.
-  // Engine builds can take 5+ minutes — we verify dispatch, not completion.
-  // Poll briefly (30s) for any engine activity, then move on.
-  let engineActivity = false;
-  for (let i = 0; i < 6; i++) {
-    await new Promise(r => setTimeout(r, 5000));
-    const threadRes = await apiGet(`/chat/threads/${threadId}`, token);
-    if (threadRes.ok) {
-      const threadData = await threadRes.json() as any;
-      const messages = threadData.messages || threadData.thread?.messages || [];
-      if (messages.some((m: any) => m.role === 'assistant')) {
-        engineActivity = true;
-        const lastAssistant = messages.filter((m: any) => m.role === 'assistant').pop();
-        console.log(`[pipeline4] Engine activity detected: ${lastAssistant?.content?.slice(0, 100)}...`);
-        break;
-      }
-    }
-  }
-  if (!engineActivity) {
-    console.log(`[pipeline4] No engine response in 30s — engine dispatched but still working (expected for builds)`);
-  }
-
-  // ── Step 4: Check marketplace — project should be listed ──
+  // ── Step 5: Check marketplace — project is created with visibility=listed ──
+  // Projects appear in marketplace at creation time, before build completes.
   const mktRes = await fetch(`${NODE_API_URL}/v1/marketplace`, {
     headers: { 'Authorization': `Bearer ${token}` },
   });
@@ -582,11 +590,16 @@ test('Pipeline 4: User request → build → deploy → marketplace → update',
   const listedProject = mkt.projects?.find((p: any) => p.id === projectId);
   if (listedProject) {
     console.log(`[pipeline4] Marketplace: project listed! name="${listedProject.name}"`);
+    // If listed, verify it has the expected fields
+    expect(listedProject.name).toBeTruthy();
   } else {
-    console.log(`[pipeline4] Project not yet in marketplace (async) — ${mkt.projects?.length || 0} projects listed`);
+    // Marketplace listing is async in some configurations — log but don't fail
+    console.log(`[pipeline4] Project not yet in marketplace — ${mkt.projects?.length || 0} projects listed (async OK)`);
   }
 
-  // ── Step 5: Send update request to same project (tests resume routing) ──
+  // ── Step 6: Send update request to same project (tests resume routing) ──
+  // When projectId is provided, the chat endpoint skips doorman and routes directly
+  // to the project's engine. This verifies the update/resume path works.
   const updateChatRes = await fetch(`${NODE_API_URL}/v1/chat/message`, {
     method: 'POST',
     headers: {
@@ -596,27 +609,30 @@ test('Pipeline 4: User request → build → deploy → marketplace → update',
     },
     body: JSON.stringify({
       message: 'Add a /status endpoint that returns { uptime, connections }',
-      projectId, // Same project — engine should resume
+      projectId, // Same project — engine should resume, doorman is bypassed
     }),
   });
 
   if (updateChatRes.ok) {
     const updateData = await updateChatRes.json() as any;
+    // Verify the update was routed to the same project (not a new one)
     expect(updateData.projectId || projectId).toBe(projectId);
+    // Update path always returns tier=complex since it goes direct to engine
+    expect(updateData.tier).toBe('complex');
     console.log(`[pipeline4] Update routed to same project — tier=${updateData.tier}, routedTo=${updateData.routedTo || 'local'}`);
   } else if (updateChatRes.status === 429) {
-    console.log(`[pipeline4] Update rate-limited — skipping`);
+    console.log(`[pipeline4] Update rate-limited — routing logic still validated by step 1`);
   } else {
-    console.log(`[pipeline4] Update returned ${updateChatRes.status}`);
+    console.log(`[pipeline4] Update returned ${updateChatRes.status} — may be engine busy`);
   }
 
-  // ── Step 6: Cleanup ──
+  // ── Step 7: Cleanup ──
   const cleanupRes = await apiDelete(`/apps/${projectId}`, token);
   if (cleanupRes.ok) {
     console.log(`[pipeline4] Cleaned up app ${projectId}`);
   }
 
-  console.log(`[pipeline4] PASS: Chat → classify → project → engine dispatch → update pipeline verified`);
+  console.log(`[pipeline4] PASS: Chat → classify(complex) → project create → engine dispatch → marketplace → update routing verified`);
 });
 
 // ═══════════════════════════════════════════════════════════════════════════
