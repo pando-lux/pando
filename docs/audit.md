@@ -1,5 +1,6 @@
 # Pando Codebase Audit
 
+> **STATUS: REFERENCE ONLY** — Point-in-time snapshot. Some issues (C-1 shell injection, C-2 weak randomness) have been fixed since generation. Verify current state before acting on any item.
 > Generated: 2026-03-08
 > Scope: pando-node, pando-code, and cross-system boundaries
 

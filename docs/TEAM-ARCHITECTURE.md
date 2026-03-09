@@ -1,7 +1,8 @@
 # Team Architecture — Unified Project Management
 
+> **STATUS: IMPLEMENTED** — Core team architecture is live (TeamRegistry, board, agents, templates, HTTP API). See COUNCIL-ROADMAP.md for phase-by-phase details.
 > Single source of truth for how teams, projects, boards, and agent management work.
-> Revised: 2026-03-08. Status: APPROVED, NOT YET IMPLEMENTED.
+> Revised: 2026-03-08.
 > Read this FIRST before touching any team/project/board code.
 
 ---

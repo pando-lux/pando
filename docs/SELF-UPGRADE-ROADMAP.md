@@ -1,8 +1,8 @@
 # Self-Upgrade Roadmap — Autonomous Self-Modification Pipeline
 
+> **STATUS: PHASE 1 (commit-and-propose) DONE, PHASE 2 (Mac as 2nd PandoCode node) DONE** — Phases 3-7 remain TODO.
 > **Created:** 2026-03-09 after full live testing session
 > **Goal:** Make pando-infra council fully autonomous: detect → edit → build → commit → push → propose → upgrade all nodes
-> **Status:** Infrastructure works, intelligence loop has gaps
 
 ## Current State (Verified 2026-03-09)
 

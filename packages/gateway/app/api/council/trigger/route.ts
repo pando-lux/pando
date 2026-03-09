@@ -1,26 +1,24 @@
 import { NextResponse } from "next/server";
-import { getNodeUrl } from "@/lib/node-connection";
+import { fetchFromNode, getApiToken } from "@/lib/node-connection";
 
 /**
  * POST /api/council/trigger
- * Proxies to POST /v1/council/trigger/:agent on the Pando node.
- * Body: { agent: "observer" | "qa" | "council", message?: string }
- * Returns: { agent, toolCalls, response }
+ * Proxies to POST /v1/teams/pando-infra/trigger on the Pando node.
+ * Body: { agent?: string, message?: string }
+ * Returns: { status, message }
  */
 export async function POST(request: Request) {
   try {
     const body = await request.json();
-    const agent = body?.agent;
-    if (!agent || !["observer", "qa", "council"].includes(agent)) {
-      return NextResponse.json({ error: "Invalid agent. Must be: observer, qa, or council" }, { status: 400 });
-    }
-    const nodeUrl = getNodeUrl();
-    const res = await fetch(`${nodeUrl}/v1/council/trigger/${encodeURIComponent(agent)}`, {
+    const headers: Record<string, string> = { "Content-Type": "application/json" };
+    const token = getApiToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetchFromNode("/v1/teams/pando-infra/trigger", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ message: body.message }),
+      headers,
+      body: JSON.stringify({ message: body?.message }),
       signal: AbortSignal.timeout(60000),
-    });
+    }, "primary");
     const data = await res.json();
     if (!res.ok) return NextResponse.json(data, { status: res.status });
     return NextResponse.json(data);

@@ -1,5 +1,7 @@
 # Human-Level Logical Testing
 
+> **STATUS: PARTIALLY STALE** — Scenarios 1-10 reference legacy `/v1/council/*` endpoints. The live system now uses `/v1/teams/pando-infra/*` endpoints (team architecture). Scenarios 12-14 reference the correct team endpoints. Use this as a conceptual test plan, not as copy-paste commands.
+
 > These are not smoke tests. Each scenario tests a real-world flow end-to-end,
 > the way a human would verify the system actually works. Run these manually
 > or automate via Playwright + API calls.

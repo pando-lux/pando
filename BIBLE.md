@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-09 (Unified Pipeline: credential resolution via resolveGitCredential, infrastructure-as-apps (pando-node + pando-code = tier 3), AppManager gains governance gate + deployAction + 3 tiers. See Section 5.8 + 5.12.1.). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-09 (Atomic commit-and-propose endpoint, 4-node mesh (Mac = 2nd PandoCode), GossipSub unverifiable message fix, Claude Code 3-source auth detection). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -438,7 +438,7 @@ Reads from @pando/node HTTP API. No direct database access.
 
 | Component | File | Status | What it does |
 |---|---|---|---|
-| **CapabilityDetector** | `platform/capability-detector.ts` | DONE | Auto-detect: PandoCode, storage, compute, hosting |
+| **CapabilityDetector** | `platform/capability-detector.ts` | DONE | Auto-detect: PandoCode, storage, compute, hosting. Claude Code auth: ANTHROPIC_API_KEY env, ~/.claude/.credentials.json (OAuth), ~/.claude/history.jsonl+settings.json (Max/Pro plan). |
 | **ResourceMarketplace** | `platform/resource-marketplace.ts` | DONE | GossipSub price broadcasting, resource discovery, metering |
 | **ContentRegistry** | `platform/content-registry.ts` | DONE | Content management |
 | **ThreadStore** | `platform/thread-store.ts` | DONE | Chat thread persistence. Non-blocking writes (local cache immediate, HTTP storage async). Requires MongoDB (EC2) or HTTP proxy for persistence. |
@@ -1822,9 +1822,10 @@ This makes a contributor's Claude Code subscription a network resource — they 
 
 | Machine | IP | Instance ID | Role | Features |
 |---|---|---|---|---|
-| EC2-1 | 54.160.217.16 | i-066e87f7440e7e2f5 | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY |
-| EC2-2 | 34.201.82.126 | i-002a88a1372adfbdb | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY |
+| EC2-1 | 54.160.217.16 | i-066e87f7440e7e2f5 | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY, --relay |
+| EC2-2 | 34.201.82.126 | i-002a88a1372adfbdb | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY, --relay |
 | Windows | 100.87.67.78 | — | Contributor | PandoCode, Claude Code, P2P port 4100, API port 4000 |
+| Mac | — | — | Contributor | PandoCode (2nd node), nohup (no auto-restart) |
 
 **Decommissioned (2026-03-08):** LS-1 (54.145.144.221), LS-2 (3.237.175.38) — Lightsail terminated. Old EC2-1 (54.82.241.132, i-0c74c15769abfcaf7) — impaired, terminated and replaced. pando-untrusted-1 (54.164.43.155), liva-test-instance (3.87.124.136) — idle, terminated.
 
@@ -1975,6 +1976,9 @@ orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), temp
 | **Marketplace enrichment** | `api/platform-api.ts` | DONE — GET /v1/marketplace and GET /v1/marketplace/:id enriched with AppManager deployment data (status, url, tier, commit, deployedAt). Commit e6fe16b1. |
 | **Engine memory leak** | `core/engine-adapter.ts`, `api/app-api.ts` | DONE — stopTeamAgent/stopTeam/app DELETE now destroy PandoCode engine processes via engine.shutdown() + pool cleanup. Previously leaked zombie engines (13 at 95% memory). Commit 5b94cd77. |
 | **Tick overlap guard** | `core/engine-adapter.ts` | DONE — Lead agent tick handler now skips if previous tick still running. Prevents concurrent sends to same engine. Commit 919b92a0. |
+| **Commit→push loop unreliable** | `api/core-api.ts` | FIXED — Atomic `POST /v1/infra/commit-and-propose` endpoint replaces 5+ sequential bash commands. Build-gated: fails fast on build errors, unstages changes for retry. See Section 10b. |
+| **Single PandoCode node** | Infrastructure | FIXED — Mac is 2nd PandoCode node. 4-node mesh: Windows (dev+PandoCode), EC2-1 (compute+relay), EC2-2 (compute+relay), Mac (PandoCode). |
+| **GossipSub message rejection after restart** | `kernel/network.ts` | FIXED — Signed messages from connected peers now allowed through even without public key on file. Transport-level Noise encryption already authenticates the peer, so rejecting unverifiable messages from connected peers was unnecessary and broke message flow after restarts. |
 
 ### Restart Architecture (Verified 2026-03-08)
 
@@ -2040,6 +2044,9 @@ The `resourceId` is generated when a credential is contributed (via `/contribute
 | ~~**Tier 2 PM2 persistence**~~ | `init-platform.ts` | **ALREADY HANDLED.** `pm2 save` is called after every deploy. Port registry also persists. |
 | **Deploy pipeline resilience** | `core/app-manager.ts` | AppManager provides blue-green deploy (no port collision) + rollback (restore previous commit). Retry on transient failures still TODO. S3 partial upload edge case mitigated by rollback capability. All deploy events persisted to `app_history` table in apps.db. |
 | **Chat-created projects lack repo_url** | `api/platform-api.ts` | Chat-created projects use workspace-based deploy (workspaceDir). EC2 deploy dispatch requires GitHub repo to clone. Workspace-to-GitHub push before deploy dispatch needed. Being fixed separately. |
+| **Board state not durable** | `core/team-registry.ts` | Local SQLite only. `team-state.json` backup is NOT wired — if node dies, board tasks are lost unless PandoCode's own SQLite has them. Need persistent backup or P2P board recovery. |
+| **No engine watchdog** | `core/engine-adapter.ts` | Dead CLI process = dead agent until node restart. No health monitoring of spawned Claude Code processes. If the CLI crashes silently, the agent stops working with no alert or auto-restart. |
+| **Mac node has no auto-restart** | Infrastructure | Mac PandoCode node runs via `nohup` — no systemd, no supervisor. If the process dies, it stays dead until manual restart. Needs launchd or equivalent. |
 | ~~**deployPeerId not persisting**~~ | `platform-api.ts:3685` | **ALREADY HANDLED.** Saved to both ProjectStore (MongoDB) and ProjectRegistry (local). |
 | ~~**Unified Pipeline Phases 3-7**~~ | `core/git-ops.ts`, `core/github-client.ts` | **DONE.** All 7 phases complete. GitOps class centralizes all git operations. GitHubClient for autonomous repo creation. All consumers refactored. See Section 5.8.2. |
 | ~~**UpgradeProtocol/AppManager duplication**~~ | `core/upgrade-protocol.ts`, `core/app-manager.ts` | **DONE.** Both now use GitOps for all git operations. UpgradeProtocol handles governance + security + safe restart. AppManager handles deployment lifecycle. No more duplicate git logic. |
@@ -2160,6 +2167,37 @@ When `commitHash` is present, the API automatically:
 
 **Security file gotcha:** If the commit touches files in the SECURITY_FILES list (`governance.ts`, `upgrade-protocol.ts`, `credential-store.ts`, etc.), the description MUST contain "security" or "credential" — otherwise auto-approve is rejected.
 
+### Atomic Commit-and-Propose Endpoint
+
+**Endpoint:** `POST /v1/infra/commit-and-propose`
+
+Atomic pipeline that replaces 5+ sequential bash commands with a single curl call. Used by the pando-infra lead agent.
+
+**Pipeline:** `git add → npm run build → git commit → git push → governance propose → mark task done`
+
+**Request body:**
+```json
+{
+  "message": "fix: description of the change",
+  "taskId": "optional-board-task-id",
+  "teamId": "optional-team-id (defaults to pando-infra)"
+}
+```
+
+**Response (success):**
+```json
+{
+  "status": "success",
+  "commitHash": "abc123...",
+  "proposalId": "prop-uuid",
+  "steps": ["staged", "built", "committed", "pushed", "proposed", "task-done"]
+}
+```
+
+**On build failure:** Returns build errors in the response body and unstages all changes (`git reset HEAD`) so the agent can read the errors, fix the code, and retry. No broken commits reach the repo.
+
+**Why this exists:** The old flow (agent runs git add, npm run build, git commit, git push, curl governance/propose as separate bash commands) was unreliable — agents would forget steps, skip the build check, or fail mid-sequence leaving dirty state. The atomic endpoint guarantees all-or-nothing: either the full pipeline succeeds or changes are rolled back to pre-attempt state.
+
 ### Key Invariants
 
 1. **Governance-flagged teams go through governance.** Teams with `governanceRequired: true` propose via governance. Teams with `false` deploy directly. pando-infra always requires governance.
@@ -2180,6 +2218,17 @@ When `commitHash` is present, the API automatically:
 **Phase 2 (COMPLETE 2026-03-09):** Migrated from legacy hardcoded council to team architecture. TeamRegistry + `/v1/teams/*` endpoints + team handoff + git-backed board recovery. All legacy council routes delegate to `/teams/pando-infra`.
 
 **Phase 3 (IN PROGRESS):** User project teams run autonomously alongside pando-infra. Multiple teams on multiple nodes. Teams hand off between nodes. Users submit requests from gateway and teams handle everything.
+
+**4-Node Mesh (LIVE):**
+
+| Node | Role | PandoCode | Relay | Notes |
+|---|---|---|---|---|
+| Windows | Dev machine | Yes | No | P2P port 4100, API port 4000. Primary dev + CEO agent. |
+| EC2-1 (54.160.217.16) | Compute + relay | No | Yes (`--relay`) | systemd, MongoDB, NAT traversal relay |
+| EC2-2 (34.201.82.126) | Compute + relay | No | Yes (`--relay`) | systemd, MongoDB, NAT traversal relay |
+| Mac | PandoCode | Yes | No | 2nd PandoCode contributor. No auto-restart (nohup). |
+
+EC2 nodes run with `--relay` flag enabling circuit relay for NAT traversal — Windows and Mac nodes behind NAT can reach each other through EC2 relays. Dev infrastructure details (IPs, SSH, peer IDs, auth tokens, quick commands) are in `infra/DEV-MODE.md` (gitignored).
 
 **Phase 8 Gateway (STARTED 2026-03-09):** Gateway team integration. `node-connection.ts` has 9 team methods (getTeams, getTeam, getTeamBoard, addTeamBoardTask, getTeamAgents, getTeamStatus, getTeamCost, submitTeamRequest, getTemplates). 8 API routes at `/api/teams/*` and `/api/templates`. Network page shows Teams section with expandable cards (agents + board tasks). Remaining: team creation from gateway, model selection, aggregate dashboard across nodes.
 
@@ -2405,3 +2454,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 32. **pando-node and pando-code are apps in AppManager.** `GET /v1/apps` returns them alongside user apps. They are tier 3 (infrastructure) with `governance: true` and `deployAction: 'restart-node'`. This is the unified pipeline — same registry, same history table, same API. However, UpgradeProtocol still runs its own git/build/deploy logic for now (Phases 3-7 will merge them). Don't be confused by the temporary duplication.
 
 33. **Never hardcode PATs in git remote URLs.** Use `ResourceRegistry.resolveGitCredential(repoUrl, userId?)` instead. It resolves contributed credentials dynamically, supports user-scoped PATs for private repos, and injects the token into the URL at call time. The old pattern of extracting PATs from `git remote get-url origin` is deprecated.
+
+34. **Claude Code auth detection checks 3 sources.** `capability-detector.ts` detects Claude Code availability by checking: (a) `ANTHROPIC_API_KEY` env var, (b) `~/.claude/.credentials.json` (OAuth login), (c) `~/.claude/history.jsonl` + `settings.json` (Max/Pro plan auth — no API key or OAuth needed, user is authenticated through their Anthropic subscription). All three are valid auth paths. If any is present, the node advertises `compute_cpu: true` and can run Claude Code agents.
+
+35. **GossipSub allows unverifiable messages from connected peers.** Signed messages from peers who are currently connected via libp2p are allowed through even if the node doesn't have their public key on file. Rationale: transport-level Noise encryption already authenticates the peer's identity at the TCP layer, so application-level signature verification is redundant for connected peers. This fixes the longstanding issue where nodes rejected all GossipSub messages from peers after a restart (because the public key cache was cleared). Only messages from unknown, non-connected peers are rejected.

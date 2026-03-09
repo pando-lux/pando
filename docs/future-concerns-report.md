@@ -1,5 +1,6 @@
 # Future Concerns Report
 
+> **STATUS: REFERENCE ONLY** — Point-in-time analysis of design gaps and future concerns. Verify current state before acting on any item.
 > Generated: 2026-03-08
 > Scope: Logical inconsistencies, unenforced permissions, dead states, phantom features
 

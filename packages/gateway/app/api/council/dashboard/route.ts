@@ -1,17 +1,19 @@
 import { NextResponse } from 'next/server';
-import { getNodeUrl } from '@/lib/node-connection';
+import { fetchFromNode, getApiToken } from '@/lib/node-connection';
 
 /**
  * GET /api/council/dashboard
- * Proxies to GET /v1/council/status on the Pando node.
- * Returns: { active, engines: [{id, role, status}], schedules: [{name, interval}] }
+ * Proxies to GET /v1/teams/pando-infra/status on the Pando node.
+ * Returns team health/status for the pando-infra team.
  */
 export async function GET() {
   try {
-    const nodeUrl = getNodeUrl();
-    const res = await fetch(`${nodeUrl}/v1/council/status`, {
+    const headers: Record<string, string> = {};
+    const token = getApiToken();
+    if (token) headers['Authorization'] = `Bearer ${token}`;
+    const res = await fetchFromNode('/v1/teams/pando-infra/status', {
+      headers,
       signal: AbortSignal.timeout(8000),
-      cache: 'no-store',
     });
     if (!res.ok) return NextResponse.json({ error: 'Upstream error' }, { status: res.status });
     return NextResponse.json(await res.json());

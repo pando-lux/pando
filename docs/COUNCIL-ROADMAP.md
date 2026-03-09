@@ -1,6 +1,7 @@
 # Team Architecture Roadmap
 
-> Updated: 2026-03-09 | Status: ACTIVE
+> **STATUS: PHASES 1-3, 4-5, 6.1, 7 COMPLETE** — Phases 6.2+, 8 remain TODO.
+> Updated: 2026-03-09
 > Master plan for the team/agent/template system.
 
 ---

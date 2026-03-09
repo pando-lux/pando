@@ -3701,7 +3701,8 @@ export async function registerPlatformRoutes(
       return true;
     }
 
-    // POST /council/veto/:id — veto a governance proposal (legacy route, kept for compatibility)
+    // POST /council/veto/:id — veto a governance proposal
+    // Legacy gateway route; kept until gateway migrates to /v1/governance/*.
     fastify.post('/council/veto/:id', async (request: any, reply: any) => {
       if (!requireOperator(request, reply)) return;
       const governance = node.getGovernance();

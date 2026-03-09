@@ -38,6 +38,11 @@ dev-testing/
 # E2E test results (runtime artifacts)
 e2e/results/
 
+# Playwright test artifacts (generated during test runs)
+playwright-report/
+test-output.json/
+test-results/
+
 # QA E2E screenshots (generated, not source)
 qa-e2e/
 

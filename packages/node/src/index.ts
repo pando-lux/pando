@@ -63,7 +63,6 @@ import { ProjectRegistry, TOPIC_PROJECTS } from './platform/project-registry.js'
 import { RevenueEngine } from './platform/revenue-engine.js';
 import { randomUUID } from 'node:crypto';
 import { ContributionTracker } from './platform/contribution-tracker.js';
-// Council replaced by Orchestrator
 import { NetworkState } from './kernel/network-state.js';
 import { ThreadStore } from './platform/thread-store.js';
 import { CloudInstanceManager } from './core/cloud-instance-manager.js';
@@ -1720,7 +1719,7 @@ export type { CreateProjectOpts, ListProjectsOpts, ProjectStats } from './platfo
 // Phase 50: Network State exports
 export { NetworkState } from './kernel/network-state.js';
 export type { NetworkStateSnapshot } from './kernel/network-state.js';
-// Council replaced by Orchestrator (exported above)
+// Teams system (pando-infra) — Orchestrator exported above
 // Phase 42: StorageBackend exports
 export type { StorageBackend } from './core/storage-backend.js';
 export { MongoStorageBackend } from './core/mongo-backend.js';

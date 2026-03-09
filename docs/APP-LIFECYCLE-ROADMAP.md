@@ -1,6 +1,6 @@
 # Unified App Lifecycle — Architecture Roadmap
 
-> **Status:** PHASES 1-3 COMPLETE (AppManager built, API mounted, legacy removed, 26/26 E2E pass)
+> **STATUS: PHASES 1-3 COMPLETE** — AppManager built, API mounted, legacy removed. Phase 4 (P2P deploy dispatch) remains TODO.
 > **Created:** 2026-03-08
 > **Goal:** One system to deploy, update, monitor, and rollback ALL running processes — pando-node and user apps alike.
 

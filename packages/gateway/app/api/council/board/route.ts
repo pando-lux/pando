@@ -1,12 +1,14 @@
 import { NextResponse } from "next/server";
-import { getNodeUrl } from "@/lib/node-connection";
+import { fetchFromNode, getApiToken } from "@/lib/node-connection";
 
 export async function GET() {
   try {
-    const nodeUrl = getNodeUrl();
-    const res = await fetch(`${nodeUrl}/v1/council/board`, {
+    const headers: Record<string, string> = {};
+    const token = getApiToken();
+    if (token) headers["Authorization"] = `Bearer ${token}`;
+    const res = await fetchFromNode("/v1/teams/pando-infra/board", {
+      headers,
       signal: AbortSignal.timeout(8000),
-      cache: "no-store",
     });
     if (!res.ok) return NextResponse.json({ error: "Upstream error" }, { status: res.status });
     return NextResponse.json(await res.json());

@@ -103,7 +103,7 @@ const RATE_LIMITS: Record<string, { max: number; envVar: string; windowMs?: numb
   'POST /auth/guest':                { max: 5,  envVar: 'PANDO_RATE_AUTH_GUEST' },
   'POST /auth/login':                { max: 5,  envVar: 'PANDO_RATE_AUTH_LOGIN' },
   'POST /teams/:id/request':         { max: 3,  envVar: 'PANDO_RATE_REPORT', windowMs: 3600_000 },
-  'POST /council/request':           { max: 3,  envVar: 'PANDO_RATE_REPORT', windowMs: 3600_000 },
+  'POST /council/request':           { max: 3,  envVar: 'PANDO_RATE_REPORT', windowMs: 3600_000 }, // legacy gateway alias → pando-infra team
   'POST /projects/:id/request':      { max: 5,  envVar: 'PANDO_RATE_PROJECT_REQUEST', windowMs: 3600_000 },
 };
 
@@ -328,7 +328,8 @@ export class ApiServer {
 
       // User-facing endpoints use their own auth (userId scoping, E2E encryption).
       // Only operator/admin endpoints require the node-level API Bearer token.
-      // NOTE: /teams/ and /council/ mutations require API token (they control AI agents).
+      // NOTE: /teams/ mutations require API token (they control AI agents).
+      // /council/* routes are legacy gateway aliases that also require auth.
       const urlPath = (request.url as string).split('?')[0];
       const pathNoVersion = urlPath.replace(/^\/v\d+/, '');
       if (

@@ -1,5 +1,6 @@
 # Unified Pipeline Roadmap
 
+> **STATUS: COMPLETE** — All 7 phases done. See Implementation Status table at bottom.
 > One pipeline for everything. pando-node, pando-code, user apps — all just "apps."
 
 ## The Problem Today
