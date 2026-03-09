@@ -3,14 +3,39 @@
  *
  * Routes: /apps, /apps/:id, /apps/:id/deploy, /apps/:id/update,
  *         /apps/:id/rollback, /apps/:id/stop, /apps/:id/start,
- *         /apps/:id/health, /apps/:id/history, /apps/:id/logs
+ *         /apps/:id/health, /apps/:id/history, /apps/:id/logs,
+ *         /apps/:id/serve/* (local static file serving)
  *
  * All /apps/* endpoints require Bearer token auth (POST/PUT/DELETE).
  * GET endpoints are public (read-only).
  */
 
 import { execFileSync } from 'node:child_process';
+import { join, extname, normalize, resolve } from 'node:path';
+import { homedir } from 'node:os';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import type { RouteHelpers } from './middleware/auth.js';
+
+const SERVE_MIME: Record<string, string> = {
+  '.html': 'text/html',
+  '.css': 'text/css',
+  '.js': 'application/javascript',
+  '.json': 'application/json',
+  '.png': 'image/png',
+  '.jpg': 'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif',
+  '.svg': 'image/svg+xml',
+  '.ico': 'image/x-icon',
+  '.webp': 'image/webp',
+  '.woff': 'font/woff',
+  '.woff2': 'font/woff2',
+  '.ttf': 'font/ttf',
+  '.eot': 'application/vnd.ms-fontobject',
+  '.map': 'application/json',
+  '.txt': 'text/plain',
+  '.xml': 'application/xml',
+};
 
 /** Validate that an ID is safe for shell/filesystem use (alphanumeric, hyphens, underscores). */
 const SAFE_ID = /^[a-zA-Z0-9_-]+$/;
@@ -245,6 +270,54 @@ export async function registerAppRoutes(
       console.error('[api] Log fetch failed:', err.message);
       return reply.code(500).send({ error: 'Failed to fetch logs' });
     }
+  });
+
+  // ── GET /apps/:id/serve/* — Serve local static files (Tier 1 fallback) ─
+  fastify.get('/apps/:id/serve/*', async (request: any, reply: any) => {
+    const { id } = request.params;
+    if (!SAFE_ID.test(id)) {
+      return reply.code(400).send({ error: 'Invalid app id' });
+    }
+
+    // Extract the file path from the wildcard segment
+    const rawPath: string = (request.params as any)['*'] || 'index.html';
+
+    // Resolve against the app's hosted directory
+    const appsBase = join(homedir(), '.pando', 'hosted-apps');
+    const appDir = join(appsBase, id);
+    if (!existsSync(appDir)) {
+      return reply.code(404).send({ error: 'App not found' });
+    }
+
+    // Prefer public/ subdirectory if it exists
+    const publicDir = join(appDir, 'public');
+    const serveRoot = existsSync(publicDir) && statSync(publicDir).isDirectory()
+      ? publicDir : appDir;
+
+    // Resolve and prevent path traversal
+    const resolved = resolve(serveRoot, normalize(rawPath));
+    if (!resolved.startsWith(resolve(serveRoot))) {
+      return reply.code(403).send({ error: 'Forbidden' });
+    }
+
+    // If path is a directory, try index.html inside it
+    let filePath = resolved;
+    if (existsSync(filePath) && statSync(filePath).isDirectory()) {
+      filePath = join(filePath, 'index.html');
+    }
+
+    if (!existsSync(filePath) || !statSync(filePath).isFile()) {
+      return reply.code(404).send({ error: 'File not found' });
+    }
+
+    const ext = extname(filePath).toLowerCase();
+    const contentType = SERVE_MIME[ext] || 'application/octet-stream';
+
+    const content = readFileSync(filePath);
+    return reply
+      .header('Content-Type', contentType)
+      .header('Cache-Control', 'public, max-age=3600')
+      .send(content);
   });
 
 }

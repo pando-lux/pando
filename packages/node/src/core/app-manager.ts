@@ -470,18 +470,37 @@ export class AppManager {
 
     // Get S3 credentials from ResourceRegistry (contributed resources)
     const registry = this.node.resourceRegistry;
-    if (!registry) {
-      throw new Error('ResourceRegistry not available on this node');
+    let s3Cred: string | null = null;
+    let s3Resources: any[] = [];
+
+    if (registry) {
+      s3Resources = registry.findResources('storage_blob' as any);
+      if (s3Resources.length) {
+        s3Cred = await registry.getCredential(s3Resources[0].resourceId);
+      }
     }
 
-    const s3Resources = registry.findResources('storage_blob' as any);
-    if (!s3Resources.length) {
-      throw new Error('No storage_blob resource contributed to this node');
-    }
-
-    const s3Cred = await registry.getCredential(s3Resources[0].resourceId);
+    // Fallback: serve locally when S3 is not configured
     if (!s3Cred) {
-      throw new Error('Could not decrypt S3 credential');
+      console.log(`[app-manager] No S3 credentials — using local static file serving for ${app.id}`);
+      const apiPort = this.node.apiPort || 4000;
+      const localUrl = `http://localhost:${apiPort}/v1/apps/${app.id}/serve/index.html`;
+
+      this.db.prepare(`
+        UPDATE apps SET
+          status = 'live', current_commit = ?, deploy_url = ?,
+          deployed_at = ?, updated_at = ?, error_message = NULL
+        WHERE id = ?
+      `).run(currentCommit, localUrl, Date.now(), Date.now(), app.id);
+
+      this.recordHistory(app.id, 'deploy', {
+        to_commit: currentCommit,
+        status: 'success',
+        duration_ms: Date.now() - startTime,
+      });
+
+      console.log(`[app-manager] Tier 1 local deploy complete: ${localUrl}`);
+      return { success: true, url: localUrl };
     }
 
     // Parse S3 credential — JSON or accessKeyId:secretAccessKey format
