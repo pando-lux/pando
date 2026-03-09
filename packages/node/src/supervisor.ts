@@ -8,7 +8,7 @@
  * Usage:
  *   node supervisor.js [--teams-path <path>] [--api-port <port>]
  *
- * --teams-path: Path to pando-teams repo (default: auto-detect ../code relative to node repo)
+ * --teams-path: Path to pando-teams repo (default: auto-detect ../teams or ../code relative to node repo)
  */
 
 import { spawn, ChildProcess } from 'node:child_process';
@@ -57,11 +57,13 @@ function resolveTeamsPath(): string | null {
     const p = resolve(process.env.PANDO_TEAMS_PATH);
     if (existsSync(join(p, 'packages', 'server', 'src', 'index.ts'))) return p;
   }
-  // Auto-detect: ../code relative to the node repo (which is 4 levels up from __dirname)
-  // __dirname = <repo>/packages/node/dist  →  <repo>/../code
+  // Auto-detect: ../teams (or legacy ../code) relative to the node repo
+  // __dirname = <repo>/packages/node/dist  →  <repo>/../teams
   const nodeRepo = resolve(__dirname, '..', '..', '..');
-  const autoPath = join(nodeRepo, '..', 'code');
-  if (existsSync(join(autoPath, 'packages', 'server', 'src', 'index.ts'))) return autoPath;
+  for (const dir of ['teams', 'code']) {
+    const autoPath = join(nodeRepo, '..', dir);
+    if (existsSync(join(autoPath, 'packages', 'server', 'src', 'index.ts'))) return autoPath;
+  }
   return null;
 }
 

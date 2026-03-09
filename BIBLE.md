@@ -105,7 +105,7 @@ Pure cryptographic primitives. No storage, no SQLite, no MongoDB, no network.
 
 ### 3.2 @pando-teams/core
 
-**Location:** Separate repo at `pando/code/`
+**Location:** Separate repo at `pando/teams/`
 **Lines:** 60K+ TypeScript | **Status:** DONE as standalone. Network integration infra built (EnginePool, Scheduler, PandoServer). Claude Code CLI provider DONE (in pando-teams repo).
 
 The AI coding engine. Multi-provider (Anthropic, OpenAI, Google, Ollama, Claude Code CLI). Multi-agent orchestration. Persistent memory. AST-based code intelligence.
@@ -210,7 +210,7 @@ PandoTeams has a **full persistent agent system**. Do NOT build a parallel one i
 
 Claude Code is NOT a dumb model API. It is a **persistent agent runtime** with its own session management, tool system, and memory. It lives in `@pando-teams/core`, NOT in pando-node.
 
-> **Full roadmap:** `pando/code/docs/CLAUDE-CODE-AGENT-ROADMAP.md`
+> **Full roadmap:** `pando/teams/docs/CLAUDE-CODE-AGENT-ROADMAP.md`
 
 **Key files in pando-teams repo:**
 - `packages/core/src/provider/claude-code.ts` — `createClaudeCodeModel()` returns LanguageModelV3-compatible object. Persistent sessions via `--session-id`/`--resume`. Windows-safe (no shell, stdin pipe, full path resolve). System text length guard (32K limit).
