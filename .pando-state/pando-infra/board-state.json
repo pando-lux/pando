@@ -1,5 +1,5 @@
 {
-  "savedAt": "2026-03-09T20:38:03.196Z",
+  "savedAt": "2026-03-09T21:10:18.194Z",
   "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
   "tasks": [
     {
@@ -97,6 +97,14 @@
       "status": "done",
       "created_at": "2026-03-09T19:03:40.232Z",
       "progress": "Auto-generated, not real. Closed."
+    },
+    {
+      "id": "task-4cb4c233-8357-4513-8fa0-e21dc8b9360d",
+      "title": "[BUG:medium] Fix team registry createTeam for user project teams",
+      "description": "User project teams fail to register in team registry. platform-api.ts:269 calls teamRegistry.createTeam() but it silently fails (catch at line 282 swallows error). Result: GET /v1/teams/:id returns 404 for project teams, even though they appear in GET /v1/teams (which has fallback for active engines not in registry at core-api.ts:447-453).\n\nFix: Debug why createTeam() throws for user project teams. Likely the team object at lines 269-280 is missing required fields or the registry rejects duplicates. Log the error instead of swallowing it, then fix the root cause.\n\nFile: packages/node/src/api/platform-api.ts:266-283\nAlso check: the TeamRegistry class createTeam method for validation requirements.\n\nAcceptance: After fix, GET /v1/teams/<projectId> should return team details for any project created via doorman build-intent flow.",
+      "status": "pending",
+      "created_at": "2026-03-09 21:10:18",
+      "progress": ""
     },
     {
       "id": "task-078c52fc-2994-458d-9093-c78878e9f9ee",
