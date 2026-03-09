@@ -1,5 +1,5 @@
 {
-  "savedAt": "2026-03-09T20:14:58.350Z",
+  "savedAt": "2026-03-09T20:23:25.798Z",
   "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
   "tasks": [
     {
@@ -99,12 +99,28 @@
       "progress": "Auto-generated, not real. Closed."
     },
     {
+      "id": "task-078c52fc-2994-458d-9093-c78878e9f9ee",
+      "title": "[BUG:critical] Chat encryption guard blocks ALL hub messages — make non-blocking",
+      "description": "File: packages/node/src/api/platform-api.ts, line 562.\n\nBUG: Line 562 blocks ALL hub chat when encryption is enabled. The hub client auto-encrypts messages for all users. When server-side decryption fails, the guard returns an error instead of proceeding.\n\nCURRENT (line 562):\n  if (isEncrypted && plaintextForProcessing === trimmed) {\n    return error...\n  }\n\nFIX: Remove the blocking guard. The catch block at line 554-558 already falls back to raw content. Let it proceed. Change line 562-566 to just log a warning instead of returning an error:\n  if (isEncrypted && plaintextForProcessing === trimmed) {\n    console.warn(\"[chat] Decryption failed for thread \" + id + \" - proceeding with raw content\");\n  }\n\nThis unblocks hub chat for all users. The AI may receive garbled input in encrypted sessions, but thats better than blocking all chat entirely.\n\nVERIFY: After fix, hub chat at http://localhost:3003/chat should accept messages without Unable to decrypt error.",
+      "status": "pending",
+      "created_at": "2026-03-09 20:23:25",
+      "progress": ""
+    },
+    {
+      "id": "task-7d813827-3c7d-4443-8b79-b6d009d9a5c9",
+      "title": "[FEATURE:infra] BOARD_STATE_REQUEST P2P handler for team handoff",
+      "description": "File: packages/node/src/core/engine-adapter.ts. When a node claims an orphaned team, it broadcasts BOARD_STATE_REQUEST to peers. Peers that have the team should respond with BOARD_STATE_RESPONSE containing the current board tasks. The claiming node uses this to restore board state from the network (in addition to the git fallback from Task 12). Check if BOARD_STATE_REQUEST/RESPONSE handlers already exist in init-platform.ts (lines 996-1031). If so, verify they work end-to-end: 1) claiming node sends request, 2) managing node receives and responds, 3) claiming node receives and restores. If handlers exist but are incomplete, fill in the gaps. If they work, mark this task done and document it.",
+      "status": "done",
+      "created_at": "2026-03-09 20:15:37",
+      "progress": "Duplicate of task-6a12a7c3. Feature already exists: init-platform.ts handles BOARD_STATE_REQUEST (line 996) and BOARD_STATE_RESPONSE (line 1018). Engine adapter has getBoardStateSnapshot (line 1382) and restoreBoardStateFromSnapshot (line 1423). End-to-end flow: claim team ? broadcast request ? peer responds with snapshot ? claiming node restores board."
+    },
+    {
       "id": "task-6a12a7c3-bc82-4fee-a3ab-b8228759928e",
       "title": "[FEATURE:medium] Add BOARD_STATE_REQUEST P2P handler for team handoff recovery",
       "description": "File: packages/node/src/core/engine-adapter.ts\n\nCONTEXT: When a node claims an orphaned team, it needs the team's board state (pending tasks, history). Currently init-platform.ts broadcasts a BOARD_STATE_REQUEST but no handler exists to respond.\n\nWHAT TO BUILD:\n1. In engine-adapter.ts or init-kernel.ts, add a P2P request-reply handler for 'pando/board-state-request'.\n2. When received, look up the requested teamId's board-state.json from local storage (~/.pando/teams/{teamId}/board-state.json) or from the git repo (.pando-state/{teamId}/board-state.json).\n3. If found, respond with the board state JSON. If not found, respond with empty/null.\n4. The requesting node (init-platform.ts orphan handler, around line 745) already broadcasts BOARD_STATE_REQUEST and waits 5 seconds. Wire the response back so it can restore board state from a peer.\n\nREFERENCE: Look at existing P2P request-reply handlers in init-kernel.ts (search for 'pando/' handlers like pando/doorman-classify, pando/team-heartbeat). Follow the same pattern.\n\nVERIFY: After fix, if you have board state for pando-infra locally, the handler should respond when queried. Test by checking the handler is registered (look in node logs for the handler registration).",
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09 20:14:58",
-      "progress": ""
+      "progress": "Already implemented. BOARD_STATE_REQUEST handler at init-platform.ts:996-1015, BOARD_STATE_RESPONSE handler at :1018-1033, getBoardStateSnapshot at engine-adapter.ts:1382, restoreBoardStateFromSnapshot at :1423. MessageTypes in shared/types.ts:182-183. No code changes needed."
     },
     {
       "id": "task-eb530605-50ee-4c1c-a749-5e8cecb2e70e",
