@@ -8,6 +8,9 @@ declare module '@pando-code/core' {
   export const EnginePool: any;
   export const Scheduler: any;
   export const PandoCode: any;
+  export function createCheckAgentsTool(opts: any): any;
+  export function createSendMessageTool(opts: any): any;
+  export function createManageTasksTool(opts: any): any;
   const _default: any;
   export default _default;
 }
