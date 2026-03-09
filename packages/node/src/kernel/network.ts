@@ -18,6 +18,7 @@ import { toString as uint8ArrayToString, fromString as uint8ArrayFromString } fr
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
+import { setMaxListeners } from 'node:events';
 import {
   PANDO_PROTOCOL,
   type PandoMessage,
@@ -231,6 +232,7 @@ export class PandoNetwork {
         // Single address: just dial it
         try {
           const ac = new AbortController();
+          setMaxListeners(0, ac.signal);
           const timer = setTimeout(() => ac.abort(), 500); // 500ms (was 800ms) — fast fail
           await this.node!.dial(multiaddr(peer.addrs[0]), { signal: ac.signal });
           clearTimeout(timer);
@@ -242,6 +244,7 @@ export class PandoNetwork {
       }
       // Multiple addresses: race them all — first success wins
       const ac = new AbortController();
+      setMaxListeners(0, ac.signal);
       const timer = setTimeout(() => ac.abort(), 800); // 800ms (was 1.5s)
       try {
         await Promise.any(peer.addrs.map(async (addr) => {

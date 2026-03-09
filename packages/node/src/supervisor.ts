@@ -59,7 +59,7 @@ function spawnNode(): ChildProcess {
 
 function onChildExit(code: number | null, signal: string | null): void {
   child = null;
-  lastState = { online: false, peers: 0, lux: 0, services: [], localGatewayPort: null };
+  lastState = { online: false, peers: 0, lux: 0, services: [], localHubPort: null };
 
   if (stopping) return;
 
@@ -133,20 +133,22 @@ interface NodeState {
   peers: number;
   lux: number;
   services: ServiceInfo[];
-  localGatewayPort: number | null;  // detected local gateway port, null if not running
+  localHubPort: number | null;  // detected local hub port, null if not running
 }
 
-let lastState: NodeState = { online: false, peers: 0, lux: 0, services: [], localGatewayPort: null };
+let lastState: NodeState = { online: false, peers: 0, lux: 0, services: [], localHubPort: null };
 
-// Detect local gateway by reading ~/.pando/gateway.json (written by gateway on startup)
+// Detect local hub by reading ~/.pando/hub.json (written by hub on startup)
 // Format: { "port": 3002 }
-// Falls back to checking if a known gateway port file exists
-function detectLocalGateway(): number | null {
-  try {
-    const gatewayFile = join(homedir(), '.pando', 'gateway.json');
-    const data = JSON.parse(readFileSync(gatewayFile, 'utf-8'));
-    if (typeof data.port === 'number' && data.port > 0) return data.port;
-  } catch { /* file doesn't exist or invalid */ }
+// Falls back to legacy ~/.pando/gateway.json
+function detectLocalHub(): number | null {
+  for (const filename of ['hub.json', 'gateway.json']) {
+    try {
+      const file = join(homedir(), '.pando', filename);
+      const data = JSON.parse(readFileSync(file, 'utf-8'));
+      if (typeof data.port === 'number' && data.port > 0) return data.port;
+    } catch { /* file doesn't exist or invalid */ }
+  }
   return null;
 }
 
@@ -159,17 +161,17 @@ async function pollState(): Promise<void> {
     const status = JSON.parse(statusRaw);
     const svcData = JSON.parse(servicesRaw);
 
-    const gwPort = detectLocalGateway();
+    const gwPort = detectLocalHub();
 
     lastState = {
       online: true,
       peers: status.peers ?? 0,
       lux: Math.floor(status.balance ?? 0),
       services: Array.isArray(svcData.services) ? svcData.services : [],
-      localGatewayPort: gwPort,
+      localHubPort: gwPort,
     };
   } catch {
-    lastState = { ...lastState, online: false, peers: 0, lux: 0, services: [], localGatewayPort: null };
+    lastState = { ...lastState, online: false, peers: 0, lux: 0, services: [], localHubPort: null };
   }
 
   refreshTray();
@@ -213,8 +215,8 @@ const IDX = {
   SEP1:          1,
   SERVICE_SLOT:  2,
   SEP2:          3,
-  GATEWAY_LOCAL: 4,
-  GATEWAY_WEB:   5,
+  HUB_LOCAL: 4,
+  HUB_WEB:   5,
   SEP3:          6,
   RESTART:       7,
   STOP:          8,
@@ -232,8 +234,8 @@ function buildInitialMenu() {
     /*  1 SEP1          */  makeItem(''),
     /*  2 SERVICE       */  makeItem('', { hidden: true }),
     /*  3 SEP2          */  makeItem('', { hidden: true }),
-    /*  4 GATEWAY_LOCAL */  makeItem('Gateway (local)', { enabled: true, hidden: true }),
-    /*  5 GATEWAY_WEB   */  makeItem('Gateway (web)', { enabled: true, hidden: true }),
+    /*  4 HUB_LOCAL */  makeItem('Hub (local)', { enabled: true, hidden: true }),
+    /*  5 HUB_WEB   */  makeItem('Hub (web)', { enabled: true, hidden: true }),
     /*  6 SEP3          */  makeItem(''),
     /*  7 RESTART       */  makeItem('Restart Node', { enabled: true, hidden: true }),
     /*  8 STOP          */  makeItem('Stop Node', { enabled: true, hidden: true }),
@@ -268,15 +270,15 @@ function refreshTray(): void {
     svcText = `${dot} ${label} v${svc.version}`;
   }
 
-  const hasLocalGw = nodeReady && lastState.localGatewayPort !== null;
-  const showGateways = nodeReady && (hasLocalGw || true); // always show web gateway when online
+  const hasLocalHub = nodeReady && lastState.localHubPort !== null;
+  const showHub = nodeReady && (hasLocalHub || true); // always show web hub when online
 
   try {
     updateItem(IDX.STATUS,        statusText, { enabled: false });
     updateItem(IDX.SERVICE_SLOT,  svcText,    { enabled: hasSvc && !!svc?.uiUrl, hidden: !hasSvc });
-    updateItem(IDX.SEP2,          '',         { hidden: !hasSvc && !showGateways });
-    updateItem(IDX.GATEWAY_LOCAL, `Gateway (localhost:${lastState.localGatewayPort})`, { enabled: true, hidden: !hasLocalGw });
-    updateItem(IDX.GATEWAY_WEB,   'Gateway (web)', { enabled: true, hidden: !nodeReady });
+    updateItem(IDX.SEP2,          '',         { hidden: !hasSvc && !showHub });
+    updateItem(IDX.HUB_LOCAL, `Hub (localhost:${lastState.localHubPort})`, { enabled: true, hidden: !hasLocalHub });
+    updateItem(IDX.HUB_WEB,   'Hub (web)', { enabled: true, hidden: !nodeReady });
     updateItem(IDX.RESTART,       'Restart Node', { enabled: true, hidden: !nodeRunning });
     updateItem(IDX.STOP,          'Stop Node',    { enabled: true, hidden: !nodeRunning });
     updateItem(IDX.START,         'Start Node',   { enabled: true, hidden: nodeRunning });
@@ -335,10 +337,10 @@ async function initTray(
         const svc = lastState.services[0];
         if (svc?.uiUrl) openUrl(svc.uiUrl);
       }
-      else if (seq === IDX.GATEWAY_LOCAL) {
-        if (lastState.localGatewayPort) openUrl(`http://localhost:${lastState.localGatewayPort}`);
+      else if (seq === IDX.HUB_LOCAL) {
+        if (lastState.localHubPort) openUrl(`http://localhost:${lastState.localHubPort}`);
       }
-      else if (seq === IDX.GATEWAY_WEB) {
+      else if (seq === IDX.HUB_WEB) {
         openUrl('https://gateway-one-mu.vercel.app');
       }
       else if (seq === IDX.START) {
