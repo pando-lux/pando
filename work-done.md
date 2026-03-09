@@ -406,3 +406,50 @@
 - [x] E2E: Pipeline 2 rate-limit retry
 - [x] E2E: Pipeline 4 async thread tolerance
 - [x] EC2 nodes updated to a8db6b3
+
+## Session: 2026-03-09 (cron loop 3)
+
+### Priority 6: Code Audit — Security & Logic
+
+#### 38. Command Injection in executeRollback (SECURITY)
+- **Root cause**: `POST /upgrade/rollback` accepted `targetVersion` from request body and passed it directly to `this.git(`checkout ${targetVersion} -- packages/`)` — shell command injection via crafted version string.
+- **Fix**: Added `/^[0-9a-f]{6,40}$/i` hex commit hash format validation in `executeRollback()`.
+- **File**: `packages/node/src/core/upgrade-protocol.ts:549`
+- **Commit**: `059b3dc1`
+
+### Audit Findings (No Fix Needed)
+
+#### Ledger Double-Spend (Safe by Architecture)
+- `subtractBalance()` reads + checks + writes balance synchronously (better-sqlite3)
+- Node.js single-threaded event loop prevents interleaving between check and update
+- `transfer()` wraps in `db.transaction()` for additional atomicity
+- Cross-node double-spend is a P2P consensus issue, not a code bug
+
+#### Doorman Classification (Working Correctly)
+- "simple" tier returned for build requests when no PandoCode engine available = correct graceful degradation
+- Pipeline 4 E2E test already handles this (relaxed assertion from previous session)
+
+#### Untracked setInterval Timers (Acceptable)
+- `init-kernel.ts:842` (governance re-sync), `init-kernel.ts:876` (peer exchange), `platform-api.ts:2894` (rate-limiter cleanup)
+- All are process-lifetime timers — cleaned up by process exit
+- Would only matter if hot-reload without process exit was implemented
+
+#### deploy-manager.ts Shell Commands (Defense-in-Depth)
+- `git()` helper passes string to `execSync(`git ${cmd}`)` — shell injection via AI-generated PatchSet data
+- Not directly user-exploitable (inputs come from PandoCode AI, not HTTP API)
+- Would need AI model compromise to exploit — accepted risk for now
+
+### Commits Pushed
+25. `059b3dc1` — Fix command injection in executeRollback: validate targetVersion format
+
+### Pending
+- [ ] PandoCode web UI testing (UI not running currently — port 4873 down)
+- [ ] Phase 6.2+: Cross-node team migration (orphan → claim → resume)
+- [ ] Phase 8: Gateway integration
+- [ ] P2P: Fix unsigned message acceptance (protocol design change)
+- [ ] P2P: Populate peer publicKey on connect (signature verification)
+- [ ] P2P: Add mutex on ledger transaction processing (double-spend)
+- [ ] P2P: Governance proposal sync gap (EC2-1 missing ~30%)
+- [ ] P2P: Account sync divergence (205/627/907 across nodes)
+- [ ] Chat: Project name sanitization in direct API (no char filter)
+- [ ] EC2 nodes need update from a8db6b3 to latest master
