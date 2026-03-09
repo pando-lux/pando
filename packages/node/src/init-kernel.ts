@@ -590,21 +590,62 @@ export async function initKernel(node: any): Promise<void> {
 
       // Peer exchange: share our peer list so new nodes can form a full mesh.
       // Delayed 50ms to let the connection settle before sending.
+      // Also immediately notify ALL existing peers about the new peer so they
+      // don't have to wait for the next periodic exchange (was up to 10s delay).
       setTimeout(async () => {
         try {
           if (!node.network) return;
-          const peerAddrs = (await node.network.getConnectedPeerAddresses())
-            .filter((p: any) => p.peerId !== peerId); // don't send them their own address
-          if (peerAddrs.length === 0) return;
-          await node.network.sendMessage(peerId, {
-            type: MessageType.PEER_EXCHANGE,
-            from: node.getIdentity()!.peerId,
-            timestamp: Date.now(),
-            payload: { peers: peerAddrs },
-          });
-          console.log(`[peer-exchange] Shared ${peerAddrs.length} peer(s) with ${peerId.slice(0, 12)}`);
+          const myPeerId = node.getIdentity()!.peerId;
+          const peerAddrs = await node.network.getConnectedPeerAddresses();
+
+          // Send existing peers to the new node
+          const forNewPeer = peerAddrs.filter((p: any) => p.peerId !== peerId);
+          if (forNewPeer.length > 0) {
+            await node.network.sendMessage(peerId, {
+              type: MessageType.PEER_EXCHANGE,
+              from: myPeerId,
+              timestamp: Date.now(),
+              payload: { peers: forNewPeer },
+            });
+            console.log(`[peer-exchange] Shared ${forNewPeer.length} peer(s) with new peer ${peerId.slice(0, 12)}`);
+          }
+
+          // Notify all existing peers about the updated peer list (including the new peer)
+          const existingPeers = node.network.getPeers().filter((p: any) => p.peerId !== peerId);
+          if (existingPeers.length > 0 && peerAddrs.length > 0) {
+            for (const peer of existingPeers) {
+              const toShare = peerAddrs.filter((p: any) => p.peerId !== peer.peerId);
+              if (toShare.length === 0) continue;
+              node.network.sendMessage(peer.peerId, {
+                type: MessageType.PEER_EXCHANGE,
+                from: myPeerId,
+                timestamp: Date.now(),
+                payload: { peers: toShare },
+              }).catch(() => {});
+            }
+            console.log(`[peer-exchange] Broadcast new peer to ${existingPeers.length} existing peer(s)`);
+          }
         } catch {}
       }, 50);
+
+      // Second peer exchange at 2s: GossipSub mesh may not be ready at 50ms,
+      // so re-share after mesh formation to catch peers the first round missed.
+      setTimeout(async () => {
+        try {
+          if (!node.network) return;
+          const myPeerId = node.getIdentity()!.peerId;
+          const peerAddrs = await node.network.getConnectedPeerAddresses();
+          const forNewPeer = peerAddrs.filter((p: any) => p.peerId !== peerId);
+          if (forNewPeer.length > 0) {
+            await node.network.sendMessage(peerId, {
+              type: MessageType.PEER_EXCHANGE,
+              from: myPeerId,
+              timestamp: Date.now(),
+              payload: { peers: forNewPeer },
+            });
+          }
+        } catch {}
+      }, 2_000);
 
       // Phase 69: Auto-wrap removed — credentials in MongoDB, not per-node.
 
@@ -831,7 +872,7 @@ export async function initKernel(node: any): Promise<void> {
         }, delay);
       }
 
-      // Periodic peer exchange: every 10s, share peer lists to discover new nodes
+      // Periodic peer exchange: every 3s, share peer lists to discover new nodes
       setInterval(async () => {
         if (!node.network) return;
         const peers = node.network.getPeers();
@@ -849,7 +890,7 @@ export async function initKernel(node: any): Promise<void> {
             });
           } catch {}
         }
-      }, 10_000);
+      }, 3_000);
 
       // Log if this is a post-upgrade restart
       const lastUpgradeFile = join(dataDir, 'last-upgrade.json');

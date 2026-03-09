@@ -830,7 +830,7 @@ Be friendly and helpful. Keep answers short.`
               if (!libp2p) return;
               if (peer.addrs.length === 1) {
                 const ac = new AbortController();
-                const timer = setTimeout(() => ac.abort(), 5_000);
+                const timer = setTimeout(() => ac.abort(), 8_000);
                 await libp2p.dial(ma(peer.addrs[0]), { signal: ac.signal });
                 clearTimeout(timer);
                 console.log(`[peer-exchange] Connected to ${peer.peerId.slice(0, 12)} via exchange from ${from.slice(0, 12)}`);
@@ -838,7 +838,7 @@ Be friendly and helpful. Keep answers short.`
               }
               // Multiple addresses: race them — first success wins
               const ac = new AbortController();
-              const timer = setTimeout(() => ac.abort(), 3_000);
+              const timer = setTimeout(() => ac.abort(), 8_000);
               try {
                 await Promise.any(peer.addrs.map(async (addr: string) => {
                   await libp2p!.dial(ma(addr), { signal: ac.signal });
