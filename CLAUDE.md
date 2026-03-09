@@ -2,15 +2,33 @@
 
 > **Architecture reference: `BIBLE.md`** at repo root. Read it for architecture, component details, technical debt, and gotchas. This file is operational instructions only.
 
-> **If you are the CEO agent (Claude Code on Windows dev machine):** Read `BIBLE.md` + `infra/DEV-MODE.md` on session start. Full CEO-level technical authority. Deploy through governance only (`/v1/infra/commit-and-propose`).
+> **If you are the CEO agent (Claude Code on Windows dev machine):** Read `BIBLE.md` + `docs/SERVICE-ARCHITECTURE-ROADMAP.md` on session start. Full CEO-level technical authority. Deploy through governance only (`/v1/infra/commit-and-propose`).
 
 > **If you are a Pando AI worker:** Your task is in your startup prompt, not this file.
 
 ## What This Is
 
-Pando is a decentralized, AI-managed network. The currency is **Lux**. Every participant runs the same node. The node IS the network. Four independent packages (@pando/identity, @pando-code/core, @pando/tests, @pando/ledger) composed by @pando/node.
+Pando is a decentralized, AI-managed network. The currency is **Lux**. Every participant runs the same node. The node IS the network. Five independent packages (@pando/shared, @pando/identity, @pando/ledger, @pando/node, @pando/gateway) with optional service plugins.
 
 **The brain/body split:** @pando-code/core = brain (intelligence, memory, tools, agents, board, communication). @pando/node = body (P2P, identity, economy, governance). engine-adapter.ts = nervous system. **CRITICAL: Never rebuild PandoCode features in pando-node. See BIBLE.md Section 3.2.**
+
+## Service Architecture
+
+Pando uses a **modular service plugin system**. Services are npm packages that implement the `PandoService` interface from `@pando/shared`.
+
+**How it works:**
+- `ServiceLoader` (in `packages/node/src/core/service-loader.ts`) auto-discovers installed service packages at startup
+- If `@pando-code/core` is installed → full node (AI engine, agents, teams, board)
+- If not installed → light node (P2P relay, ledger, identity only)
+- No config needed — presence of the npm package is the config
+
+**Key interfaces** (in `@pando/shared/types.ts`):
+- `PandoService` — `id`, `version`, `capabilities`, `start(ctx)`, `stop()`, `healthy()`
+- `ServiceContext` — what the node provides: `peerId`, `dataDir`, `apiPort`, `registerRoutes()`, `getCapability()`
+
+**Diagnostic endpoint:** `GET /services` — shows engine adapter status, ServiceLoader state, @pando-code/core installation
+
+**For future services:** Implement `PandoService`, export `createService()`, add package name to `SERVICE_PACKAGES` in service-loader.ts. See `docs/SERVICE-ARCHITECTURE-ROADMAP.md`.
 
 ## Package Structure
 
@@ -43,6 +61,12 @@ packages/node/src/
 ```
 
 **Import boundary rule:** kernel → only kernel + @pando/*. core → kernel + @pando/*. platform → core + kernel + @pando/*. Never upward.
+
+**Key service files:**
+- `core/service-loader.ts` — ServiceLoader, auto-discovers PandoService packages
+- `core/engine-adapter.ts` — EngineAdapter + `createEngineService()` wrapper
+- `core/team-registry.ts` — TeamRegistry (SQLite + P2P gossip sync)
+- `init-platform.ts` — wires ServiceLoader, TeamRegistry, engine bootstrap
 
 ## Build and Run
 
