@@ -333,9 +333,45 @@
 - Full 3-node mesh restored (all nodes see 2 peers)
 - Cleaned up 10 orphaned E2E test apps
 
+#### 32. Concurrent Tick Overlap (LOGIC BUG)
+- **Root cause**: Lead agent tick handler (15min interval) had no guard against overlap. If a tick took >15min, the next tick would fire concurrently, sending two messages to the same engine.
+- **Fix**: Added `tickRunning` boolean guard — skip tick if previous still running.
+- **File**: `engine-adapter.ts:1595-1616`
+
+#### 33. stopTeam Zombie Engines (MEMORY LEAK)
+- **Root cause**: `stopTeam()` cleared intervals and unregistered scheduler ticks but never destroyed engine processes from pool.
+- **Fix**: Call `destroyEngine()` for each agent in the team before deleting from activeTeams.
+- **File**: `engine-adapter.ts:1654-1674`
+
+#### 34. Chat Message Length Unbounded (INPUT VALIDATION)
+- **Root cause**: Main `POST /chat/message` endpoint had no message length limit.
+- **Fix**: Added 10000 char limit.
+- **File**: `platform-api.ts:111`
+
+#### 35. Governance Comment/Message Length Unbounded (INPUT VALIDATION)
+- **Root cause**: `POST /governance/comment` and `POST /governance/message` had no type check or length limit on content.
+- **Fix**: Type check + 5000 char limit on both.
+- **File**: `kernel-api.ts:906,961`
+
+#### 36. Transfer Amount Accepts Infinity (SECURITY)
+- **Root cause**: `typeof amount === 'number' && amount > 0` passes for `Infinity`. Could allow infinite Lux transfer.
+- **Fix**: Added `isFinite(amount)` check on transfer + payment hold endpoints.
+- **Files**: `kernel-api.ts:418`, `platform-api.ts:1675`
+
+#### 37. persistMessage Race Condition (LOGIC BUG — previously deferred)
+- **Root cause**: Concurrent `addMessage()` calls for the same thread both read the same messages array, append, and the last write overwrites the first's message.
+- **Fix**: Per-thread promise queue — writes serialize per threadId. Lock entries cleaned up after chain drains.
+- **File**: `platform/thread-store.ts:163-193`
+
 ### Commits Pushed
 17. `a8db6b33` — E2E test reliability: Pipeline 2 rate-limit retry + Pipeline 4 async thread
 18. `5b94cd77` — Fix memory leak: destroy engine processes on agent stop and app delete
+19. `919b92a0` — Tick overlap guard + stopTeam engine cleanup
+20. `5389b851` — Chat message length limit (10000 chars)
+21. `0471397e` — Governance comment/message length limits
+22. `31064d03` — Transfer Infinity bypass + payment hold amount validation
+23. `e715dd6c` — BIBLE.md + work-done.md update
+24. `827ec880` — Fix persistMessage race condition with per-thread write queue
 
 ### Pending
 - [ ] PandoCode web UI testing (UI not running currently — port 4873 down)
@@ -346,7 +382,6 @@
 - [ ] P2P: Add mutex on ledger transaction processing (double-spend)
 - [ ] P2P: Governance proposal sync gap (EC2-1 missing ~30%)
 - [ ] P2P: Account sync divergence (205/627/907 across nodes)
-- [ ] Chat: Fix persistMessage race condition (needs architectural change)
 - [ ] Chat: Project name sanitization in direct API (no char filter)
 - [x] Fix: add model field to agent list endpoint
 - [x] Fix: add include_done query param to board endpoint
