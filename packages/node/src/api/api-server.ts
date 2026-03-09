@@ -784,10 +784,16 @@ Be friendly and helpful. Keep answers short.`
               if (parsed.intent === 'report' && parsed.description) {
                 return { intent: 'report', description: parsed.description, targetProject: parsed.targetProject || 'pando-infra' };
               }
+              // AI returned valid JSON but with incomplete/unexpected fields — treat as question
+              console.warn(`[doorman] AI returned unrecognized classification: ${JSON.stringify(parsed).slice(0, 200)}`);
+              if (parsed.response) return { intent: 'question', response: parsed.response };
+              // Fall through to keyword matching
             } catch {
               return { intent: 'question', response: content };
             }
           }
+        } else {
+          console.warn(`[doorman] OpenAI classification HTTP error: ${classifyRes.status} ${classifyRes.statusText}`);
         }
       } catch (err: any) {
         console.log(`[doorman] Local OpenAI classification failed: ${err.message}`);
