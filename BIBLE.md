@@ -957,9 +957,9 @@ No tick loop. No orchestrator. No message bus. The engine runs when it has somet
 
 | Actor | How it works | Triggered by |
 |---|---|---|
-| **Council Lead** | Long-running engine. Reads inbox + board snapshot, acts on issues + user requests, spawns builders, submits through governance. | Scheduler tick (every 15 min) |
-| **Observer** | Long-running engine. Read-only. Monitors network health, peer status. Sends issues to council via send_message. | Scheduler tick (every 60 min) |
-| **QA** | Long-running engine. Runs health checks, API validation. Sends findings to council via send_message. | Scheduler tick (every 120 min) |
+| **Team Lead** | Long-running engine. Reads inbox + board snapshot, acts on issues + user requests, spawns builders, deploys through governance (`/v1/infra/commit-and-propose`). | Scheduler tick (every 15 min) |
+| **Observer** | Long-running engine. Read-only. Monitors network health, peer status. Sends issues to lead via send_message. | Scheduler tick (every 60 min) |
+| **QA** | Long-running engine. Runs health checks, API validation. Sends findings to lead via send_message. | Scheduler tick (every 120 min) |
 
 ### 5.8 App Lifecycle (AppManager) — Unified Pipeline
 
@@ -1549,7 +1549,7 @@ The following legacy code is being removed:
 - `isCouncilActive()`, `ensureCouncilStarted()`, `sendToCouncilAgent()` — replaced by `isTeamActive(teamId)`, `getActiveTeamIds()`, `triggerTeamAgentBackground(teamId, agentId, message)`
 - `getCouncilBoard()`, `getCouncilInbox()`, `sendCouncilMessage()` — replaced by `getTeamBoard(teamId)`, `getTeamInbox(teamId, agentId)`, `sendTeamMessage(teamId, fromAgentId, toAgentId, message)`, `addTeamBoardTask(teamId, title, description?)`, `updateTeamBoardTask(teamId, taskId, updates)`
 - `/v1/council/*` API endpoints — replaced by `/v1/teams/*`
-- `config.enableCouncil` flag — still checked in init-platform.ts (line ~668), controls whether teams auto-bootstrap on startup
+- `config.enableCouncil` flag — renamed to `config.enableTeams`
 - `--council` / `--no-council` CLI flags — removed
 
 See `docs/TEAM-ARCHITECTURE.md` Section 17 for the complete legacy code audit (120+ references across 11 files).

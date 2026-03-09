@@ -660,10 +660,9 @@ Be friendly and helpful. Keep answers short.`
     // ── Team Registry + Bootstrap ──────────────────────────────────────
     // Initialize the TeamRegistry (SQLite + GossipSub sync) and auto-bootstrap
     // the pando-infra team if the EngineAdapter is available.
-    // #9: Check enableCouncil config flag — skip team bootstrap if disabled
-    // (legacy config name; controls whether pando-infra team auto-starts)
-    if (node.config.enableCouncil === false) {
-      console.log('[team-registry] Team bootstrap disabled (enableCouncil=false) — skipping');
+    // Skip team bootstrap if explicitly disabled
+    if (node.config.enableTeams === false) {
+      console.log('[team-registry] Team bootstrap disabled (enableTeams=false) — skipping');
     } else
     try {
       const teamsDbPath = join(dataDir, 'teams', 'teams.db');
