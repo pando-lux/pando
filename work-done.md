@@ -492,6 +492,65 @@
 27. `241166df` — Update BIBLE.md: Phase 2 complete, Phase 8 started
 28. `fe5f6c62` — Update work-done.md
 29. `4d19a31e` — Input validation: resource price/project budget/tier/visibility
+30. `67ad50d8` — Content/app input validation: title/description length, SAFE_ID on app registration
+31. `ab08c8d1` — Fix P2P Infinity/negative-fee exploits in transaction sync (bugs 44-46)
+32. `293f2554` — Validate commitHash format at governance proposal API entry
+33. `69ca98ca` — Fix shell injection in deploy-manager + Infinity bypasses in 3 endpoints (bugs 47-50)
+
+## Session: 2026-03-09 (cron loop 4)
+
+### Priority 6 Continued: P2P + Financial Audit
+
+#### 44. P2P tx.amount Infinity bypass (CRITICAL)
+- **Root cause**: `JSON.parse('{"amount":1e999}')` yields `Infinity` in JavaScript. Both `handleIncomingTransaction` and `handleSyncResponse` in sync.ts checked `tx.amount <= 0` which passes for Infinity. A malicious peer could corrupt all nodes' ledger balances to Infinity.
+- **Fix**: Added `!isFinite(tx.amount)` to both validation checks in sync.ts.
+- **Commit**: `ab08c8d1`
+
+#### 45. P2P negative tx.fee exploit (CRITICAL)
+- **Root cause**: No validation on `tx.fee` from P2P messages. A malicious peer could send a self-signed tx with `{amount:1, fee:-1000000}`. This caused `forceSubtractBalance(from, amount + fee)` = `forceSubtractBalance(from, -999999)` which ADDS 999999 to the sender's balance. Free Lux from nothing.
+- **Fix**: Fee sanitization — reject non-number, NaN, Infinity, or negative fees (clamp to 0).
+- **Commit**: `ab08c8d1`
+
+#### 46. Governance riskScore NaN bypass (LOW)
+- **Root cause**: `review.riskScore < 1 || review.riskScore > 5` — NaN comparisons always false, so NaN passes both checks. Invalid risk scores could be stored.
+- **Fix**: Explicit `typeof` + `isFinite()` check before range comparison.
+- **Commit**: `ab08c8d1`
+
+#### 47. Shell injection in deploy-manager.ts (CRITICAL)
+- **Root cause**: `git()` helper used `execSync(`git ${args}`)` with string interpolation. PatchSet file paths from external input flowed directly into shell commands. Malicious file path like `"test" && rm -rf /` would execute arbitrary commands.
+- **Fix**: Migrated `git()` from `execSync(string)` to `execFileSync('git', args[])` — no shell, no interpolation. Updated all 11 call sites.
+- **Commit**: `69ca98ca`
+
+#### 48. Marketplace budget Infinity bypass
+- **Root cause**: `GET /resources/marketplace/find` used `parseFloat(budgetParam)` with only `!isNaN()` check — Infinity passed through and could match all nodes ignoring actual costs.
+- **Fix**: Added `isFinite()` check.
+- **Commit**: `69ca98ca`
+
+#### 49. Project transfer salePrice Infinity
+- **Root cause**: `POST /projects/:id/transfer` accepted `salePrice` without type/isFinite validation. Infinity would flow to `paymentGate.holdPayment()`, attempting to deduct Infinity from buyer balance.
+- **Fix**: Added full type + isFinite + non-negative validation before the hold.
+- **Commit**: `69ca98ca`
+
+#### 50. TUI transfer Infinity bypass
+- **Root cause**: `/transfer` command used `parseFloat()` with only `isNaN()` check — typing "Infinity" at the TUI prompt would bypass validation.
+- **Fix**: Added `isFinite()` check.
+- **Commit**: `69ca98ca`
+
+#### Audit: Areas confirmed safe
+- **payment-gate.ts**: `holdPayment()` naturally rejects Infinity via `subtractBalance()` which checks `current < amount` (always true for Infinity → returns false). Safe.
+- **kernel-api.ts /transfer**: Already has `isFinite(amount)` check. Safe.
+- **project-store.ts**: Uses SQLite parameterized queries. Project names are AI-generated (from doorman), not direct user input. Safe.
+- **governance handlers**: Proposals/comments sanitized via `sanitizeText()`. Signature verification on proposals. Safe.
+- **sync.ts cleanup()**: Called every 60s from init-kernel.ts. Memory growth handled. Safe.
+
+### E2E Tests
+- 9/9 pass consistently across all changes
+
+### Commits
+30. `67ad50d8` — Content/app input validation
+31. `ab08c8d1` — P2P Infinity/negative-fee exploit fixes
+32. `293f2554` — commitHash validation at governance proposal API
+33. `69ca98ca` — deploy-manager shell injection + Infinity bypasses
 
 ### Pending
 - [ ] PandoCode web UI testing (UI not running currently — port 4873 down)
@@ -502,5 +561,7 @@
 - [ ] P2P: Add mutex on ledger transaction processing (double-spend)
 - [ ] P2P: Governance proposal sync gap (EC2-1 missing ~30%)
 - [ ] P2P: Account sync divergence (205/627/907 across nodes)
-- [ ] Chat: Project name sanitization in direct API (no char filter)
+- [x] Chat: Project name sanitization — confirmed safe (parameterized SQL, AI-generated names)
+- [x] deploy-manager.ts shell injection — FIXED (migrated to execFileSync)
 - [x] EC2 nodes updated to 241166d (both on latest master, full mesh)
+- [ ] EC2 nodes need update to latest (69ca98ca)
