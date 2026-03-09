@@ -1527,6 +1527,12 @@ export async function registerPlatformRoutes(
       if (!validTypes.includes(type)) {
         return reply.code(400).send({ error: `type must be one of: ${validTypes.join(', ')}` });
       }
+      if (typeof title !== 'string' || title.length > 200) {
+        return reply.code(400).send({ error: 'Title must be a string (max 200 chars)' });
+      }
+      if (description !== undefined && (typeof description !== 'string' || description.length > 5000)) {
+        return reply.code(400).send({ error: 'Description must be a string (max 5000 chars)' });
+      }
 
       // Dual-auth: use JWT user's peerId if available, fall back to node identity
       const userPeerId = await deps.verifyUserJwt(request);

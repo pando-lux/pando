@@ -40,6 +40,12 @@ export async function registerAppRoutes(
     if (!body.id || !body.name) {
       return reply.code(400).send({ error: 'Missing required fields: id, name' });
     }
+    if (!SAFE_ID.test(body.id) || body.id.length > 100) {
+      return reply.code(400).send({ error: 'App id must be alphanumeric/hyphens/underscores (max 100 chars)' });
+    }
+    if (typeof body.name !== 'string' || body.name.length > 200) {
+      return reply.code(400).send({ error: 'App name must be a string (max 200 chars)' });
+    }
 
     try {
       const app = await appManager.register(body);
