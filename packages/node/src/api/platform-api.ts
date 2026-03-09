@@ -261,6 +261,27 @@ export async function registerPlatformRoutes(
           const wsDir = joinPath(getHome(), '.pando', 'projects', newProjectId);
           await projectStore.updateProject(newProjectId, { workspaceDir: wsDir });
 
+          // Register project as a team so it appears in /v1/teams and gets
+          // proper board-task injection, handoff, etc.
+          const teamRegistry = node.getTeamRegistry?.();
+          if (teamRegistry && newProjectId) {
+            try {
+              teamRegistry.createTeam({
+                id: newProjectId,
+                displayName: projName || 'User Project',
+                managingNode: node.getIdentity()?.peerId || '',
+                lastHeartbeat: Date.now(),
+                status: 'active',
+                repos: [],
+                agentCount: 1,
+                governanceRequired: false,
+                createdBy: node.getIdentity()?.peerId || '',
+                claimedAt: Date.now(),
+              });
+              console.log(`[router] Registered team for project ${newProjectId}`);
+            } catch (e) { /* team may already exist */ }
+          }
+
           console.log(`[router] Created project ${newProjectId}: ${projName} (tier ${deployTier}, builder: ${builder.isLocal ? 'local' : builder.peerId})`);
 
           // Run preflight (auto-generates API key, assigns MongoDB)
@@ -289,11 +310,31 @@ export async function registerPlatformRoutes(
 
       // Route to best builder
       if (builder.isLocal && newProjectId) {
-        // Local PandoTeams — async engine call (don't block HTTP response)
+        // Local PandoTeams — route through team registry (don't block HTTP response)
         (async () => {
           try {
-            const result = await sendToEngine(trimmed, newProjectId);
-            const engineReply = result.response || 'Build complete.';
+            const adapter = node.getEngineAdapter();
+            // Start team if not already running
+            if (adapter && !adapter.isTeamActive?.(newProjectId)) {
+              const projLabel = (classification.description || trimmed).slice(0, 60).replace(/[^a-zA-Z0-9 -]/g, '').trim() || 'Project';
+              await adapter.startTeam(newProjectId, [{
+                id: 'lead',
+                role: 'lead',
+                displayName: `${projLabel} Lead`,
+                prompt: '',
+                promptTemplate: 'lead-universal',
+                model: 'claude-code',
+                tickIntervalMs: 15 * 60_000,
+              }]);
+            }
+            // Send message through team agent
+            const chunks: string[] = [];
+            if (adapter) {
+              for await (const event of adapter.sendToTeamAgent(newProjectId, 'lead', trimmed)) {
+                if (event.type === 'stream:chunk' && event.content) chunks.push(event.content);
+              }
+            }
+            const engineReply = chunks.join('') || 'Build complete.';
             if (threadStore && threadId) {
               await threadStore.addMessage(threadId, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
             }
