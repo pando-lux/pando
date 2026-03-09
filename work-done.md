@@ -285,6 +285,33 @@
 - 3 trigger endpoints + council message endpoint accepted arbitrary-length messages
 - **Fix**: Trigger messages capped at 5000 chars, council messages at 2000 chars
 
+#### 30. Doorman Classification Silent Fallback (LOGIC BUG)
+- **Root cause**: When OpenAI returned valid JSON with unexpected fields (e.g., missing `description`), doorman silently fell through to keyword matching without logging. HTTP errors (401/429/500) also not logged.
+- **Fix**: Log warning for malformed AI responses, attempt `response` field extraction, log HTTP errors explicitly.
+- **File**: `packages/node/src/api/api-server.ts:771-795`
+
+### Cross-Node Sync Test Results
+| Test | Result |
+|------|--------|
+| Peer connectivity (full mesh) | PASS — all 3 nodes see 2 peers |
+| Team metadata sync | PASS — pando-infra identical on all nodes |
+| Ledger: supply/txs/fees | PASS — identical on all nodes |
+| Governance proposal sync | PARTIAL — EC2-1 missing ~30% (353 vs 506) |
+| Ledger: account count | FAIL — diverged (205/627/907) |
+
+**Root causes**: Governance gap likely from EC2-1 being offline during some proposals. Account divergence is an architectural issue — accounts created locally aren't all synced. Both EC2 nodes need code update from 8ac3dd74 → current master.
+
+### Logic Audit Results (7 findings, 1 fixed)
+- **CRITICAL**: Doorman classification silent fallback (FIXED ↑)
+- **HIGH**: OpenAI HTTP error not logged (FIXED ↑)
+- **MEDIUM**: Thread TOCTOU race (accepted risk — ?.operator handles safely)
+- **MEDIUM**: Project name sanitization inconsistent between chat + direct API (deferred)
+- **MEDIUM**: Decryption failure check lenient (accepted risk — error message shown to user)
+- **LOW-MEDIUM**: P2P marketplace dedup gap (design issue, not current bug)
+
+### Commits Pushed
+16. `80337d2b` — Fix doorman classification silent fallback
+
 ### Pending
 - [ ] PandoCode web UI testing (UI not running currently — port 4873 down)
 - [ ] Phase 6.2+: Cross-node team migration (orphan → claim → resume)
@@ -292,7 +319,10 @@
 - [ ] P2P: Fix unsigned message acceptance (protocol design change)
 - [ ] P2P: Populate peer publicKey on connect (signature verification)
 - [ ] P2P: Add mutex on ledger transaction processing (double-spend)
+- [ ] P2P: Governance proposal sync gap (EC2-1 missing ~30%)
+- [ ] P2P: Account sync divergence (205/627/907 across nodes)
 - [ ] Chat: Fix persistMessage race condition (needs architectural change)
+- [ ] Chat: Project name sanitization in direct API (no char filter)
 - [x] Fix: add model field to agent list endpoint
 - [x] Fix: add include_done query param to board endpoint
 - [x] Fix: updateTeamBoardTask nonexistent task returns 404
