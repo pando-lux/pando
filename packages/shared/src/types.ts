@@ -1867,3 +1867,50 @@ export const DEFAULT_AGENT_CAPABILITIES: AgentCapabilityDeclaration = {
   internet: true,
   p2pMessaging: true,
 };
+
+// ─── Service Architecture ────────────────────────────────────────────
+// Modular service interface — any npm package can plug into pando-node.
+// See docs/SERVICE-ARCHITECTURE-ROADMAP.md for the full design.
+
+/**
+ * The contract all pluggable services implement.
+ * Install the npm package → service auto-loads. Uninstall → skipped.
+ */
+export interface PandoService {
+  /** Unique service identifier (e.g. 'pando-code', 'pando-exchange') */
+  readonly id: string;
+  /** Semver version string */
+  readonly version: string;
+  /** What this service provides to the network */
+  readonly capabilities: string[];
+
+  /** Initialize the service with node context */
+  start(ctx: ServiceContext): Promise<void>;
+  /** Graceful shutdown */
+  stop(): Promise<void>;
+  /** Health check — returns true if service is operational */
+  healthy(): boolean;
+}
+
+/**
+ * Context provided by pando-node to each service at startup.
+ * Services use this to access node infrastructure without tight coupling.
+ */
+export interface ServiceContext {
+  /** This node's libp2p peer ID */
+  peerId: string;
+  /** Persistent storage root (e.g. ~/.pando) */
+  dataDir: string;
+  /** HTTP API port (e.g. 4000) */
+  apiPort: number;
+  /** Bearer token for authenticated API calls */
+  apiToken?: string;
+  /** Mount HTTP routes under a prefix (e.g. '/v1/engine') */
+  registerRoutes(prefix: string, router: any): void;
+  /** Query capabilities from other loaded services */
+  getCapability(name: string): any;
+  /** Access the node's resource registry (for contributed API keys) */
+  resourceRegistry?: any;
+  /** Project metadata resolver */
+  projectResolver?: (projectId: string) => Promise<{ repoUrl?: string; name?: string } | null>;
+}

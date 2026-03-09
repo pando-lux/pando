@@ -29,6 +29,7 @@ import { Guardrails } from './kernel/guardrails.js';
 import { RequestReplyManager } from './core/request-reply.js';
 import { ReputationManager } from './kernel/reputation.js';
 import { EngineAdapter } from './core/engine-adapter.js';
+import { ServiceLoader } from './core/service-loader.js';
 import { EmissionWitness, TOPIC_EMISSIONS } from './kernel/emission-witness.js';
 import { SecurityMonitor } from './kernel/security-monitor.js';
 import { ResourceProofChallenger } from './platform/resource-proof.js';
@@ -109,6 +110,7 @@ export class PandoNode {
   public httpPeerClient: import('./core/http-peer-client.js').HttpPeerClient | null = null;
   private reputation: ReputationManager | null = null;
   private engineAdapter: EngineAdapter | null = null;
+  private serviceLoader: ServiceLoader | null = null;
   private emissionWitness: EmissionWitness | null = null;
   private securityMonitor: SecurityMonitor | null = null;
   private resourceProofChallenger: ResourceProofChallenger | null = null;
@@ -1117,6 +1119,10 @@ export class PandoNode {
     return this.engineAdapter;
   }
 
+  getServiceLoader(): ServiceLoader | null {
+    return this.serviceLoader;
+  }
+
   getThreadStore(): ThreadStore | null {
     return this.threadStore;
   }
@@ -1552,6 +1558,11 @@ export class PandoNode {
     if ((this as any)._teamRegistry) {
       (this as any)._teamRegistry.stop();
       (this as any)._teamRegistry = null;
+    }
+    // Shutdown ServiceLoader (stops all loaded services)
+    if ((this as any)._serviceLoader) {
+      await (this as any)._serviceLoader.stopAll();
+      (this as any)._serviceLoader = null;
     }
     // Shutdown EngineAdapter
     await this.engineAdapter?.shutdown();

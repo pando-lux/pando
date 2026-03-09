@@ -58,5 +58,8 @@ RESULT.md
 *snapshot*.md
 project-state.md
 
+# Secrets directory (credential templates, never commit actual secrets)
+secrets/
+
 # Local infrastructure config (node IPs, SSH info — dev only)
 infra/

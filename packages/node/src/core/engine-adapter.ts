@@ -21,7 +21,7 @@ import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { ResourceRegistry } from '../platform/resource-registry.js';
 import { STREAM_EVENT_VERSION, LUX_PER_USD, DAILY_EMISSION_CAP } from '@pando/shared';
-import type { StreamEvent } from '@pando/shared';
+import type { StreamEvent, PandoService, ServiceContext } from '@pando/shared';
 
 // Two Laws Content Filter — imported from shared constants (defense-in-depth at storage level)
 import { HARM_PATTERNS, SHUTDOWN_PATTERNS } from '../constants.js';
@@ -2424,4 +2424,39 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     }
   }
 
+}
+
+// ─── PandoService adapter ────────────────────────────────────────────
+// Wraps EngineAdapter as a PandoService for the ServiceLoader pattern.
+// This is the bridge between the new service architecture and the existing engine.
+
+/**
+ * Create a PandoService that wraps EngineAdapter.
+ * Called by ServiceLoader when @pando-code/core is installed,
+ * or directly by init-platform.ts during the transition period.
+ */
+export function createEngineService(adapter: EngineAdapter): PandoService {
+  return {
+    id: 'pando-code',
+    version: '0.2.0',
+    capabilities: ['ai-engine', 'agents', 'board', 'scheduler', 'governance-review'],
+
+    async start(ctx: ServiceContext): Promise<void> {
+      await adapter.start({
+        apiPort: ctx.apiPort,
+        apiToken: ctx.apiToken,
+        dataDir: ctx.dataDir,
+        resourceRegistry: ctx.resourceRegistry ?? null,
+        projectResolver: ctx.projectResolver,
+      });
+    },
+
+    async stop(): Promise<void> {
+      await adapter.shutdown();
+    },
+
+    healthy(): boolean {
+      return adapter.available;
+    },
+  };
 }

@@ -433,6 +433,8 @@ Reads from @pando/node HTTP API. No direct database access.
 | **VersionProtocol** | `core/version-protocol.ts` | DONE | Version negotiation between nodes (~222 lines) |
 | **MongoBackend** | `core/mongo-backend.ts` | DONE | MongoDB storage backend implementation (~239 lines) |
 | **P2PStorageBackend** | `core/p2p-storage-backend.ts` | DONE | P2P storage proxy for non-MongoDB nodes (~171 lines) |
+| **ServiceLoader** | `core/service-loader.ts` | DONE | Discovers and loads installed PandoService npm packages. Auto-skip if not installed. See Section 5.11. |
+| **TeamRegistry** | `core/team-registry.ts` | DONE | SQLite + GossipSub team sync. Orphan detection, heartbeat, auto-claim. See Section 5.10. |
 
 ### 4.3 Platform Layer (non-brain services)
 
@@ -1567,7 +1569,77 @@ See `docs/TEAM-ARCHITECTURE.md` Section 17 for the complete legacy code audit (1
 | Team spam (fake teams flooding registry) | Team creation costs 1 Lux. P2P only accepts heartbeats from `msg.from === team.managing_node`. |
 | Board data poisoning | Board stays local (not synced via P2P). HTTP requests are Ed25519-signed. |
 
-### 5.11 Pando Login (Agent Identity)
+### 5.11 Service Architecture — Modular Plugin System
+
+Pando-node is designed as a **lightweight, modular platform**. The core node handles P2P, ledger, identity, and governance. Optional services (like AI agents) plug in via npm packages.
+
+#### The Service Interface
+
+```typescript
+// @pando/shared/types.ts — the contract all services implement
+interface PandoService {
+  readonly id: string;           // 'pando-code', 'pando-exchange'
+  readonly version: string;
+  readonly capabilities: string[];
+  start(ctx: ServiceContext): Promise<void>;
+  stop(): Promise<void>;
+  healthy(): boolean;
+}
+
+interface ServiceContext {
+  peerId: string;                // this node's identity
+  dataDir: string;               // persistent storage root
+  apiPort: number;               // HTTP API port
+  apiToken?: string;             // auth token
+  registerRoutes(prefix: string, router: any): void;
+  getCapability(name: string): any;
+  resourceRegistry?: any;        // contributed API keys
+  projectResolver?: (id: string) => Promise<{ repoUrl?: string; name?: string } | null>;
+}
+```
+
+#### ServiceLoader (packages/node/src/core/service-loader.ts)
+
+Auto-discovers installed npm packages and loads them as services:
+
+```
+SERVICE_PACKAGES = ['@pando-code/core', /* future: '@pando/exchange', '@pando/storage' */]
+
+for each package:
+  try import(pkg) → call createService() → svc.start(ctx) → register
+  catch → "not installed — skipping" (expected for light nodes)
+```
+
+**No config files.** If the npm package is installed, the service loads. If not, it's skipped.
+
+#### How Operators Choose What to Run
+
+```bash
+# Light node (relay + validate only):
+npm install && node cli.js              # default — no services
+
+# AI node (adds PandoCode):
+npm install @pando-code/core && node cli.js  # auto-detects, loads AI engine
+
+# Future: DEX node:
+npm install @pando/exchange && node cli.js
+```
+
+#### Integration with EngineAdapter
+
+`createEngineService()` in engine-adapter.ts wraps the existing EngineAdapter as a PandoService. During the transition period, EngineAdapter starts directly via `startEngine()`. Eventually, ServiceLoader.loadAll() will handle everything.
+
+#### Unified Pipeline
+
+All projects (governance and non-governance, public and private) flow through the same pipeline:
+- Same TeamRegistry, board system, agent templates, cost tracking
+- `governanceRequired: true` → code changes go through voting
+- `governanceRequired: false` → commits deploy directly
+- Private projects skip P2P broadcast but use identical team/board infrastructure
+
+See `docs/SERVICE-ARCHITECTURE-ROADMAP.md` for the full migration plan.
+
+### 5.12 Pando Login (Agent Identity)
 
 ```
 Human (Ed25519 keypair in ~/.pando/identity.json)
@@ -1581,7 +1653,7 @@ Agent (own Ed25519 keypair, own peerId = wallet)
 
 **Trust chain:** `verifySignedActionFull(action, humanPublicKey)` verifies: action signature (agent key) → certificate signature (human key) → expiry check. All offline.
 
-### 5.12 Credential Security (IMMUTABLE LAW)
+### 5.13 Credential Security (IMMUTABLE LAW)
 
 **Two credential models. Both are valid. Keys NEVER travel over the network.**
 
@@ -1607,7 +1679,7 @@ Used by Path A (simple AI) and git operations (via credential resolution). Contr
 3. `ResourceRegistry` stores metadata (type + status, NEVER the value)
 4. At use time: EC2 node decrypts locally → makes API call → returns result
 
-#### 5.12.1 Credential Resolution (IMPLEMENTED — Phase 1)
+#### 5.13.1 Credential Resolution (IMPLEMENTED — Phase 1)
 
 All git operations resolve credentials dynamically via `ResourceRegistry.resolveGitCredential(repoUrl, userId?)`. No more hardcoded PATs in git remote URLs.
 
@@ -1869,8 +1941,9 @@ EOF
 
 ```bash
 # Set credentials (contributed resource, not in env/config files)
-export AWS_ACCESS_KEY_ID=AKIAX3DNHH2QISP7C4FM
-export AWS_SECRET_ACCESS_KEY='...'  # see credential store
+# Keys rotated — use `/contribute aws <key>` to store securely
+export AWS_ACCESS_KEY_ID='<from credential store>'
+export AWS_SECRET_ACCESS_KEY='<from credential store>'
 export AWS_DEFAULT_REGION=us-east-1
 
 # List instances

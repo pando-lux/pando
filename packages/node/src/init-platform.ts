@@ -18,6 +18,7 @@ import { LocalEnvironment } from './kernel/local-environment.js';
 import { ApiServer } from './api/api-server.js';
 import { GitOps } from './core/git-ops.js';
 import { TeamRegistry } from './core/team-registry.js';
+import { ServiceLoader } from './core/service-loader.js';
 import { PANDO_INFRA_AGENTS } from './core/engine-adapter.js';
 import type { CredentialStore } from './core/credential-store.js';
 import { join } from 'node:path';
@@ -655,6 +656,48 @@ Be friendly and helpful. Keep answers short.`
       await node.startEngine();
     } else {
       console.log(`[node] Mode '${node.config.nodeMode}' — engine skipped.`);
+    }
+
+    // ── Service Loader ─────────────────────────────────────────────────
+    // Initialize the modular service loader. Currently loads @pando-code/core
+    // if installed as an npm package (future: @pando/exchange, @pando/storage).
+    // This runs AFTER startEngine() during the transition period — eventually
+    // ServiceLoader will replace startEngine() entirely.
+    try {
+      let token: string | undefined;
+      try {
+        const tokenPath = join(dataDir, 'api-token');
+        if ((await import('node:fs')).existsSync(tokenPath)) {
+          token = readFileSync(tokenPath, 'utf-8').trim();
+        }
+      } catch { /* no token */ }
+
+      const serviceLoader = new ServiceLoader({
+        peerId: node.identity?.peerId || '',
+        dataDir,
+        apiPort: node.config.apiPort,
+        apiToken: token,
+        registerRoutes: (prefix: string, router: any) => {
+          // Future: wire to Fastify server for service-specific routes
+          console.log(`[services] Route registration requested: ${prefix}`);
+        },
+        getCapability: (name: string) => serviceLoader.getCapability(name),
+        resourceRegistry: node.getResourceRegistry?.() ?? undefined,
+        projectResolver: async (projectId: string) => {
+          const ps = node.getProjectStore?.();
+          if (!ps) return null;
+          const project = await ps.getProjectAsync(projectId);
+          if (!project) return null;
+          return { repoUrl: project.repoUrl || project.githubRepo || undefined, name: project.name };
+        },
+      });
+      (node as any)._serviceLoader = serviceLoader;
+      // Don't call loadAll() yet — engine-adapter handles pando-code loading directly for now.
+      // ServiceLoader.loadAll() will be used when future services are added or when
+      // @pando-code/core ships a createService() export.
+      console.log('[services] ServiceLoader initialized.');
+    } catch (err: any) {
+      console.warn(`[services] ServiceLoader init failed (non-fatal): ${err.message}`);
     }
 
     // ── Team Registry + Bootstrap ──────────────────────────────────────
