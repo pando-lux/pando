@@ -2197,6 +2197,20 @@ export async function registerPlatformRoutes(
         repoUrl?: string;
       };
 
+      // Validate update fields
+      if (body.name !== undefined && (typeof body.name !== 'string' || body.name.length > 200)) {
+        return reply.code(400).send({ error: 'Name must be a string (max 200 chars)' });
+      }
+      if (body.description !== undefined && (typeof body.description !== 'string' || body.description.length > 2000)) {
+        return reply.code(400).send({ error: 'Description must be a string (max 2000 chars)' });
+      }
+      if (body.budgetLimit !== undefined && (typeof body.budgetLimit !== 'number' || !isFinite(body.budgetLimit) || body.budgetLimit < 0)) {
+        return reply.code(400).send({ error: 'Budget limit must be a non-negative finite number' });
+      }
+      if (body.visibility !== undefined && !['public', 'private', 'listed', 'unlisted'].includes(body.visibility)) {
+        return reply.code(400).send({ error: 'Visibility must be one of: public, private, listed, unlisted' });
+      }
+
       const updates: any = {};
       if (body.name !== undefined) updates.name = body.name;
       if (body.description !== undefined) updates.description = body.description;
