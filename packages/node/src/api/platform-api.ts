@@ -1672,6 +1672,9 @@ export async function registerPlatformRoutes(
       if (!peerId || !taskId || amount === undefined) {
         return reply.code(400).send({ error: '"peerId", "taskId", and "amount" are required' });
       }
+      if (typeof amount !== 'number' || !isFinite(amount) || amount <= 0) {
+        return reply.code(400).send({ error: '"amount" must be a positive finite number' });
+      }
       const hold = gate.holdPayment(peerId, taskId, amount);
       if (!hold) {
         return reply.code(402).send({ error: 'Insufficient balance', code: 'INSUFFICIENT_BALANCE' });

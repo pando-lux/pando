@@ -415,8 +415,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       if (!to || typeof to !== 'string') {
         return reply.code(400).send({ error: 'Missing or invalid "to" peer ID', code: 'INVALID_RECIPIENT' });
       }
-      if (!amount || typeof amount !== 'number' || amount <= 0) {
-        return reply.code(400).send({ error: 'Missing or invalid "amount" — must be a positive number', code: 'INVALID_AMOUNT' });
+      if (!amount || typeof amount !== 'number' || !isFinite(amount) || amount <= 0) {
+        return reply.code(400).send({ error: 'Missing or invalid "amount" — must be a positive finite number', code: 'INVALID_AMOUNT' });
       }
       // Resolve sender: use authenticated user's peerId if available, fall back to node identity
       const userPeerId = await deps.verifyUserJwt(request);
