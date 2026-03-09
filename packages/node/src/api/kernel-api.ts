@@ -887,6 +887,10 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       if (!trimmedTitle) return reply.code(400).send({ error: 'Title cannot be empty' });
       if (trimmedTitle.length > 200) return reply.code(400).send({ error: 'Title must be 200 characters or fewer' });
       if (trimmedDesc.length > 2000) return reply.code(400).send({ error: 'Description must be 2000 characters or fewer' });
+      // Defense-in-depth: validate commitHash format at API entry (execution paths also validate)
+      if (commitHash && !/^[0-9a-f]{6,40}$/i.test(commitHash)) {
+        return reply.code(400).send({ error: 'commitHash must be a valid hex git hash (6-40 chars)' });
+      }
       try {
         // If commitHash provided, auto-set category to 'upgrade' and build upgradePayload
         const effectiveCategory = commitHash ? 'upgrade' as any : category;
