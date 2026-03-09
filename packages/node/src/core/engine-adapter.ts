@@ -616,8 +616,11 @@ LIST TEMPLATES: curl -s http://127.0.0.1:${ctx.apiPort}/v1/templates
 
 RULES:
 - Every code change MUST go through COMMIT & DEPLOY (the /infra/commit-and-propose endpoint). Never git push manually.
-- Be brief. Act, don't narrate. Complete quickly.
-- Close or update tasks when done. Do NOT leave tasks perpetually pending.`;
+- Start each task by saying: "Processing: [task title]" so activity logs show what you're working on.
+- After code changes, log: "Build: [pass/fail]. Files: [list]. Lines changed: [N]."
+- After significant code changes, update BIBLE.md to reflect the new reality (e.g., new API params, removed features, changed behavior). Future sessions depend on accurate documentation.
+- Close or update tasks when done. Do NOT leave tasks perpetually pending.
+- Be concise but visible — brief output is fine, silent work is not.`;
 }
 
 function makeUniversalLeadPrompt(ctx: PromptContext & { teamId: string; repos?: string[] }): string {
