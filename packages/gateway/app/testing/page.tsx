@@ -120,7 +120,7 @@ function describeToTag(name: string): string {
   if (clean.includes("api")) return "api";
   if (clean.includes("p2p") || clean.includes("network") || clean.includes("topology")) return "network";
   if (clean.includes("ledger") || clean.includes("economy") || clean.includes("emission") || clean.includes("payment")) return "economy";
-  if (clean.includes("agent") || clean.includes("council")) return "agent";
+  if (clean.includes("agent") || clean.includes("council") || clean.includes("infra")) return "agent";
   if (clean.includes("identity") || clean.includes("login")) return "identity";
   if (clean.includes("governance")) return "governance";
   if (clean.includes("content") || clean.includes("template")) return "content";

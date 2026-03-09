@@ -2,9 +2,9 @@ import { NextResponse } from 'next/server';
 import { fetchFromNode, getApiToken } from '@/lib/node-connection';
 
 /**
- * GET /api/council/dashboard
+ * GET /api/council/dashboard (legacy route, proxies to pando-infra team)
  * Proxies to GET /v1/teams/pando-infra/status on the Pando node.
- * Returns team health/status for the pando-infra team.
+ * Returns team health/status for the pando-infra infrastructure team.
  */
 export async function GET() {
   try {

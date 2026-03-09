@@ -32,7 +32,7 @@ interface Commit {
   message: string;
 }
 
-interface CouncilInfo {
+interface InfraInfo {
   orchestratorId: string;
   status: string;
   role: string;
@@ -43,7 +43,7 @@ interface CouncilInfo {
 }
 
 interface DashboardData {
-  council: CouncilInfo;
+  council: InfraInfo;
   workers: Worker[];
   recentCommits: Commit[];
   observer?: { status: string; lastTickAt: string } | null;
@@ -195,7 +195,7 @@ export default function DashboardPage() {
     else errs.status = "Status unreachable";
 
     if (fetches[2].status === "fulfilled") results.council = fetches[2].value;
-    else errs.council = "Council unreachable";
+    else errs.council = "Infrastructure unreachable";
 
     if (fetches[3].status === "fulfilled") {
       const val = fetches[3].value;
@@ -353,10 +353,10 @@ export default function DashboardPage() {
 
             {/* Section 2: Orchestrator Cards Row */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-              {/* CEO (Council) */}
+              {/* CEO (Infrastructure Lead) */}
               <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-4 hover:bg-neutral-200 dark:hover:bg-neutral-800/50 transition-colors">
                 <div className="flex items-center justify-between mb-3">
-                  <h3 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">CEO (Council)</h3>
+                  <h3 className="text-sm font-semibold text-neutral-700 dark:text-neutral-200">CEO (Infrastructure)</h3>
                   {data.council?.council?.status && (
                     <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium border ${statusBadgeColor(data.council.council.status)}`}>
                       {data.council.council.status}

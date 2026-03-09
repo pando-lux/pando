@@ -975,8 +975,9 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
     });
 
     // ── Legacy /council/* routes (gateway compatibility) ──────────────────────
-    // The gateway UI still calls /v1/council/* endpoints. These routes delegate
-    // to the pando-infra team via the teams system. Remove once gateway is migrated.
+    // The gateway UI still calls /api/council/* which proxies to these endpoints.
+    // All routes delegate to the pando-infra team via the teams system.
+    // TODO: Remove once gateway routes are migrated to /v1/teams/pando-infra/*.
 
     fastify.get('/council/status', async () => {
       const adapter = node.getEngineAdapter();
@@ -990,7 +991,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
     });
 
     fastify.post('/council/request', async (request: any, reply: any) => {
-      // Legacy gateway route — delegates to /teams/pando-infra/request
+      // Legacy route — delegates to /v1/teams/pando-infra/request
       const body = request.body as any;
       const message = body?.message?.trim();
       if (!message || message.length < 5) return reply.code(400).send({ error: 'Message required (min 5 chars)' });

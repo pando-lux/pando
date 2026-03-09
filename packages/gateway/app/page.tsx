@@ -141,7 +141,7 @@ export default function LandingPage() {
             {
               step: "02",
               title: "AI agents build it",
-              desc: "A council of AI agents plans, codes, tests, and deploys — autonomously. You watch it happen in real time.",
+              desc: "A team of AI agents plans, codes, tests, and deploys — autonomously. You watch it happen in real time.",
             },
             {
               step: "03",

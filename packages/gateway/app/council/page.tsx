@@ -5,25 +5,25 @@ import NavBar from "@/components/NavBar";
 
 /* -- Types matching actual backend responses -------------------- */
 
-/** GET /v1/council/status response shape */
-interface CouncilStatus {
+/** GET /v1/teams/pando-infra/status response shape */
+interface InfraStatus {
   active: boolean;
-  engines: CouncilEngine[];
-  schedules: CouncilSchedule[];
+  engines: InfraEngine[];
+  schedules: InfraSchedule[];
 }
 
-interface CouncilEngine {
+interface InfraEngine {
   id: string;
   role: string;
   status: string;
 }
 
-interface CouncilSchedule {
+interface InfraSchedule {
   name: string;
   interval: number;
 }
 
-/** GET /v1/council/board response shape */
+/** GET /v1/teams/pando-infra/board response shape */
 interface BoardTask {
   id: string;
   title: string;
@@ -34,7 +34,7 @@ interface BoardTask {
   description?: string;
 }
 
-/** POST /v1/council/trigger/:agent response shape */
+/** POST /v1/teams/pando-infra/trigger response shape */
 interface TriggerResult {
   agent: string;
   toolCalls?: { tool: string; args?: any; success?: boolean; output?: string }[];
@@ -102,7 +102,7 @@ function engineRoleLabel(id: string): string {
   switch (id) {
     case "observer": return "Observer";
     case "qa": return "QA";
-    case "council": return "Council Lead";
+    case "council": return "Infrastructure Lead";
     default: return id;
   }
 }
@@ -111,7 +111,7 @@ function engineRoleDescription(id: string): string {
   switch (id) {
     case "observer": return "Monitors codebase and reports findings";
     case "qa": return "Runs health checks and tests";
-    case "council": return "Reviews board, coordinates agents";
+    case "council": return "Reviews board, coordinates infrastructure agents";
     default: return "";
   }
 }
@@ -119,8 +119,8 @@ function engineRoleDescription(id: string): string {
 /* -- Page ------------------------------------------------------- */
 
 export default function CouncilPage() {
-  /* Council status state */
-  const [status, setStatus] = useState<CouncilStatus | null>(null);
+  /* Infrastructure status state */
+  const [status, setStatus] = useState<InfraStatus | null>(null);
   const [statusLoading, setStatusLoading] = useState(true);
   const [statusError, setStatusError] = useState<string | null>(null);
 
@@ -251,10 +251,10 @@ export default function CouncilPage() {
         {/* Header */}
         <div>
           <h1 className="text-2xl font-bold text-neutral-900 dark:text-neutral-100">
-            Council Dashboard
+            Infrastructure Dashboard
           </h1>
           <p className="text-sm text-neutral-500 dark:text-neutral-400 mt-1">
-            Real-time view of the autonomous AI council. Auto-refreshes every 30s.
+            Real-time view of the pando-infra team. Auto-refreshes every 30s.
           </p>
         </div>
 
@@ -262,7 +262,7 @@ export default function CouncilPage() {
         {statusLoading && (
           <div className="text-center py-16 text-neutral-500">
             <div className="inline-block w-6 h-6 border-2 border-neutral-300 dark:border-neutral-600 border-t-neutral-600 dark:border-t-neutral-300 rounded-full animate-spin mb-3" />
-            <p className="text-sm">Loading council data...</p>
+            <p className="text-sm">Loading infrastructure data...</p>
           </div>
         )}
 
@@ -281,7 +281,7 @@ export default function CouncilPage() {
             {/* Status Summary Cards */}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl p-3 text-center hover:bg-neutral-200 dark:hover:bg-neutral-800/50 transition-colors">
-                <p className="text-xs text-neutral-500 mb-1">Council</p>
+                <p className="text-xs text-neutral-500 mb-1">Infrastructure</p>
                 <div className="flex items-center justify-center gap-2">
                   <span
                     className={`w-2 h-2 rounded-full ${
@@ -316,11 +316,11 @@ export default function CouncilPage() {
               </div>
             </div>
 
-            {/* Council Engines */}
+            {/* Infrastructure Agents */}
             <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-200 dark:border-neutral-800 rounded-xl overflow-hidden">
               <div className="px-4 py-3 border-b border-neutral-200 dark:border-neutral-800 flex items-center justify-between">
                 <h2 className="text-sm font-semibold text-neutral-600 dark:text-neutral-300">
-                  Council Agents
+                  Infrastructure Agents
                   <span className="ml-2 text-xs font-normal text-neutral-500">
                     ({activeEngines.length})
                   </span>
@@ -335,7 +335,7 @@ export default function CouncilPage() {
               {activeEngines.length === 0 ? (
                 <div className="px-4 py-8 text-center">
                   <p className="text-sm text-neutral-500">
-                    No council engines running.
+                    No infrastructure agents running.
                   </p>
                 </div>
               ) : (

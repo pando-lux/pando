@@ -102,13 +102,13 @@ The `'reviewing'` status is queried in `content_reports` table and accepted as v
 
 ---
 
-## 9. enableCouncil Config Flag is Ignored
+## 9. ~~enableCouncil Config Flag is Ignored~~ RESOLVED
 
-`NodeConfig` defines `enableCouncil?: boolean` with comment "Enable Council/Observer/QA agents (default: false, auto-detected)", but no code reads or acts on this flag.
+**RESOLVED**: The `enableCouncil` flag was renamed to `enableTeams` as part of the council-to-teams migration. Teams are now enabled automatically when an EngineAdapter is available. The flag controls whether the pando-infra team (formerly "council") auto-starts on boot.
 
-- **Location**: `node/packages/shared/src/types.ts:158`
-- **Impact**: Users can set `enableCouncil: true` in config but it has zero effect. Council agents are not conditionally enabled based on this flag.
-- **Severity**: MEDIUM
+- **Location**: `node/packages/shared/src/types.ts`
+- **Original issue**: Users could set `enableCouncil: true` in config but it had zero effect.
+- **Resolution**: Renamed to `enableTeams`. Teams system replaces the legacy council concept.
 
 ---
 
@@ -256,7 +256,7 @@ Tasks can be assigned to agents via `assignTask()`, but the assigned agent doesn
 | 6 | grantedTo never enforced on decrypt | node | HIGH |
 | 7 | **Governance proposals pass but never execute** | node | **CRITICAL** |
 | 8 | Content report 'reviewing' unreachable | node | MEDIUM |
-| 9 | enableCouncil config flag ignored | node | MEDIUM |
+| 9 | ~~enableCouncil config flag ignored~~ RESOLVED | node | -- |
 | 10 | DeployPipeline events unhandled | node | LOW |
 | 11 | Proposal 'revision_requested' dead-end | node | LOW |
 | 12 | findBestBuilder() no scoring | node | MEDIUM |
@@ -535,7 +535,7 @@ Content reports have an `aiSafetyScore` field initialized to -1. ContentSafetyRe
 | 6 | grantedTo never enforced on decrypt | node | HIGH |
 | 7 | Governance proposals pass but never execute | node | CRITICAL |
 | 8 | Content report 'reviewing' unreachable | node | MEDIUM |
-| 9 | enableCouncil config flag ignored | node | MEDIUM |
+| 9 | ~~enableCouncil config flag ignored~~ RESOLVED | node | -- |
 | 10 | DeployPipeline events unhandled | node | LOW |
 | 11 | Proposal 'revision_requested' dead-end | node | LOW |
 | 12 | findBestBuilder() no scoring | node | MEDIUM |
@@ -899,7 +899,7 @@ No per-IP connection limits on SSE endpoints. Attacker can open unlimited SSE co
 | 6 | grantedTo never enforced on decrypt | node | HIGH |
 | 7 | Governance proposals pass but never execute | node | CRITICAL |
 | 8 | Content report 'reviewing' unreachable | node | MEDIUM |
-| 9 | enableCouncil config flag ignored | node | MEDIUM |
+| 9 | ~~enableCouncil config flag ignored~~ RESOLVED | node | -- |
 | 10 | DeployPipeline events unhandled | node | LOW |
 | 11 | Proposal 'revision_requested' dead-end | node | LOW |
 | 12 | findBestBuilder() no scoring | node | MEDIUM |

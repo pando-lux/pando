@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { fetchFromNode, getApiToken } from "@/lib/node-connection";
 
 /**
- * POST /api/council/trigger
+ * POST /api/council/trigger (legacy route, proxies to pando-infra team)
  * Proxies to POST /v1/teams/pando-infra/trigger on the Pando node.
  * Body: { agent?: string, message?: string }
  * Returns: { status, message }

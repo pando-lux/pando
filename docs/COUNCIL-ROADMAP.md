@@ -1,8 +1,9 @@
-# Team Architecture Roadmap
+# Team Architecture Roadmap (formerly "Council Roadmap")
 
 > **STATUS: PHASES 1-3, 4-5, 6.1, 7 COMPLETE** — Phases 6.2+, 8 remain TODO.
 > Updated: 2026-03-09
 > Master plan for the team/agent/template system.
+> Note: "council" references below refer to the legacy name for the pando-infra team.
 
 ---
 
@@ -15,13 +16,13 @@ Every team starts with **1 lead agent**. The lead:
 4. Manages agent lifecycle (start, stop, reassign)
 5. Is the brain — workers are hands
 
-**pando-infra (council) is a special case**: jumpstarted with 3 pre-seeded agents
+**pando-infra** is a special case: jumpstarted with 3 pre-seeded agents
 (lead + observer + qa) because we know exactly what infrastructure management needs.
 Same pipeline, just pre-populated. All other teams start with 1 lead.
 
 ```
 Default team:     [Lead] → lead assesses → spawns worker/tester/observer as needed
-Council team:     [Lead + Observer + QA] → pre-seeded, same pipeline, jumpstarted once
+pando-infra:      [Lead + Observer + QA] → pre-seeded, same pipeline, jumpstarted once
 Future user team: [Lead] → user picks template → lead fills in the gaps
 ```
 
@@ -75,7 +76,7 @@ Fix 7 stale items:
 1. Observer/QA model: `gemini-2.5-flash` → `claude-code`
 2. Tick intervals: 30min → 60min (observer), 120min (QA)
 3. Method names: `getCouncilBoard()` → `getTeamBoard()`
-4. `enableCouncil` flag: not removed, still checked in init-platform.ts
+4. `enableCouncil` flag: renamed to `enableTeams`, checked in init-platform.ts
 5. Lead vs non-lead tick asymmetry: document custom interval + inbox injection
 6. Board snapshot format: document the `getBoardSnapshot()` output
 7. Team inbox key structure: `msg:{agentId}:{uuid}` in state table
@@ -231,7 +232,7 @@ Rules:
 ✓ Lead agent spawns a 'worker' for a simple task → worker executes → lead gets result
 ✓ Lead agent spawns a 'builder' for a code fix → builder edits file → build passes
 ✓ Lead agent stops a worker after task completion
-✓ Council lead (pando-infra) still works with pre-seeded 3 agents
+✓ pando-infra lead still works with pre-seeded 3 agents
 ✓ Template catalog accessible via GET /v1/templates
 ```
 
@@ -244,7 +245,7 @@ Rules:
 ~/.pando/teams/templates/
   worker.json        → built-in (shipped with code, can be overridden)
   builder.json       → built-in
-  council.json       → pre-seeded 3-agent team template
+  pando-infra.json   → pre-seeded 3-agent infrastructure team template
   my-custom.json     → user-created
 ```
 
@@ -439,7 +440,7 @@ DELETE /v1/templates/:id               → delete custom template (can't delete 
 ### Section 5.10: Team Architecture
 - All agents → `claude-code` model
 - Correct tick intervals (15m / 60m / 120m)
-- Lead-first design: default = 1 lead, council = jumpstarted 3
+- Lead-first design: default = 1 lead, pando-infra = jumpstarted 3
 - Template system overview
 - Lead agent's `manage_team` tool
 - Lead vs non-lead tick asymmetry
