@@ -1,5 +1,5 @@
 {
-  "savedAt": "2026-03-09T20:23:25.798Z",
+  "savedAt": "2026-03-09T20:38:03.196Z",
   "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
   "tasks": [
     {
@@ -102,9 +102,9 @@
       "id": "task-078c52fc-2994-458d-9093-c78878e9f9ee",
       "title": "[BUG:critical] Chat encryption guard blocks ALL hub messages — make non-blocking",
       "description": "File: packages/node/src/api/platform-api.ts, line 562.\n\nBUG: Line 562 blocks ALL hub chat when encryption is enabled. The hub client auto-encrypts messages for all users. When server-side decryption fails, the guard returns an error instead of proceeding.\n\nCURRENT (line 562):\n  if (isEncrypted && plaintextForProcessing === trimmed) {\n    return error...\n  }\n\nFIX: Remove the blocking guard. The catch block at line 554-558 already falls back to raw content. Let it proceed. Change line 562-566 to just log a warning instead of returning an error:\n  if (isEncrypted && plaintextForProcessing === trimmed) {\n    console.warn(\"[chat] Decryption failed for thread \" + id + \" - proceeding with raw content\");\n  }\n\nThis unblocks hub chat for all users. The AI may receive garbled input in encrypted sessions, but thats better than blocking all chat entirely.\n\nVERIFY: After fix, hub chat at http://localhost:3003/chat should accept messages without Unable to decrypt error.",
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09 20:23:25",
-      "progress": ""
+      "progress": "CLOSED by lead: root cause was hub node pool routing, not the encryption guard. Guard is correct. Fix applied in hub routing layer (primary routing)."
     },
     {
       "id": "task-7d813827-3c7d-4443-8b79-b6d009d9a5c9",
