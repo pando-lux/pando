@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-09 (Memory leak fix: engine cleanup on agent stop/team stop/app delete. Tick overlap guard. Transfer Infinity bypass fix. Phase 6.2 resilience. Input validation hardening. 9/9 E2E pass.). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-09 (Phase 8 gateway: team API routes + Network page teams section. executeRollback injection fix. Phase 2 team migration complete. 9/9 E2E pass.). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -2080,9 +2080,11 @@ When `commitHash` is present, the API automatically:
 
 **Phase 1 (PROVEN 2026-03-07 with legacy council code):** pando-infra team detects issues, creates board tasks, spawns builders, fixes code, proposes via governance. Full autonomous loop — fix → commit → push → governance → all nodes upgrade. Verified end-to-end across 3 nodes (1 Windows + 2 EC2).
 
-**Phase 2 (IN PROGRESS):** Migrate from legacy hardcoded council to team architecture. Same proven loop, now generic for any team. TeamRegistry + `/v1/teams/*` endpoints + team handoff + git-backed board recovery.
+**Phase 2 (COMPLETE 2026-03-09):** Migrated from legacy hardcoded council to team architecture. TeamRegistry + `/v1/teams/*` endpoints + team handoff + git-backed board recovery. All legacy council routes delegate to `/teams/pando-infra`.
 
-**Phase 3 (future):** User project teams run autonomously alongside pando-infra. Multiple teams on multiple nodes. Teams hand off between nodes. Users submit requests from gateway and teams handle everything. Human role shifts from operator to advisor.
+**Phase 3 (IN PROGRESS):** User project teams run autonomously alongside pando-infra. Multiple teams on multiple nodes. Teams hand off between nodes. Users submit requests from gateway and teams handle everything.
+
+**Phase 8 Gateway (STARTED 2026-03-09):** Gateway team integration. `node-connection.ts` has 9 team methods (getTeams, getTeam, getTeamBoard, addTeamBoardTask, getTeamAgents, getTeamStatus, getTeamCost, submitTeamRequest, getTemplates). 8 API routes at `/api/teams/*` and `/api/templates`. Network page shows Teams section with expandable cards (agents + board tasks). Remaining: team creation from gateway, model selection, aggregate dashboard across nodes.
 
 ### Files Involved
 
@@ -2095,6 +2097,9 @@ When `commitHash` is present, the API automatically:
 | `kernel/governance.ts:1856-1890` | Auto-approve logic, validateUpgradeProposal() |
 | `api/kernel-api.ts` | POST /v1/governance/propose (commitHash → upgradePayload) |
 | `api/core-api.ts` | /v1/teams/* endpoints (board proxy, team CRUD) |
+| `gateway/lib/node-connection.ts` | **Phase 8.** 9 team methods: getTeams through getTemplates |
+| `gateway/app/api/teams/*` | **Phase 8.** 8 API routes proxying to pando-node team endpoints |
+| `gateway/app/network/page.tsx` | **Phase 8.** Teams section with expandable cards, agents, board tasks |
 | `supervisor.ts` | Watches exit codes, respawns on 75 |
 | `cli.ts` | Crash guard, circuit breaker |
 | `docs/TEAM-ARCHITECTURE.md` | Full implementation reference (schema, flows, legacy audit, E2E tests) |
