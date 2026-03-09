@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-09 (Phase 8 gateway: team API routes + Network page teams section. executeRollback injection fix. Phase 2 team migration complete. 9/9 E2E pass.). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-09 (Security audit: P2P Infinity/negative-fee exploit fixes, deploy-manager shell injection fix, 7 financial validation patches. Phase 8 gateway. 9/9 E2E pass.). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -1922,7 +1922,9 @@ The codebase has multiple restart mechanisms, each serving a distinct purpose:
 | **Shutdown improvements** | P2P request drain, WAL checkpoint, 30s timeout |
 | **Double-spend prevention** | Balance validation on remote transactions |
 | **Weighted governance** | Reputation-weighted vote counting |
-| **Command injection prevention** | `safeGitRef()` validator in app-manager, hex validation on commitHash, `execFileSync` for user-influenced git commands |
+| **Command injection prevention** | `safeGitRef()` validator in app-manager, hex validation on commitHash, `execFileSync` for ALL git commands (deploy-manager, app-manager, guardrails). No `execSync` with string interpolation for git. |
+| **P2P Infinity/NaN guards** | All P2P transaction handlers validate `isFinite(tx.amount)` and sanitize `tx.fee` (must be non-negative finite). Prevents Infinity balance corruption and negative-fee free-Lux exploit. |
+| **Financial isFinite() gates** | All API endpoints accepting financial values (transfer, sale, budget, price, resource cost) validate `isFinite()`. Blocks `JSON.parse('1e999')` → Infinity bypass. |
 | **Two Laws on all agent-facing endpoints** | All trigger, spawn, message, request, and board endpoints check `violatesTwoLaws()` before passing text to AI agents |
 | **Board task CRUD validation** | `updateTeamBoardTask()` checks `result.changes > 0` — nonexistent tasks return 404, not 200 |
 | **repoUrl validation** | `cloneOrPull()` validates URL format before `execSync` to prevent shell injection via malicious repo URLs |
