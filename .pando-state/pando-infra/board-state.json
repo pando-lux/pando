@@ -1,78 +1,78 @@
 {
-  "savedAt": "2026-03-09T21:40:18.012Z",
+  "savedAt": "2026-03-09T22:04:13.358Z",
   "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
   "tasks": [
     {
       "id": "9f8aef4a-e148-4cb4-90cb-f878c6407411",
       "title": "Verify with test suite",
       "description": null,
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09T21:40:02.301Z",
-      "progress": null
+      "progress": "Garbage task - deleted by ops. Created from board state injection text, not a real task."
     },
     {
       "id": "6115b291-87aa-41c4-91ae-72361c358b77",
       "title": "Find similar patterns in codebase",
       "description": null,
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09T21:40:02.300Z",
-      "progress": null
+      "progress": "Garbage task - deleted by ops. Created from board state injection text, not a real task."
     },
     {
       "id": "afbf5792-83cb-4506-8450-9c685b2d8bc6",
       "title": "Implement: Check your inbox and review board tasks now.\n\nINBOX: Empty — no new messages.\n\nB",
       "description": null,
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09T21:40:02.300Z",
-      "progress": null
+      "progress": "Garbage task - deleted by ops. Created from board state injection text, not a real task."
     },
     {
       "id": "e1b84bc2-793c-4b31-b36f-614f780f2105",
       "title": "Write or update tests",
       "description": null,
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09T21:40:02.300Z",
-      "progress": null
+      "progress": "Garbage task - deleted by ops. Created from board state injection text, not a real task."
     },
     {
       "id": "3db78bf2-7511-4cc7-95c0-60dd3142843d",
       "title": "Explore codebase for: Check your inbox and review board tasks now.\n\nINBOX: Empty — no new messages.\n\nB",
       "description": null,
-      "status": "in_progress",
+      "status": "done",
       "created_at": "2026-03-09T21:40:02.299Z",
-      "progress": null
+      "progress": "Garbage task - deleted by ops. Created from board state injection text, not a real task."
     },
     {
       "id": "565dd28a-2922-461d-9529-fbe9c63fb3eb",
       "title": "Verify with test suite",
       "description": null,
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09T21:36:05.377Z",
-      "progress": null
+      "progress": "Spurious task from misinterpreted inbox check."
     },
     {
       "id": "085e4226-1599-4502-97f6-420e8cf6f3ae",
       "title": "Find similar patterns in codebase",
       "description": null,
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09T21:36:05.376Z",
-      "progress": null
+      "progress": "Spurious task from misinterpreted inbox check."
     },
     {
       "id": "2fdaebf2-0033-4653-9ddf-47376594bbe8",
       "title": "Implement: Check your inbox and review board tasks now.\n\nINBOX: Empty — no new messages.\n\nB",
       "description": null,
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09T21:36:05.376Z",
-      "progress": null
+      "progress": "Spurious task from misinterpreted inbox check."
     },
     {
       "id": "724062d5-b8c7-44b0-a4db-e0cc5ce62617",
       "title": "Write or update tests",
       "description": null,
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09T21:36:05.376Z",
-      "progress": null
+      "progress": "Spurious task from misinterpreted inbox check."
     },
     {
       "id": "70f7997e-4f26-4a00-94d6-4c9430daad5c",
@@ -179,12 +179,20 @@
       "progress": "Auto-generated, not real. Closed."
     },
     {
+      "id": "task-cac08405-e69e-40fe-973c-364a7fc4945f",
+      "title": "[FEATURE:high] Add local static file serving for deployed apps (Tier 1 fallback)",
+      "description": "When S3 credentials are not configured, Tier 1 (static) app deployments fail. Need a local fallback that serves static files from the node HTTP API.\n\nChanges needed:\n\n1. In app-api.ts: Add a new route `GET /v1/apps/:id/serve/*` that serves static files from `~/.pando/hosted-apps/{appId}/`. Use fastify-static or manual fs.readFile with proper MIME types (html, css, js, json, png, jpg, svg, ico). Set appropriate Content-Type headers. Return 404 for missing files.\n\n2. In app-manager.ts deployTier1(): When S3 upload fails (no credentials or bucket not configured), fall back to local serving. Set deploy_url to `http://localhost:{apiPort}/v1/apps/{appId}/serve/index.html` instead of the S3 URL. Still copy files to ~/.pando/hosted-apps/{appId}/ and mark status as live.\n\n3. The files are already copied to ~/.pando/hosted-apps/ by the deploy flow. The static serve endpoint just needs to read from that directory.\n\nFile: packages/node/src/api/app-api.ts (add route)\nFile: packages/node/src/core/app-manager.ts (Tier 1 fallback, around line 463-602)\n\nAcceptance: After deploying a static app (HTML/CSS/JS files) on a machine without S3 credentials, the app should be accessible at http://localhost:4000/v1/apps/<appId>/serve/index.html and deploy_url should point there.",
+      "status": "pending",
+      "created_at": "2026-03-09 22:04:13",
+      "progress": ""
+    },
+    {
       "id": "task-7e3120af-147a-478e-8bdf-36667ed20216",
       "title": "[BUG:medium] Doorman misclassifies non-build messages as build intent",
       "description": "The doorman in platform-api.ts classifies too aggressively. Messages like \"The encryption issue has been resolved\" get classified as build intent, creating unnecessary projects. The doorman classification logic is in the classifyIntent() function or the system prompt that tells the doorman how to classify.\n\nFix: Make the doorman classification more conservative. Only classify as \"build\" or \"complex\" when the user is clearly requesting something to be built (e.g., \"build me\", \"create a\", \"make a\"). Status updates, questions, and informational messages should be classified as \"simple\" or \"question\".\n\nFile: packages/node/src/api/platform-api.ts � search for classifyIntent, doorman prompt, or intent classification logic.\nAlso check: the doorman system prompt in engine-adapter.ts if classification happens there.\n\nAcceptance: Sending \"The encryption issue has been resolved\" or \"How do I deploy?\" should NOT create a project. Only explicit build requests should trigger project creation.",
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09 21:32:36",
-      "progress": ""
+      "progress": "Committed 9e2a5317ae76790062bd55af98238662767b22bc, proposal f84c1deb39b61a81b6a9392a32285f181a7b73578c74f62be471914d57b5c9d6 — push pending governance approval"
     },
     {
       "id": "task-8b9147eb-ae52-4029-bd2c-790638905dc4",
