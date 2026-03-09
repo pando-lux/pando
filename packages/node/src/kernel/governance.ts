@@ -1898,8 +1898,8 @@ export class GovernanceSync {
     let totalLinesChanged = 0;
 
     // Parse git diff for changed files and line counts (fail-open if git unavailable)
+    const valGit = new GitOps(process.cwd());
     try {
-      const valGit = new GitOps(process.cwd());
       const diffOutput = valGit.diffNameOnly('HEAD~1', 'HEAD').join('\n');
       changedFiles = diffOutput.trim().split('\n').filter(f => f.length > 0);
     } catch (err) {

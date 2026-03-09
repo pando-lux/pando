@@ -2205,8 +2205,7 @@ class PandoTUI {
       } catch { /* governance check is best-effort */ }
 
       this.log(`${c.dim}Pulling...${c.reset}`);
-      const { GitOps } = await import('./core/git-ops.js');
-      new GitOps(repoDir).stashAndReset('origin/master');
+      tuiGit.stashAndReset('origin/master');
       this.log(`${c.dim}Building...${c.reset}`);
       execSync('npm run build', { cwd: repoDir, stdio: 'pipe', timeout: 120_000 });
       this.log(`${c.green}Build succeeded.${c.reset}`);

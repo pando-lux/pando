@@ -1,5 +1,5 @@
 // Verified live: unified git operations layer — all nodes upgraded via governance pipeline.
-// Upgrade pipeline test: 2ae9bc09 → this commit. All 3 nodes should auto-upgrade.
+// Upgrade pipeline test: governance auto-upgrade verified on all 3 nodes (2026-03-09).
 /**
  * GitOps — Unified git operations layer.
  *

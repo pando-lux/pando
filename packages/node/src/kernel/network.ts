@@ -323,12 +323,7 @@ export class PandoNetwork {
         enableKeepAlive: true,
         keepAliveInterval: 15_000, // 15s keepalive pings
       })],
-      connectionManager: {
-        // Proactively dial peers from peerStore when below minConnections
-        minConnections: 2,
-        // Check for new peers to dial every 2s (default 5s)
-        autoDialInterval: 2_000,
-      },
+      connectionManager: {},
       peerDiscovery,
       services,
     });
