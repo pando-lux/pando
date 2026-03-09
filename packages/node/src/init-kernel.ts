@@ -785,13 +785,19 @@ export async function initKernel(node: any): Promise<void> {
           if (!/^[0-9a-f]{6,40}$/i.test(commitHash)) { console.warn(`[upgrade] REJECTED: invalid commitHash format in governance proposal`); return; }
           console.log(`[upgrade] Governance approved upgrade: ${commitHash.slice(0, 8)} — ${description}`);
 
+          // Broadcast to peers FIRST so they start pulling in parallel
+          // (if we pull+build+restart locally first, the broadcast may never fire)
+          try {
+            await upgradeProtocol.broadcastUpgradeNotification(commitHash, description, govProposal.id);
+          } catch (err: any) {
+            console.warn(`[upgrade] Broadcast failed (peers will use catchup): ${err.message?.slice(0, 100)}`);
+          }
+
           // Pull and build locally
           node.upgradeInProgress = true;
           try {
             const result = await upgradeProtocol.pullAndUpgrade(commitHash);
             if (result.success) {
-              // Broadcast to all peers so they pull too
-              await upgradeProtocol.broadcastUpgradeNotification(commitHash, description, govProposal.id);
 
               // Auto-deploy gateway to all contributed hosting accounts
               const filesTouched: string[] = (govProposal.upgradePayload as any)?.filesTouched || [];
