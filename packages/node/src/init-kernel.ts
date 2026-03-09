@@ -810,6 +810,10 @@ export async function initKernel(node: any): Promise<void> {
             console.warn(`[upgrade] Broadcast failed (peers will use catchup): ${err.message?.slice(0, 100)}`);
           }
 
+          // Give peers time to receive the notification before we restart
+          // (our P2P connections drop on restart, so peers must have the message first)
+          await new Promise(resolve => setTimeout(resolve, 5_000));
+
           // Pull and build locally
           node.upgradeInProgress = true;
           try {
