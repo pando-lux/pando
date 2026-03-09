@@ -165,6 +165,11 @@ export async function registerAppRoutes(
     try {
       await appManager.undeploy(id);
       await appManager.unregister(id);
+      // Clean up any associated engine to free memory
+      const adapter = (node as any).getEngineAdapter?.();
+      if (adapter?.destroyEngine) {
+        await adapter.destroyEngine(id).catch(() => {});
+      }
       return { deleted: true, id };
     } catch (err: any) {
       return reply.code(500).send({ error: err.message });

@@ -1023,6 +1023,23 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     return this.pool.has(projectId) ?? false;
   }
 
+  /** Destroy a specific engine by ID — frees memory and process. */
+  async destroyEngine(engineId: string): Promise<boolean> {
+    if (!this.pool) return false;
+    const engine = this.pool.get(engineId);
+    if (!engine) return false;
+    try {
+      await engine.shutdown().catch(() => {});
+      this.pool.engines?.delete(engineId);
+      this.pool.lastUsed?.delete(engineId);
+      this.pool.createdAt?.delete(engineId);
+      console.log(`[EngineAdapter] Destroyed engine: ${engineId}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /** Get scheduler info. */
   getSchedules(): any[] {
     return this.scheduler?.getAll() ?? [];
@@ -1775,7 +1792,20 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       }
     } catch { /* ok */ }
 
-    console.log(`[team:${teamId}] Stopped agent "${agentId}"`);
+    // Destroy the engine process to free memory
+    const engineId = `${teamId}:${agentId}`;
+    try {
+      const engine = this.pool.get(engineId);
+      if (engine) {
+        await engine.shutdown().catch(() => {});
+        // Remove from pool internals (engines, lastUsed, createdAt are Maps)
+        this.pool.engines?.delete(engineId);
+        this.pool.lastUsed?.delete(engineId);
+        this.pool.createdAt?.delete(engineId);
+      }
+    } catch { /* ok — engine may already be gone */ }
+
+    console.log(`[team:${teamId}] Stopped agent "${agentId}" (engine destroyed)`);
   }
 
   /**
