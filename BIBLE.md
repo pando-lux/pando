@@ -1040,12 +1040,19 @@ All git operations consolidated into a single `GitOps` class (`core/git-ops.ts`)
 | **init-platform.ts** | ✅ | P2P upgrade handler uses GitOps. |
 | **init-kernel.ts** | ✅ | Running commit detection uses GitOps. |
 | **tui.ts** | ✅ | Manual upgrade uses `GitOps.stashAndReset()`. |
+| **governance.ts** | ✅ | `scanDiffForDangerousPatterns()` and `validateUpgradeProposal()` use GitOps. |
+| **guardrails.ts** | ✅ | Auto-rollback uses `GitOps.checkoutAll()`. |
+| **platform-api.ts** | ✅ | `/github/push` endpoint uses GitOps for init, add, commit, remote, push. |
+| **engine-adapter.ts** | ✅ | `pando_workspace` tool + project workspace recovery use GitOps. |
+| **index.ts (PandoNode)** | ✅ | Project clone, git init, commit callback all use GitOps. |
 
 **Also completed:**
 - **GitHubClient** (`core/github-client.ts`): GitHub API for autonomous repo creation (createRepo, deleteRepo, repoExists)
 - **safeGitReset** removed from UpgradeProtocol — replaced by `GitOps.stashAndReset()`
 - **safeGitRef/safeCommitHash** validators exported from `git-ops.ts` (single source of truth)
 - All `execSync('git ...')` template-literal calls eliminated — only `execFileSync` via GitOps
+- **Zero git operations exist outside `git-ops.ts`** — every file (governance, guardrails, engine-adapter, platform-api, index.ts) migrated
+- **`GitOps.cloneSync()`** — static synchronous clone for callers that don't need credential resolution (used by AppManager, engine-adapter)
 
 **PROVEN LIVE (2026-03-06) — BOTH TIERS:**
 
