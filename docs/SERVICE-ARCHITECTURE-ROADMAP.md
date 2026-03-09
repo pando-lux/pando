@@ -250,7 +250,7 @@ This is the big mechanical rename. All 100+ references across the codebase.
 | 5.2 | Update BIBLE.md: remove/update brain/body split to reflect service interface | DONE (brain/body stays — service layer added on top) |
 | 5.3 | Update BIBLE.md: document ServiceLoader, PandoService interface | DONE (Section 4.2 + 5.11) |
 | 5.4 | Update CLAUDE.md: new package structure, service pattern | DONE (7f2b0a1a — service architecture section, key files, diagnostic endpoint) |
-| 5.5 | Update infra/DEV-MODE.md: document service installation for nodes | TODO |
+| 5.5 | Update infra/DEV-MODE.md: document service installation for nodes | DONE (service architecture section added — npm link, diagnostic endpoint, key files) |
 | 5.6 | Create README.md for pando-node: "How to run a node" (light vs full) | TODO |
 | 5.7 | Update MEMORY.md with new architecture | DONE |
 

@@ -314,16 +314,22 @@ export class UpgradeProtocol {
       console.warn(`[upgrade] npm install warning: ${(err.stderr?.toString() || err.message)?.slice(0, 200)}`);
     }
 
-    // Step 6c: Re-establish npm link if it was linked before npm install wiped it
+    // Step 6c: Re-establish npm link if it was linked before npm install wiped it.
+    // Check isSymbolicLink(), not just existsSync() — npm install may replace symlink
+    // with a real directory from cache, which would silently use stale code.
     if (wasLinked) {
       try {
-        const { existsSync } = await import('node:fs');
-        if (!existsSync(pandoCodeCorePath)) {
+        const { lstatSync: lstat2 } = await import('node:fs');
+        let stillLinked = false;
+        try { stillLinked = lstat2(pandoCodeCorePath).isSymbolicLink(); } catch { /* gone */ }
+        if (!stillLinked) {
           console.log('[upgrade] Re-linking @pando-code/core...');
           execSync('npm link @pando-code/core', {
             cwd: this.repoDir, timeout: 60_000, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
           });
           console.log('[upgrade] @pando-code/core re-linked successfully');
+        } else {
+          console.log('[upgrade] @pando-code/core symlink survived npm install');
         }
       } catch (err: any) {
         console.warn(`[upgrade] Failed to re-link @pando-code/core: ${(err.stderr?.toString() || err.message)?.slice(0, 200)}`);

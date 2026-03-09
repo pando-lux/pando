@@ -1,3 +1,4 @@
+// ServiceLoader — auto-discovers and loads PandoService plugins. See docs/SERVICE-ARCHITECTURE-ROADMAP.md
 /**
  * ServiceLoader — discovers and loads installed PandoService packages.
  *
