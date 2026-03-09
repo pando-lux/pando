@@ -691,7 +691,7 @@ Be friendly and helpful. Keep answers short.`
           return { repoUrl: project.repoUrl || project.githubRepo || undefined, name: project.name };
         },
       });
-      (node as any)._serviceLoader = serviceLoader;
+      (node as any).serviceLoader = serviceLoader;
       // If the engine adapter is already running, skip loadAll() to avoid double-loading
       // @pando-code/core. Otherwise, call loadAll() as a fallback discovery mechanism
       // so future services that aren't @pando-code/core always load through ServiceLoader.
