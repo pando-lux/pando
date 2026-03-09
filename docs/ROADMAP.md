@@ -38,17 +38,17 @@ Priority: **HIGH** — needed for production reliability.
 
 The code for team migration EXISTS but has **never been tested** under real conditions.
 
-**Key discovery (2026-03-09):** Board state is LOCAL ONLY — `~/.pando/teams/{teamId}/board-state.json` is not synced via P2P. Claiming node starts with an empty board unless it has local board file. This is a gap that needs P2P board sync for true failover.
+**P2P board sync IMPLEMENTED (06fce4d):** BOARD_STATE_REQUEST/RESPONSE messages. Claiming node broadcasts request, peers respond with board data, 5s delay before startTeam to allow responses.
 
 **Mechanics:** Orphan scan every 5 min. Team stale after 20 min without heartbeat. Claiming node must have PandoCode capability. Conflict resolution: latest `claimedAt` wins.
 
 | # | Test | Status |
 |---|------|--------|
 | 1 | Kill managing node → orphan detection triggers on another node | NOT TESTED |
-| 2 | New node claims team → agents started (board empty without P2P sync) | NOT TESTED |
+| 2 | New node claims team → board synced via P2P → agents started | NOT TESTED |
 | 3 | Split-brain: two nodes both claim same team → latest claimedAt wins | NOT TESTED |
 | 4 | Network partition: node disconnects but comes back → graceful reconciliation | NOT TESTED |
-| 5 | P2P board sync — transfer board-state.json to claiming node | NOT IMPLEMENTED |
+| 5 | P2P board sync — transfer board-state.json to claiming node | **IMPLEMENTED** (06fce4d) |
 
 **Prerequisites for test:**
 - At least 2 nodes with PandoCode capability (currently: Windows + Mac)
