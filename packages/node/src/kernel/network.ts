@@ -13,6 +13,7 @@ import { webSockets } from '@libp2p/websockets';
 import { pipe } from 'it-pipe';
 import * as lp from 'it-length-prefixed';
 import { multiaddr } from '@multiformats/multiaddr';
+import { peerIdFromString } from '@libp2p/peer-id';
 import { toString as uint8ArrayToString, fromString as uint8ArrayFromString } from 'uint8arrays';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -45,7 +46,7 @@ import type { Connection, Stream } from '@libp2p/interface';
 //   @gotcha("Peer exchange includes peerStore announce addresses (public IPs from identify protocol), not just connection addresses. This is critical for NAT/VPC traversal.")
 //   @gotcha("Agent message payload limit is 256KB (increased from 8KB) to support P2P storage proxy responses containing large project/thread data.")
 //   @why("announce addresses are configured via PUBLIC_IP env var on cloud nodes — required because 0.0.0.0 bind address is not externally reachable behind NAT/VPC.")
-//   @why("updateKnownPeer is delayed 3s after connect to allow the identify protocol to populate peerStore with announce addresses.")
+//   @why("updateKnownPeer is delayed 100ms after connect to allow the identify protocol to populate peerStore with announce addresses.")
 // }
 // @end
 
@@ -125,7 +126,7 @@ export class PandoNetwork {
   private reconnectTick = 0;
   // In-memory known-peers cache to avoid disk reads every 2s
   private knownPeersCache: KnownPeer[] | null = null;
-  // Exponential backoff for reconnect when no peers (2s → 4s → 8s → max 30s)
+  // Exponential backoff for reconnect when no peers (2s → 4s → 8s → max 16s)
   private reconnectBackoff = 1;
 
   constructor(identity: NodeIdentity, config: NodeConfig) {
@@ -171,7 +172,6 @@ export class PandoNetwork {
   private async getPeerStoreAddresses(peerId: string): Promise<string[]> {
     if (!this.node) return [];
     try {
-      const { peerIdFromString } = await import('@libp2p/peer-id');
       const peerIdObj = peerIdFromString(peerId);
       const peerInfo = await this.node.peerStore.get(peerIdObj);
       return peerInfo.addresses
@@ -231,7 +231,7 @@ export class PandoNetwork {
         // Single address: just dial it
         try {
           const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 3_000);
+          const timer = setTimeout(() => ac.abort(), 1_000);
           await this.node!.dial(multiaddr(peer.addrs[0]), { signal: ac.signal });
           clearTimeout(timer);
           console.log(`[known-peers] Connected to ${peer.peerId.slice(0, 16)}...`);
@@ -242,7 +242,7 @@ export class PandoNetwork {
       }
       // Multiple addresses: race them all — first success wins
       const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 8_000);
+      const timer = setTimeout(() => ac.abort(), 2_500);
       try {
         await Promise.any(peer.addrs.map(async (addr) => {
           const conn = await this.node!.dial(multiaddr(addr), { signal: ac.signal });
@@ -370,9 +370,9 @@ export class PandoNetwork {
         connectedAt: Date.now(),
         lastSeen: Date.now(),
       });
-      // Phase 54.2: Persist known peer — delay 250ms to allow identify protocol to populate
-      // peerStore with announce addresses (public IPs). Identify typically completes in <250ms.
-      setTimeout(() => this.updateKnownPeer(peerId).catch(() => {}), 250);
+      // Phase 54.2: Persist known peer — delay 50ms to allow identify protocol to populate
+      // peerStore with announce addresses (public IPs). Identify typically completes in <50ms.
+      setTimeout(() => this.updateKnownPeer(peerId).catch(() => {}), 50);
       // Notify handlers
       for (const handler of this.peerConnectHandlers) {
         try { handler(peerId); } catch {}
@@ -388,8 +388,22 @@ export class PandoNetwork {
 
     await this.node.start();
 
-    // Phase 54.2: Dial known peers from previous sessions
-    this.dialKnownPeers().catch(() => {});
+    // Dial known peers AND bootstrap peers in parallel for fastest initial discovery
+    const startupDials: Promise<any>[] = [this.dialKnownPeers()];
+    if (this.config.bootstrapPeers.length > 0) {
+      startupDials.push(...this.config.bootstrapPeers.map(async (addr) => {
+        try {
+          const ac = new AbortController();
+          const timer = setTimeout(() => ac.abort(), 1_500);
+          await this.node!.dial(multiaddr(addr), { signal: ac.signal });
+          clearTimeout(timer);
+          console.log(`[startup] Connected to bootstrap ${addr.slice(0, 40)}...`);
+        } catch {
+          // Bootstrap peer may be offline
+        }
+      }));
+    }
+    Promise.allSettled(startupDials).catch(() => {});
 
     // Early discovery: re-sweep known peers 1s after start (catches peers
     // that weren't ready during the initial dialKnownPeers call)
@@ -419,7 +433,7 @@ export class PandoNetwork {
       const bootstrapDials = this.config.bootstrapPeers.map(async (addr) => {
         try {
           const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 3_000);
+          const timer = setTimeout(() => ac.abort(), 1_000);
           await this.node!.dial(multiaddr(addr), { signal: ac.signal });
           clearTimeout(timer);
           console.log(`[reconnect] Dialed bootstrap ${addr.slice(0, 40)}...`);
@@ -428,8 +442,8 @@ export class PandoNetwork {
         }
       });
       await Promise.allSettled([...bootstrapDials, this.dialKnownPeers()]);
-      // Increase backoff up to 15 ticks (30s at 2s interval)
-      if (this.reconnectBackoff < 15) this.reconnectBackoff = Math.min(this.reconnectBackoff * 2, 15);
+      // Increase backoff up to 8 ticks (16s at 2s interval)
+      if (this.reconnectBackoff < 8) this.reconnectBackoff = Math.min(this.reconnectBackoff * 2, 8);
       return;
     }
 
@@ -438,7 +452,7 @@ export class PandoNetwork {
 
     // Periodic discovery sweep: every 6s, try dialing any known peers
     // we're not yet connected to. Catches new nodes added via peer exchange.
-    if (this.reconnectTick % 3 === 0) {
+    if (this.reconnectTick % 2 === 0) {
       this.dialKnownPeers().catch(() => {});
     }
   }
