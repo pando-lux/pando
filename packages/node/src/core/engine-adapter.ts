@@ -717,6 +717,7 @@ export class EngineAdapter {
   private watchdogRestarts = new Map<string, { count: number; firstRestartAt: number }>();
   private stoppedEngines = new Set<string>();  // engines intentionally stopped — don't restart
   private teamKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
+  private boardCommitDebounce = new Map<string, number>(); // teamId → last commit timestamp
 
   /** Whether the adapter is ready (pando-teams loaded + pool started). */
   get available(): boolean { return this.started; }
@@ -1210,8 +1211,59 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       const tmpPath = filePath + '.tmp';
       writeFileSync(tmpPath, JSON.stringify(snapshot, null, 2), 'utf-8');
       renameSync(tmpPath, filePath);
+
+      // Debounced git commit of board state for cross-node recovery
+      this.commitBoardStateDebounced(teamId);
     } catch (err: any) {
       console.warn(`[board-persist] Failed to persist board state for team ${teamId}: ${err.message}`);
+    }
+  }
+
+  /**
+   * Commit board-state.json into the node git repo for team handoff recovery.
+   * Copies from ~/.pando/teams/{teamId}/board-state.json to .pando-state/{teamId}/board-state.json
+   * in the repo, then git add + commit. Debounced: max once per 5 minutes per team.
+   * Does NOT push — push happens via governance on meaningful changes.
+   */
+  private commitBoardStateDebounced(teamId: string): void {
+    const DEBOUNCE_MS = 5 * 60_000; // 5 minutes
+    const now = Date.now();
+    const lastCommit = this.boardCommitDebounce.get(teamId) || 0;
+    if (now - lastCommit < DEBOUNCE_MS) return;
+
+    // Run async in background — never block board operations
+    this.commitBoardStateAsync(teamId).catch((err: any) => {
+      console.warn(`[board-git] commitBoardState failed for ${teamId}: ${err.message}`);
+    });
+  }
+
+  private async commitBoardStateAsync(teamId: string): Promise<void> {
+    const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
+    const srcPath = pathJoin(baseDir, 'teams', teamId, 'board-state.json');
+    if (!existsSync(srcPath)) return;
+
+    const repoDir = process.cwd();
+    const destDir = pathJoin(repoDir, '.pando-state', teamId);
+    mkdirSync(destDir, { recursive: true });
+
+    const destPath = pathJoin(destDir, 'board-state.json');
+    const content = readFileSync(srcPath, 'utf-8');
+    writeFileSync(destPath, content, 'utf-8');
+
+    try {
+      const { GitOps: GO } = await import('./git-ops.js');
+      const git = new GO(repoDir);
+      const relPath = `.pando-state/${teamId}/board-state.json`;
+      git.add([relPath]);
+
+      // Only commit if the file actually changed
+      if (!git.hasUncommittedChanges()) return;
+
+      git.commit(`chore: persist board state for ${teamId}`);
+      this.boardCommitDebounce.set(teamId, Date.now());
+      console.log(`[board-git] Committed board state for team ${teamId}`);
+    } catch (err: any) {
+      console.warn(`[board-git] Git commit failed for ${teamId}: ${err.message}`);
     }
   }
 
@@ -1224,7 +1276,19 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   restoreBoardState(teamId: string): boolean {
     try {
       const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
-      const filePath = pathJoin(baseDir, 'teams', teamId, 'board-state.json');
+      const teamDir = pathJoin(baseDir, 'teams', teamId);
+      const filePath = pathJoin(teamDir, 'board-state.json');
+
+      // Fallback: if local file missing, try git repo copy (.pando-state/{teamId}/board-state.json)
+      if (!existsSync(filePath)) {
+        const repoFallback = pathJoin(process.cwd(), '.pando-state', teamId, 'board-state.json');
+        if (existsSync(repoFallback)) {
+          console.log(`[board-restore] Local board-state.json missing — recovering from git repo for team ${teamId}`);
+          mkdirSync(teamDir, { recursive: true });
+          const content = readFileSync(repoFallback, 'utf-8');
+          writeFileSync(filePath, content, 'utf-8');
+        }
+      }
 
       if (!existsSync(filePath)) return false;
 
