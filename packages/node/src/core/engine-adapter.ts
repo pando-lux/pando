@@ -2173,17 +2173,54 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
           }, tickMs);
           intervals.push(interval);
         } else {
-          // Non-lead agents use scheduler (simpler, prompt-only)
-          this.scheduler.register({
-            name: `${teamId}-${agent.id}-tick`,
-            engineId,
-            intervalMs: tickMs,
-            prompt: `${agent.prompt}\n\n---\n\nRun your periodic checks now.`,
-            active: true,
-            onEvent: logEvent(label),
-            onComplete: () => console.log(`\n[${label}] Tick complete.`),
-            onError: (err: Error) => console.warn(`[${label}] Tick error: ${err.message}`),
-          });
+          // Non-lead agents: use sendToTeamAgent (same as lead) for proper agent context.
+          // The scheduler's pool.send() doesn't pass agentOverride, so agents had no identity.
+          let nlTickRunning = false;
+          let nlConsecutiveFailures = 0;
+          const NL_TICK_TIMEOUT_MS = 10 * 60_000;
+          const nlInterval = setInterval(async () => {
+            if (nlTickRunning) {
+              console.log(`[${label}] Tick skipped — previous tick still running`);
+              return;
+            }
+            nlTickRunning = true;
+            try {
+              const msg = 'Run your periodic checks now.';
+              const tickPromise = (async () => {
+                for await (const event of this.sendToTeamAgent(teamId, agent.id, msg)) {
+                  logEvent(label)(event);
+                }
+              })();
+              const timeoutPromise = new Promise<never>((_, reject) =>
+                setTimeout(() => reject(new Error(`${label} tick timed out after 10 minutes`)), NL_TICK_TIMEOUT_MS)
+              );
+              await Promise.race([tickPromise, timeoutPromise]);
+              nlConsecutiveFailures = 0;
+              console.log(`\n[${label}] Tick complete.`);
+            } catch (err: any) {
+              nlConsecutiveFailures++;
+              if (nlConsecutiveFailures >= 3) {
+                console.error(`[${label}] CRITICAL: ${nlConsecutiveFailures} consecutive failures: ${err.message}`);
+                try {
+                  if (this.pool && !this.pool.has(`${teamId}:${agent.id}`)) {
+                    console.log(`[${label}] Attempting restart after repeated failures`);
+                    const teamData = this.activeTeams.get(teamId);
+                    if (teamData) {
+                      await this.restartTeamEngine(teamId, agent, teamData);
+                      nlConsecutiveFailures = 0;
+                    }
+                  }
+                } catch (restartErr: any) {
+                  console.error(`[${label}] Restart failed: ${restartErr.message}`);
+                }
+              } else {
+                console.warn(`[${label}] Tick error (${nlConsecutiveFailures}/3): ${err.message}`);
+              }
+            } finally {
+              nlTickRunning = false;
+            }
+          }, tickMs);
+          intervals.push(nlInterval);
         }
       }
     }
