@@ -439,8 +439,42 @@
 - Not directly user-exploitable (inputs come from PandoCode AI, not HTTP API)
 - Would need AI model compromise to exploit — accepted risk for now
 
+### Phase 8: Gateway Team Integration
+
+#### Gateway node-connection.ts — 9 team methods added
+- `getTeams()`, `getTeam(id)`, `getTeamBoard(id)`, `addTeamBoardTask(id, ...)`, `getTeamAgents(id)`, `getTeamStatus(id)`, `getTeamCost(id)`, `submitTeamRequest(id, message)`, `getTemplates()`
+
+#### Gateway API Routes — 8 new routes
+- `GET /api/teams` — list all teams
+- `GET /api/teams/[id]` — team details
+- `GET /api/teams/[id]/board` — board tasks (supports include_done)
+- `POST /api/teams/[id]/board` — add task
+- `GET /api/teams/[id]/agents` — agent list
+- `GET /api/teams/[id]/status` — team health
+- `GET /api/teams/[id]/cost` — token/cost summary
+- `POST /api/teams/[id]/request` — submit user request
+- `GET /api/templates` — list agent templates
+
+#### Network Page — Teams Section
+- Teams displayed between stats grid and reputation leaderboard
+- Expandable cards: click team → shows agents (status dot, role, template) + board tasks (status badge, title)
+- Auto-refresh every 10 seconds with other network data
+
+### Live API Testing
+| Endpoint | Result |
+|----------|--------|
+| GET /v1/teams | 1 team (pando-infra) ✅ |
+| GET /v1/teams/pando-infra/agents | 3 agents (lead/observer/qa) ✅ |
+| GET /v1/teams/pando-infra/board | 0 active tasks ✅ |
+| GET /v1/teams/pando-infra/cost | 76.6 Lux, 3.16M tokens ✅ |
+
+### E2E Tests
+- **9/9 pass** (22.2s) — all pipelines green after Phase 8 changes
+
 ### Commits Pushed
 25. `059b3dc1` — Fix command injection in executeRollback: validate targetVersion format
+26. `189bc941` — Phase 8: Gateway team integration — API routes + Network page teams section
+27. `241166df` — Update BIBLE.md: Phase 2 complete, Phase 8 started
 
 ### Pending
 - [ ] PandoCode web UI testing (UI not running currently — port 4873 down)
@@ -452,4 +486,4 @@
 - [ ] P2P: Governance proposal sync gap (EC2-1 missing ~30%)
 - [ ] P2P: Account sync divergence (205/627/907 across nodes)
 - [ ] Chat: Project name sanitization in direct API (no char filter)
-- [ ] EC2 nodes need update from a8db6b3 to latest master
+- [x] EC2 nodes updated to 241166d (both on latest master, full mesh)
