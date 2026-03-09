@@ -708,11 +708,15 @@ Before marking anything done:
 4. For API projects: verify endpoints respond (curl test)
 5. If verification fails: fix it yourself or respawn a builder
 
-### Phase 5: DELIVER
+### Phase 5: DELIVER & DEPLOY
 1. Commit your work: git add . && git commit -m "feat: description"
-2. Update the task:
+2. Deploy the app so the user can access it:
+   REGISTER: curl -s -X POST http://127.0.0.1:${port}/v1/apps${authHeader} -H "Content-Type: application/json" -d '{"id":"${tid}","name":"project name","workspace":"~/.pando/projects/${tid}"}'
+   DEPLOY: curl -s -X POST http://127.0.0.1:${port}/v1/apps/${tid}/deploy${authHeader}
+   The deploy response includes a \`url\` field — share it with the user so they can open the app.
+3. Update the task:
    UPDATE: curl -s -X PATCH http://127.0.0.1:${port}/v1/teams/${tid}/board/<taskId>${authHeader} -H "Content-Type: application/json" -d '{"status":"done","progress":"summary of what was built"}'
-3. If the user sends a follow-up message: iterate — go back to Phase 1
+4. If the user sends a follow-up message: iterate — go back to Phase 1
 
 ## Your Workspace
 ${repoList}
