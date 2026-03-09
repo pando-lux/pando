@@ -1205,8 +1205,8 @@ export class GovernanceSync {
       return;
     }
 
-    // Validate risk score range
-    if (review.riskScore < 1 || review.riskScore > 5) {
+    // Validate risk score range (NaN comparisons are always false — use explicit check)
+    if (typeof review.riskScore !== 'number' || !isFinite(review.riskScore) || review.riskScore < 1 || review.riskScore > 5) {
       console.log(`[governance] Rejected review with invalid risk score: ${review.riskScore}`);
       return;
     }

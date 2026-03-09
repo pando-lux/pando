@@ -282,8 +282,12 @@ export class LedgerSync {
       if (this.processedTxs.has(tx.id)) continue;
       this.processedTxs.add(tx.id);
 
-      // Validate basic fields
-      if (!tx.from || !tx.to || !tx.amount || tx.amount <= 0) continue;
+      // Validate basic fields (P2P data is untrusted — check for Infinity/NaN via isFinite)
+      if (!tx.from || !tx.to || !tx.amount || tx.amount <= 0 || !isFinite(tx.amount)) continue;
+      // Sanitize fee: negative fees could make forceSubtractBalance ADD to sender's balance
+      if (typeof tx.fee !== 'number' || !isFinite(tx.fee) || tx.fee < 0) {
+        tx.fee = 0;
+      }
 
       // Verify signature if present
       const sigResult = await this.verifyTxSignature(tx);
@@ -415,10 +419,14 @@ export class LedgerSync {
     if (this.processedTxs.has(tx.id)) return;
     this.processedTxs.add(tx.id);
 
-    // Validate basic fields
-    if (!tx.from || !tx.to || !tx.amount || tx.amount <= 0) {
+    // Validate basic fields (P2P data is untrusted — check for Infinity/NaN via isFinite)
+    if (!tx.from || !tx.to || !tx.amount || tx.amount <= 0 || !isFinite(tx.amount)) {
       console.warn(`[sync] Invalid transaction from ${message.from.slice(0, 16)}...`);
       return;
+    }
+    // Sanitize fee: negative fees could make forceSubtractBalance ADD to sender's balance
+    if (typeof tx.fee !== 'number' || !isFinite(tx.fee) || tx.fee < 0) {
+      tx.fee = 0;
     }
 
     // Verify signature asynchronously, then apply
