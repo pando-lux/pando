@@ -255,9 +255,15 @@ export class ApiServer {
       if (error.message?.includes('timed out') || error.message?.includes('ECONNREFUSED') || error.message?.includes('not connected') || error.code === 'ETIMEDOUT') {
         return reply.code(503).send({ error: 'Storage backend temporarily unavailable' });
       }
-      // Let Fastify handle everything else as normal 500
-      request.log.error(error);
-      reply.code(error.statusCode || 500).send({ error: error.message || 'Internal server error' });
+      // Log full error internally but never expose raw error.message to clients
+      console.error(`[api] Unhandled error on ${request.method} ${request.url}:`, error.message);
+      const statusCode = error.statusCode || 500;
+      if (statusCode >= 500) {
+        reply.code(statusCode).send({ error: 'Internal server error' });
+      } else {
+        // 4xx from Fastify (e.g. 400 bad JSON) — safe to pass through
+        reply.code(statusCode).send({ error: error.message || 'Bad request' });
+      }
     });
 
     this.apiToken = loadOrGenerateApiToken(node.getDataDir() || join(homedir(), '.pando'));

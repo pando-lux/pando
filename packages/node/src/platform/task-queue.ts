@@ -12,7 +12,7 @@
 import { readFileSync, existsSync, mkdirSync, renameSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { MessageType, QaTier } from '@pando/shared';
 import type { ThreadMessage, ResourceType } from '@pando/shared';
 import type { PandoNetwork } from '../kernel/network.js';
@@ -417,7 +417,7 @@ export class TaskQueue {
     }
 
     const id = createHash('sha256')
-      .update(`${opts.title}-${Date.now()}-${Math.random()}`)
+      .update(`${opts.title}-${Date.now()}-${randomBytes(8).toString('hex')}`)
       .digest('hex')
       .slice(0, 16);
 
@@ -911,7 +911,7 @@ export class TaskQueue {
 
     const msg: ThreadMessage = {
       id: createHash('sha256')
-        .update(`${taskId}-${opts.from}-${Date.now()}-${Math.random()}`)
+        .update(`${taskId}-${opts.from}-${Date.now()}-${randomBytes(8).toString('hex')}`)
         .digest('hex')
         .slice(0, 16),
       taskId,

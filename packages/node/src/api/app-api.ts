@@ -53,7 +53,8 @@ export async function registerAppRoutes(
       const app = await appManager.register(body);
       return app;
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      console.error('[api] App registration failed:', err.message);
+      return reply.code(500).send({ error: 'App registration failed' });
     }
   });
 
@@ -67,7 +68,8 @@ export async function registerAppRoutes(
       const apps = await appManager.list(status ? { status } : undefined);
       return { apps };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      console.error('[api] App list failed:', err.message);
+      return reply.code(500).send({ error: 'Failed to list apps' });
     }
   });
 
@@ -84,7 +86,8 @@ export async function registerAppRoutes(
       const history = await appManager.getHistory(id);
       return { app, history };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      console.error('[api] App get failed:', err.message);
+      return reply.code(500).send({ error: 'Failed to get app details' });
     }
   });
 
@@ -98,7 +101,8 @@ export async function registerAppRoutes(
       const result = await appManager.deploy(id);
       return result;
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      console.error('[api] App deploy failed:', err.message);
+      return reply.code(500).send({ error: 'Deploy failed' });
     }
   });
 
@@ -118,7 +122,8 @@ export async function registerAppRoutes(
       const result = await appManager.update(id, opts);
       return result;
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      console.error('[api] App update failed:', err.message);
+      return reply.code(500).send({ error: 'Update failed' });
     }
   });
 
@@ -132,7 +137,8 @@ export async function registerAppRoutes(
       const result = await appManager.rollback(id);
       return result;
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      console.error('[api] App rollback failed:', err.message);
+      return reply.code(500).send({ error: 'Rollback failed' });
     }
   });
 
@@ -146,7 +152,8 @@ export async function registerAppRoutes(
       await appManager.undeploy(id);
       return { stopped: true, id };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      console.error('[api] App stop failed:', err.message);
+      return reply.code(500).send({ error: 'Failed to stop app' });
     }
   });
 
@@ -160,7 +167,8 @@ export async function registerAppRoutes(
       const result = await appManager.deploy(id);
       return result;
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      console.error('[api] App start failed:', err.message);
+      return reply.code(500).send({ error: 'Failed to start app' });
     }
   });
 
@@ -180,7 +188,8 @@ export async function registerAppRoutes(
       }
       return { deleted: true, id };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      console.error('[api] App delete failed:', err.message);
+      return reply.code(500).send({ error: 'Failed to delete app' });
     }
   });
 
@@ -196,7 +205,8 @@ export async function registerAppRoutes(
       const healthy = await appManager.healthCheck(id);
       return { healthy, app };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      console.error('[api] App health check failed:', err.message);
+      return reply.code(500).send({ error: 'Health check failed' });
     }
   });
 
@@ -212,7 +222,8 @@ export async function registerAppRoutes(
       const history = await appManager.getHistory(id, limit);
       return { history };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      console.error('[api] App history fetch failed:', err.message);
+      return reply.code(500).send({ error: 'Failed to fetch app history' });
     }
   });
 
@@ -231,7 +242,8 @@ export async function registerAppRoutes(
       });
       return { logs: output };
     } catch (err: any) {
-      return reply.code(500).send({ error: `Failed to fetch logs: ${err.message}` });
+      console.error('[api] Log fetch failed:', err.message);
+      return reply.code(500).send({ error: 'Failed to fetch logs' });
     }
   });
 

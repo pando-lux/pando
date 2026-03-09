@@ -61,7 +61,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
           node.setUpgradeInProgress(false);
           const msg = err.stderr?.toString()?.slice(0, 500) || err.message;
           console.error(`[upgrade] Git fetch/reset failed: ${msg}`);
-          return reply.code(500).send({ status: 'error', step: 'git_pull', error: msg });
+          return reply.code(500).send({ status: 'error', step: 'git_pull', error: 'Git pull failed' });
         }
 
         // Check if already up to date
@@ -98,7 +98,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
           node.setUpgradeInProgress(false);
           const stderr = err.stderr?.toString()?.slice(-500) || err.message;
           console.error(`[upgrade] Build FAILED: ${stderr}`);
-          return reply.code(500).send({ status: 'error', step: 'build', error: stderr });
+          return reply.code(500).send({ status: 'error', step: 'build', error: 'Build failed' });
         }
 
         console.log('[upgrade] Build passed.');
@@ -123,7 +123,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       } catch (err: any) {
         node.setUpgradeInProgress(false);
         console.error(`[upgrade] Unexpected error: ${err.message}`);
-        return reply.code(500).send({ status: 'error', step: 'unknown', error: err.message });
+        return reply.code(500).send({ status: 'error', step: 'unknown', error: 'Upgrade failed' });
       }
     });
 
@@ -199,7 +199,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         const proposal = await upgradeProtocol.createUpgradeProposal(description);
         return { success: true, proposal };
       } catch (err: any) {
-        return reply.code(400).send({ error: err.message });
+        return reply.code(400).send({ error: 'Failed to create upgrade proposal' });
       }
     });
 
@@ -400,7 +400,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         }
         return { result };
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message || 'Challenge failed' });
+        console.error('[api] Challenge failed:', err.message);
+        return reply.code(500).send({ error: 'Challenge failed' });
       }
     });
 
@@ -552,7 +553,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
           }
         }
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] Team agent trigger failed:', err.message);
+        return reply.code(500).send({ error: 'Agent trigger failed' });
       }
 
       return { team: teamId, agent: agentId, toolCalls, response: textChunks.join('') };
@@ -620,7 +622,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         });
         return { status: 'created', team };
       } catch (err: any) {
-        return reply.code(400).send({ error: err.message });
+        return reply.code(400).send({ error: 'Failed to create team' });
       }
     });
 
@@ -658,7 +660,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         const agents = adapter?.getTeamAgents?.(teamId) ?? [];
         return { teamId, agents };
       } catch (err: any) {
-        return reply.status(500).send({ error: err.message });
+        console.error('[api] List agents failed:', err.message);
+        return reply.status(500).send({ error: 'Failed to list agents' });
       }
     });
 
@@ -672,7 +675,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         const messages = adapter.getTeamAgentMessages(teamId, agentId, limit);
         return { messages };
       } catch (err: any) {
-        return reply.status(500).send({ error: err.message });
+        console.error('[api] Get agent messages failed:', err.message);
+        return reply.status(500).send({ error: 'Failed to get agent messages' });
       }
     });
 
@@ -703,7 +707,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         const ok = adapter.sendTeamMessage(teamId, from, to, message);
         return ok ? { status: 'sent', from, to } : reply.code(500).send({ error: 'Failed to send message' });
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] Team message send failed:', err.message);
+        return reply.code(500).send({ error: 'Failed to send message' });
       }
     });
 
@@ -784,7 +789,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
 
         return { status: 'spawned', agentId, role, displayName };
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] Agent spawn failed:', err.message);
+        return reply.code(500).send({ error: 'Failed to spawn agent' });
       }
     });
 
@@ -815,7 +821,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         await adapter.stopTeamAgent(teamId, agentId);
         return { status: 'stopped', agentId };
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] Agent stop failed:', err.message);
+        return reply.code(500).send({ error: 'Failed to stop agent' });
       }
     });
 
@@ -838,7 +845,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         adapter.triggerTeamAgentBackground(teamId, agentId, message);
         return { status: 'triggered', teamId, agentId };
       } catch (err: any) {
-        return reply.status(500).send({ error: err.message });
+        console.error('[api] Agent trigger failed:', err.message);
+        return reply.status(500).send({ error: 'Agent trigger failed' });
       }
     });
 
@@ -850,7 +858,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         const cost = adapter?.getTeamCost?.(teamId) ?? { totalTokens: 0, totalCostLux: 0, byAgent: {} };
         return { teamId, ...cost };
       } catch (err: any) {
-        return reply.status(500).send({ error: err.message });
+        console.error('[api] Team cost query failed:', err.message);
+        return reply.status(500).send({ error: 'Failed to get team cost' });
       }
     });
 
@@ -861,7 +870,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         const templates = adapter?.getTemplates?.() ?? [];
         return { templates };
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] Templates list failed:', err.message);
+        return reply.code(500).send({ error: 'Failed to list templates' });
       }
     });
 
@@ -901,7 +911,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         writeFileSync(join(dir, `${body.id}.json`), JSON.stringify(template, null, 2));
         return { status: 'created', template };
       } catch (err: any) {
-        return reply.status(500).send({ error: err.message });
+        console.error('[api] Template create failed:', err.message);
+        return reply.status(500).send({ error: 'Failed to create template' });
       }
     });
 
@@ -926,7 +937,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         unlinkSync(filePath);
         return { status: 'deleted', id };
       } catch (err: any) {
-        return reply.status(500).send({ error: err.message });
+        console.error('[api] Template delete failed:', err.message);
+        return reply.status(500).send({ error: 'Failed to delete template' });
       }
     });
 
@@ -937,7 +949,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         const tasks = adapter?.getTeamBoard(request.params.teamId) ?? [];
         return { tasks };
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] Team tasks list failed:', err.message);
+        return reply.code(500).send({ error: 'Failed to list team tasks' });
       }
     });
 
@@ -949,7 +962,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         if (!task) return reply.code(404).send({ error: 'Task not found' });
         return task;
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] Team task get failed:', err.message);
+        return reply.code(500).send({ error: 'Failed to get team task' });
       }
     });
 
@@ -970,7 +984,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
           managingNode: node.getIdentity?.()?.peerId || 'unknown',
         };
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] Team status failed:', err.message);
+        return reply.code(500).send({ error: 'Failed to get team status' });
       }
     });
 
@@ -1115,9 +1130,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         } catch (buildErr: any) {
           // Unstage on build failure so agent can fix
           try { git.exec(['reset', 'HEAD']); } catch { /* ignore */ }
-          const output = (buildErr.stdout || '') + (buildErr.stderr || '');
-          const errorLines = output.split('\n').filter((l: string) => l.includes('error') || l.includes('Error')).slice(0, 10).join('\n');
-          return reply.code(400).send({ error: 'Build failed — fix errors before committing', buildErrors: errorLines, steps });
+          console.error('[api] Build failed during commit-and-propose:', (buildErr.stderr || buildErr.message)?.slice(0, 500));
+          return reply.code(400).send({ error: 'Build failed — fix errors before committing', steps });
         }
 
         // Step 4: Commit
@@ -1130,7 +1144,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
           steps.push('pushed');
         } catch (pushErr: any) {
           // Push failed — commit is local only. Agent should investigate.
-          return reply.code(500).send({ error: `Push failed: ${pushErr.message?.slice(0, 200)}`, commitHash, steps });
+          console.error('[api] Git push failed:', pushErr.message);
+          return reply.code(500).send({ error: 'Push failed', commitHash, steps });
         }
 
         // Step 6: Create governance proposal
@@ -1148,7 +1163,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
           }
         } catch (govErr: any) {
           // Governance proposal failed — code is pushed, just no auto-upgrade
-          steps.push(`proposal-failed:${govErr.message?.slice(0, 100)}`);
+          console.error('[api] Governance proposal failed:', govErr.message);
+          steps.push('proposal-failed');
         }
 
         // Step 7: Update board task to done (if taskId provided)
@@ -1172,7 +1188,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
           steps,
         };
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message, steps });
+        console.error('[api] Commit-and-propose failed:', err.message);
+        return reply.code(500).send({ error: 'Operation failed', steps });
       }
     });
 

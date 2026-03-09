@@ -84,7 +84,8 @@ export function registerTestingRoutes(
       const overview = tester.dashboard.overview();
       return reply.send(overview);
     } catch (err: any) {
-      return reply.code(500).send({ error: 'Failed to get testing status', detail: err.message });
+      console.error('[testing] Failed to get testing status:', err.message);
+      return reply.code(500).send({ error: 'Failed to get testing status' });
     }
   });
 
@@ -106,7 +107,8 @@ export function registerTestingRoutes(
       });
       return reply.send(runs);
     } catch (err: any) {
-      return reply.code(500).send({ error: 'Failed to get run history', detail: err.message });
+      console.error('[testing] Failed to get run history:', err.message);
+      return reply.code(500).send({ error: 'Failed to get run history' });
     }
   });
 
@@ -132,7 +134,8 @@ export function registerTestingRoutes(
 
       return reply.send({ run, findings });
     } catch (err: any) {
-      return reply.code(500).send({ error: 'Failed to get run detail', detail: err.message });
+      console.error('[testing] Failed to get run detail:', err.message);
+      return reply.code(500).send({ error: 'Failed to get run detail' });
     }
   });
 
@@ -153,7 +156,8 @@ export function registerTestingRoutes(
       });
       return reply.send(findings);
     } catch (err: any) {
-      return reply.code(500).send({ error: 'Failed to get findings', detail: err.message });
+      console.error('[testing] Failed to get findings:', err.message);
+      return reply.code(500).send({ error: 'Failed to get findings' });
     }
   });
 
@@ -171,7 +175,8 @@ export function registerTestingRoutes(
       tester.findings.acknowledge(id);
       return reply.send({ success: true });
     } catch (err: any) {
-      return reply.code(500).send({ error: 'Failed to acknowledge finding', detail: err.message });
+      console.error('[testing] Failed to acknowledge finding:', err.message);
+      return reply.code(500).send({ error: 'Failed to acknowledge finding' });
     }
   });
 
@@ -196,7 +201,8 @@ export function registerTestingRoutes(
       tester.findings.resolve(id, resolution);
       return reply.send({ success: true });
     } catch (err: any) {
-      return reply.code(500).send({ error: 'Failed to resolve finding', detail: err.message });
+      console.error('[testing] Failed to resolve finding:', err.message);
+      return reply.code(500).send({ error: 'Failed to resolve finding' });
     }
   });
 
@@ -209,7 +215,8 @@ export function registerTestingRoutes(
       const scenarios = tester.scenarios.list();
       return reply.send(scenarios);
     } catch (err: any) {
-      return reply.code(500).send({ error: 'Failed to list scenarios', detail: err.message });
+      console.error('[testing] Failed to list scenarios:', err.message);
+      return reply.code(500).send({ error: 'Failed to list scenarios' });
     }
   });
 
@@ -251,7 +258,8 @@ export function registerTestingRoutes(
 
       return reply.send(playbooks);
     } catch (err: any) {
-      return reply.code(500).send({ error: 'Failed to list playbooks', detail: err.message });
+      console.error('[testing] Failed to list playbooks:', err.message);
+      return reply.code(500).send({ error: 'Failed to list playbooks' });
     }
   });
 
@@ -326,7 +334,8 @@ export function registerTestingRoutes(
 
       return reply.send(specs);
     } catch (err: any) {
-      return reply.code(500).send({ error: 'Failed to list specs', detail: err.message });
+      console.error('[testing] Failed to list specs:', err.message);
+      return reply.code(500).send({ error: 'Failed to list specs' });
     }
   });
 
@@ -341,7 +350,8 @@ export function registerTestingRoutes(
       const trend = tester.history.getTrend(isNaN(days) ? 14 : days);
       return reply.send(trend);
     } catch (err: any) {
-      return reply.code(500).send({ error: 'Failed to get stats trend', detail: err.message });
+      console.error('[testing] Failed to get stats trend:', err.message);
+      return reply.code(500).send({ error: 'Failed to get stats trend' });
     }
   });
 
@@ -366,7 +376,8 @@ export function registerTestingRoutes(
       const label = body?.grep || body?.specFile || 'all specs';
       return reply.send({ started: true, message: `Running ${label}` });
     } catch (err: any) {
-      return reply.code(500).send({ error: 'Failed to start scripted run', detail: err.message });
+      console.error('[testing] Failed to start scripted run:', err.message);
+      return reply.code(500).send({ error: 'Failed to start scripted run' });
     }
   });
 
@@ -406,7 +417,8 @@ export function registerTestingRoutes(
       resultPromise.catch(() => {}); // prevent unhandled rejection
       return reply.send({ started: true, message: `Running live playbook: ${body.playbook}` });
     } catch (err: any) {
-      return reply.code(500).send({ error: 'Failed to start live run', detail: err.message });
+      console.error('[testing] Failed to start live run:', err.message);
+      return reply.code(500).send({ error: 'Failed to start live run' });
     }
   });
 }

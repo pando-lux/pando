@@ -1831,8 +1831,17 @@ location /apps/${appId}/ {
       if (!pkg.scripts?.build) return;
     }
 
+    // Security: only allow `npm run <script>` or `npx <tool>` patterns to prevent injection
+    const allowedPattern = /^(npm run [a-zA-Z0-9_:.-]+|npx [a-zA-Z0-9_@/.:-]+)$/;
+    if (!allowedPattern.test(buildCmd)) {
+      console.warn(`[app-manager] Rejected unsafe buildCmd: ${buildCmd.slice(0, 50)}`);
+      return;
+    }
+
     try {
-      execSync(buildCmd, { ...INSTALL_OPTS, cwd: appDir });
+      // Split into command + args for execFileSync (no shell injection)
+      const parts = buildCmd.split(' ');
+      execFileSync(parts[0], parts.slice(1), { ...INSTALL_OPTS, cwd: appDir });
       console.log(`[app-manager] Build complete: ${buildCmd}`);
     } catch (err: any) {
       console.log(`[app-manager] Build failed (continuing): ${err.message?.slice(0, 200)}`);

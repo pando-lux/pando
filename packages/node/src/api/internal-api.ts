@@ -170,7 +170,8 @@ export function registerInternalRoutes(fastify: any, deps: InternalRouteDeps): v
       }
       return { result };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message ?? 'Storage operation failed' });
+      console.error('[internal] Storage operation failed:', err.message);
+      return reply.code(500).send({ error: 'Storage operation failed' });
     }
   });
 
@@ -184,7 +185,8 @@ export function registerInternalRoutes(fastify: any, deps: InternalRouteDeps): v
       const result = await deps.deployHandler(request.body);
       return result;
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message ?? 'Deploy failed' });
+      console.error('[internal] Deploy failed:', err.message);
+      return reply.code(500).send({ error: 'Deploy failed' });
     }
   });
 
@@ -212,7 +214,8 @@ export function registerInternalRoutes(fastify: any, deps: InternalRouteDeps): v
       }
       return { credential };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message ?? 'Credential retrieval failed' });
+      console.error('[internal] Credential retrieval failed:', err.message);
+      return reply.code(500).send({ error: 'Credential retrieval failed' });
     }
   });
 
@@ -226,7 +229,8 @@ export function registerInternalRoutes(fastify: any, deps: InternalRouteDeps): v
       const result = await deps.chatProxyHandler(request.body);
       return result;
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message ?? 'Chat proxy failed' });
+      console.error('[internal] Chat proxy failed:', err.message);
+      return reply.code(500).send({ error: 'Chat proxy failed' });
     }
   });
 
@@ -259,7 +263,8 @@ export function registerInternalRoutes(fastify: any, deps: InternalRouteDeps): v
       const result = await handler(req);
       return { success: true, payload: result };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message ?? 'Handler failed' });
+      console.error('[internal] Handler dispatch failed:', err.message);
+      return reply.code(500).send({ error: 'Handler failed' });
     }
   });
 }

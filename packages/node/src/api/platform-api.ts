@@ -125,7 +125,7 @@ export async function registerPlatformRoutes(
       // If projectId is provided, skip doorman — route directly to project engine
       if (projectId && typeof projectId === 'string') {
         if (threadStore) {
-          threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'project', '', chatUserId);
           threadStore.updateThread(threadId, { projectId });
           await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' });
@@ -199,7 +199,7 @@ export async function registerPlatformRoutes(
         // Doorman answers directly — no PandoCode engine needed
         const doormanReply = classification.response || 'I can help you build apps or answer questions. Try "build me a todo app"!';
         if (threadStore) {
-          threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+          threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
           await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' });
           await threadStore.addMessage(threadId, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' });
@@ -218,7 +218,7 @@ export async function registerPlatformRoutes(
         const reply = taskId
           ? `Thanks for the report! I've added it to the team's board. Task: ${taskId}`
           : `Thanks for the report. The team will review it on the next tick.`;
-        threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
         if (threadStore) {
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
           await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' });
@@ -230,7 +230,7 @@ export async function registerPlatformRoutes(
       // Intent is 'build' — unified routing: always create project, find best PandoCode peer
       const builder = findBestBuilder();
       if (!builder) {
-        threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
         if (threadStore) {
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
           await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' });
@@ -281,7 +281,7 @@ export async function registerPlatformRoutes(
 
       // Create thread linked to project
       if (threadStore) {
-        threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+        threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
         threadStore.createThread(threadId, trimmed.slice(0, 50), 'project', '', chatUserId);
         if (newProjectId) threadStore.updateThread(threadId, { projectId: newProjectId });
         await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' });
@@ -391,7 +391,7 @@ export async function registerPlatformRoutes(
 
       const { title, type, encryptionKeys, projectId } = request.body || {};
       const threadTitle = (title || 'New Chat').slice(0, 80);
-      const threadId = `chat-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      const threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
 
       // Resolve user ID from token to associate thread with the user
       const userId = (await deps.verifyUserJwt(request)) || undefined;
@@ -1334,7 +1334,8 @@ export async function registerPlatformRoutes(
         });
         return record;
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] Instance launch failed:', err.message);
+        return reply.code(500).send({ error: 'Instance launch failed' });
       }
     });
 
@@ -1348,7 +1349,8 @@ export async function registerPlatformRoutes(
         await manager.terminateInstance(id);
         return { instanceId: id, status: 'terminated' };
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] Instance terminate failed:', err.message);
+        return reply.code(500).send({ error: 'Instance termination failed' });
       }
     });
 
@@ -1362,7 +1364,8 @@ export async function registerPlatformRoutes(
         const health = await manager.checkInstanceHealth(id);
         return { instanceId: id, ...health };
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] Instance health check failed:', err.message);
+        return reply.code(500).send({ error: 'Instance health check failed' });
       }
     });
 
@@ -1383,7 +1386,8 @@ export async function registerPlatformRoutes(
         }
         return result;
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] Console output failed:', err.message);
+        return reply.code(500).send({ error: 'Failed to get console output' });
       }
     });
 
@@ -1428,8 +1432,8 @@ export async function registerPlatformRoutes(
         const result = await manager.deployApp(id, body.projectId, body.repoUrl, envVars);
         return result;
       } catch (err: any) {
-        console.log(`[api] P2P deploy failed: ${err.message}`);
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] P2P deploy failed:', err.message);
+        return reply.code(500).send({ error: 'Deploy failed' });
       }
     });
 
@@ -1449,8 +1453,8 @@ export async function registerPlatformRoutes(
         const result = await manager.upgradeInstance(id);
         return { ok: true, instanceId: id, ...result };
       } catch (err: any) {
-        console.log(`[api] Instance upgrade failed: ${err.message}`);
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] Instance upgrade failed:', err.message);
+        return reply.code(500).send({ error: 'Instance upgrade failed' });
       }
     });
 
@@ -1861,7 +1865,7 @@ export async function registerPlatformRoutes(
         return { ...result, token: jwt.token, expiresAt: jwt.expiresAt };
       } catch (err: any) {
         console.error('[api] Login error:', err.message);
-        return reply.code(500).send({ error: err.message || 'Login failed' });
+        return reply.code(500).send({ error: 'Login failed' });
       }
     });
 
@@ -2049,7 +2053,7 @@ export async function registerPlatformRoutes(
           return reply.code(401).send({ error: 'Challenge token signature invalid' });
         }
       } catch (err: any) {
-        return reply.code(401).send({ error: 'Challenge verification error', detail: err?.message });
+        return reply.code(401).send({ error: 'Challenge verification failed' });
       }
 
       // 2. Verify the user's signature over the nonce
@@ -2069,7 +2073,7 @@ export async function registerPlatformRoutes(
           return reply.code(401).send({ error: 'Signature verification failed' });
         }
       } catch (err: any) {
-        return reply.code(401).send({ error: 'Signature verification error', detail: err?.message });
+        return reply.code(401).send({ error: 'Signature verification failed' });
       }
 
       // 3. Issue a JWT signed by THIS node
@@ -3107,7 +3111,7 @@ export async function registerPlatformRoutes(
         const resources = ps.getProjectResources(id);
         return { resources };
       } catch (err: any) {
-        return reply.code(400).send({ error: err.message });
+        return reply.code(400).send({ error: 'Failed to assign resource' });
       }
     });
 
@@ -3134,7 +3138,7 @@ export async function registerPlatformRoutes(
         const resources = ps.getProjectResources(id);
         return { resources };
       } catch (err: any) {
-        return reply.code(400).send({ error: err.message });
+        return reply.code(400).send({ error: 'Failed to remove resource' });
       }
     });
 
@@ -3207,7 +3211,8 @@ export async function registerPlatformRoutes(
         const apiKey = await ps.generateApiKey(id);
         return { apiKey };
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] API key generation failed:', err.message);
+        return reply.code(500).send({ error: 'API key generation failed' });
       }
     });
 
@@ -3233,7 +3238,8 @@ export async function registerPlatformRoutes(
         const apiKey = await ps.generateApiKey(id);
         return { apiKey };
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message });
+        console.error('[api] API key regeneration failed:', err.message);
+        return reply.code(500).send({ error: 'API key regeneration failed' });
       }
     });
 
@@ -3434,8 +3440,8 @@ export async function registerPlatformRoutes(
           console.log(`[github] Repo already exists: ${fullRepoName}`);
         } else {
           const errText = await createResp.text();
-          console.log(`[github] Repo create failed (${createResp.status}): ${errText}`);
-          return reply.code(502).send({ error: `GitHub API error: ${createResp.status}`, details: errText });
+          console.error(`[github] Repo create failed (${createResp.status}): ${errText}`);
+          return reply.code(502).send({ error: 'GitHub repo creation failed' });
         }
 
         // Update project record
@@ -3447,8 +3453,8 @@ export async function registerPlatformRoutes(
           githubRepo: fullRepoName,
         };
       } catch (err: any) {
-        console.log(`[github] Create repo error: ${err.message}`);
-        return reply.code(502).send({ error: err.message });
+        console.error('[github] Create repo error:', err.message);
+        return reply.code(502).send({ error: 'GitHub repo creation failed' });
       }
     });
 
@@ -3486,7 +3492,8 @@ export async function registerPlatformRoutes(
             return reply.code(502).send({ error: 'Failed to create GitHub repo' });
           }
         } catch (err: any) {
-          return reply.code(502).send({ error: `GitHub repo creation failed: ${err.message}` });
+          console.error('[github] Repo creation failed during push:', err.message);
+          return reply.code(502).send({ error: 'GitHub repo creation failed' });
         }
       }
 
@@ -3502,7 +3509,7 @@ export async function registerPlatformRoutes(
       const { GitOps } = await import('../core/git-ops.js');
       const workDir = body.workspaceDir;
 
-      if (!fsExists(workDir)) return reply.code(400).send({ error: `Workspace not found: ${workDir}` });
+      if (!fsExists(workDir)) return reply.code(400).send({ error: 'Workspace directory not found' });
 
       try {
         const pushUrl = `https://x-access-token:${githubToken}@github.com/${project.githubRepo}.git`;
@@ -3533,8 +3540,8 @@ export async function registerPlatformRoutes(
           githubRepo: project.githubRepo,
         };
       } catch (err: any) {
-        console.log(`[github] Push failed: ${err.message}`);
-        return reply.code(502).send({ error: `GitHub push failed: ${err.message}` });
+        console.error('[github] Push failed:', err.message);
+        return reply.code(502).send({ error: 'GitHub push failed' });
       }
     });
 
@@ -3585,7 +3592,7 @@ export async function registerPlatformRoutes(
           if (resp.ok) htmlContent = await resp.text();
           else errors.push(`URL returned ${resp.status}`);
         } catch (err: any) {
-          errors.push(`URL fetch failed: ${err.message}`);
+          errors.push('URL fetch failed');
         }
       } else {
         errors.push('No deployment URL found');
@@ -3612,7 +3619,7 @@ export async function registerPlatformRoutes(
             resourceProxyWorks = proxyResp.ok;
             if (!proxyResp.ok) errors.push(`Resource Proxy returned ${proxyResp.status}`);
           } catch (err: any) {
-            errors.push(`Resource Proxy test failed: ${err.message}`);
+            errors.push('Resource Proxy test failed');
           }
         }
       }
@@ -3713,7 +3720,7 @@ export async function registerPlatformRoutes(
         await governance.castVote(id, 'reject', reason || 'Operator veto');
         return { status: 'vetoed', proposalId: id };
       } catch (err: any) {
-        return reply.code(400).send({ error: err.message });
+        return reply.code(400).send({ error: 'Veto failed' });
       }
     });
 

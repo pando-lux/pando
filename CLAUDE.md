@@ -2,7 +2,7 @@
 
 > **Architecture reference: `BIBLE.md`** at repo root. Read it for architecture, component details, technical debt, and gotchas. This file is operational instructions only.
 
-> **If you are the CEO agent (Claude Code on Windows dev machine):** Current mission: `docs/BRAINSTORM-ROADMAP.md` (council rewire). Read it + `BIBLE.md` Section 3.2 + Section 5.10 on every session start. Full CEO-level technical authority.
+> **If you are the CEO agent (Claude Code on Windows dev machine):** Read `BIBLE.md` + `infra/DEV-MODE.md` on session start. Full CEO-level technical authority. Deploy through governance only (`/v1/infra/commit-and-propose`).
 
 > **If you are a Pando AI worker:** Your task is in your startup prompt, not this file.
 
@@ -68,6 +68,24 @@ Dashboard at gateway `/testing`. API at `/v1/testing/*`. Do NOT create ad-hoc te
 **ONLY path:** `/contribute <service> <token>` → AES-256-GCM → MongoDB → `ResourceRegistry.getCredential()`
 
 **NEVER:** read from env files, secrets/, CLI args. NEVER log, print, output credential values.
+
+## Deploying Code (MANDATORY)
+
+**ALL code changes MUST go through the governance pipeline.** Never raw `git push`.
+
+```bash
+# The ONE command for deploying code:
+API_TOKEN=$(cat ~/.pando/api-token)
+curl -s -X POST http://localhost:4000/v1/infra/commit-and-propose \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $API_TOKEN" \
+  -d '{"message":"fix: description","taskId":"<optional>"}'
+```
+
+This does: git add → build → commit → push → governance proposal → auto-deploy to all nodes.
+In dev mode (≤8 peers), governance auto-approves. Upgrade notifications sent via direct P2P to all peers.
+
+**SSH into nodes only as last resort** (pipeline broken, node crashed). The pipeline handles normal deploys.
 
 ## Sprint Rules
 

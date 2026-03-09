@@ -1327,7 +1327,7 @@ function DraftScenariosView({
 
   const handleAdd = () => {
     if (!newTitle.trim()) return;
-    const id = `draft-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const id = `draft-${Date.now()}-${crypto.randomUUID().slice(0, 8)}`;
     const draft: DraftScenario = {
       id,
       title: newTitle.trim(),

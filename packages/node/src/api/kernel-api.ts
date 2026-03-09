@@ -229,7 +229,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
             results.push({ projectId: project.id, status: 'failed', error: response?.payload?.error });
           }
         } catch (err: any) {
-          results.push({ projectId: project.id, status: 'error', error: err.message });
+          console.error(`[admin] Migration failed for ${project.id}:`, err.message);
+          results.push({ projectId: project.id, status: 'error', error: 'Migration failed' });
         }
       }
 
@@ -255,7 +256,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
           await ps.updateProject(id, { status: 'archived', updatedAt: Date.now() });
           results.push({ projectId: id, status: 'archived' });
         } catch (err: any) {
-          results.push({ projectId: id, status: 'error', error: err.message });
+          console.error(`[admin] Cleanup failed for ${id}:`, err.message);
+          results.push({ projectId: id, status: 'error', error: 'Archive failed' });
         }
       }
 
@@ -397,7 +399,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         const peerId = await network.dialPeer(addr);
         return { success: true, peerId };
       } catch (err: any) {
-        return reply.code(500).send({ error: `Connection failed: ${err.message}` });
+        console.error('[api] Peer connection failed:', err.message);
+        return reply.code(500).send({ error: 'Connection failed' });
       }
     });
 
@@ -486,15 +489,16 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
 
         return { success: true, transaction: tx };
       } catch (err: any) {
-        // Categorize known ledger errors
-        const msg = err.message || 'Unknown error';
+        // Categorize known ledger errors — expose safe user-facing messages only
+        const msg = err.message || '';
         if (msg.includes('Insufficient balance')) {
-          return reply.code(400).send({ error: msg, code: 'INSUFFICIENT_BALANCE' });
+          return reply.code(400).send({ error: 'Insufficient balance', code: 'INSUFFICIENT_BALANCE' });
         }
         if (msg.includes('not found')) {
-          return reply.code(404).send({ error: msg, code: 'ACCOUNT_NOT_FOUND' });
+          return reply.code(404).send({ error: 'Account not found', code: 'ACCOUNT_NOT_FOUND' });
         }
-        return reply.code(500).send({ error: msg, code: 'TRANSFER_FAILED' });
+        console.error('[api] Transfer failed:', msg);
+        return reply.code(500).send({ error: 'Transfer failed', code: 'TRANSFER_FAILED' });
       }
     });
 
@@ -862,7 +866,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         const result = gov.deleteProposal(request.params.id);
         return { success: true, deleted: result.title };
       } catch (err: any) {
-        return reply.code(404).send({ error: err.message });
+        return reply.code(404).send({ error: 'Proposal not found' });
       }
     });
 
@@ -897,7 +901,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         const proposal = await gov.createProposal(trimmedTitle, trimmedDesc, votingDurationMs || 300_000, { category: effectiveCategory, isEmergency, upgradePayload });
         return { success: true, proposal, proposer: proposerPeerId };
       } catch (err: any) {
-        return reply.code(429).send({ error: err.message });
+        return reply.code(429).send({ error: 'Proposal rate limit exceeded or governance constraint' });
       }
     });
 
@@ -914,7 +918,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         await gov.addComment(proposalId, content);
         return { success: true };
       } catch (err: any) {
-        return reply.code(400).send({ error: err.message });
+        return reply.code(400).send({ error: 'Failed to add comment' });
       }
     });
 
@@ -952,7 +956,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
           decision: decision || null,
         };
       } catch (err: any) {
-        return reply.code(400).send({ error: err.message });
+        return reply.code(400).send({ error: 'Vote failed — proposal may be closed or already voted' });
       }
     });
 
@@ -1027,7 +1031,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         });
         return { success: true, review };
       } catch (err: any) {
-        return reply.code(400).send({ error: err.message });
+        return reply.code(400).send({ error: 'Review submission failed' });
       }
     });
 
@@ -1194,7 +1198,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
 
         return response;
       } catch (err: any) {
-        return reply.code(500).send({ error: err.message || 'Pipeline failed' });
+        console.error('[api] Pipeline run failed:', err.message);
+        return reply.code(500).send({ error: 'Pipeline failed' });
       }
     });
 
@@ -1584,7 +1589,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
           const data = JSON.parse(readFileSync(path, 'utf-8'));
           return data;
         } catch (err: any) {
-          return reply.code(500).send({ error: `Failed to read snapshot: ${err.message}` });
+          console.error('[api] Failed to read snapshot:', err.message);
+          return reply.code(500).send({ error: 'Failed to read snapshot' });
         }
       }
 
@@ -1602,7 +1608,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         const info = ledger.createSnapshot(node.getDataDir() || undefined);
         return { success: true, snapshot: info };
       } catch (err: any) {
-        return reply.code(500).send({ error: `Snapshot creation failed: ${err.message}` });
+        console.error('[api] Snapshot creation failed:', err.message);
+        return reply.code(500).send({ error: 'Snapshot creation failed' });
       }
     });
 
@@ -1899,7 +1906,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         if (!result.success) return reply.code(502).send({ error: result.error || 'Remote peer returned error' });
         return result.payload;
       } catch (err: any) {
-        return reply.code(504).send({ error: `Remote query failed: ${err.message}` });
+        console.error('[api] Remote query failed:', err.message);
+        return reply.code(504).send({ error: 'Remote query failed' });
       }
     });
 
@@ -1914,7 +1922,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         if (result.payload?.error) return reply.code(404).send({ error: result.payload.error });
         return result.payload;
       } catch (err: any) {
-        return reply.code(504).send({ error: `Remote query failed: ${err.message}` });
+        console.error('[api] Remote query failed:', err.message);
+        return reply.code(504).send({ error: 'Remote query failed' });
       }
     });
 
@@ -2323,11 +2332,12 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         const result = await httpClient.dispatchRequest(to, type, payload ?? {}, timeoutMs);
         return { success: true, reply: result };
       } catch (err: any) {
-        const msg = err.message || 'Request failed';
+        const msg = err.message || '';
         if (msg.includes('timed out')) {
-          return reply.code(504).send({ error: msg });
+          return reply.code(504).send({ error: 'Request timed out' });
         }
-        return reply.code(500).send({ error: msg });
+        console.error('[api] Request dispatch failed:', msg);
+        return reply.code(500).send({ error: 'Request failed' });
       }
     });
 
@@ -2384,7 +2394,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       const result = await le.grantDirectory(dirPath);
       return { success: true, ...result };
     } catch (err: any) {
-      return reply.code(400).send({ error: err.message });
+      return reply.code(400).send({ error: 'Failed to index directory' });
     }
   });
 
@@ -2418,7 +2428,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       const content = le.readFile(filePath);
       return { path: filePath, content };
     } catch (err: any) {
-      return reply.code(403).send({ error: err.message });
+      return reply.code(403).send({ error: 'Access denied or file not found' });
     }
   });
 
@@ -2442,7 +2452,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       le.appendMemory(entry);
       return { success: true };
     } catch (err: any) {
-      return reply.code(500).send({ error: err.message });
+      console.error('[api] Memory append failed:', err.message);
+      return reply.code(500).send({ error: 'Failed to append memory entry' });
     }
   });
 
