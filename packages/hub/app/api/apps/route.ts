@@ -22,9 +22,9 @@ export async function GET() {
     const data = await res.json();
     const allApps: any[] = data.apps || [];
 
-    // Show live and deploying apps (not failed/registered)
+    // Show live and deploying apps that have an accessible URL
     const deployed = allApps
-      .filter((a: any) => a.status === "live" || a.status === "deploying")
+      .filter((a: any) => (a.status === "live" || a.status === "deploying") && a.deploy_url)
       .map((a: any) => {
         let hostType: "s3" | "ec2" | "gateway" | "other" = "other";
         const url: string = a.deploy_url || "";
