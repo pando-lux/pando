@@ -36,25 +36,25 @@ All issues verified fixed and deployed to network via governance pipeline.
 
 Priority: **HIGH** — needed for production reliability.
 
-The code for team migration EXISTS but has **never been tested** under real conditions.
+**Tested 2026-03-09:** Kill Mac (managing node) → Windows detects orphan (2 min) → claims team → starts 3 agents. Local board persisted. P2P board sync failed (dead node can't respond).
 
-**P2P board sync IMPLEMENTED (06fce4d):** BOARD_STATE_REQUEST/RESPONSE messages. Claiming node broadcasts request, peers respond with board data, 5s delay before startTeam to allow responses.
+**P2P board sync IMPLEMENTED (06fce4d):** BOARD_STATE_REQUEST/RESPONSE messages. Claiming node broadcasts request, peers respond with board data, 5s delay before startTeam.
 
-**Mechanics:** Orphan scan every 5 min. Team stale after 20 min without heartbeat. Claiming node must have PandoCode capability. Conflict resolution: latest `claimedAt` wins.
+**Dev mode timings (≤8 peers):** 30s orphan scan interval, 2 min stale threshold, 30s heartbeat. Production: 5 min scan, 20 min threshold, 5 min heartbeat.
+
+**Mechanics:** Conflict resolution: latest `claimedAt` wins. Claiming node must have PandoCode (@pando-code/core) capability.
 
 | # | Test | Status |
 |---|------|--------|
-| 1 | Kill managing node → orphan detection triggers on another node | NOT TESTED |
-| 2 | New node claims team → board synced via P2P → agents started | NOT TESTED |
-| 3 | Split-brain: two nodes both claim same team → latest claimedAt wins | NOT TESTED |
+| 1 | Kill managing node → orphan detection triggers on another node | **PASS** (2026-03-09) — Mac killed, Windows detected orphan in ~2 min |
+| 2 | New node claims team → agents started | **PASS** (2026-03-09) — Windows claimed, 3 agents running, local board persisted |
+| 3 | Split-brain: two nodes both claim same team → latest claimedAt wins | **PASS** (2026-03-09) — observed during test: team sync correctly resolved to latest claimedAt |
 | 4 | Network partition: node disconnects but comes back → graceful reconciliation | NOT TESTED |
-| 5 | P2P board sync — transfer board-state.json to claiming node | **IMPLEMENTED** (06fce4d) |
+| 5 | P2P board sync — transfer board-state.json to claiming node | **PARTIAL** — code works (06fce4d) but only if old managing node is alive to respond. Dead node = board data lost |
 
-**Prerequisites for test:**
-- At least 2 nodes with PandoCode capability (currently: Windows + Mac)
-- Mac must have Claude Code installed and API key configured
+**Known limitation:** Board data created exclusively on the dead node is lost. Board state should be proactively replicated to survive sudden node death. Current sync is on-demand (request/response) which requires the source node to be alive.
 
-**Done when:** Full node-death-and-recovery cycle proven E2E, including board state transfer.
+**Done when:** Board state proactive replication implemented, network partition test (#4) completed.
 
 ## Phase 3: Gateway Dashboard Integration
 

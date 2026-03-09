@@ -588,7 +588,7 @@ export async function initKernel(node: any): Promise<void> {
       }, 2_000);
 
       // Peer exchange: share our peer list so new nodes can form a full mesh.
-      // Delayed 10ms to let connection settle (was 50ms — connection is ready sooner).
+      // Immediate — connection is already established, no settle delay needed.
       // Also immediately notify ALL existing peers about the new peer so they
       // don't have to wait for the next periodic exchange.
       setTimeout(async () => {
@@ -625,7 +625,7 @@ export async function initKernel(node: any): Promise<void> {
             console.log(`[peer-exchange] Broadcast new peer to ${existingPeers.length} existing peer(s)`);
           }
         } catch {}
-      }, 10);
+      }, 1); // 1ms — effectively immediate, just yields to event loop
 
       // Second peer exchange at 300ms: re-share after mesh settles to catch peers
       // the first round missed. (Was 500ms — mesh forms within ~200ms.)

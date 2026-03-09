@@ -712,12 +712,18 @@ Be friendly and helpful. Keep answers short.`
         }
       };
 
-      // Auto-bootstrap pando-infra if EngineAdapter is available
-      const adapter = node.getEngineAdapter?.();
-      if (adapter?.available) {
+      // Auto-bootstrap pando-infra — delayed to allow P2P team sync first.
+      // Without this delay, both PandoCode-capable nodes create pando-infra
+      // independently (split-brain). The delay lets team_sync_response arrive
+      // so we know if another node already manages the team.
+      const TEAM_SYNC_WAIT_MS = 10_000; // 10s — enough for P2P sync round-trip
+      const bootstrapTeams = () => {
+        const adapter = node.getEngineAdapter?.();
+        if (!adapter?.available) return;
+
         const existing = teamRegistry.getTeam('pando-infra');
         if (!existing) {
-          // Create pando-infra team and claim it for this node
+          // No one has pando-infra yet — create and claim it
           teamRegistry.createTeam({
             id: 'pando-infra',
             displayName: 'Pando Infrastructure',
@@ -735,6 +741,12 @@ Be friendly and helpful. Keep answers short.`
           // Unclaimed or orphaned — claim it
           const claimed = teamRegistry.claimTeam('pando-infra');
           if (claimed) console.log('[team-registry] pando-infra team claimed (was orphaned).');
+        } else if (existing.managingNode === node.identity.peerId) {
+          // We already manage it (persisted from previous session) — verify still valid
+          console.log('[team-registry] pando-infra already managed by this node.');
+        } else {
+          // Another node manages it — don't touch it, orphan scan will handle failover
+          console.log(`[team-registry] pando-infra managed by peer ${existing.managingNode.slice(0, 16)}... — not claiming.`);
         }
 
         // If we manage pando-infra, start its agents
@@ -745,7 +757,7 @@ Be friendly and helpful. Keep answers short.`
           );
         }
 
-        // Heartbeat for all teams we manage (every 5 minutes)
+        // Heartbeat for all teams we manage
         // #audit: Store ref so performStop() can clear it
         // Heartbeat fast in dev mode (30s) so orphan detection works quickly
         const heartbeatMs = peerCount <= 8 ? 30_000 : 5 * 60_000;
@@ -756,6 +768,17 @@ Be friendly and helpful. Keep answers short.`
           }
         }, heartbeatMs);
         node._teamHeartbeatTimer.unref();
+      };
+
+      // Request team sync from a random peer, then wait for responses
+      const peers = node.network?.getPeers?.() ?? [];
+      if (peers.length > 0) {
+        console.log(`[team-registry] Waiting ${TEAM_SYNC_WAIT_MS / 1000}s for P2P team sync before bootstrap...`);
+        teamRegistry.requestSyncFromPeer(peers[Math.floor(Math.random() * peers.length)]);
+        setTimeout(bootstrapTeams, TEAM_SYNC_WAIT_MS);
+      } else {
+        // No peers yet — bootstrap immediately (we're likely the first node)
+        bootstrapTeams();
       }
 
       console.log('[team-registry] Initialized. Teams: ' + teamRegistry.listTeams().length);
@@ -893,16 +916,16 @@ Be friendly and helpful. Keep answers short.`
               if (!libp2p) return;
               if (peer.addrs.length === 1) {
                 const ac = new AbortController();
-                const timer = setTimeout(() => ac.abort(), 1_000);
+                const timer = setTimeout(() => ac.abort(), 500); // 500ms (was 1s) — fast fail on stale addrs
                 await libp2p.dial(ma(peer.addrs[0]), { signal: ac.signal });
                 clearTimeout(timer);
                 console.log(`[peer-exchange] Connected to ${peer.peerId.slice(0, 12)} via exchange from ${from.slice(0, 12)}`);
                 triggerCascade();
                 return;
               }
-              // Multiple addresses: race them — first success wins (1.5s, was 2.5s)
+              // Multiple addresses: race them — first success wins (800ms, was 1.5s)
               const ac = new AbortController();
-              const timer = setTimeout(() => ac.abort(), 1_500);
+              const timer = setTimeout(() => ac.abort(), 800);
               try {
                 await Promise.any(peer.addrs.map(async (addr: string) => {
                   await libp2p!.dial(ma(addr), { signal: ac.signal });

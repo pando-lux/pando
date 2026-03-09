@@ -231,7 +231,7 @@ export class PandoNetwork {
         // Single address: just dial it
         try {
           const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 800); // 800ms (was 1s)
+          const timer = setTimeout(() => ac.abort(), 500); // 500ms (was 800ms) — fast fail
           await this.node!.dial(multiaddr(peer.addrs[0]), { signal: ac.signal });
           clearTimeout(timer);
           console.log(`[known-peers] Connected to ${peer.peerId.slice(0, 16)}...`);
@@ -242,7 +242,7 @@ export class PandoNetwork {
       }
       // Multiple addresses: race them all — first success wins
       const ac = new AbortController();
-      const timer = setTimeout(() => ac.abort(), 1_500); // 1.5s (was 2.5s)
+      const timer = setTimeout(() => ac.abort(), 800); // 800ms (was 1.5s)
       try {
         await Promise.any(peer.addrs.map(async (addr) => {
           const conn = await this.node!.dial(multiaddr(addr), { signal: ac.signal });
@@ -396,7 +396,7 @@ export class PandoNetwork {
       startupDials.push(...this.config.bootstrapPeers.map(async (addr) => {
         try {
           const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 1_000); // 1s timeout (was 1.5s)
+          const timer = setTimeout(() => ac.abort(), 600); // 600ms (was 1s) — bootstrap should be fast
           await this.node!.dial(multiaddr(addr), { signal: ac.signal });
           clearTimeout(timer);
           console.log(`[startup] Connected to bootstrap ${addr.slice(0, 40)}...`);
@@ -422,6 +422,33 @@ export class PandoNetwork {
         }
       } catch {}
     }, 1_000);
+
+    // Periodic DHT refresh: every 30s for 5 min, then every 2 min.
+    // Discovers new nodes that joined after startup via DHT routing.
+    let dhtRefreshCount = 0;
+    const dhtRefreshTimer = setInterval(() => {
+      if (this.stopped) { clearInterval(dhtRefreshTimer); return; }
+      dhtRefreshCount++;
+      try {
+        const dht = (this.node as any)?.services?.dht;
+        if (dht && typeof dht.refreshRoutingTable === 'function') {
+          dht.refreshRoutingTable().catch(() => {});
+        }
+      } catch {}
+      // After 10 refreshes (5 min at 30s), switch to 2 min interval
+      if (dhtRefreshCount >= 10) {
+        clearInterval(dhtRefreshTimer);
+        const slowTimer = setInterval(() => {
+          if (this.stopped) { clearInterval(slowTimer); return; }
+          try {
+            const dht = (this.node as any)?.services?.dht;
+            if (dht && typeof dht.refreshRoutingTable === 'function') {
+              dht.refreshRoutingTable().catch(() => {});
+            }
+          } catch {}
+        }, 120_000);
+      }
+    }, 30_000);
 
     // Fast startup reconnect: 1s interval for first 60s, then settle to 2s.
     // Extended fast phase (was 30s) helps new nodes form mesh quickly.
@@ -452,7 +479,7 @@ export class PandoNetwork {
       const bootstrapDials = this.config.bootstrapPeers.map(async (addr) => {
         try {
           const ac = new AbortController();
-          const timer = setTimeout(() => ac.abort(), 1_000);
+          const timer = setTimeout(() => ac.abort(), 600); // 600ms — match startup timeout
           await this.node!.dial(multiaddr(addr), { signal: ac.signal });
           clearTimeout(timer);
           console.log(`[reconnect] Dialed bootstrap ${addr.slice(0, 40)}...`);

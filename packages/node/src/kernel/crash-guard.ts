@@ -11,12 +11,13 @@
  * restarting the node, and this guard will eventually restore a working build.
  */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, mkdirSync, cpSync, rmSync, unlinkSync } from 'node:fs';
 import { join } from 'node:path';
 import { execSync } from 'node:child_process';
 import { homedir } from 'node:os';
 
 const CRASH_LOG_FILE = 'crash-log.json';
+const CLEAN_EXIT_FILE = 'clean-exit.json';
 const CRASH_WINDOW_MS = 60_000;   // 60 seconds
 const CRASH_THRESHOLD = 6;        // 6 crashes in window = crash loop (was 3 — too aggressive for dev workflows)
 const STABILITY_DELAY_MS = 30_000; // 30s uptime = stable
@@ -40,6 +41,13 @@ export function checkAndRecordStartup(dataDir?: string, repoDir?: string): { cra
 
   mkdirSync(dir, { recursive: true });
 
+  // Check for clean-exit marker (previous shutdown was graceful, not a crash)
+  const cleanExitPath = join(dir, CLEAN_EXIT_FILE);
+  const wasCleanExit = existsSync(cleanExitPath);
+  if (wasCleanExit) {
+    try { unlinkSync(cleanExitPath); } catch { /* best-effort */ }
+  }
+
   // Read existing crash log
   let log: CrashLog = { startups: [] };
   if (existsSync(logPath)) {
@@ -56,8 +64,10 @@ export function checkAndRecordStartup(dataDir?: string, repoDir?: string): { cra
   // Clean old entries (outside the crash window)
   log.startups = log.startups.filter(ts => now - ts < CRASH_WINDOW_MS);
 
-  // Add this startup
-  log.startups.push(now);
+  // Only count this startup as a potential crash if the previous exit was NOT clean
+  if (!wasCleanExit) {
+    log.startups.push(now);
+  }
 
   // Write updated log
   writeFileSync(logPath, JSON.stringify(log, null, 2), 'utf-8');

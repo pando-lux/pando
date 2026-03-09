@@ -407,6 +407,9 @@ export class TeamRegistry {
     }
   }
 
+  /** Request team sync from a specific peer (public for init-platform delayed bootstrap). */
+  requestSyncFromPeer(peerId: string): void { return this.requestSync(peerId); }
+
   private requestSync(peerId: string): void {
     try {
       const msg: PandoMessage = {

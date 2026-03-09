@@ -157,11 +157,20 @@ export function analyzeStartupHealth(dataDir?: string): StartupHealthReport {
     cbState = { consecutiveFailures: 0, lastError: '', lastTimestamp: 0 };
   }
 
+  // Check if last shutdown was graceful (clean-exit marker already consumed by crash-guard,
+  // but we can infer: if crash-guard didn't add a startup entry, it was clean)
+  const currentStartupRecorded = crashLog?.startups?.some((ts: number) => Math.abs(now - ts) < 2000) ?? false;
+
   // Determine if this startup looks like a crash recovery
   const recentCrash = crashLog?.startups?.some((ts: number) => now - ts < RECENT_CRASH_WINDOW_MS && ts !== now) ?? false;
   const hasRestartReason = !!reason?.reason;
 
-  if (recentCrash || hasRestartReason) {
+  if (!currentStartupRecorded) {
+    // Clean exit detected (crash-guard skipped recording) — reset circuit breaker
+    cbState.consecutiveFailures = 0;
+    cbState.lastError = '';
+    cbState.lastTimestamp = now;
+  } else if (recentCrash || hasRestartReason) {
     // Build error signature from restart reason or crash pattern
     const signature = restartSignature || 'crash';
 

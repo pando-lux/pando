@@ -323,9 +323,16 @@ async function main() {
     origWarn(...args);
   };
 
-  // Graceful shutdown
+  // Graceful shutdown — write clean-exit marker so crash guard ignores this stop
   const shutdown = async () => {
     console.log('\nShutting down...');
+    try {
+      const { writeFileSync } = await import('node:fs');
+      const { join } = await import('node:path');
+      const { homedir } = await import('node:os');
+      const exitMarker = join(dataDir || join(homedir(), '.pando'), 'clean-exit.json');
+      writeFileSync(exitMarker, JSON.stringify({ timestamp: Date.now(), reason: 'graceful' }), 'utf-8');
+    } catch { /* best-effort */ }
     await node.stop();
     fileLogger.close();
     process.exit(0);
