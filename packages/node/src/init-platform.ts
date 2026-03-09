@@ -1098,6 +1098,22 @@ Be friendly and helpful. Keep answers short.`
               }
               return;
             }
+            // Check if only non-code files changed (e.g. .pando-state/ from board commits)
+            // If no packages/ files differ, this isn't a real code change — skip restart
+            try {
+              const diffOutput = execSync(
+                `git diff --name-only ${builtCommit}..${currentCommit}`,
+                { cwd: process.cwd(), timeout: 10_000, encoding: 'utf8', windowsHide: true }
+              ).trim();
+              const changedFiles = diffOutput ? diffOutput.split('\n') : [];
+              const hasCodeChanges = changedFiles.some(f => f.startsWith('packages/'));
+              if (!hasCodeChanges) {
+                // Only data files changed (board state, docs, etc.) — no restart needed
+                staleSinceTs = null;
+                return;
+              }
+            } catch { /* git diff failed — fall through to normal stale-build logic */ }
+
             // Build is stale — track how long
             if (!staleSinceTs) staleSinceTs = Date.now();
             const staleMs = Date.now() - staleSinceTs;
