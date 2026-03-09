@@ -2,7 +2,7 @@
 
 > **Architecture reference: `BIBLE.md`** at repo root. Read it for architecture, component details, technical debt, and gotchas. This file is operational instructions only.
 
-> **If you are the CEO agent (Claude Code on Windows dev machine):** Read `BIBLE.md` + `docs/SERVICE-ARCHITECTURE-ROADMAP.md` on session start. Full CEO-level technical authority. Deploy through governance only (`/v1/infra/commit-and-propose`).
+> **If you are the CEO agent (Claude Code on Windows dev machine):** Read `BIBLE.md` + `docs/COUNCIL-ROADMAP.md` on session start. The council (pando-infra team) handles all code changes now. Submit tasks via `/v1/teams/pando-infra/request`, observe, intervene only when stuck.
 
 > **If you are a Pando AI worker:** Your task is in your startup prompt, not this file.
 
