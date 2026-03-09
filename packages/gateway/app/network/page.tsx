@@ -6,6 +6,16 @@ import NavBar from "@/components/NavBar";
 interface Peer { peerId: string; balance: number; connectedAt: number; lastSeen?: number }
 interface Status { connected: boolean; peers: number; totalSupply: number; totalAccounts: number }
 
+interface TeamSummary {
+  id: string;
+  displayName?: string;
+  managingNode?: string;
+  governanceRequired?: boolean;
+  agents?: { id: string; role: string; template: string; status: string }[];
+  boardTaskCount?: number;
+  cost?: { totalLux: number; totalTokens: number };
+}
+
 interface ReputationRecord {
   nodeId: string;
   tasksCompleted: number;
@@ -53,15 +63,20 @@ export default function NetworkPage() {
   const [profileStats, setProfileStats] = useState<ProfileSyncStats | null>(null);
   const [rrStats, setRrStats] = useState<RequestReplyStats | null>(null);
   const [capProfiles, setCapProfiles] = useState<CapabilityProfile[]>([]);
+  const [teams, setTeams] = useState<TeamSummary[]>([]);
+  const [expandedTeam, setExpandedTeam] = useState<string | null>(null);
+  const [teamAgents, setTeamAgents] = useState<Record<string, any[]>>({});
+  const [teamBoard, setTeamBoard] = useState<Record<string, any[]>>({});
 
   const fetchData = useCallback(async () => {
-    const [s, p, rep, prof, rr, cap] = await Promise.all([
+    const [s, p, rep, prof, rr, cap, t] = await Promise.all([
       fetch("/api/status").then(r => r.json()).catch(() => null),
       fetch("/api/peers").then(r => r.json()).catch(() => ({ peers: [] })),
       fetch("/api/reputation/peers").then(r => r.json()).catch(() => null),
       Promise.resolve(null), // profiles/shared API removed in Phase 27
       fetch("/api/request-reply/stats").then(r => r.json()).catch(() => null),
       fetch("/api/capabilities/network").then(r => r.json()).catch(() => ({ profiles: [] })),
+      fetch("/api/teams").then(r => r.json()).catch(() => ({ teams: [] })),
     ]);
     if (s) setStatus(s);
     if (p?.peers) setPeers(p.peers);
@@ -69,6 +84,7 @@ export default function NetworkPage() {
     if (prof) setProfileStats(prof);
     if (rr) setRrStats(rr);
     if (cap?.profiles) setCapProfiles(cap.profiles);
+    if (t?.teams) setTeams(t.teams);
   }, []);
 
   useEffect(() => {
@@ -169,6 +185,90 @@ export default function NetworkPage() {
                 </div>
               </>
             )}
+          </div>
+        )}
+
+        {/* Teams */}
+        {teams.length > 0 && (
+          <div className="bg-white dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl overflow-hidden">
+            <div className="px-4 py-3 border-b border-neutral-300 dark:border-neutral-800 flex items-center justify-between">
+              <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">Teams</h2>
+              <span className="text-xs text-neutral-500">{teams.length} active</span>
+            </div>
+            <div className="divide-y divide-neutral-200 dark:divide-neutral-800">
+              {teams.map(team => (
+                <div key={team.id}>
+                  <button
+                    onClick={async () => {
+                      if (expandedTeam === team.id) { setExpandedTeam(null); return; }
+                      setExpandedTeam(team.id);
+                      if (!teamAgents[team.id]) {
+                        const [ag, bd] = await Promise.all([
+                          fetch(`/api/teams/${encodeURIComponent(team.id)}/agents`).then(r => r.json()).catch(() => ({ agents: [] })),
+                          fetch(`/api/teams/${encodeURIComponent(team.id)}/board`).then(r => r.json()).catch(() => ({ tasks: [] })),
+                        ]);
+                        setTeamAgents(prev => ({ ...prev, [team.id]: ag.agents || [] }));
+                        setTeamBoard(prev => ({ ...prev, [team.id]: bd.tasks || [] }));
+                      }
+                    }}
+                    className="w-full px-4 py-3 text-left hover:bg-neutral-100 dark:hover:bg-neutral-800/50 transition flex items-center justify-between"
+                  >
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-neutral-800 dark:text-neutral-200">{team.displayName || team.id}</span>
+                      {team.governanceRequired && (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400">governance</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-xs text-neutral-500">
+                      {team.agents && <span>{team.agents.length} agents</span>}
+                      <span className="text-neutral-400">{expandedTeam === team.id ? "\u25B2" : "\u25BC"}</span>
+                    </div>
+                  </button>
+                  {expandedTeam === team.id && (
+                    <div className="px-4 pb-4 bg-neutral-50 dark:bg-neutral-800/20 border-t border-neutral-200 dark:border-neutral-800 space-y-3">
+                      {/* Agents */}
+                      <div className="pt-3">
+                        <h3 className="text-xs font-semibold text-neutral-600 dark:text-neutral-400 mb-2">Agents</h3>
+                        {(teamAgents[team.id] || []).length === 0 ? (
+                          <p className="text-xs text-neutral-500">Loading...</p>
+                        ) : (
+                          <div className="space-y-1">
+                            {(teamAgents[team.id] || []).map((agent: any) => (
+                              <div key={agent.id} className="flex items-center gap-2 text-xs">
+                                <span className={`w-1.5 h-1.5 rounded-full ${agent.status === 'active' ? 'bg-green-500' : 'bg-neutral-400'}`} />
+                                <span className="font-mono text-neutral-700 dark:text-neutral-300">{agent.id}</span>
+                                <span className="text-neutral-500">{agent.role}</span>
+                                <span className="px-1.5 py-0.5 rounded text-[10px] bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400">{agent.template}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                      {/* Board Tasks */}
+                      <div>
+                        <h3 className="text-xs font-semibold text-neutral-600 dark:text-neutral-400 mb-2">Board Tasks</h3>
+                        {(teamBoard[team.id] || []).length === 0 ? (
+                          <p className="text-xs text-neutral-500">No active tasks</p>
+                        ) : (
+                          <div className="space-y-1">
+                            {(teamBoard[team.id] || []).slice(0, 10).map((task: any) => (
+                              <div key={task.id || task.title} className="flex items-center gap-2 text-xs">
+                                <span className={`px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                  task.status === 'done' ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' :
+                                  task.status === 'in_progress' ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400' :
+                                  'bg-neutral-100 dark:bg-neutral-800 text-neutral-600 dark:text-neutral-400'
+                                }`}>{task.status}</span>
+                                <span className="text-neutral-700 dark:text-neutral-300 truncate">{task.title}</span>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

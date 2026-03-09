@@ -695,6 +695,126 @@ class NodeConnection {
       return { results: [], available: false };
     }
   }
+
+  // ── Phase 8: Team API Integration ───────────────────────────────────────
+
+  /** List all teams across the network. */
+  async getTeams(): Promise<any[]> {
+    try {
+      const res = await this.fetchWithFailover("/v1/teams", {
+        headers: this.authHeaders(),
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : data.teams || [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Get a single team's config and metadata. */
+  async getTeam(teamId: string): Promise<any | null> {
+    try {
+      const res = await this.fetchWithFailover(`/v1/teams/${encodeURIComponent(teamId)}`, {
+        headers: this.authHeaders(),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  /** Get board tasks for a team. */
+  async getTeamBoard(teamId: string, includeDone = false): Promise<any[]> {
+    try {
+      const qs = includeDone ? "?include_done=true" : "";
+      const res = await this.fetchWithFailover(`/v1/teams/${encodeURIComponent(teamId)}/board${qs}`, {
+        headers: this.authHeaders(),
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : data.tasks || [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Add a task to a team's board. */
+  async addTeamBoardTask(teamId: string, title: string, description?: string, priority?: string): Promise<any> {
+    const res = await this.fetchWithFailover(`/v1/teams/${encodeURIComponent(teamId)}/board`, {
+      method: "POST",
+      headers: this.authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ title, description, priority }),
+    });
+    if (!res.ok) throw new Error(`Failed to add board task: ${res.status}`);
+    return await res.json();
+  }
+
+  /** Get agents running on a team. */
+  async getTeamAgents(teamId: string): Promise<any[]> {
+    try {
+      const res = await this.fetchWithFailover(`/v1/teams/${encodeURIComponent(teamId)}/agents`, {
+        headers: this.authHeaders(),
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : data.agents || [];
+    } catch {
+      return [];
+    }
+  }
+
+  /** Get team health/status summary. */
+  async getTeamStatus(teamId: string): Promise<any | null> {
+    try {
+      const res = await this.fetchWithFailover(`/v1/teams/${encodeURIComponent(teamId)}/status`, {
+        headers: this.authHeaders(),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  /** Get team cost/token summary. */
+  async getTeamCost(teamId: string): Promise<any | null> {
+    try {
+      const res = await this.fetchWithFailover(`/v1/teams/${encodeURIComponent(teamId)}/cost`, {
+        headers: this.authHeaders(),
+      });
+      if (!res.ok) return null;
+      return await res.json();
+    } catch {
+      return null;
+    }
+  }
+
+  /** Submit a user request to a team (adds to board + triggers lead). */
+  async submitTeamRequest(teamId: string, message: string): Promise<any> {
+    const res = await this.fetchWithFailover(`/v1/teams/${encodeURIComponent(teamId)}/request`, {
+      method: "POST",
+      headers: this.authHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ message }),
+    });
+    if (!res.ok) throw new Error(`Failed to submit request: ${res.status}`);
+    return await res.json();
+  }
+
+  /** Get available agent templates. */
+  async getTemplates(): Promise<any[]> {
+    try {
+      const res = await this.fetchWithFailover("/v1/templates", {
+        headers: this.authHeaders(),
+      });
+      if (!res.ok) return [];
+      const data = await res.json();
+      return Array.isArray(data) ? data : data.templates || [];
+    } catch {
+      return [];
+    }
+  }
 }
 
 // Singleton
