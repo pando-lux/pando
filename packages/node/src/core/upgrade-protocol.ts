@@ -633,6 +633,33 @@ export class UpgradeProtocol {
           console.warn(`[upgrade] Catch-up: upgrade ${commitHash.slice(0, 8)} failed: ${result.message}`);
         }
       }
+
+      // ── Git-based fallback: detect new code on origin/master even without governance ──
+      // This makes upgrades bulletproof — nodes converge to origin/master regardless of
+      // whether governance proposals propagated via GossipSub.
+      if (!this.pinnedVersion) {
+        try {
+          this.git.addSafeDirectory();
+          this.git.fetch('origin', 'master');
+          const localHead = this.git.getCurrentCommit();
+          const remoteHead = this.git.getRemoteCommit('origin', 'master');
+          if (localHead !== remoteHead && !this.git.isAncestor(remoteHead, 'HEAD')) {
+            const behind = this.git.revListCount('HEAD', 'origin/master');
+            console.log(`[upgrade] Git catch-up: origin/master is ${behind} commit(s) ahead (local ${localHead.slice(0, 8)}, remote ${remoteHead.slice(0, 8)}) — upgrading`);
+            const result = await pullAndUpgradeFn(remoteHead);
+            if (result.success) {
+              console.log(`[upgrade] Git catch-up: upgraded to ${remoteHead.slice(0, 8)}`);
+            } else {
+              console.warn(`[upgrade] Git catch-up: upgrade failed: ${result.message}`);
+            }
+          }
+        } catch (fetchErr: any) {
+          // Non-fatal — git fetch may fail if offline or repo not configured
+          if (!fetchErr.message?.includes('Could not resolve host')) {
+            console.warn(`[upgrade] Git catch-up fetch failed: ${fetchErr.message?.slice(0, 100)}`);
+          }
+        }
+      }
     } catch (err: any) {
       console.error(`[upgrade] Catch-up check failed: ${err.message}`);
     }

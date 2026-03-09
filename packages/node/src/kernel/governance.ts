@@ -878,7 +878,7 @@ export class GovernanceSync {
       this.stmtUpdateProposalStatus.run(proposal.status, proposal.id);
 
       // Broadcast decision
-      this.broadcastDecision(decision).catch(() => {});
+      this.broadcastDecision(decision).catch((e: any) => console.warn(`[governance] Decision broadcast failed: ${e.message?.slice(0, 100)}`));
 
       // Reward proposer if the proposal passed
       if (outcome === 'passed') {
@@ -1552,7 +1552,7 @@ export class GovernanceSync {
       this.resolveProposalStake(proposalId, 'rejected');
 
       // Broadcast decision
-      this.broadcastDecision(decision).catch(() => {});
+      this.broadcastDecision(decision).catch((e: any) => console.warn(`[governance] Decision broadcast failed: ${e.message?.slice(0, 100)}`));
       this.onDecisionCallback?.(decision, proposal.title);
 
       console.log(`[governance] Proposal "${proposal.title}" auto-rejected by AI reviewers (${recommendations.reject}/${totalReviews} reject)`);
@@ -1797,7 +1797,7 @@ export class GovernanceSync {
           };
           this.decisions.set(proposal.id, decision);
           this.stmtInsertDecision.run(decision.proposalId, decision.outcome, decision.votesFor, decision.votesAgainst, decision.votesAbstain, decision.decidedAt);
-          this.broadcastDecision(decision).catch(() => {});
+          this.broadcastDecision(decision).catch((e: any) => console.warn(`[governance] Decision broadcast failed: ${e.message?.slice(0, 100)}`));
           this.onUpgradeApprovedCallback?.(proposal);
         };
 
