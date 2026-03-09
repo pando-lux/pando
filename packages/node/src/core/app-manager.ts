@@ -351,8 +351,9 @@ export class AppManager {
     }
 
     // P2P dispatch: if no host set, find a deploy target
+    // Skip remote dispatch for workspace-only apps (no repo_url) — remote nodes can't access local workspace files
     const selfPeerId = this.node.getIdentity?.()?.peerId;
-    if (!app.host_peer_id) {
+    if (!app.host_peer_id && app.repo_url) {
       const target = this.findDeployTarget();
       if (target) {
         // Update local record with target info
