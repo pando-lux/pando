@@ -1,0 +1,14 @@
+{
+  "savedAt": "2026-03-09T21:02:53.322Z",
+  "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
+  "tasks": [
+    {
+      "id": "task-bb07f413-0ebb-47fd-9c69-1e4f8d6822d8",
+      "title": "Simple todo app with add, complete, delete",
+      "description": "Single-page HTML/CSS/JS todo app with localStorage persistence",
+      "status": "pending",
+      "created_at": "2026-03-09 21:02:53",
+      "progress": ""
+    }
+  ]
+}
