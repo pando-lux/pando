@@ -2370,7 +2370,9 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 16. **AppManager update result is awaited and pushed to chat.** `appManager.update(projectId)` is awaited from platform-api.ts after build completion. On success: deploy message pushed to chat thread via `threadStore.addMessage()` + SSE event `app_deployed`. On failure: failure message pushed to chat thread + SSE event `app_deploy_status`. History is recorded in apps.db regardless of success/failure.
 
-17. **Marketplace filters test artifacts.** `getMarketplaceAsync()` uses a regex to strip projects named "hello world", "test app", "demo", "example", etc. If your test project doesn't show up in the marketplace, that's why. Use a real project name.
+17. **Dev infrastructure details are in `infra/DEV-MODE.md` (gitignored).** Contains: 4-node mesh details (IPs, SSH, peer IDs, capabilities), quick commands for checking/restarting each node, API auth tokens, governance upgrade pipeline steps, and known dev issues. Read this file at session start if you need to SSH into nodes or test the live network.
+
+18. **Marketplace filters test artifacts.** `getMarketplaceAsync()` uses a regex to strip projects named "hello world", "test app", "demo", "example", etc. If your test project doesn't show up in the marketplace, that's why. Use a real project name.
 
 18. **Project workspaces are `~/.pando/projects/{projectId}/`.** Engine adapter creates the directory and passes it as `projectPath` to PandoCode. The engine writes files there. The deploy pipeline reads `workspaceDir` from the project record to know where to git push from. If `workspaceDir` is missing, GitHub push fails with "workspaceDir required".
 

@@ -422,6 +422,7 @@ export interface TeamAgentConfig {
 export interface PromptContext {
   projectDir: string;   // resolved nodeRepoRoot
   apiPort: number;      // from config
+  apiToken?: string;    // Bearer token for authenticated API calls (commit-and-propose)
   teamId?: string;      // team being started (for universal templates)
   repos?: string[];     // repos assigned to the team
   model?: string;       // 'claude-code' | 'gemini-*' | 'gpt-*' etc — for model-specific prompts
@@ -584,6 +585,9 @@ RULES:
 }
 
 function makeLeadPrompt(ctx: PromptContext): string {
+  const token = ctx.apiToken || '';
+  const authHeader = token ? ` -H "Authorization: Bearer ${token}"` : '';
+  const tid = ctx.teamId || 'pando-infra';
   return `You are the Pando Infrastructure Lead. You manage the network by processing your inbox and board queue.
 
 You run on Claude Code CLI. You have full bash, read, write, edit tools available.
@@ -599,13 +603,10 @@ Your INBOX and BOARD STATE are injected below this message — no tool call need
    - Code fixes — use bash, read, edit tools directly:
      1. Find the file, read it, understand the issue.
      2. Edit the file to fix the bug.
-     3. Run: npm run build (must pass with zero errors).
-     4. git add <files> && git commit -m "fix: description" && git push origin master
-     5. Get commit hash: git rev-parse HEAD
-     6. Propose governance upgrade:
-        curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/governance/propose -H "Content-Type: application/json" -d '{"title":"[Upgrade] fix: description","description":"...","category":"upgrade","commitHash":"<hash>"}'
-     7. Update the task:
-        curl -s -X PATCH http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/board/<taskId> -H "Content-Type: application/json" -d '{"status":"done","progress":"Fixed in <hash>"}'
+     3. COMMIT AND DEPLOY (one command — handles build, commit, push, governance, and task update):
+        curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/infra/commit-and-propose${authHeader} -H "Content-Type: application/json" -d '{"message":"fix: description","taskId":"<taskId>"}'
+        This single call does: git add → npm run build → git commit → git push → governance propose → mark task done.
+        If build fails, it returns the errors — fix them and try again.
    - User requests: investigate, then update task progress via PATCH.
    - False positives / stale (>24h): mark done with a note.
 5. If inbox empty AND no pending board tasks: say "System healthy. No open issues." and STOP.
@@ -615,18 +616,17 @@ The upgrade protocol auto-deploys to ALL nodes:
   git fetch → verify hash → build → safe restart (exit 75) → supervisor respawns
 
 ## HTTP API (use curl for ALL operations — you do NOT have PandoCode tools, only bash/read/write/edit)
-GOVERNANCE PROPOSE: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/governance/propose -H "Content-Type: application/json" -d '{"title":"[Upgrade] fix: description","description":"...","category":"upgrade","commitHash":"<hash>"}'
-UPDATE TASK: curl -s -X PATCH http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/board/<taskId> -H "Content-Type: application/json" -d '{"status":"done","progress":"<notes>"}'
-CREATE TASK: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/board -H "Content-Type: application/json" -d '{"title":"<title>","description":"<desc>"}'
-SEND MESSAGE: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"lead","to":"<agentId>","message":"<text>"}'
-SPAWN AGENT: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/agents/spawn -H "Content-Type: application/json" -d '{"template":"worker","task":"<description>"}'
-STOP AGENT: curl -s -X DELETE http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/agents/<agentId>
-LIST AGENTS: curl -s http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/agents
+COMMIT & DEPLOY: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/infra/commit-and-propose${authHeader} -H "Content-Type: application/json" -d '{"message":"fix: description","taskId":"<taskId>"}'
+UPDATE TASK: curl -s -X PATCH http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/board/<taskId>${authHeader} -H "Content-Type: application/json" -d '{"status":"done","progress":"<notes>"}'
+CREATE TASK: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/board${authHeader} -H "Content-Type: application/json" -d '{"title":"<title>","description":"<desc>"}'
+SEND MESSAGE: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/message${authHeader} -H "Content-Type: application/json" -d '{"from":"lead","to":"<agentId>","message":"<text>"}'
+SPAWN AGENT: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/agents/spawn${authHeader} -H "Content-Type: application/json" -d '{"template":"worker","task":"<description>"}'
+STOP AGENT: curl -s -X DELETE http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/agents/<agentId>${authHeader}
+LIST AGENTS: curl -s http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/agents
 LIST TEMPLATES: curl -s http://127.0.0.1:${ctx.apiPort}/v1/templates
 
 RULES:
-- Every code change goes through governance.
-- npm run build MUST pass before committing.
+- Every code change MUST go through COMMIT & DEPLOY (the /infra/commit-and-propose endpoint). Never git push manually.
 - Be brief. Act, don't narrate. Complete quickly.
 - Close or update tasks when done. Do NOT leave tasks perpetually pending.`;
 }
@@ -1410,6 +1410,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         const promptCtx: PromptContext = {
           projectDir: nodeRepoRoot,
           apiPort: this.config!.apiPort,
+          apiToken: this.config!.apiToken,
           teamId,
           model: agent.model,
         };

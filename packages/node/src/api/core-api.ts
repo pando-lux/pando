@@ -1068,6 +1068,111 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       return ok ? { status: 'sent' } : reply.code(500).send({ error: 'Failed to send message' });
     });
 
+    // ── Atomic Commit + Propose (Self-Upgrade Pipeline) ─────────────────────
+
+    // POST /infra/commit-and-propose — One-call atomic pipeline:
+    //   git add → npm run build → git commit → git push → governance propose → update task
+    // Used by pando-infra lead agent after editing code. Single curl call replaces 5+ sequential bash commands.
+    fastify.post('/infra/commit-and-propose', async (request: any, reply: any) => {
+      const authHeader = request.headers.authorization || '';
+      if (!authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
+        return reply.code(401).send({ error: 'Operator authentication required' });
+      }
+
+      const body = request.body as any || {};
+      const message = typeof body.message === 'string' ? body.message.trim() : '';
+      const taskId = typeof body.taskId === 'string' ? body.taskId.trim() : '';
+      const teamId = typeof body.teamId === 'string' ? body.teamId.trim() : 'pando-infra';
+
+      if (!message) return reply.code(400).send({ error: 'message required (commit message)' });
+      if (message.length > 1000) return reply.code(400).send({ error: 'message too long (max 1000 chars)' });
+
+      const lawViolation = violatesTwoLaws(message);
+      if (lawViolation) return reply.code(403).send({ error: lawViolation });
+
+      const repoDir = process.cwd();
+      const git = new GitOps(repoDir);
+      const steps: string[] = [];
+
+      try {
+        // Step 1: Stage all changes (exclude CLAUDE.md worker context files)
+        git.exec(['add', '-A', '--', ':(exclude)CLAUDE.md', ':(exclude)*.db', ':(exclude)*.db-shm', ':(exclude)*.db-wal']);
+        steps.push('staged');
+
+        // Step 2: Check if there are actual changes
+        if (!git.hasUncommittedChanges()) {
+          return reply.code(400).send({ error: 'No changes to commit', steps });
+        }
+        steps.push('changes-detected');
+
+        // Step 3: Build check (npm run build must pass)
+        try {
+          execSync('npm run build', { cwd: repoDir, timeout: 180_000, stdio: 'pipe', encoding: 'utf-8' });
+          steps.push('build-passed');
+        } catch (buildErr: any) {
+          // Unstage on build failure so agent can fix
+          try { git.exec(['reset', 'HEAD']); } catch { /* ignore */ }
+          const output = (buildErr.stdout || '') + (buildErr.stderr || '');
+          const errorLines = output.split('\n').filter((l: string) => l.includes('error') || l.includes('Error')).slice(0, 10).join('\n');
+          return reply.code(400).send({ error: 'Build failed — fix errors before committing', buildErrors: errorLines, steps });
+        }
+
+        // Step 4: Commit
+        const commitHash = git.commit(message);
+        steps.push(`committed:${commitHash}`);
+
+        // Step 5: Push to GitHub
+        try {
+          git.push('origin', 'master');
+          steps.push('pushed');
+        } catch (pushErr: any) {
+          // Push failed — commit is local only. Agent should investigate.
+          return reply.code(500).send({ error: `Push failed: ${pushErr.message?.slice(0, 200)}`, commitHash, steps });
+        }
+
+        // Step 6: Create governance proposal
+        let proposalId = '';
+        try {
+          const gov = node.getGovernance();
+          if (gov) {
+            const title = `Upgrade: ${message.slice(0, 150)}`;
+            const proposal = await gov.createProposal(title, message, 300_000, {
+              category: 'upgrade' as any,
+              upgradePayload: { commitHash, description: message },
+            });
+            proposalId = proposal.id;
+            steps.push(`proposed:${proposalId}`);
+          }
+        } catch (govErr: any) {
+          // Governance proposal failed — code is pushed, just no auto-upgrade
+          steps.push(`proposal-failed:${govErr.message?.slice(0, 100)}`);
+        }
+
+        // Step 7: Update board task to done (if taskId provided)
+        if (taskId) {
+          try {
+            const adapter = node.getEngineAdapter();
+            if (adapter?.available) {
+              adapter.updateTeamBoardTask(teamId, taskId, {
+                status: 'done',
+                progress: `Committed ${commitHash}, proposal ${proposalId || 'skipped'}`,
+              });
+              steps.push('task-completed');
+            }
+          } catch { /* non-fatal */ }
+        }
+
+        return {
+          status: 'success',
+          commitHash,
+          proposalId,
+          steps,
+        };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message, steps });
+      }
+    });
+
     // ── Chat API (Phase 27: AgentManager) ──────────────────────────────────
 
     // POST /chat/message — Phase 68.3: Doorman-routed chat
