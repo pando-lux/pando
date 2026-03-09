@@ -1,5 +1,5 @@
 {
-  "savedAt": "2026-03-09T22:04:13.358Z",
+  "savedAt": "2026-03-09T22:10:50.951Z",
   "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
   "tasks": [
     {
@@ -182,9 +182,9 @@
       "id": "task-cac08405-e69e-40fe-973c-364a7fc4945f",
       "title": "[FEATURE:high] Add local static file serving for deployed apps (Tier 1 fallback)",
       "description": "When S3 credentials are not configured, Tier 1 (static) app deployments fail. Need a local fallback that serves static files from the node HTTP API.\n\nChanges needed:\n\n1. In app-api.ts: Add a new route `GET /v1/apps/:id/serve/*` that serves static files from `~/.pando/hosted-apps/{appId}/`. Use fastify-static or manual fs.readFile with proper MIME types (html, css, js, json, png, jpg, svg, ico). Set appropriate Content-Type headers. Return 404 for missing files.\n\n2. In app-manager.ts deployTier1(): When S3 upload fails (no credentials or bucket not configured), fall back to local serving. Set deploy_url to `http://localhost:{apiPort}/v1/apps/{appId}/serve/index.html` instead of the S3 URL. Still copy files to ~/.pando/hosted-apps/{appId}/ and mark status as live.\n\n3. The files are already copied to ~/.pando/hosted-apps/ by the deploy flow. The static serve endpoint just needs to read from that directory.\n\nFile: packages/node/src/api/app-api.ts (add route)\nFile: packages/node/src/core/app-manager.ts (Tier 1 fallback, around line 463-602)\n\nAcceptance: After deploying a static app (HTML/CSS/JS files) on a machine without S3 credentials, the app should be accessible at http://localhost:4000/v1/apps/<appId>/serve/index.html and deploy_url should point there.",
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-09 22:04:13",
-      "progress": ""
+      "progress": "Committed 028978765c228a3c6599eb139913bcb056deaf1f, proposal 3f1d96cbe04375d0baa38db1fb2df3b9408e17d6324fcd08e5539888b3dac021 — push pending governance approval"
     },
     {
       "id": "task-7e3120af-147a-478e-8bdf-36667ed20216",
