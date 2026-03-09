@@ -60,6 +60,11 @@ export class ServiceLoader {
     }
   }
 
+  /** Register an already-running service (e.g. engine started outside ServiceLoader) */
+  register(svc: PandoService): void {
+    this.services.set(svc.id, svc);
+  }
+
   /** Get a loaded service by its ID */
   get(serviceId: string): PandoService | undefined {
     return this.services.get(serviceId);

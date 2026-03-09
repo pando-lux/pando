@@ -317,7 +317,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       };
     });
 
-    // GET /services — diagnostic endpoint for service loader and engine adapter status
+    // GET /services — service loader status + per-service details for supervisor tray
     fastify.get('/services', async () => {
       const adapter = node.getEngineAdapter?.();
       const serviceLoader = node.getServiceLoader?.();
@@ -333,6 +333,21 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
           pandoCodeIsLink = lstatSync(fullPath).isSymbolicLink();
         }
       } catch {}
+
+      // Build per-service detail array for tray / dashboard consumption
+      const services: Array<{ id: string; version: string; healthy: boolean; capabilities: string[]; uiUrl?: string }> = [];
+      if (serviceLoader) {
+        for (const svc of serviceLoader.getAll()) {
+          services.push({
+            id: svc.id,
+            version: svc.version,
+            healthy: svc.healthy(),
+            capabilities: svc.capabilities,
+            uiUrl: (svc as any).uiUrl ?? undefined,
+          });
+        }
+      }
+
       return {
         engineAdapter: {
           available: adapter?.available ?? false,
@@ -341,8 +356,9 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         serviceLoader: {
           initialized: !!serviceLoader,
           services: serviceLoader?.getIds?.() ?? [],
-          healthyServices: serviceLoader?.getAll?.()?.filter((s: any) => s.healthy())?.map((s: any) => s.id) ?? [],
+          healthyServices: services.filter(s => s.healthy).map(s => s.id),
         },
+        services,
         pandoCodeCore: {
           installed: pandoCodeInstalled,
           isSymlink: pandoCodeIsLink,

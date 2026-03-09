@@ -2,7 +2,7 @@
  * Pando Node Supervisor
  *
  * Standalone entry point — spawns dist/cli.js as a managed child process.
- * Handles restart-on-exit(75), crash backoff, and optional system tray icon.
+ * Handles restart-on-exit(75), crash backoff, and system tray with dynamic service discovery.
  * Zero imports from Pando internals — fully decoupled.
  */
 
@@ -11,21 +11,41 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as http from 'node:http';
 import { execSync } from 'node:child_process';
-import { writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { writeFileSync, readFileSync } from 'node:fs';
+import { tmpdir, homedir } from 'node:os';
 
 const RESTART_EXIT_CODE = 75;
 const RESTART_DELAY_MS  = 2_000;
 const CRASH_WINDOW_MS   = 5 * 60 * 1_000;
 const MAX_CRASHES       = 5;
+const POLL_INTERVAL_MS  = 10_000;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ts = () => new Date().toISOString();
 
-// ─── Core Supervisor (<50 lines) ───────────────────────────────────────────
+// Resolve API port from CLI args or env, matching cli.ts logic
+function resolveApiPort(): number {
+  const args = process.argv.slice(2);
+  const idx = args.indexOf('--api-port');
+  if (idx !== -1 && args[idx + 1]) {
+    const p = parseInt(args[idx + 1], 10);
+    if (p > 0 && p < 65536) return p;
+  }
+  if (process.env.PANDO_API_PORT) {
+    const p = parseInt(process.env.PANDO_API_PORT, 10);
+    if (p > 0 && p < 65536) return p;
+  }
+  return 4000;
+}
+
+const API_PORT = resolveApiPort();
+const API_BASE = `http://127.0.0.1:${API_PORT}`;
+
+// ─── Core Supervisor ──────────────────────────────────────────────────────
 
 let child: ChildProcess | null = null;
-let stopping = false;
+let stopping = false;     // true = supervisor is exiting (SIGINT)
+let userStopped = false;  // true = user clicked "Stop Node" — don't respawn
 const crashTimes: number[] = [];
 
 function spawnNode(): ChildProcess {
@@ -39,23 +59,27 @@ function spawnNode(): ChildProcess {
 
 function onChildExit(code: number | null, signal: string | null): void {
   child = null;
-  setTrayStatus('restarting', 'Status: Restarting…');
+  lastState = { online: false, peers: 0, lux: 0, services: [], localGatewayPort: null };
+
   if (stopping) return;
 
-  if (code === 0) {
-    console.log(`[supervisor ${ts()}] Node exited cleanly (0). Stopping supervisor.`);
-    process.exit(0);
-  }
-
-  // Port conflict — don't respawn (user needs to kill existing process)
   if (code === 78) {
     console.log(`[supervisor ${ts()}] Port conflict (exit 78). Stopping supervisor — kill existing process and retry.`);
     process.exit(78);
   }
 
+  // User clicked "Stop Node" or node exited cleanly — stay alive with tray, show "Start Node"
+  if (userStopped || code === 0) {
+    console.log(`[supervisor ${ts()}] Node stopped${userStopped ? ' by user' : ' (exit 0)'}. Supervisor stays alive — use tray to restart.`);
+    userStopped = false;
+    refreshTray();
+    return;
+  }
+
   if (code === RESTART_EXIT_CODE) {
     console.log(`[supervisor ${ts()}] Restart requested (exit 75). Respawning in ${RESTART_DELAY_MS}ms…`);
-    setTimeout(() => { child = spawnNode(); }, RESTART_DELAY_MS);
+    refreshTray();
+    setTimeout(() => { child = spawnNode(); refreshTray(); }, RESTART_DELAY_MS);
     return;
   }
 
@@ -70,7 +94,8 @@ function onChildExit(code: number | null, signal: string | null): void {
     console.error(`[supervisor ${ts()}] Crash limit reached — stopping supervisor.`);
     process.exit(1);
   }
-  setTimeout(() => { child = spawnNode(); }, RESTART_DELAY_MS);
+  refreshTray();
+  setTimeout(() => { child = spawnNode(); refreshTray(); }, RESTART_DELAY_MS);
 }
 
 process.on('SIGINT', () => {
@@ -80,38 +105,77 @@ process.on('SIGINT', () => {
   setTimeout(() => process.exit(0), 3_000);
 });
 
-// ─── Tray helpers ──────────────────────────────────────────────────────────
+// ─── HTTP helpers ─────────────────────────────────────────────────────────
 
-type TrayStatus = 'green' | 'yellow' | 'restarting' | 'red';
-let trayUpdateFn: ((status: TrayStatus, text: string) => void) | null = null;
-
-function setTrayStatus(status: TrayStatus, text: string): void {
-  if (trayUpdateFn) trayUpdateFn(status, text);
-}
-
-// ─── Status poller ─────────────────────────────────────────────────────────
-
-function pollStatus(): void {
-  const req = http.get('http://127.0.0.1:4100/v1/status', (res) => {
-    let body = '';
-    res.on('data', (c: Buffer) => { body += c.toString(); });
-    res.on('end', () => {
-      try {
-        const d = JSON.parse(body);
-        const peers: number  = d.peers   ?? 0;
-        const lux: number    = Math.floor(d.balance ?? 0);
-        const text = `Status: Online | ${peers} peer${peers !== 1 ? 's' : ''} | ${lux} Lux`;
-        setTrayStatus(peers > 0 ? 'green' : 'yellow', text);
-      } catch { /* ignore parse errors */ }
+function httpGet(path: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const req = http.get(`${API_BASE}${path}`, (res) => {
+      let body = '';
+      res.on('data', (c: Buffer) => { body += c.toString(); });
+      res.on('end', () => resolve(body));
     });
+    req.on('error', reject);
+    req.setTimeout(5_000, () => { req.destroy(); reject(new Error('timeout')); });
   });
-  req.on('error', () => {
-    if (!stopping) setTrayStatus('red', 'Status: Offline');
-  });
-  req.setTimeout(5_000, () => req.destroy());
 }
 
-// ─── Open URL ──────────────────────────────────────────────────────────────
+// ─── State ────────────────────────────────────────────────────────────────
+
+interface ServiceInfo {
+  id: string;
+  version: string;
+  healthy: boolean;
+  uiUrl?: string;
+}
+
+interface NodeState {
+  online: boolean;
+  peers: number;
+  lux: number;
+  services: ServiceInfo[];
+  localGatewayPort: number | null;  // detected local gateway port, null if not running
+}
+
+let lastState: NodeState = { online: false, peers: 0, lux: 0, services: [], localGatewayPort: null };
+
+// Detect local gateway by reading ~/.pando/gateway.json (written by gateway on startup)
+// Format: { "port": 3002 }
+// Falls back to checking if a known gateway port file exists
+function detectLocalGateway(): number | null {
+  try {
+    const gatewayFile = join(homedir(), '.pando', 'gateway.json');
+    const data = JSON.parse(readFileSync(gatewayFile, 'utf-8'));
+    if (typeof data.port === 'number' && data.port > 0) return data.port;
+  } catch { /* file doesn't exist or invalid */ }
+  return null;
+}
+
+async function pollState(): Promise<void> {
+  try {
+    const [statusRaw, servicesRaw] = await Promise.all([
+      httpGet('/v1/status'),
+      httpGet('/v1/services').catch(() => '{}'),
+    ]);
+    const status = JSON.parse(statusRaw);
+    const svcData = JSON.parse(servicesRaw);
+
+    const gwPort = detectLocalGateway();
+
+    lastState = {
+      online: true,
+      peers: status.peers ?? 0,
+      lux: Math.floor(status.balance ?? 0),
+      services: Array.isArray(svcData.services) ? svcData.services : [],
+      localGatewayPort: gwPort,
+    };
+  } catch {
+    lastState = { ...lastState, online: false, peers: 0, lux: 0, services: [], localGatewayPort: null };
+  }
+
+  refreshTray();
+}
+
+// ─── Open URL ─────────────────────────────────────────────────────────────
 
 function openUrl(url: string): void {
   try {
@@ -122,10 +186,9 @@ function openUrl(url: string): void {
   } catch { /* ignore */ }
 }
 
-// ─── System tray (optional — headless fallback) ────────────────────────────
+// ─── System Tray ──────────────────────────────────────────────────────────
 
-// 16x16 amber "P" on dark background — Pillow-generated PNG-in-ICO (works on Windows 10/11).
-// Written to temp file because systray2 loads icons most reliably via file path.
+// 16x16 amber "P" on dark background — PNG-in-ICO (works on Windows 10/11).
 const ICON_ICO_B64 =
   'AAABAAEAEBAAAAAAIADmAAAAFgAAAIlQTkcNChoKAAAADUlIRFIAAAAQAAAAEAgGAAAAH/P/YQAAAK1J' +
   'REFUeJxjlJNT+c9AAWCiRDNVDGBBF5AR+c1wtPchnP/nLyPDqw/MDF1rhBnWH+Ml3gUrD/IxKCSo' +
@@ -141,40 +204,119 @@ function getIconPath(): string {
 
 const ICON_PATH = getIconPath();
 
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+let tray: any = null;
+
+// Menu item indices — fixed layout, items are shown/hidden dynamically
+const IDX = {
+  STATUS:        0,
+  SEP1:          1,
+  SERVICE_SLOT:  2,
+  SEP2:          3,
+  GATEWAY_LOCAL: 4,
+  GATEWAY_WEB:   5,
+  SEP3:          6,
+  RESTART:       7,
+  STOP:          8,
+  START:         9,
+  QUIT:          10,
+};
+
+function makeItem(title: string, opts?: { enabled?: boolean; hidden?: boolean; tooltip?: string }) {
+  return { title, tooltip: opts?.tooltip ?? '', checked: false, enabled: opts?.enabled ?? false, hidden: opts?.hidden ?? false };
+}
+
+function buildInitialMenu() {
+  return [
+    /*  0 STATUS        */  makeItem('Starting\u2026'),
+    /*  1 SEP1          */  makeItem(''),
+    /*  2 SERVICE       */  makeItem('', { hidden: true }),
+    /*  3 SEP2          */  makeItem('', { hidden: true }),
+    /*  4 GATEWAY_LOCAL */  makeItem('Gateway (local)', { enabled: true, hidden: true }),
+    /*  5 GATEWAY_WEB   */  makeItem('Gateway (web)', { enabled: true, hidden: true }),
+    /*  6 SEP3          */  makeItem(''),
+    /*  7 RESTART       */  makeItem('Restart Node', { enabled: true, hidden: true }),
+    /*  8 STOP          */  makeItem('Stop Node', { enabled: true, hidden: true }),
+    /*  9 START         */  makeItem('Start Node', { enabled: true, hidden: true }),
+    /* 10 QUIT          */  makeItem('Quit', { enabled: true }),
+  ];
+}
+
+function refreshTray(): void {
+  if (!tray) return;
+
+  const nodeRunning = child !== null;
+  const nodeReady = lastState.online;
+
+  // Status text
+  let statusText: string;
+  if (!nodeRunning) {
+    statusText = 'Stopped';
+  } else if (!nodeReady) {
+    statusText = 'Starting\u2026';
+  } else {
+    statusText = `Online | ${lastState.peers} peer${lastState.peers !== 1 ? 's' : ''} | ${lastState.lux} Lux`;
+  }
+
+  // Service line
+  const svc = lastState.services[0]; // primary service (pando-code)
+  const hasSvc = nodeReady && !!svc;
+  let svcText = '';
+  if (hasSvc) {
+    const dot = svc.healthy ? '\u25CF' : '\u25CB';
+    const label = svc.id.replace(/^pando-/, '').replace(/^\w/, c => c.toUpperCase());
+    svcText = `${dot} ${label} v${svc.version}`;
+  }
+
+  const hasLocalGw = nodeReady && lastState.localGatewayPort !== null;
+  const showGateways = nodeReady && (hasLocalGw || true); // always show web gateway when online
+
+  try {
+    updateItem(IDX.STATUS,        statusText, { enabled: false });
+    updateItem(IDX.SERVICE_SLOT,  svcText,    { enabled: hasSvc && !!svc?.uiUrl, hidden: !hasSvc });
+    updateItem(IDX.SEP2,          '',         { hidden: !hasSvc && !showGateways });
+    updateItem(IDX.GATEWAY_LOCAL, `Gateway (localhost:${lastState.localGatewayPort})`, { enabled: true, hidden: !hasLocalGw });
+    updateItem(IDX.GATEWAY_WEB,   'Gateway (web)', { enabled: true, hidden: !nodeReady });
+    updateItem(IDX.RESTART,       'Restart Node', { enabled: true, hidden: !nodeRunning });
+    updateItem(IDX.STOP,          'Stop Node',    { enabled: true, hidden: !nodeRunning });
+    updateItem(IDX.START,         'Start Node',   { enabled: true, hidden: nodeRunning });
+  } catch { /* ignore */ }
+}
+
+function updateItem(seqId: number, title: string, opts?: { enabled?: boolean; hidden?: boolean }): void {
+  if (!tray) return;
+  tray.sendAction({
+    type: 'update-item',
+    item: {
+      title,
+      tooltip: '',
+      checked: false,
+      enabled: opts?.enabled ?? false,
+      hidden: opts?.hidden ?? false,
+    },
+    seq_id: seqId,
+  });
+}
+
 async function initTray(
   getChild: () => ChildProcess | null,
-  stop: () => void,
 ): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let SysTray: any;
   try {
-    // Dynamic import — systray2 is optional; fails gracefully on headless systems
-    // @ts-ignore — no type declarations for systray2
+    // @ts-ignore
     const mod = await import('systray2');
-    // Handle ESM/CJS interop — systray2 may nest default exports
     SysTray = mod.default?.default || mod.default || mod;
   } catch {
     console.log('[supervisor] Running in headless mode (systray2 unavailable or unsupported)');
     return;
   }
 
-  const STATUS_IDX = 1; // index of status item in menu
-  const items = [
-    { title: 'Pando Node',           tooltip: '',                        checked: false, enabled: false },
-    { title: 'Status: Starting…',    tooltip: 'Node status',             checked: false, enabled: false },
-    { title: '<sep>',                tooltip: '',                        checked: false, enabled: false },
-    { title: 'Open Gateway',         tooltip: 'Open Pando web gateway',  checked: false, enabled: true  },
-    { title: 'View API',             tooltip: 'Open local API',          checked: false, enabled: true  },
-    { title: '<sep>',                tooltip: '',                        checked: false, enabled: false },
-    { title: 'Restart Node',         tooltip: 'Restart the Pando node',  checked: false, enabled: true  },
-    { title: 'Stop Node',            tooltip: 'Stop Pando and exit',     checked: false, enabled: true  },
-  ];
+  const items = buildInitialMenu();
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let tray: any;
   try {
     tray = new SysTray({
-      menu: { icon: ICON_PATH, title: '', tooltip: 'Pando Node — Running', items },
+      menu: { icon: ICON_PATH, title: '', tooltip: 'Pando', items },
       debug: false,
       copyDir: true,
     });
@@ -184,33 +326,44 @@ async function initTray(
     return;
   }
 
-  trayUpdateFn = (_status: TrayStatus, text: string) => {
-    try {
-      tray.sendAction({
-        type: 'update-item',
-        item: { ...items[STATUS_IDX], title: text },
-        seq_id: STATUS_IDX,
-      });
-    } catch { /* ignore */ }
-  };
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   tray.onClick((action: any) => {
     try {
-      const title: string = action?.item?.title ?? '';
-      if      (title === 'Open Gateway')  openUrl('https://gateway-one-mu.vercel.app');
-      else if (title === 'View API')      openUrl('http://127.0.0.1:4100');
-      else if (title === 'Restart Node')  { const c = getChild(); if (c) c.kill('SIGINT'); }
-      else if (title === 'Stop Node')     stop();
+      const seq: number = action?.seq_id ?? -1;
+
+      if (seq === IDX.SERVICE_SLOT) {
+        const svc = lastState.services[0];
+        if (svc?.uiUrl) openUrl(svc.uiUrl);
+      }
+      else if (seq === IDX.GATEWAY_LOCAL) {
+        if (lastState.localGatewayPort) openUrl(`http://localhost:${lastState.localGatewayPort}`);
+      }
+      else if (seq === IDX.GATEWAY_WEB) {
+        openUrl('https://gateway-one-mu.vercel.app');
+      }
+      else if (seq === IDX.START) {
+        if (!child) { child = spawnNode(); refreshTray(); }
+      }
+      else if (seq === IDX.RESTART) {
+        const c = getChild(); if (c) c.kill('SIGINT');
+      }
+      else if (seq === IDX.STOP) {
+        userStopped = true;
+        const c = getChild(); if (c) c.kill('SIGINT');
+      }
+      else if (seq === IDX.QUIT) {
+        stopping = true;
+        if (child) child.kill('SIGINT');
+        setTimeout(() => process.exit(0), 2_000);
+      }
     } catch { /* ignore */ }
   });
 
   console.log('[supervisor] System tray initialized.');
 }
 
-// ─── Boot ──────────────────────────────────────────────────────────────────
+// ─── Boot ─────────────────────────────────────────────────────────────────
 
-// Catch unhandled errors from systray binary spawn (EACCES on headless Linux)
 process.on('uncaughtException', (err: Error) => {
   if (err.message?.includes('systray') || err.message?.includes('tray_linux') || err.message?.includes('EACCES')) {
     console.log(`[supervisor] Ignoring tray error on headless system: ${err.message}`);
@@ -220,15 +373,16 @@ process.on('uncaughtException', (err: Error) => {
   process.exit(1);
 });
 
-const pollTimer = setInterval(pollStatus, 10_000);
-pollTimer.unref(); // don't prevent process exit
+// Poll node status + services — first poll after 5s (wait for node boot), then every 10s
+setTimeout(() => { pollState().catch(() => {}); }, 5_000);
+const pollTimer = setInterval(() => { pollState().catch(() => {}); }, POLL_INTERVAL_MS);
+pollTimer.unref();
 
-// Skip tray on headless systems (no DISPLAY on Linux = no GUI)
+// Skip tray on headless systems
 const isHeadless = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
 if (!isHeadless) {
   initTray(
     () => child,
-    () => { stopping = true; if (child) child.kill('SIGINT'); setTimeout(() => process.exit(0), 3_000); },
   ).catch((e: unknown) => {
     console.log(`[supervisor] Tray init failed: ${e instanceof Error ? e.message : String(e)}`);
   });

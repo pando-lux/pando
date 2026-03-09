@@ -696,7 +696,10 @@ Be friendly and helpful. Keep answers short.`
       // @pando-code/core. Otherwise, call loadAll() as a fallback discovery mechanism
       // so future services that aren't @pando-code/core always load through ServiceLoader.
       if (node.getEngineAdapter?.()?.available) {
-        console.log('[services] ServiceLoader initialized — engine already running, skipping loadAll().');
+        // Engine started directly — register it in ServiceLoader so /v1/services reports it
+        const { createEngineService } = await import('./core/engine-adapter.js');
+        serviceLoader.register(createEngineService(node.getEngineAdapter()));
+        console.log('[services] ServiceLoader initialized — engine registered as pando-code service.');
       } else {
         console.log('[services] ServiceLoader initialized — no engine, calling loadAll() for service discovery.');
         await serviceLoader.loadAll();
