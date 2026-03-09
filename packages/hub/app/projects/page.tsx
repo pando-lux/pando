@@ -225,9 +225,9 @@ export default function ProjectsPage() {
       case "mine":
         return p.ownerId === myPeerId;
       case "shared":
-        return p.ownerId !== myPeerId && p.type !== "public";
+        return p.ownerId !== myPeerId && p.type !== "public" && p.visibility !== "listed" && p.visibility !== "featured";
       case "public":
-        return p.type === "public";
+        return p.type === "public" || p.visibility === "listed" || p.visibility === "featured";
       default:
         return true;
     }
@@ -235,8 +235,8 @@ export default function ProjectsPage() {
 
   const tabCounts = {
     mine: projects.filter((p) => p.ownerId === myPeerId).length,
-    shared: projects.filter((p) => p.ownerId !== myPeerId && p.type !== "public").length,
-    public: projects.filter((p) => p.type === "public").length,
+    shared: projects.filter((p) => p.ownerId !== myPeerId && p.type !== "public" && p.visibility !== "listed" && p.visibility !== "featured").length,
+    public: projects.filter((p) => p.type === "public" || p.visibility === "listed" || p.visibility === "featured").length,
   };
 
   const stats: ProjectStats = {

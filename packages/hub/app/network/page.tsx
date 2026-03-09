@@ -74,7 +74,7 @@ export default function NetworkPage() {
       fetch("/api/peers").then(r => r.json()).catch(() => ({ peers: [] })),
       fetch("/api/reputation/peers").then(r => r.json()).catch(() => null),
       Promise.resolve(null), // profiles/shared API removed in Phase 27
-      fetch("/api/request-reply/stats").then(r => r.json()).catch(() => null),
+      Promise.resolve(null), // request-reply/stats API removed — node endpoint no longer exists
       fetch("/api/capabilities/network").then(r => r.json()).catch(() => ({ profiles: [] })),
       fetch("/api/teams").then(r => r.json()).catch(() => ({ teams: [] })),
     ]);
