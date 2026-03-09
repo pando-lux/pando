@@ -11,7 +11,7 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { execSync } from 'node:child_process';
+import { GitOps } from '../core/git-ops.js';
 import type Database from 'better-sqlite3';
 import type { PandoNetwork } from './network.js';
 import type { PandoMessage, GovernanceProposal, GovernanceComment, GovernanceVote, GovernanceDecision, VoteChoice, AgentHello, AgentCapabilities, Transaction, ActivityRecord, ModelAttestation, NodeIdentity, WeightedVoteResult, ReviewerCandidacy, ProposalCategory, ProposalReview, ReviewRecommendation, ReviewSummary, UpgradePayload } from '@pando/shared';
@@ -1830,7 +1830,8 @@ export class GovernanceSync {
 
     const matches: import('@pando/shared').DangerousPatternMatch[] = [];
     try {
-      const diff = execSync('git diff HEAD~1 HEAD -U0', { encoding: 'utf-8', timeout: 15000 });
+      const govGit = new GitOps(process.cwd());
+      const diff = govGit.diff('HEAD~1', 'HEAD', ['-U0']);
       let currentFile = '';
       let lineNum = 0;
       for (const line of diff.split('\n')) {
@@ -1879,7 +1880,7 @@ export class GovernanceSync {
   private async validateUpgradeProposal(proposal: GovernanceProposal): Promise<{ approved: boolean; reason: string; kernelDelay: boolean }> {
     // Same-commit (no-op) proposals skip all validation — nothing to review
     try {
-      const currentHead = execSync('git rev-parse HEAD', { encoding: 'utf-8', timeout: 5000 }).trim();
+      const currentHead = new GitOps(process.cwd()).getCurrentCommit();
       if (proposal.upgradePayload?.commitHash && currentHead.startsWith(proposal.upgradePayload.commitHash)) {
         this.agentDb?.logGovernanceCheck(proposal.id, 'same_commit_check', 'pass', 'No-op upgrade (already at this commit)');
         return { approved: true, reason: 'No-op upgrade — already at proposed commit', kernelDelay: false };
@@ -1898,14 +1899,15 @@ export class GovernanceSync {
 
     // Parse git diff for changed files and line counts (fail-open if git unavailable)
     try {
-      const diffOutput = execSync('git diff HEAD~1 HEAD --name-only', { encoding: 'utf-8', timeout: 10000 });
+      const valGit = new GitOps(process.cwd());
+      const diffOutput = valGit.diffNameOnly('HEAD~1', 'HEAD').join('\n');
       changedFiles = diffOutput.trim().split('\n').filter(f => f.length > 0);
     } catch (err) {
       console.warn('[governance] WARNING: git diff --name-only failed, skipping file-based checks:', (err as Error).message);
     }
 
     try {
-      const statOutput = execSync('git diff HEAD~1 HEAD --stat', { encoding: 'utf-8', timeout: 10000 });
+      const statOutput = valGit.diffStat('HEAD~1', 'HEAD');
       // Last line of git diff --stat looks like: " 5 files changed, 120 insertions(+), 30 deletions(-)"
       const statMatch = statOutput.match(/(\d+)\s+insertions?\(\+\).*?(\d+)\s+deletions?\(-\)/);
       if (statMatch) {
@@ -1946,7 +1948,7 @@ export class GovernanceSync {
       try {
         let diff = '';
         try {
-          diff = execSync('git diff HEAD~1 HEAD', { encoding: 'utf-8', timeout: 15000 });
+          diff = new GitOps(process.cwd()).diff('HEAD~1', 'HEAD');
         } catch { /* git unavailable — skip AI review */ }
         if (diff) {
           const review = await this.engineAdapter.reviewDiff(diff, proposal.description || '');

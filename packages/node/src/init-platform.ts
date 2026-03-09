@@ -16,7 +16,7 @@ import { CloudInstanceManager } from './core/cloud-instance-manager.js';
 import { NetworkState } from './kernel/network-state.js';
 import { LocalEnvironment } from './kernel/local-environment.js';
 import { ApiServer } from './api/api-server.js';
-import { safeGitReset } from './core/upgrade-protocol.js';
+import { GitOps } from './core/git-ops.js';
 import { TeamRegistry } from './core/team-registry.js';
 import { PANDO_INFRA_AGENTS } from './core/engine-adapter.js';
 import type { CredentialStore } from './core/credential-store.js';
@@ -81,22 +81,17 @@ export async function initPlatform(node: any): Promise<void> {
       }
       node.upgradeInProgress = true;
       try {
-        const { execSync, execFileSync: efs } = await import('node:child_process');
+        const { execSync } = await import('node:child_process');
         const repoDir = process.cwd();
+        const git = new GitOps(repoDir);
 
         // Ensure git safe.directory (compute instances: repo cloned by root, node runs as 'pando')
-        try {
-          efs('git', ['config', '--global', '--add', 'safe.directory', repoDir], {
-            cwd: repoDir, encoding: 'utf-8', timeout: 5_000, stdio: 'pipe', windowsHide: true,
-          });
-        } catch {}
+        git.addSafeDirectory();
 
         // Fetch + reset to origin/master (handles orphan-branch force pushes)
-        execSync('git fetch origin master', {
-          cwd: repoDir, encoding: 'utf-8', timeout: 120_000, stdio: 'pipe',
-        });
-        const localSha = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
-        const remoteSha = execSync('git rev-parse origin/master', { cwd: repoDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
+        git.fetch('origin', 'master');
+        const localSha = git.getCurrentCommit();
+        const remoteSha = git.getRemoteCommit('origin', 'master');
 
         if (localSha === remoteSha) {
           node.upgradeInProgress = false;
@@ -104,7 +99,7 @@ export async function initPlatform(node: any): Promise<void> {
           return { status: 'already_up_to_date', output: 'Already up to date.' };
         }
 
-        safeGitReset(repoDir, 'origin/master');
+        git.stashAndReset('origin/master');
         const pullOutput = `Updated ${localSha.slice(0, 8)} -> ${remoteSha.slice(0, 8)}`;
         console.log(`[upgrade-node] ${pullOutput}`);
 
@@ -929,9 +924,7 @@ Be friendly and helpful. Keep answers short.`
             // Re-read .build-commit each cycle — upgrade catch-up may have rebuilt
             const builtCommit = readBuildCommit();
             if (!builtCommit) return;
-            const currentCommit = (execSync('git rev-parse HEAD', {
-              cwd: process.cwd(), encoding: 'utf8', timeout: 5000,
-            }) as string).trim();
+            const currentCommit = new GitOps(process.cwd()).getCurrentCommit();
             if (currentCommit === builtCommit) {
               staleSinceTs = null; // Build is fresh
               // Build matches HEAD, but did the build change since this process started?

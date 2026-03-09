@@ -14,7 +14,7 @@
  */
 
 import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync, readdirSync, statSync } from 'node:fs';
-import { execFileSync } from 'node:child_process';
+import { GitOps } from '../core/git-ops.js';
 import { join, relative, dirname, extname } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import type {
@@ -141,13 +141,15 @@ export class CodePipeline {
     const changes: FileChange[] = [];
 
     try {
+      const git = new GitOps(this.repoDir);
+
       // Get both unstaged and staged changes
-      const unstaged = execFileSync('git', ['diff', '--name-only'], { cwd: this.repoDir, encoding: 'utf-8', windowsHide: true }).trim();
-      const staged = execFileSync('git', ['diff', '--cached', '--name-only'], { cwd: this.repoDir, encoding: 'utf-8', windowsHide: true }).trim();
+      const unstagedFiles = git.diffNameOnly();
+      const stagedFiles = git.diffCachedNameOnly();
 
       const changedFiles = new Set<string>();
-      if (unstaged) unstaged.split('\n').forEach((f: string) => changedFiles.add(f.trim()));
-      if (staged) staged.split('\n').forEach((f: string) => changedFiles.add(f.trim()));
+      for (const f of unstagedFiles) changedFiles.add(f.trim());
+      for (const f of stagedFiles) changedFiles.add(f.trim());
 
       for (const relPath of changedFiles) {
         if (!relPath) continue;
@@ -163,7 +165,7 @@ export class CodePipeline {
           const newContent = readFileSync(fullPath, 'utf-8');
           let oldContent = '';
           try {
-            oldContent = execFileSync('git', ['show', `HEAD:${relPath}`], { cwd: this.repoDir, encoding: 'utf-8', windowsHide: true });
+            oldContent = git.show('HEAD', relPath);
           } catch {
             // New file not in HEAD
           }

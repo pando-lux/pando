@@ -8,8 +8,8 @@
  *       /instances/* is in platform-api.ts.
  */
 
-import { execSync, execFileSync } from 'node:child_process';
-import { safeGitReset } from '../core/upgrade-protocol.js';
+import { execSync } from 'node:child_process';
+import { GitOps } from '../core/git-ops.js';
 import type { RouteHelpers } from './middleware/auth.js';
 import { violatesTwoLaws } from './api-server.js';
 
@@ -39,28 +39,22 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const repoDir = process.cwd();
 
       try {
+        const git = new GitOps(repoDir);
+
         // Step 0: ensure git safe.directory (compute instances run as 'pando' user, repo cloned by root)
-        try {
-          execFileSync('git', ['config', '--global', '--add', 'safe.directory', repoDir], {
-            cwd: repoDir, encoding: 'utf-8', timeout: 5_000, stdio: 'pipe', windowsHide: true,
-          });
-        } catch {}
+        git.addSafeDirectory();
 
         // Step 1: fetch + reset to origin/master (handles orphan-branch force pushes)
         console.log('[upgrade] Fetching latest code...');
         let pullOutput: string;
         try {
-          execSync('git fetch origin master', {
-            cwd: repoDir, encoding: 'utf-8', timeout: 60_000,
-            stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-          });
-          // Check if we're already at the same commit
-          const localSha = execSync('git rev-parse HEAD', { cwd: repoDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
-          const remoteSha = execSync('git rev-parse origin/master', { cwd: repoDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
+          git.fetch('origin', 'master');
+          const localSha = git.getCurrentCommit();
+          const remoteSha = git.getRemoteCommit('origin', 'master');
           if (localSha === remoteSha) {
             pullOutput = 'Already up to date.';
           } else {
-            safeGitReset(repoDir, 'origin/master');
+            git.stashAndReset('origin/master');
             pullOutput = `Updated ${localSha.slice(0, 8)} -> ${remoteSha.slice(0, 8)}`;
           }
         } catch (err: any) {
@@ -165,15 +159,12 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         }
 
         // Check git
-        let isAncestor = false;
-        try {
-          execFileSync('git', ['merge-base', '--is-ancestor', commitHash, 'HEAD'], { cwd: process.cwd(), timeout: 5000, stdio: 'pipe', windowsHide: true });
-          isAncestor = true;
-        } catch {}
+        const diagGit = new GitOps(process.cwd());
+        const isAncestor = diagGit.isAncestor(commitHash, 'HEAD');
 
         let canFetch = false;
         try {
-          execSync('git ls-remote --exit-code origin master', { cwd: process.cwd(), timeout: 10000, stdio: 'pipe' });
+          diagGit.lsRemote('origin', 'master');
           canFetch = true;
         } catch {}
 

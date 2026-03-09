@@ -422,12 +422,14 @@ Reads from @pando/node HTTP API. No direct database access.
 | **AppManager** | `core/app-manager.ts` | DONE | Unified app lifecycle: SQLite registry (apps.db), three tiers (1=static/S3, 2=server/PM2, 3=infrastructure), governance gate, blue-green deploy, health monitoring, rollback, P2P dispatch. pando-node + pando-code registered as tier 3 apps on startup. See Section 5.8. |
 | **CredentialStore** | `core/credential-store.ts` | DONE | AES-256-GCM encrypt/decrypt. Secure compute nodes (EC2) only. |
 | **StorageBackend** | `core/storage-backend.ts` | DONE | MongoDB direct or HTTP proxy to compute nodes |
-| **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Governance gate + security validation + safe restart for infrastructure upgrades. Git/build/deploy logic being migrated to AppManager (see Section 5.8.2). |
+| **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Governance gate + security validation + safe restart for infrastructure upgrades. Uses GitOps for all git operations. |
+| **GitOps** | `core/git-ops.ts` | DONE | Unified git operations layer — ALL git calls go through this class. `execFileSync` only (no shell injection). Methods: clone, fetch, pull, checkout, resetHard, commit, revert, stashAndReset, diffNameOnly, isAncestor, etc. |
+| **GitHubClient** | `core/github-client.ts` | DONE | GitHub API client for autonomous repo creation. createRepo, deleteRepo, repoExists. Uses contributed PAT. |
 | **PaymentGate** | `core/payment-gate.ts` | DONE | Lux escrow for task execution |
 | **RequestReply** | `core/request-reply.ts` | DONE | Handler registry + broadcast queries only. Unicast removed (Phase A). |
 | **HttpPeerClient** | `core/http-peer-client.ts` | DONE | Direct HTTP for all inter-node operations. Ed25519-signed requests. See Section 4.5. |
 | **CloudInstanceManager** | `core/cloud-instance-manager.ts` | DONE | EC2 instance provisioning, security groups, IP polling (~961 lines) |
-| **DeployManager** | `core/deploy-manager.ts` | DONE | PatchSet git commit/revert for CodePipeline. Backup/restore being removed (AppManager handles). See Section 5.8.2. |
+| **DeployManager** | `core/deploy-manager.ts` | DONE | PatchSet git commit/revert for CodePipeline. Uses GitOps for all git operations. |
 | **VersionProtocol** | `core/version-protocol.ts` | DONE | Version negotiation between nodes (~222 lines) |
 | **MongoBackend** | `core/mongo-backend.ts` | DONE | MongoDB storage backend implementation (~239 lines) |
 | **P2PStorageBackend** | `core/p2p-storage-backend.ts` | DONE | P2P storage proxy for non-MongoDB nodes (~171 lines) |
@@ -1024,24 +1026,26 @@ P2P DISPATCH: findDeployTarget() → CapabilityRegistry (credentialAccess + mong
               → HttpPeerClient forwards deploy/update to EC2 secure node
 ```
 
-#### 5.8.2 Deprecation Plan (Phases 3-7 — PLANNED)
+#### 5.8.2 Unified Git Operations (ALL PHASES COMPLETE)
 
-The unified pipeline consolidates three systems that previously did overlapping work:
+All git operations consolidated into a single `GitOps` class (`core/git-ops.ts`):
 
-| System | Keeps | Removes (migrates to AppManager) |
+| Component | Uses GitOps? | Notes |
 |---|---|---|
-| **UpgradeProtocol** | Security validation, safe restart (wait for active workers), catch-up timer, governance gate | Git fetch/reset, npm install, build, deploy logic |
-| **DeployManager** | PatchSet commit for CodePipeline | Standalone backup/restore, direct git operations |
-| **Hardcoded PATs** | (nothing) | All replaced by `resolveGitCredential()` |
+| **UpgradeProtocol** | ✅ | Governance gate + security + safe restart. All git via `this.git` (GitOps instance). |
+| **DeployManager** | ✅ | PatchSet commit/revert. All git via `this.git` (GitOps instance). |
+| **AppManager** | ✅ | Creates `new GitOps(appDir)` per operation for user app deploys. |
+| **CodePipeline** | ✅ | Uses GitOps for `diffNameOnly()`, `diffCachedNameOnly()`, `show()`. |
+| **core-api.ts** | ✅ | `/upgrade/now` and `/upgrade/diagnose` use GitOps. |
+| **init-platform.ts** | ✅ | P2P upgrade handler uses GitOps. |
+| **init-kernel.ts** | ✅ | Running commit detection uses GitOps. |
+| **tui.ts** | ✅ | Manual upgrade uses `GitOps.stashAndReset()`. |
 
-**Planned phases (NOT YET IMPLEMENTED):**
-- **Phase 3:** Extract git operations into shared `GitOps` class — all git calls use `execFileSync`, all resolve credentials via credential system
-- **Phase 4:** AppManager.update() gains governance awareness — UpgradeProtocol becomes a thin governance gate calling AppManager
-- **Phase 5:** Agent-driven GitHub repo creation via API (not CLI)
-- **Phase 6:** pando-code upgrade pipeline (same as pando-node, already registered as tier 3 app)
-- **Phase 7:** Remove deprecated duplicate logic from UpgradeProtocol and DeployManager
-
-Until these phases are implemented, UpgradeProtocol still runs its own git/build/deploy logic for pando-node upgrades. The AppManager handles user app deployment independently. Both work, but the code is duplicated.
+**Also completed:**
+- **GitHubClient** (`core/github-client.ts`): GitHub API for autonomous repo creation (createRepo, deleteRepo, repoExists)
+- **safeGitReset** removed from UpgradeProtocol — replaced by `GitOps.stashAndReset()`
+- **safeGitRef/safeCommitHash** validators exported from `git-ops.ts` (single source of truth)
+- All `execSync('git ...')` template-literal calls eliminated — only `execFileSync` via GitOps
 
 **PROVEN LIVE (2026-03-06) — BOTH TIERS:**
 
@@ -2030,8 +2034,8 @@ The `resourceId` is generated when a credential is contributed (via `/contribute
 | **Deploy pipeline resilience** | `core/app-manager.ts` | AppManager provides blue-green deploy (no port collision) + rollback (restore previous commit). Retry on transient failures still TODO. S3 partial upload edge case mitigated by rollback capability. All deploy events persisted to `app_history` table in apps.db. |
 | **Chat-created projects lack repo_url** | `api/platform-api.ts` | Chat-created projects use workspace-based deploy (workspaceDir). EC2 deploy dispatch requires GitHub repo to clone. Workspace-to-GitHub push before deploy dispatch needed. Being fixed separately. |
 | ~~**deployPeerId not persisting**~~ | `platform-api.ts:3685` | **ALREADY HANDLED.** Saved to both ProjectStore (MongoDB) and ProjectRegistry (local). |
-| **Unified Pipeline Phases 3-7** | `core/app-manager.ts`, `core/upgrade-protocol.ts`, `core/deploy-manager.ts` | Phases 1-2 DONE (credential resolution + infrastructure-as-apps). Remaining: shared GitOps class (Phase 3), AppManager governance-aware update (Phase 4), agent-driven repo creation (Phase 5), pando-code pipeline (Phase 6), cleanup deprecated logic (Phase 7). See `docs/UNIFIED-PIPELINE-ROADMAP.md` and Section 5.8.2. |
-| **UpgradeProtocol/AppManager duplication** | `core/upgrade-protocol.ts`, `core/app-manager.ts` | Both have git/build/deploy logic. UpgradeProtocol handles pando-node upgrades, AppManager handles user apps. Will merge in Phase 4 — AppManager.update() gains governance gate, UpgradeProtocol becomes thin wrapper. |
+| ~~**Unified Pipeline Phases 3-7**~~ | `core/git-ops.ts`, `core/github-client.ts` | **DONE.** All 7 phases complete. GitOps class centralizes all git operations. GitHubClient for autonomous repo creation. All consumers refactored. See Section 5.8.2. |
+| ~~**UpgradeProtocol/AppManager duplication**~~ | `core/upgrade-protocol.ts`, `core/app-manager.ts` | **DONE.** Both now use GitOps for all git operations. UpgradeProtocol handles governance + security + safe restart. AppManager handles deployment lifecycle. No more duplicate git logic. |
 
 ### Stubs
 
@@ -2230,10 +2234,12 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 | `core/credential-store.ts` | AES-256-GCM encrypt/decrypt |
 | `core/http-peer-client.ts` | Direct HTTP for all inter-node operations. Ed25519-signed. See Section 4.5. |
 | `core/storage-backend.ts` | MongoDB or HTTP proxy |
-| `core/upgrade-protocol.ts` | Governance gate + security validation + safe restart. Git/build logic being migrated to AppManager (Section 5.8.2). |
+| `core/upgrade-protocol.ts` | Governance gate + security validation + safe restart. Uses GitOps for all git operations. |
+| `core/git-ops.ts` | **Unified git operations.** ALL git calls go through GitOps. execFileSync only. safeGitRef/safeCommitHash validators. stashAndReset (replaces safeGitReset). |
+| `core/github-client.ts` | GitHub API client for autonomous repo creation. createRepo, deleteRepo, repoExists. |
 | `core/payment-gate.ts` | Lux escrow |
 | `core/cloud-instance-manager.ts` | EC2 instance provisioning, security groups, IP polling (~961 lines) |
-| `core/deploy-manager.ts` | PatchSet git commit/revert for CodePipeline. Backup/restore being removed (Section 5.8.2). |
+| `core/deploy-manager.ts` | PatchSet git commit/revert for CodePipeline. Uses GitOps for all git operations. |
 | `core/version-protocol.ts` | Version negotiation (~222 lines) |
 | `core/mongo-backend.ts` | MongoDB storage backend (~239 lines) |
 | `core/p2p-storage-backend.ts` | P2P storage proxy (~171 lines) |

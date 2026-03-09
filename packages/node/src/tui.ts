@@ -2174,8 +2174,10 @@ class PandoTUI {
     const repoDir = process.cwd();
     this.log(`${c.bold}Checking for updates...${c.reset}`);
     try {
-      execSync('git fetch', { cwd: repoDir, stdio: 'pipe', timeout: 30_000 });
-      const status = execSync('git status -uno', { cwd: repoDir, encoding: 'utf-8', timeout: 10_000 });
+      const { GitOps } = await import('./core/git-ops.js');
+      const tuiGit = new GitOps(repoDir);
+      tuiGit.fetch();
+      const status = tuiGit.exec(['status', '-uno']);
       if (status.includes('up to date') || status.includes('up-to-date')) {
         this.log(`${c.green}Already up to date.${c.reset}`); return;
       }
@@ -2185,7 +2187,7 @@ class PandoTUI {
 
       // Governance hardening: check if remote HEAD is governance-approved
       try {
-        const remoteSha = execSync('git rev-parse origin/master', { cwd: repoDir, encoding: 'utf-8', stdio: 'pipe' }).trim();
+        const remoteSha = tuiGit.getRemoteCommit('origin', 'master');
         const governance = (this.node as any).governance;
         if (governance) {
           const proposals = governance.getProposals();
@@ -2203,8 +2205,8 @@ class PandoTUI {
       } catch { /* governance check is best-effort */ }
 
       this.log(`${c.dim}Pulling...${c.reset}`);
-      const { safeGitReset } = await import('./core/upgrade-protocol.js');
-      safeGitReset(repoDir, 'origin/master');
+      const { GitOps } = await import('./core/git-ops.js');
+      new GitOps(repoDir).stashAndReset('origin/master');
       this.log(`${c.dim}Building...${c.reset}`);
       execSync('npm run build', { cwd: repoDir, stdio: 'pipe', timeout: 120_000 });
       this.log(`${c.green}Build succeeded.${c.reset}`);

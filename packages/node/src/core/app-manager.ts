@@ -30,14 +30,7 @@ import {
   cpSync,
 } from 'node:fs';
 import { execSync, execFileSync } from 'node:child_process';
-
-/** Validate a git ref (commit hash or branch name) to prevent command injection */
-function safeGitRef(ref: string): string {
-  if (!/^[0-9a-zA-Z._\-/]{1,100}$/.test(ref)) {
-    throw new Error(`Invalid git ref: ${ref.slice(0, 20)}`);
-  }
-  return ref;
-}
+import { GitOps, safeGitRef } from './git-ops.js';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -857,7 +850,8 @@ export class AppManager {
     let newCommit: string;
     if (isGitRepo) {
       // Pull latest from git
-      execSync('git pull origin main', { ...GIT_OPTS, cwd: appDir });
+      const git = new GitOps(appDir);
+      git.pull('origin', 'main');
       newCommit = this.getCommit(appDir);
     } else {
       // Workspace-based: files were already re-copied by update(), use timestamp as "commit"
@@ -1002,15 +996,16 @@ export class AppManager {
     let newCommit: string;
 
     if (isGitRepo) {
+      const git = new GitOps(appDir);
+
       // Fetch latest from remote
-      execSync('git fetch origin', { ...GIT_OPTS, cwd: appDir });
+      git.fetch('origin');
 
       // Determine target commit
       if (targetCommit) {
         newCommit = targetCommit;
       } else {
-        newCommit = execSync('git rev-parse origin/main', { ...EXEC_OPTS, cwd: appDir })
-          .toString().trim();
+        newCommit = git.getRemoteCommit('origin', 'main');
       }
 
       // Check if already at target
@@ -1022,7 +1017,7 @@ export class AppManager {
       }
 
       // Checkout new commit
-      execFileSync('git', ['checkout', safeGitRef(newCommit)], { ...GIT_OPTS, cwd: appDir });
+      git.checkout(newCommit);
     } else {
       // Workspace-based: files were already re-copied by update(), use timestamp as "commit"
       newCommit = `workspace-${Date.now()}`;
@@ -1121,7 +1116,8 @@ export class AppManager {
       // Restore old commit so old process's code is intact
       if (oldCommit) {
         try {
-          execFileSync('git', ['checkout', safeGitRef(oldCommit)], { ...GIT_OPTS, cwd: appDir });
+          const git = new GitOps(appDir);
+          git.checkout(oldCommit);
         } catch { /* best effort — old process is still running on old port */ }
       }
 
@@ -1177,7 +1173,8 @@ export class AppManager {
       const currentCommit = app.current_commit;
 
       // Checkout previous commit
-      execFileSync('git', ['checkout', safeGitRef(targetCommit)], { ...GIT_OPTS, cwd: appDir });
+      const git = new GitOps(appDir);
+      git.checkout(targetCommit);
 
       // Reinstall deps and rebuild
       execSync('npm install --production', { ...INSTALL_OPTS, cwd: appDir });
@@ -1287,7 +1284,7 @@ export class AppManager {
           try { execFileSync('pm2', ['delete', pm2NameStaging], EXEC_OPTS); } catch { /* best effort */ }
 
           if (currentCommit) {
-            try { execFileSync('git', ['checkout', safeGitRef(currentCommit)], { ...GIT_OPTS, cwd: appDir }); } catch { /* best effort */ }
+            try { const gitRestore = new GitOps(appDir); gitRestore.checkout(currentCommit); } catch { /* best effort */ }
           }
 
           const error = 'Rollback staging health check failed — original process continues running';
@@ -1789,12 +1786,13 @@ location /apps/${appId}/ {
       throw new Error(`Invalid repo URL: ${repoUrl.slice(0, 50)}`);
     }
     if (existsSync(join(appDir, '.git'))) {
-      execSync('git pull origin main', { ...GIT_OPTS, cwd: appDir });
+      const git = new GitOps(appDir);
+      git.pull('origin', 'main');
       console.log(`[app-manager] Updated ${repoUrl} in ${appDir}`);
     } else {
       // Clone to tmp dir, move files, delete tmp (same pattern as init-platform.ts)
       const tmpDir = appDir + '-tmp-' + Date.now();
-      execFileSync('git', ['clone', repoUrl, tmpDir], GIT_OPTS);
+      GitOps.cloneSync(repoUrl, tmpDir);
 
       const { renameSync } = require('node:fs') as typeof import('node:fs');
       for (const f of readdirSync(tmpDir)) {
@@ -1807,7 +1805,8 @@ location /apps/${appId}/ {
 
   private getCommit(appDir: string): string {
     try {
-      return execFileSync('git', ['-C', appDir, 'rev-parse', 'HEAD'], EXEC_OPTS).toString().trim();
+      const git = new GitOps(appDir);
+      return git.getCurrentCommit();
     } catch {
       return 'unknown';
     }

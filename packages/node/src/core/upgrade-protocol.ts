@@ -1,20 +1,29 @@
 /**
- * Upgrade Protocol — Git Pull + Hash Verification + Build Fallback (E2E verified 2026-03-08)
+ * Upgrade Protocol — Governance gate + security validation for infrastructure upgrades.
  *
- * Governance approves upgrade → broadcasts commit hash via GossipSub →
- * all nodes: git pull → verify hash → build → restart. That's it.
+ * This is a THIN WRAPPER around the unified pipeline (AppManager + GitOps).
+ * It provides:
+ *   - Governance proposal creation with risk assessment
+ *   - Security validation (dangerous patterns, immutable kernel, protocol changes)
+ *   - Version pinning
+ *   - Safe restart (wait for active workers)
+ *   - Catch-up timer for missed upgrades
+ *   - P2P broadcast of upgrade notifications
+ *
+ * The actual git/build/deploy work is done by GitOps.
+ * UpgradeProtocol does NOT duplicate git operations.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { execSync, execFileSync } from 'node:child_process';
+import { execSync } from 'node:child_process';
+import { GitOps } from './git-ops.js';
 import type {
   UpgradeProposal,
   RiskAssessment,
   UpgradeRecord,
   UpgradeStatus,
-  ReviewResult,
   UpgradeQuorumResult,
   UpgradePayload,
 } from '@pando/shared';
@@ -40,44 +49,6 @@ const MAX_HISTORY = 200;
 
 export const TOPIC_UPGRADES = 'pando/upgrades';
 const RESTART_EXIT_CODE = 75;
-
-/** Stash uncommitted changes before destructive git reset. */
-export function safeGitReset(repoDir: string, target: string = 'origin/master'): void {
-  // Check for local commits not yet pushed to origin — skip reset entirely to avoid destroying unpushed work
-  try {
-    const countStr = execSync('git rev-list origin/master..HEAD --count', {
-      cwd: repoDir, encoding: 'utf-8', timeout: 10_000, stdio: 'pipe',
-    }).trim();
-    const count = parseInt(countStr, 10);
-    if (count > 0) {
-      console.warn(`[upgrade] Upgrade: skipping reset — local commits not yet pushed to origin (${count} commit(s) ahead)`);
-      return;
-    }
-  } catch (checkErr: any) {
-    console.warn(`[upgrade] Could not check for unpushed commits (${checkErr.message?.slice(0, 100)}) — proceeding.`);
-  }
-
-  const status = execSync('git status --porcelain', {
-    cwd: repoDir, encoding: 'utf-8', timeout: 10_000, stdio: 'pipe',
-  }).trim();
-
-  if (status.length > 0) {
-    console.warn(`[upgrade] WARNING: Uncommitted changes detected (${status.split('\n').length} files). Stashing...`);
-    try {
-      execFileSync('git', ['stash', 'push', '-m', `pando-auto-stash-${Date.now()}`], {
-        cwd: repoDir, encoding: 'utf-8', timeout: 15_000, stdio: 'pipe', windowsHide: true,
-      });
-      console.warn('[upgrade] Changes stashed. Recover with: git stash pop');
-    } catch (stashErr: any) {
-      console.warn(`[upgrade] Stash failed (${stashErr.message}). Proceeding with reset.`);
-    }
-  }
-
-  execFileSync('git', ['reset', '--hard', target], {
-    cwd: repoDir, encoding: 'utf-8', timeout: 30_000,
-    stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-  });
-}
 
 // ── File patterns considered "protocol changes" (longer review) ──
 
@@ -116,6 +87,9 @@ export class UpgradeProtocol {
   private deployManagerProvider: () => DeployManager | null;
   private networkProvider: () => PandoNetwork | null;
 
+  /** GitOps instance for all git operations. */
+  private git: GitOps;
+
   // State
   private proposals: Map<string, UpgradeProposal> = new Map();
   private history: UpgradeRecord[] = [];
@@ -149,11 +123,12 @@ export class UpgradeProtocol {
     this.workersActiveFn = deps.workersActiveFn || (() => 0);
     this.messagesPendingFn = deps.messagesPendingFn || (() => false);
 
+    // Create GitOps instance for this repo
+    this.git = new GitOps(deps.repoDir);
+
     // Snapshot the git HEAD at startup — used to detect stale compiled code after self-commits
     try {
-      this.runningCommit = execSync('git rev-parse HEAD', {
-        cwd: deps.repoDir, encoding: 'utf-8', timeout: 5_000, stdio: 'pipe',
-      }).trim();
+      this.runningCommit = this.git.getCurrentCommit();
       console.log(`[upgrade] Running commit: ${this.runningCommit.slice(0, 8)}`);
     } catch {
       this.runningCommit = 'unknown';
@@ -229,7 +204,7 @@ export class UpgradeProtocol {
 
   /**
    * Pull latest code from origin, verify commit hash, build, and restart.
-   * This is the ONE upgrade path. No patches, no canary, no complexity.
+   * Uses GitOps for all git operations.
    */
   async pullAndUpgrade(commitHash?: string): Promise<{ success: boolean; message: string }> {
     if (this.pinnedVersion) {
@@ -240,15 +215,13 @@ export class UpgradeProtocol {
       return { success: false, message: `Invalid commitHash format: ${commitHash.slice(0, 20)}` };
     }
 
-    const repoDir = this.repoDir;
-
     // Step 0: If local HEAD already matches target hash, we're the proposer — skip pull
     if (commitHash) {
       try {
-        const localSha = this.git(['rev-parse', 'HEAD']);
+        const localSha = this.git.getCurrentCommit();
         if (localSha.startsWith(commitHash) || commitHash.startsWith(localSha.slice(0, commitHash.length))) {
           console.log(`[upgrade] Already at target version ${commitHash.slice(0, 8)} — skipping pull.`);
-          // Proposer node: dist/ was rebuilt by asyncOnCommit but running process uses stale in-memory code
+          // Proposer node: dist/ was rebuilt but running process uses stale in-memory code
           if (this.runningCommit !== 'unknown' && this.runningCommit !== localSha) {
             console.log(`[upgrade] Proposer node stale: running ${this.runningCommit.slice(0, 8)}, built ${localSha.slice(0, 8)} — triggering safe restart`);
             this.safeRestart(localSha);
@@ -259,19 +232,12 @@ export class UpgradeProtocol {
     }
 
     // Step 1: Ensure git safe.directory
-    try {
-      execFileSync('git', ['config', '--global', '--add', 'safe.directory', repoDir], {
-        cwd: repoDir, timeout: 5_000, stdio: 'pipe', windowsHide: true,
-      });
-    } catch {}
+    this.git.addSafeDirectory();
 
     // Step 2: Fetch latest
     console.log('[upgrade] Fetching latest code...');
     try {
-      execSync('git fetch origin master', {
-        cwd: repoDir, encoding: 'utf-8', timeout: 60_000,
-        stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-      });
+      this.git.fetch('origin', 'master');
     } catch (err: any) {
       const msg = err.stderr?.toString()?.slice(0, 500) || err.message;
       console.error(`[upgrade] Git fetch failed: ${msg}`);
@@ -279,13 +245,11 @@ export class UpgradeProtocol {
     }
 
     // Step 3: Check if already up to date
-    const localSha = this.git(['rev-parse', 'HEAD']);
-    const remoteSha = this.git(['rev-parse', 'origin/master']);
+    const localSha = this.git.getCurrentCommit();
+    const remoteSha = this.git.getRemoteCommit('origin', 'master');
 
     if (localSha === remoteSha) {
       console.log('[upgrade] Already up to date.');
-      // Proposer node: source matches origin but dist may be stale (self-commit scenario).
-      // If the running commit differs from current HEAD, we built new code — restart safely.
       if (this.runningCommit !== 'unknown' && this.runningCommit !== localSha) {
         console.log(`[upgrade] Stale dist detected: running ${this.runningCommit.slice(0, 8)}, source is now ${localSha.slice(0, 8)} — checking safe restart`);
         this.safeRestart(localSha);
@@ -293,14 +257,11 @@ export class UpgradeProtocol {
       return { success: true, message: 'Already up to date.' };
     }
 
-    // Step 4: STRICT commit hash verification (governance hardening)
-    // Exact/prefix match → proceed. Ancestor of origin/master → proceed (already incorporated).
-    // Neither → ABORT. No code runs without governance approval.
+    // Step 4: STRICT commit hash verification
     if (commitHash && remoteSha !== commitHash && !remoteSha.startsWith(commitHash) && !commitHash.startsWith(remoteSha.slice(0, commitHash.length))) {
-      try {
-        this.git(['merge-base', '--is-ancestor', commitHash, 'origin/master']);
+      if (this.git.isAncestor(commitHash, 'origin/master')) {
         console.log(`[upgrade] Proposed commit ${commitHash.slice(0, 12)} is ancestor of origin/master (${remoteSha.slice(0, 12)}) — upgrading to latest`);
-      } catch {
+      } else {
         console.error(`[upgrade] REJECTED: governance approved ${commitHash.slice(0, 12)}, but origin/master is ${remoteSha.slice(0, 12)} and commit is not an ancestor`);
         return { success: false, message: `Hash mismatch: governance approved ${commitHash} but origin/master is ${remoteSha}. Rejected.` };
       }
@@ -309,15 +270,15 @@ export class UpgradeProtocol {
     // Step 5: Reset to origin/master (stash uncommitted changes first)
     console.log(`[upgrade] Updating ${localSha.slice(0, 8)} → ${remoteSha.slice(0, 8)}`);
     try {
-      safeGitReset(repoDir, 'origin/master');
+      this.git.stashAndReset('origin/master');
     } catch (err: any) {
       const msg = err.stderr?.toString()?.slice(0, 500) || err.message;
       console.error(`[upgrade] Git reset failed: ${msg}`);
       return { success: false, message: `Git reset failed: ${msg}` };
     }
 
-    // Step 5b: If HEAD didn't move (safeGitReset skipped), mark applied without restart
-    const headAfterReset = this.git(['rev-parse', 'HEAD']);
+    // Step 5b: If HEAD didn't move (stashAndReset skipped), mark applied without restart
+    const headAfterReset = this.git.getCurrentCommit();
     if (headAfterReset === localSha && localSha === this.runningCommit) {
       console.log(`[upgrade] HEAD unchanged after reset (local ahead) — marking ${(commitHash || remoteSha).slice(0, 8)} as applied, no restart needed`);
       const proposalId = commitHash || remoteSha;
@@ -327,18 +288,17 @@ export class UpgradeProtocol {
       return { success: true, message: 'Already incorporated (local ahead of origin).' };
     }
 
-    // Step 6a: Install dependencies (new packages may have been added)
+    // Step 6a: Install dependencies
     console.log('[upgrade] Installing dependencies...');
     try {
       execSync('npm install', {
-        cwd: repoDir, timeout: 180_000, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
+        cwd: this.repoDir, timeout: 180_000, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
       });
     } catch (err: any) {
       console.warn(`[upgrade] npm install warning: ${(err.stderr?.toString() || err.message)?.slice(0, 200)}`);
-      // Non-fatal — build might still succeed if deps didn't change
     }
 
-    // Step 6b: Build (with fallback to targeted tsc for EC2)
+    // Step 6b: Build (with fallback)
     console.log('[upgrade] Building...');
     try {
       this.build();
@@ -346,7 +306,7 @@ export class UpgradeProtocol {
       const stderr = err.stderr?.toString()?.slice(-500) || err.message;
       console.error(`[upgrade] Build FAILED: ${stderr}`);
       // Rollback to previous commit
-      try { execFileSync('git', ['reset', '--hard', localSha], { cwd: repoDir, timeout: 10_000, stdio: 'pipe', windowsHide: true }); } catch {}
+      try { this.git.resetHard(localSha); } catch {}
       return { success: false, message: `Build failed: ${stderr}` };
     }
 
@@ -358,7 +318,7 @@ export class UpgradeProtocol {
     this.recordUpgrade(proposalId, 'success');
     this.saveState();
 
-    const actualHead = this.git(['rev-parse', 'HEAD']);
+    const actualHead = this.git.getCurrentCommit();
     this.safeRestart(actualHead);
 
     return { success: true, message: `Updated to ${actualHead.slice(0, 8)}. Restarting...` };
@@ -368,14 +328,11 @@ export class UpgradeProtocol {
 
   /**
    * Create an upgrade proposal. Submits to governance with the remote HEAD commit hash.
-   * Fetches origin/master first so the proposal targets the latest remote code, not local HEAD.
-   * No diffs, no patches — just a description and a hash for peers to verify.
    */
   async createUpgradeProposal(description: string): Promise<UpgradeProposal> {
-    // Fetch remote state first so we propose the remote HEAD, not local HEAD.
-    // This ensures all nodes actually pull new code rather than seeing "already at target".
+    // Fetch remote state first
     try {
-      this.git(['fetch', 'origin', 'master']);
+      this.git.fetch('origin', 'master');
     } catch (e) {
       console.warn('[upgrade] git fetch failed — proposal will use local HEAD:', e);
     }
@@ -447,7 +404,6 @@ export class UpgradeProtocol {
 
   /**
    * Broadcast upgrade notification to all peers.
-   * Called after governance approves and local node upgrades successfully.
    */
   async broadcastUpgradeNotification(commitHash: string, description: string, governanceId?: string): Promise<void> {
     if (!this.broadcastFn) {
@@ -547,7 +503,7 @@ export class UpgradeProtocol {
   }
 
   async executeRollback(targetVersion?: string): Promise<{ success: boolean; message: string }> {
-    // Validate targetVersion to prevent command injection (comes from API body)
+    // Validate targetVersion
     if (targetVersion && !/^[0-9a-f]{6,40}$/i.test(targetVersion)) {
       return { success: false, message: `Invalid targetVersion format: ${(targetVersion || '').slice(0, 20)}` };
     }
@@ -572,9 +528,9 @@ export class UpgradeProtocol {
 
     try {
       if (targetVersion) {
-        this.git(['checkout', targetVersion, '--', 'packages/']);
+        this.git.checkoutFiles(targetVersion, ['packages/']);
       } else {
-        this.git(['checkout', 'HEAD', '--', 'packages/']);
+        this.git.checkoutFiles('HEAD', ['packages/']);
       }
       this.build(180_000);
       console.log('[upgrade-protocol] Git-based rollback successful.');
@@ -613,18 +569,13 @@ export class UpgradeProtocol {
 
   /**
    * Periodically scan governance for passed upgrade proposals this node hasn't applied.
-   * Handles the case where the proposing node goes offline before broadcasting.
-   * Every node independently catches up — no dependency on the proposer.
    */
   private catchupTimer: ReturnType<typeof setInterval> | null = null;
-  private static CATCHUP_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
-  private static CATCHUP_STARTUP_DELAY_MS = 30 * 1000; // 30s after boot
+  private static CATCHUP_INTERVAL_MS = 5 * 60 * 1000;
+  private static CATCHUP_STARTUP_DELAY_MS = 30 * 1000;
 
   startCatchupTimer(pullAndUpgradeFn: (commitHash: string) => Promise<{ success: boolean; message: string }>): void {
-    // Initial check 30s after startup
     setTimeout(() => this.checkForMissedUpgrades(pullAndUpgradeFn), UpgradeProtocol.CATCHUP_STARTUP_DELAY_MS);
-
-    // Then every 5 minutes
     this.catchupTimer = setInterval(
       () => this.checkForMissedUpgrades(pullAndUpgradeFn),
       UpgradeProtocol.CATCHUP_INTERVAL_MS,
@@ -642,29 +593,22 @@ export class UpgradeProtocol {
         if (p.status !== 'passed' || p.category !== 'upgrade') continue;
         const commitHash = p.upgradePayload?.commitHash;
         if (!commitHash) continue;
-        // Validate commitHash format (P2P data — prevent command injection)
         if (!/^[0-9a-f]{6,40}$/i.test(commitHash)) continue;
-        // Skip if already applied
         if (this.hasApplied(commitHash)) continue;
-        // Check if we're already at this version (git HEAD matches)
+
         const headMatches = currentVersion.startsWith(commitHash) || commitHash.startsWith(currentVersion.slice(0, commitHash.length));
-        // Check if this commit is already in our git history (ancestor of HEAD)
         let isAncestor = false;
         if (!headMatches) {
-          try {
-            this.git(['merge-base', '--is-ancestor', commitHash, 'HEAD']);
-            isAncestor = true;
-          } catch { /* not an ancestor */ }
+          isAncestor = this.git.isAncestor(commitHash, 'HEAD');
         }
         if (headMatches || isAncestor) {
-          // HEAD has this commit, but is the BUILD stale?
-          // This catches the proposer-node case: lead committed locally but process is running old dist/
-          if (this.runningCommit !== 'unknown' && this.runningCommit !== this.git(['rev-parse', 'HEAD'])) {
+          // HEAD has this commit — check if build is stale
+          if (this.runningCommit !== 'unknown' && this.runningCommit !== this.git.getCurrentCommit()) {
             console.log(`[upgrade] Catch-up: HEAD has ${commitHash.slice(0, 8)} but running commit is stale (${this.runningCommit.slice(0, 8)}) — rebuilding`);
             try {
               this.build(180_000);
               console.log('[upgrade] Rebuild complete after local commit — triggering safe restart');
-              this.safeRestart(this.git(['rev-parse', 'HEAD']));
+              this.safeRestart(this.git.getCurrentCommit());
             } catch (buildErr: any) {
               console.warn(`[upgrade] Rebuild failed: ${buildErr.message?.slice(0, 200)}`);
             }
@@ -673,14 +617,12 @@ export class UpgradeProtocol {
           this.saveState();
           continue;
         }
-        // Skip if pinned
         if (this.pinnedVersion) continue;
 
         console.log(`[upgrade] Catch-up: found unapplied upgrade ${commitHash.slice(0, 8)} — ${p.title?.slice(0, 50)}`);
         const result = await pullAndUpgradeFn(commitHash);
         if (result.success) {
           console.log(`[upgrade] Catch-up: upgrade ${commitHash.slice(0, 8)} applied successfully`);
-          // Broadcast to any peers who also missed it
           await this.broadcastUpgradeNotification(
             commitHash,
             p.upgradePayload?.description || p.title || '',
@@ -707,22 +649,18 @@ export class UpgradeProtocol {
 
   private getRecentFilesTouched(): string[] {
     try {
-      // Try origin/master diff first (for remote upgrades)
-      const output = this.git(['diff', '--name-only', 'HEAD', 'origin/master']);
-      const files = output.split('\n').filter(Boolean);
-      // If empty (proposer already pushed), fall back to last commit diff
+      const files = this.git.diffNameOnly('HEAD', 'origin/master');
       if (files.length > 0) return files;
     } catch { /* origin/master unavailable */ }
     try {
-      const output = this.git(['diff', '--name-only', 'HEAD~1', 'HEAD']);
-      return output.split('\n').filter(Boolean);
+      return this.git.diffNameOnly('HEAD~1', 'HEAD');
     } catch {
       return [];
     }
   }
 
   private getRemoteVersion(): string {
-    try { return this.git(['rev-parse', '--short', 'origin/master']); } catch { return this.getCurrentVersion(); }
+    try { return this.git.getRemoteCommit('origin', 'master', true); } catch { return this.getCurrentVersion(); }
   }
 
   private assessRisk(filesTouched: string[]): RiskAssessment {
@@ -756,9 +694,6 @@ export class UpgradeProtocol {
 
   /**
    * Build the project — tries full monorepo build first, falls back to targeted tsc.
-   * EC2 nodes lack @pando-code/core so `npm run build` fails. The targeted tsc also
-   * exits non-zero (engine-adapter errors) but still emits valid JS for all other files.
-   * We verify dist/cli.js exists rather than relying on the exit code.
    */
   private build(timeoutMs = 300_000): void {
     try {
@@ -776,8 +711,6 @@ export class UpgradeProtocol {
         cwd: this.repoDir, timeout: timeoutMs, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
       });
     } catch {
-      // tsc exits non-zero due to engine-adapter errors but still emits JS.
-      // Verify dist/cli.js exists as proof that compilation succeeded for the files that matter.
       if (!existsSync(cliJsPath) || readFileSync(cliJsPath).length === 0) {
         throw new Error('Build failed: dist/cli.js missing or empty after tsc');
       }
@@ -785,15 +718,8 @@ export class UpgradeProtocol {
     }
   }
 
-  private git(args: string[]): string {
-    return execFileSync('git', args, {
-      cwd: this.repoDir, encoding: 'utf-8', timeout: 30_000,
-      stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
-    }).trim();
-  }
-
   private getCurrentVersion(): string {
-    try { return this.git(['rev-parse', '--short', 'HEAD']); } catch { return 'unknown'; }
+    try { return this.git.getCurrentCommit(true); } catch { return 'unknown'; }
   }
 
   private recordUpgrade(proposalId: string, status: UpgradeRecord['status'], reason?: string): void {

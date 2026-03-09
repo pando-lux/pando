@@ -68,12 +68,13 @@ import { NetworkState } from './kernel/network-state.js';
 import { ThreadStore } from './platform/thread-store.js';
 import { CloudInstanceManager } from './core/cloud-instance-manager.js';
 import { AppManager } from './core/app-manager.js';
+import { GitOps } from './core/git-ops.js';
 import type { StorageBackend } from './core/storage-backend.js';
 import { LocalEnvironment } from './kernel/local-environment.js';
 import { join, resolve as pathResolve } from 'node:path';
 import { homedir } from 'node:os';
 import { EventEmitter } from 'node:events';
-import { execSync, execFileSync, exec as execCb } from 'node:child_process';
+import { exec as execCb } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execAsync = promisify(execCb);
@@ -821,7 +822,7 @@ export class PandoNode {
           const authenticatedUrl = await this.resourceRegistry.resolveGitCredential(plainUrl);
           if (authenticatedUrl) cloneUrl = authenticatedUrl;
         }
-        execFileSync('git', ['clone', cloneUrl, '.'], { cwd: wsDir, timeout: 60000, stdio: 'ignore' });
+        new GitOps(wsDir).exec(['clone', cloneUrl, '.'], { timeout: 60000 });
         console.log(`[project-workspace] Cloned ${project.githubRepo} into ${wsDir}`);
       } catch (err: any) {
         console.warn(`[project-workspace] Clone failed (using empty workspace): ${err.message?.slice(0, 100)}`);
@@ -831,7 +832,7 @@ export class PandoNode {
     // Ensure git is initialized
     if (!existsSync(join(wsDir, '.git'))) {
       try {
-        execSync('git init', { cwd: wsDir, timeout: 5000, stdio: 'ignore' });
+        new GitOps(wsDir).init();
         console.log(`[project-workspace] Initialized git in ${wsDir}`);
       } catch { /* non-fatal */ }
     }
@@ -897,14 +898,13 @@ export class PandoNode {
 
       try {
         // Git add, check, commit (exclude CLAUDE.md — it's a worker context file, not project code)
-        execSync('git add -A -- ":(exclude)CLAUDE.md"', { cwd: wsDir, timeout: 10000 });
-        const status = execSync('git status --porcelain', { cwd: wsDir, encoding: 'utf-8', timeout: 5000 });
-        if (!status.trim()) {
+        const commitGit = new GitOps(wsDir);
+        commitGit.exec(['add', '-A', '--', ':(exclude)CLAUDE.md']);
+        if (!commitGit.hasUncommittedChanges()) {
           console.log(`[project-orch] Nothing to commit in project ${projectId}`);
           return false;
         }
-        // Use execFileSync to avoid shell interpretation of special chars in commit message
-        execFileSync('git', ['commit', '-m', message], { cwd: wsDir, timeout: 30000 });
+        commitGit.commit(message);
         console.log(`[project-orch] Committed in ${wsDir}: ${message}`);
 
         // Push to GitHub via the API endpoint (non-fatal if fails)

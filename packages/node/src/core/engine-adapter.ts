@@ -234,7 +234,6 @@ async function createPandoTools(apiPort: number, apiToken?: string, resourceRegi
         branch: z.string().optional().default('main').describe('Branch to checkout (default: main).'),
       }),
       execute: async (args: any): Promise<any> => {
-        const { execFileSync } = await import('node:child_process');
         const { join, resolve, dirname } = await import('node:path');
         const { existsSync, mkdirSync } = await import('node:fs');
         const os = await import('node:os');
@@ -274,10 +273,10 @@ async function createPandoTools(apiPort: number, apiToken?: string, resourceRegi
         try {
           if (existsSync(join(workDir, '.git'))) {
             // Already cloned — pull latest
-            const gitOpts = { timeout: 60000, stdio: 'pipe' as const, windowsHide: true };
-            execFileSync('git', ['-C', workDir, 'fetch', 'origin', branch], gitOpts);
-            execFileSync('git', ['-C', workDir, 'checkout', branch], gitOpts);
-            execFileSync('git', ['-C', workDir, 'pull', 'origin', branch], gitOpts);
+            const wsGit = new (await import('./git-ops.js')).GitOps(workDir);
+            wsGit.fetch('origin', branch);
+            wsGit.checkout(branch);
+            wsGit.pull('origin', branch);
             return { success: true, output: JSON.stringify({ path: workDir, status: 'updated', repo, branch }) };
           } else {
             // 3. Clone fresh from GitHub.
@@ -289,11 +288,8 @@ async function createPandoTools(apiPort: number, apiToken?: string, resourceRegi
                 if (authenticatedUrl) cloneUrl = authenticatedUrl;
               } catch { /* credential resolution failed — use plain URL */ }
             }
-            execFileSync('git', ['clone', '--branch', branch, cloneUrl, workDir], {
-              timeout: 120000,
-              stdio: 'pipe' as const,
-              windowsHide: true,
-            });
+            const { GitOps: GO } = await import('./git-ops.js');
+            GO.cloneSync(cloneUrl, workDir, branch);
             return { success: true, output: JSON.stringify({ path: workDir, status: 'cloned', repo, branch }) };
           }
         } catch (err: any) {
@@ -870,7 +866,6 @@ export class EngineAdapter {
    */
   private async ensureProjectWorkspace(projectId: string): Promise<string> {
     const { mkdirSync, writeFileSync, existsSync: fsExists, readdirSync } = await import('node:fs');
-    const { execSync } = await import('node:child_process');
     const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
     const projectDir = pathJoin(baseDir, 'projects', projectId);
     mkdirSync(projectDir, { recursive: true });
@@ -893,18 +888,18 @@ export class EngineAdapter {
           try {
             // Dir already exists — use git init + fetch + checkout (clone fails on non-empty dirs)
             const gitDir = pathJoin(projectDir, '.git');
-            const { execFileSync: efs } = await import('node:child_process');
-            const gitCmdOpts = { cwd: projectDir, stdio: 'pipe' as const, windowsHide: true };
+            const { GitOps: ProjGitOps } = await import('./git-ops.js');
+            const projGit = new ProjGitOps(projectDir);
             if (!fsExists(gitDir)) {
-              efs('git', ['init'], { ...gitCmdOpts, timeout: 10_000 });
-              efs('git', ['remote', 'add', 'origin', project.repoUrl], { ...gitCmdOpts, timeout: 10_000 });
+              projGit.init();
+              projGit.remoteAdd('origin', project.repoUrl);
             }
-            efs('git', ['fetch', 'origin'], { ...gitCmdOpts, timeout: 60_000 });
+            projGit.fetch('origin');
             // Try main branch first, fall back to master
             try {
-              efs('git', ['checkout', '-f', 'origin/main', '--', '.'], { ...gitCmdOpts, timeout: 30_000 });
+              projGit.exec(['checkout', '-f', 'origin/main', '--', '.']);
             } catch {
-              efs('git', ['checkout', '-f', 'origin/master', '--', '.'], { ...gitCmdOpts, timeout: 30_000 });
+              projGit.exec(['checkout', '-f', 'origin/master', '--', '.']);
             }
             const recovered = readdirSync(projectDir).filter(f => f !== 'PANDO_PROJECT.json' && f !== '.git');
             console.log(`[engine] Recovered ${recovered.length} file(s) from ${project.repoUrl}`);

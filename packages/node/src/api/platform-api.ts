@@ -3498,32 +3498,32 @@ export async function registerPlatformRoutes(
       const githubToken = await registry.getCredential(githubResources[0].resourceId);
       if (!githubToken) return reply.code(503).send({ error: 'Could not decrypt GitHub credential' });
 
-      const { execFileSync } = await import('node:child_process');
       const { existsSync: fsExists } = await import('node:fs');
+      const { GitOps } = await import('../core/git-ops.js');
       const workDir = body.workspaceDir;
 
       if (!fsExists(workDir)) return reply.code(400).send({ error: `Workspace not found: ${workDir}` });
 
       try {
         const pushUrl = `https://x-access-token:${githubToken}@github.com/${project.githubRepo}.git`;
-        const gitOpts = { cwd: workDir, stdio: 'pipe' as const, windowsHide: true, timeout: 30_000 };
+        const git = new GitOps(workDir);
 
         // Init git if needed
         if (!fsExists(`${workDir}/.git`)) {
-          execFileSync('git', ['init'], gitOpts);
+          git.init();
         }
-        execFileSync('git', ['config', 'user.email', 'deploy@pando.network'], gitOpts);
-        execFileSync('git', ['config', 'user.name', 'Pando Deploy'], gitOpts);
-        execFileSync('git', ['add', '-A'], gitOpts);
+        git.config('user.email', 'deploy@pando.network');
+        git.config('user.name', 'Pando Deploy');
+        git.add(['-A']);
 
         const commitMsg = `Deploy ${new Date().toISOString().slice(0, 19)}`;
-        try { execFileSync('git', ['commit', '-m', commitMsg], gitOpts); } catch {}
+        try { git.commit(commitMsg); } catch {}
 
-        try { execFileSync('git', ['remote', 'remove', 'origin'], gitOpts); } catch {}
-        execFileSync('git', ['remote', 'add', 'origin', pushUrl], gitOpts);
-        execFileSync('git', ['push', '-u', 'origin', 'HEAD:main', '--force'], gitOpts);
+        git.remoteRemove('origin');
+        git.remoteAdd('origin', pushUrl);
+        git.exec(['push', '-u', 'origin', 'HEAD:main', '--force'], { timeout: 60_000 });
 
-        const commitSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: workDir, encoding: 'utf-8', windowsHide: true, timeout: 10_000 }).trim();
+        const commitSha = git.getCurrentCommit();
         console.log(`[github] Pushed to ${project.githubRepo} (${commitSha.slice(0, 8)})`);
 
         return {

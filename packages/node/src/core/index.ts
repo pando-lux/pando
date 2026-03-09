@@ -26,6 +26,14 @@ export { CredentialStore } from './credential-store.js';
 export type { CredentialMetadata } from './credential-store.js';
 export { generateDataKey, encryptCredential, decryptCredential } from './credential-vault.js';
 
+// Unified git operations
+export { GitOps, safeGitRef, safeCommitHash } from './git-ops.js';
+export type { GitOpsOptions } from './git-ops.js';
+
+// GitHub API client
+export { GitHubClient } from './github-client.js';
+export type { CreateRepoOptions, RepoInfo } from './github-client.js';
+
 // Deployment & versioning
 export { DeployManager } from './deploy-manager.js';
 export type { DeployStatus, CommitResult, BuildResult, BackupInfo } from './deploy-manager.js';

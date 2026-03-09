@@ -20,6 +20,7 @@ import { homedir, freemem, totalmem } from 'node:os';
 import { EventEmitter } from 'node:events';
 import { readFileSync, writeFileSync, unlinkSync, existsSync } from 'node:fs';
 import { execSync } from 'node:child_process';
+import { GitOps } from './core/git-ops.js';
 import { randomUUID } from 'node:crypto';
 
 export async function initKernel(node: any): Promise<void> {
@@ -198,9 +199,7 @@ export async function initKernel(node: any): Promise<void> {
     // Write running-commit.txt so the orchestrator's safe-restart guard can
     // detect when a newer build is ready and the node is idle.
     try {
-      const headCommit = (execSync('git rev-parse HEAD', {
-        cwd: process.cwd(), encoding: 'utf-8', timeout: 5000, stdio: 'pipe',
-      }) as string).trim();
+      const headCommit = new GitOps(process.cwd()).getCurrentCommit();
       writeFileSync(join(dataDir, 'running-commit.txt'), headCommit);
       console.log(`[node] Running commit: ${headCommit.slice(0, 8)}`);
     } catch { /* git unavailable — skip silently */ }

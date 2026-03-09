@@ -375,13 +375,25 @@ Phases 1 and 2 can run in parallel. Phase 3 needs Phase 1. Phase 4 needs 2+3. Ph
 
 ---
 
+## Implementation Status
+
+| Phase | Status | Commit |
+|-------|--------|--------|
+| Phase 1: Credential Resolution | ✅ DONE | cc042661 |
+| Phase 2: Register Infra as Apps | ✅ DONE | cc042661 |
+| Phase 3: Unified GitOps | ✅ DONE | (this commit) |
+| Phase 4: UpgradeProtocol uses GitOps | ✅ DONE | (this commit) |
+| Phase 5: GitHub Client | ✅ DONE | (this commit) |
+| Phase 6: pando-code pipeline | ✅ DONE | (registered as app in Phase 2, same pipeline) |
+| Phase 7: Cleanup | ✅ DONE | (this commit — safeGitReset removed, all git ops via GitOps) |
+
 ## Success Criteria
 
-- [ ] `GET /v1/apps` shows pando-node, pando-code, and user apps in one list
-- [ ] All git operations use contributed credentials (no hardcoded PATs)
-- [ ] User can `/contribute github <token>` and agents use it for all git ops
-- [ ] Paid user contributes PAT, gets private repo builds
-- [ ] pando-code upgrades flow through same pipeline as pando-node
-- [ ] Unified deployment history in one table
-- [ ] UpgradeProtocol is just a governance gate, not a separate pipeline
-- [ ] 9/9 E2E tests still pass
+- [x] `GET /v1/apps` shows pando-node, pando-code, and user apps in one list
+- [x] All git operations use contributed credentials (no hardcoded PATs)
+- [x] User can `/contribute github <token>` and agents use it for all git ops
+- [ ] Paid user contributes PAT, gets private repo builds (GitHubClient ready, needs integration)
+- [x] pando-code upgrades flow through same pipeline as pando-node
+- [x] Unified deployment history in one table (app_history)
+- [x] UpgradeProtocol is a governance gate using GitOps, not a separate pipeline
+- [x] 9/9 E2E tests still pass
