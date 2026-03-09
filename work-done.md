@@ -267,6 +267,23 @@
 
 ### Commits Pushed
 12. `74249c43` — Phase 6.2 graceful degradation + fix chat balance bug + input validation hardening
+13. `37ad192f` — Fix startTeam TOCTOU race condition + failure cleanup
+14. `004d21a6` — Message length limits on trigger + council message endpoints
+15. `065c90eb` — LIKE wildcard injection fix + type validation on message fields
+
+#### 27. startTeam TOCTOU Race Condition (BUG)
+- **Root cause**: `startTeam()` checked `activeTeams.has(teamId)` at top but didn't set it until 200+ lines later after all async engine creation. Two concurrent calls could both pass the check and create duplicate engines.
+- **Fix**: Reserve slot immediately with placeholder, update with real data on success, delete on failure.
+- **File**: `packages/node/src/core/engine-adapter.ts:1374-1621`
+
+#### 28. LIKE Wildcard Injection in getTeamInbox (SECURITY)
+- **Root cause**: `getTeamInbox()` used `LIKE 'msg:${agentId}:%'` — passing `%` as agentId would read AND DELETE all agents' inbox messages.
+- **Fix**: Reject agentIds containing `%` or `_` wildcards.
+- **File**: `packages/node/src/core/engine-adapter.ts:1073`
+
+#### 29. Missing Message Length Limits on Trigger Endpoints
+- 3 trigger endpoints + council message endpoint accepted arbitrary-length messages
+- **Fix**: Trigger messages capped at 5000 chars, council messages at 2000 chars
 
 ### Pending
 - [ ] PandoCode web UI testing (UI not running currently — port 4873 down)
