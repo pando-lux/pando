@@ -547,6 +547,10 @@ export class UpgradeProtocol {
   }
 
   async executeRollback(targetVersion?: string): Promise<{ success: boolean; message: string }> {
+    // Validate targetVersion to prevent command injection (comes from API body)
+    if (targetVersion && !/^[0-9a-f]{6,40}$/i.test(targetVersion)) {
+      return { success: false, message: `Invalid targetVersion format: ${(targetVersion || '').slice(0, 20)}` };
+    }
     console.log(`[upgrade-protocol] Executing rollback${targetVersion ? ` to ${targetVersion}` : ''}...`);
 
     const deployManager = this.deployManagerProvider();
