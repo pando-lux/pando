@@ -1,1 +1,5 @@
-export { default } from "@/app/monitor/page";
+import { redirect } from "next/navigation";
+
+export default function HealthPage() {
+  redirect("/network");
+}

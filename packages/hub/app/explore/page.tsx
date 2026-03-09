@@ -185,12 +185,6 @@ export default function ExplorePage() {
               For Node Operators
             </summary>
             <div className="px-5 pb-4 pt-2 grid grid-cols-2 sm:grid-cols-4 gap-3">
-              <a href="/explore/tasks" className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50 transition text-sm text-neutral-700 dark:text-neutral-300 font-medium">
-                Tasks
-              </a>
-              <a href="/explore/strategy" className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50 transition text-sm text-neutral-700 dark:text-neutral-300 font-medium">
-                Strategy
-              </a>
               <a href="/explore/health" className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50 transition text-sm text-neutral-700 dark:text-neutral-300 font-medium">
                 Health
               </a>

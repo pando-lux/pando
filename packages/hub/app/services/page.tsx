@@ -343,10 +343,10 @@ export default function ServicesPage() {
           </p>
           <div className="flex items-center gap-3 flex-wrap">
             <a
-              href="/capacity"
+              href="/network"
               className="inline-flex items-center gap-1.5 text-sm font-medium text-amber-600 dark:text-amber-400 hover:text-amber-500 dark:hover:text-amber-300 transition"
             >
-              View capacity dashboard &rarr;
+              View network &rarr;
             </a>
             <a
               href="/resources"

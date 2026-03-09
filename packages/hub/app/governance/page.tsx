@@ -714,7 +714,7 @@ export default function GovernancePage() {
                         <div className="bg-green-500/10 border border-green-500/20 rounded-lg p-2.5 flex items-center gap-2">
                           <span className="text-green-500 text-xs font-semibold">Approved</span>
                           <span className="text-xs text-neutral-600 dark:text-neutral-400">Task auto-created in scheduler</span>
-                          <a href="/explore/tasks" className="text-xs text-amber-500 hover:text-amber-400 underline ml-auto">View tasks &rarr;</a>
+                          <span className="text-xs text-amber-500 ml-auto">Task auto-created</span>
                         </div>
                       )}
 
