@@ -1106,7 +1106,9 @@ Be friendly and helpful. Keep answers short.`
                 { cwd: process.cwd(), timeout: 10_000, encoding: 'utf8', windowsHide: true }
               ).trim();
               const changedFiles = diffOutput ? diffOutput.split('\n') : [];
-              const hasCodeChanges = changedFiles.some(f => f.startsWith('packages/'));
+              const hasCodeChanges = changedFiles.some(f =>
+                f.startsWith('packages/node/') || f.startsWith('packages/shared/') || f.startsWith('packages/mcp-server/')
+              );
               if (!hasCodeChanges) {
                 // Only data files changed (board state, docs, etc.) — no restart needed
                 staleSinceTs = null;
