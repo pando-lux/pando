@@ -1899,7 +1899,6 @@ This makes a contributor's Claude Code subscription a network resource — they 
 | Windows | 100.87.67.78 | — | Contributor | PandoCode, Claude Code, P2P port 4100, API port 4000 |
 | Mac | — | — | Contributor | PandoCode (2nd node), nohup (no auto-restart) |
 
-**Decommissioned (2026-03-08):** LS-1 (54.145.144.221), LS-2 (3.237.175.38) — Lightsail terminated. Old EC2-1 (54.82.241.132, i-0c74c15769abfcaf7) — impaired, terminated and replaced. pando-untrusted-1 (54.164.43.155), liva-test-instance (3.87.124.136) — idle, terminated.
 
 **Public gateway:** https://gateway-one-mu.vercel.app
 **S3 deployments:** `http://pando-deployments.s3-website-us-east-1.amazonaws.com/public/{projectId}/index.html`
@@ -1908,7 +1907,7 @@ This makes a contributor's Claude Code subscription a network resource — they 
 #### EC2 Node Details (critical for SSH troubleshooting)
 
 ```
-SSH:     ssh -i ~/.ssh/lightsail-default.pem ubuntu@<IP>
+SSH:     ssh -i ~/.ssh/lightsail-default.pem ubuntu@<IP>   (key name is legacy)
 Path:    /opt/pando                    (NOT /opt/pando/node)
 User:    pando                         (systemd runs as pando:pando)
 SSH as:  ubuntu                        (has sudo)
@@ -2006,20 +2005,7 @@ npx playwright test --project pando-code
 
 ## 9. BRAIN-KILL MIGRATION (COMPLETED 2026-03-06)
 
-**9,414 lines deleted. 15 brain files removed. engine-adapter.ts replaced everything (started at ~280 lines, now ~1,393 with council agents + board operations + dedup + per-project boards + project ticks + pando_workspace tool + workspace recovery).**
-
-The dual coordination system is dead. pando-node no longer has any intelligence of its own. All AI flows through EngineAdapter → @pando-code/core.
-
-### What was deleted
-orchestrator.ts (2,529), agent-database.ts (1,265), worker-pool.ts (1,081), template-registry.ts (476), org-manager.ts (377), agent-tools.ts (373), orchestrator-manager.ts (333), engine-bridge.ts (283), worker-mcp.ts (274), orchestrator-process.ts (248), ai-backend-pandocode.ts (244), message-bus.ts (143), ai-backend-registry.ts (43), ai-backend.ts (37), context-api.ts (336).
-
-### What replaced it
-`core/engine-adapter.ts` (~1,393 lines) — uses EnginePool from @pando-code/core. Creates system engine at boot, project engines on demand, council agents (observer/qa/council) using PandoCode's native agent system. Registers 15 Pando tools. Injects Lux budget. Evicts idle engines at 30min TTL. Board operations (read/write/dedup) for user reports.
-
-### API changes
-- **Removed:** `/v1/bridge/*`, `/v1/agents/*`, `/v1/context/*`
-- **Added:** `/v1/engines`, `/v1/engines/schedules`, `/v1/council/status`, `/v1/council/trigger/:agent`, `/v1/council/board`, `/v1/council/request`
-- **Unchanged:** `/v1/chat/message` (same interface, different backend)
+9,414 lines of legacy orchestrator code deleted. All AI now flows through `engine-adapter.ts` → @pando-code/core. No dual coordination system.
 
 ---
 

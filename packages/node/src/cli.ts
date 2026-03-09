@@ -252,10 +252,10 @@ async function main() {
   let publicIp = process.env.PUBLIC_IP?.trim() || undefined;
 
   // Auto-detect public IP for cloud nodes (when PUBLIC_IP env var isn't set).
-  // Uses AWS IMDS (EC2/Lightsail) first, falls back to external service.
+  // Uses AWS IMDS (EC2) first, falls back to external service.
   if (!publicIp) {
     try {
-      // AWS Instance Metadata Service v1 (works on EC2 and Lightsail)
+      // AWS Instance Metadata Service v1 (works on EC2)
       const imdsRes = await fetch('http://169.254.169.254/latest/meta-data/public-ipv4', {
         signal: AbortSignal.timeout(2000),
       });

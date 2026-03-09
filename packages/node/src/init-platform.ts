@@ -692,10 +692,15 @@ Be friendly and helpful. Keep answers short.`
         },
       });
       (node as any)._serviceLoader = serviceLoader;
-      // Don't call loadAll() yet — engine-adapter handles pando-code loading directly for now.
-      // ServiceLoader.loadAll() will be used when future services are added or when
-      // @pando-code/core ships a createService() export.
-      console.log('[services] ServiceLoader initialized.');
+      // If the engine adapter is already running, skip loadAll() to avoid double-loading
+      // @pando-code/core. Otherwise, call loadAll() as a fallback discovery mechanism
+      // so future services that aren't @pando-code/core always load through ServiceLoader.
+      if (node.getEngineAdapter?.()?.available) {
+        console.log('[services] ServiceLoader initialized — engine already running, skipping loadAll().');
+      } else {
+        console.log('[services] ServiceLoader initialized — no engine, calling loadAll() for service discovery.');
+        await serviceLoader.loadAll();
+      }
     } catch (err: any) {
       console.warn(`[services] ServiceLoader init failed (non-fatal): ${err.message}`);
     }
