@@ -108,6 +108,7 @@ export async function registerPlatformRoutes(
       }
       const trimmed = (message as string).trim();
       if (!trimmed) return reply.code(400).send({ error: 'message cannot be empty' });
+      if (trimmed.length > 10000) return reply.code(400).send({ error: 'Message too long (max 10000 chars)' });
 
       // Two Laws check — reject harmful messages before any routing
       const lawViolation = violatesTwoLaws(trimmed);
