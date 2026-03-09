@@ -868,8 +868,9 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       try {
         const teamId = (request.params as any).teamId;
         const limit = Math.min(Number((request.query as any)?.limit) || 20, 100);
+        const full = (request.query as any)?.full === 'true';
         const adapter = node.getEngineAdapter();
-        const activity = adapter?.getTeamActivity?.(teamId, limit) ?? { messages: [], toolCalls: [] };
+        const activity = adapter?.getTeamActivity?.(teamId, limit, full) ?? { messages: [], toolCalls: [] };
         return { teamId, ...activity };
       } catch (err: any) {
         console.error('[api] Team activity query failed:', err.message);

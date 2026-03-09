@@ -2311,7 +2311,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
    * Get recent activity (messages + tool_calls) for an entire team.
    * Returns the last N messages and N tool_calls across all team sessions.
    */
-  getTeamActivity(teamId: string, limit = 20): { messages: any[]; toolCalls: any[] } {
+  getTeamActivity(teamId: string, limit = 20, full = false): { messages: any[]; toolCalls: any[] } {
     const teamData = this.activeTeams.get(teamId);
     if (!teamData?.dbPath || !this.Database) return { messages: [], toolCalls: [] };
     try {
@@ -2325,10 +2325,13 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         `SELECT name FROM sqlite_master WHERE type='table' AND name='tool_calls'`
       ).get();
 
+      const contentCol = full ? 'm.content' : 'substr(m.content, 1, 500) as content';
+      const argsCol = full ? 't.args' : 'substr(t.args, 1, 300) as args';
+
       let messages: any[] = [];
       if (hasMsgs) {
         messages = db.prepare(
-          `SELECT m.id, m.role, substr(m.content, 1, 500) as content, m.tool_name, m.agent_id, m.created_at
+          `SELECT m.id, m.role, ${contentCol}, m.tool_name, m.agent_id, m.created_at
            FROM messages m ORDER BY m.created_at DESC LIMIT ?`
         ).all(limit);
       }
@@ -2336,7 +2339,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       let toolCalls: any[] = [];
       if (hasToolCalls) {
         toolCalls = db.prepare(
-          `SELECT t.id, t.tool_name, substr(t.args, 1, 300) as args, t.success, t.duration_ms, t.created_at
+          `SELECT t.id, t.tool_name, ${argsCol}, t.success, t.duration_ms, t.created_at
            FROM tool_calls t ORDER BY t.created_at DESC LIMIT ?`
         ).all(limit);
       }
