@@ -17,6 +17,7 @@ import { MessageType, QaTier } from '@pando/shared';
 import type { ThreadMessage, ResourceType } from '@pando/shared';
 import type { PandoNetwork } from '../kernel/network.js';
 import { openTaskDatabase, TaskDatabase } from './task-database.js';
+import { debug } from '../logger.js';
 
 export type TaskPriority = 'critical' | 'high' | 'medium' | 'low';
 export type TaskStatus = 'open' | 'claimed' | 'in_progress' | 'review' | 'done' | 'rejected' | 'archived' | 'expired';
@@ -328,7 +329,7 @@ export class TaskQueue {
         timestamp: Date.now(),
         payload: { requestedAt: Date.now() },
       });
-      console.log(`[task-sync] Sync requested from ${peerId.slice(0, 16)}...`);
+      debug(`[task-sync] Sync requested from ${peerId.slice(0, 16)}...`);
     } catch (e: any) {
       console.log(`[task-sync] Could not request sync from ${peerId.slice(0, 16)}...: ${e.message}`);
     }
@@ -340,7 +341,7 @@ export class TaskQueue {
   handleSyncRequest(fromPeerId: string): void {
     if (!this.network) return;
     const tasks = this.getActiveTasks();
-    console.log(`[task-sync] Sending ${tasks.length} active tasks to ${fromPeerId.slice(0, 16)}...`);
+    debug(`[task-sync] Sending ${tasks.length} active tasks to ${fromPeerId.slice(0, 16)}...`);
     this.network.sendMessage(fromPeerId, {
       type: MessageType.TASK_SYNC_RESPONSE,
       from: this.localPeerId,
@@ -362,7 +363,7 @@ export class TaskQueue {
     if (inserted > 0) {
       console.log(`[task-sync] Sync complete: +${inserted} tasks`);
     } else {
-      console.log(`[task-sync] Sync complete: already up to date`);
+      debug(`[task-sync] Sync complete: already up to date`);
     }
   }
 

@@ -16,6 +16,7 @@ import type Database from 'better-sqlite3';
 import type { PandoNetwork } from './network.js';
 import type { PandoMessage, GovernanceProposal, GovernanceComment, GovernanceVote, GovernanceDecision, VoteChoice, AgentHello, AgentCapabilities, Transaction, ActivityRecord, ModelAttestation, NodeIdentity, WeightedVoteResult, ReviewerCandidacy, ProposalCategory, ProposalReview, ReviewRecommendation, ReviewSummary, UpgradePayload } from '@pando/shared';
 import { MessageType, WorkType } from '@pando/shared';
+import { debug } from '../logger.js';
 import { privateKeyFromProtobuf } from '@libp2p/crypto/keys';
 import { toString as uint8ArrayToString } from 'uint8arrays';
 /** Minimal interfaces — avoids importing core/platform from kernel */
@@ -2150,7 +2151,7 @@ export class GovernanceSync {
         timestamp: Date.now(),
         payload: { requestedAt: Date.now() },
       });
-      console.log(`[governance] Sync requested from ${peerId.slice(0, 16)}...`);
+      debug(`[governance] Sync requested from ${peerId.slice(0, 16)}...`);
     } catch (e: any) {
       console.log(`[governance] Could not request sync from ${peerId.slice(0, 16)}...: ${e.message}`);
     }
@@ -2175,7 +2176,7 @@ export class GovernanceSync {
     }
 
     const payload = { proposals, comments: allComments, votes: allVotes, decisions: allDecisions, reviews: allReviews };
-    console.log(`[governance] Sending sync response to ${fromPeerId.slice(0, 16)}... (${proposals.length} proposals, ${allVotes.length} votes, ${allComments.length} comments, ${allDecisions.length} decisions, ${allReviews.length} reviews)`);
+    debug(`[governance] Sending sync response to ${fromPeerId.slice(0, 16)}... (${proposals.length} proposals, ${allVotes.length} votes, ${allComments.length} comments, ${allDecisions.length} decisions, ${allReviews.length} reviews)`);
 
     this.network.sendMessage(fromPeerId, {
       type: MessageType.GOVERNANCE_SYNC_RESPONSE,
@@ -2277,7 +2278,7 @@ export class GovernanceSync {
     if (newProposals + newVotes + newComments + newDecisions + newReviews > 0) {
       console.log(`[governance] Sync complete: +${newProposals} proposals, +${newVotes} votes, +${newComments} comments, +${newDecisions} decisions, +${newReviews} reviews${skippedStale > 0 ? ` (skipped ${skippedStale} stale)` : ''}`);
     } else {
-      console.log(`[governance] Sync complete: already up to date${skippedStale > 0 ? ` (skipped ${skippedStale} stale)` : ''}`);
+      debug(`[governance] Sync complete: already up to date${skippedStale > 0 ? ` (skipped ${skippedStale} stale)` : ''}`);
     }
   }
 

@@ -8,6 +8,7 @@
  */
 
 import type { StorageBackend } from '../core/storage-backend.js';
+import { debug } from '../logger.js';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -249,7 +250,7 @@ export class ThreadStore {
     try {
       const records = await this.backend.listRecords('threads');
       this.index = records as ThreadMeta[];
-      console.log(`[threads] Loaded ${this.index.length} threads from storage backend`);
+      debug(`[threads] Loaded ${this.index.length} threads from storage backend`);
     } catch (err: any) {
       console.warn(`[threads] Failed to load from backend: ${err.message}`);
     }

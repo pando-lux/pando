@@ -19,6 +19,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { readFileSync, writeFileSync, mkdirSync } from 'node:fs';
 import { setMaxListeners } from 'node:events';
+import { debug } from '../logger.js';
 import {
   PANDO_PROTOCOL,
   type PandoMessage,
@@ -225,7 +226,7 @@ export class PandoNetwork {
     if (known.length === 0) return;
     const toDial = known.filter(p => !this.peers.has(p.peerId));
     if (toDial.length === 0) return;
-    console.log(`[known-peers] Dialing ${toDial.length} known peers in parallel...`);
+    debug(`[known-peers] Dialing ${toDial.length} known peers in parallel...`);
     // Dial all known peers concurrently — race all addresses per peer for speed
     await Promise.allSettled(toDial.map(async (peer) => {
       if (peer.addrs.length === 1) {
@@ -236,7 +237,7 @@ export class PandoNetwork {
           const timer = setTimeout(() => ac.abort(), 500); // 500ms (was 800ms) — fast fail
           await this.node!.dial(multiaddr(peer.addrs[0]), { signal: ac.signal });
           clearTimeout(timer);
-          console.log(`[known-peers] Connected to ${peer.peerId.slice(0, 16)}...`);
+          debug(`[known-peers] Connected to ${peer.peerId.slice(0, 16)}...`);
         } catch {
           // addr may be stale or timed out
         }
@@ -249,7 +250,7 @@ export class PandoNetwork {
       try {
         await Promise.any(peer.addrs.map(async (addr) => {
           const conn = await this.node!.dial(multiaddr(addr), { signal: ac.signal });
-          console.log(`[known-peers] Connected to ${peer.peerId.slice(0, 16)}...`);
+          debug(`[known-peers] Connected to ${peer.peerId.slice(0, 16)}...`);
           return conn;
         }));
       } catch {

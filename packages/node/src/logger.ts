@@ -4,11 +4,22 @@
  * Writes timestamped, ANSI-stripped log lines to ~/.pando/logs/node.log.
  * Rotates when the file exceeds MAX_LOG_SIZE (keeps one .log.1 backup).
  * Used by both tui.ts and cli.ts so we can always inspect node output via SSH.
+ *
+ * Also exports a `debug()` helper for console output that only shows
+ * when PANDO_LOG=debug is set. Use for routine/noisy messages.
  */
 
 import { createWriteStream, mkdirSync, statSync, renameSync, existsSync, type WriteStream } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
+
+/** Returns true when PANDO_LOG=debug is set. */
+export const isDebug = process.env.PANDO_LOG === 'debug';
+
+/** console.log that only fires in debug mode (PANDO_LOG=debug). */
+export function debug(...args: unknown[]): void {
+  if (isDebug) console.log(...args);
+}
 
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5 MB
 

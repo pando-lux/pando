@@ -18,6 +18,7 @@ import { readFileSync, writeFileSync, existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { join } from 'node:path';
 import type { PandoNetwork } from './network.js';
+import { debug } from '../logger.js';
 /** Minimal interface — avoids importing core/ from kernel/ */
 interface RequestReplyLike {
   registerHandler(type: string, handler: (req: any) => Promise<any>): void;
@@ -388,7 +389,7 @@ export class ReputationManager {
     this.peerRecords.set(record.nodeId, verified);
     this.savePeers();
 
-    console.log(
+    debug(
       `[reputation] Peer update: ${record.nodeId.slice(0, 12)} → score ${verified.reputationScore.toFixed(1)} (${verified.tasksCompleted} completed, ${verified.tasksFailed} failed)`,
     );
   }

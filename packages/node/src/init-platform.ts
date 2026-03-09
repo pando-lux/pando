@@ -1,4 +1,5 @@
 import { WorkType, MessageType } from '@pando/shared';
+import { debug, isDebug } from './logger.js';
 import { ResourceRouter } from './platform/resource-router.js';
 import { ResourceMeter } from './platform/resource-meter.js';
 import { ResourceMarketplace } from './platform/resource-marketplace.js';
@@ -848,10 +849,10 @@ Be friendly and helpful. Keep answers short.`
       // Record message for security rate monitoring
       node.securityMonitor?.recordMessage(from);
 
-      console.log(`[${message.type}] from ${from.slice(0, 16)}...`);
-      if (message.payload) {
+      debug(`[${message.type}] from ${from.slice(0, 16)}...`);
+      if (isDebug && message.payload) {
         const payloadStr = JSON.stringify(message.payload);
-        console.log(`  payload: ${payloadStr.length > 500 ? payloadStr.slice(0, 500) + '...[' + payloadStr.length + ' bytes]' : payloadStr}`);
+        debug(`  payload: ${payloadStr.length > 500 ? payloadStr.slice(0, 500) + '...[' + payloadStr.length + ' bytes]' : payloadStr}`);
       }
 
       // Ensure the sending peer has an account
@@ -936,7 +937,7 @@ Be friendly and helpful. Keep answers short.`
           const unknownPeers = exchangedPeers.filter(
             (p: any) => p.peerId !== myPeerId && !connectedPeers.has(p.peerId)
           );
-          console.log(`[peer-exchange] Received ${exchangedPeers.length} peer(s) from ${from.slice(0, 12)}, ${unknownPeers.length} unknown, already connected to ${connectedPeers.size}`);
+          debug(`[peer-exchange] Received ${exchangedPeers.length} peer(s) from ${from.slice(0, 12)}, ${unknownPeers.length} unknown, already connected to ${connectedPeers.size}`);
           if (unknownPeers.length > 0) {
             // Track successful dials for cascade — trigger on first success, not after all finish
             let cascaded = false;

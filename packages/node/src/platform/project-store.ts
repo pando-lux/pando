@@ -48,6 +48,7 @@ import type {
   ReportStats,
 } from '@pando/shared';
 import type { StorageBackend } from '../core/storage-backend.js';
+import { debug } from '../logger.js';
 
 // ── Schema ───────────────────────────────────────────────────────────────────
 
@@ -289,7 +290,7 @@ export class ProjectStore {
    * Loads all projects, collaborators, invites, transfers, deployments, ratings, and reports.
    */
   async loadFromBackend(): Promise<void> {
-    console.log('[project-store] Loading data from MongoDB backend...');
+    debug('[project-store] Loading data from MongoDB backend...');
 
     // Load projects
     const projects = await this.backend.listRecords('projects');
@@ -307,7 +308,7 @@ export class ProjectStore {
         JSON.stringify(p.resources || []), p.apiKey || null,
       );
     }
-    console.log(`[project-store] Loaded ${projects.length} projects from backend`);
+    debug(`[project-store] Loaded ${projects.length} projects from backend`);
 
     // Load collaborators
     const collaborators = await this.backend.listRecords('project_collaborators');
@@ -318,7 +319,7 @@ export class ProjectStore {
         VALUES (?, ?, ?, ?, ?)
       `).run(c.projectId, c.userId, c.role, c.addedAt, c.addedBy);
     }
-    console.log(`[project-store] Loaded ${collaborators.length} collaborators from backend`);
+    debug(`[project-store] Loaded ${collaborators.length} collaborators from backend`);
 
     // Load invites
     const invites = await this.backend.listRecords('project_invites');
@@ -329,7 +330,7 @@ export class ProjectStore {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
       `).run(inv.id, inv.projectId, inv.code, inv.role, inv.createdBy, inv.expiresAt, inv.maxUses, inv.usedCount);
     }
-    console.log(`[project-store] Loaded ${invites.length} invites from backend`);
+    debug(`[project-store] Loaded ${invites.length} invites from backend`);
 
     // Load transfers
     const transfers = await this.backend.listRecords('project_transfers');
@@ -340,7 +341,7 @@ export class ProjectStore {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(t.id, t.projectId, t.fromUser, t.toUser, t.transferType, t.salePrice, t.escrowHoldId, t.status, t.createdAt, t.completedAt);
     }
-    console.log(`[project-store] Loaded ${transfers.length} transfers from backend`);
+    debug(`[project-store] Loaded ${transfers.length} transfers from backend`);
 
     // Load deployments
     const deployments = await this.backend.listRecords('project_deployments');
@@ -351,7 +352,7 @@ export class ProjectStore {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(d.id, d.projectId, d.deployType, d.deployUrl, JSON.stringify(d.deployConfig), d.status, d.deployedBy, d.deployedAt, d.errorMessage);
     }
-    console.log(`[project-store] Loaded ${deployments.length} deployments from backend`);
+    debug(`[project-store] Loaded ${deployments.length} deployments from backend`);
 
     // Load ratings
     const ratings = await this.backend.listRecords('project_ratings');
@@ -362,7 +363,7 @@ export class ProjectStore {
         VALUES (?, ?, ?, ?, ?)
       `).run(rt.projectId, rt.userId, rt.rating, rt.review, rt.createdAt);
     }
-    console.log(`[project-store] Loaded ${ratings.length} ratings from backend`);
+    debug(`[project-store] Loaded ${ratings.length} ratings from backend`);
 
     // Load reports
     const reports = await this.backend.listRecords('content_reports');
@@ -373,9 +374,9 @@ export class ProjectStore {
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `).run(rpt.id, rpt.projectId, rpt.reporterId, rpt.reason, rpt.description, rpt.status, rpt.aiReview, rpt.aiSafetyScore, rpt.reviewedBy, rpt.resolvedAt, rpt.createdAt);
     }
-    console.log(`[project-store] Loaded ${reports.length} reports from backend`);
+    debug(`[project-store] Loaded ${reports.length} reports from backend`);
 
-    console.log('[project-store] Backend hydration complete');
+    debug('[project-store] Backend hydration complete');
   }
 
   // ── Create ──────────────────────────────────────────────────────────────

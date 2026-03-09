@@ -1,17 +1,22 @@
 /**
- * Pando Node Supervisor
+ * Pando Supervisor
  *
- * Standalone entry point — spawns dist/cli.js as a managed child process.
+ * Standalone entry point — manages both pando-node and pando-teams as child processes.
  * Handles restart-on-exit(75), crash backoff, and system tray with dynamic service discovery.
  * Zero imports from Pando internals — fully decoupled.
+ *
+ * Usage:
+ *   node supervisor.js [--teams-path <path>] [--api-port <port>]
+ *
+ * --teams-path: Path to pando-teams repo (default: auto-detect ../code relative to node repo)
  */
 
 import { spawn, ChildProcess } from 'node:child_process';
-import { dirname, join } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import * as http from 'node:http';
 import { execSync } from 'node:child_process';
-import { writeFileSync, readFileSync } from 'node:fs';
+import { writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 
 const RESTART_EXIT_CODE = 75;
@@ -19,6 +24,7 @@ const RESTART_DELAY_MS  = 2_000;
 const CRASH_WINDOW_MS   = 5 * 60 * 1_000;
 const MAX_CRASHES       = 5;
 const POLL_INTERVAL_MS  = 10_000;
+const TEAMS_PORT        = 4873;
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ts = () => new Date().toISOString();
@@ -38,28 +44,80 @@ function resolveApiPort(): number {
   return 4000;
 }
 
+// Resolve pando-teams path from CLI args or auto-detect
+function resolveTeamsPath(): string | null {
+  const args = process.argv.slice(2);
+  const idx = args.indexOf('--teams-path');
+  if (idx !== -1 && args[idx + 1]) {
+    const p = resolve(args[idx + 1]);
+    if (existsSync(join(p, 'packages', 'server', 'src', 'index.ts'))) return p;
+    console.warn(`[supervisor] --teams-path "${p}" does not contain packages/server/src/index.ts`);
+  }
+  if (process.env.PANDO_TEAMS_PATH) {
+    const p = resolve(process.env.PANDO_TEAMS_PATH);
+    if (existsSync(join(p, 'packages', 'server', 'src', 'index.ts'))) return p;
+  }
+  // Auto-detect: ../code relative to the node repo (which is 4 levels up from __dirname)
+  // __dirname = <repo>/packages/node/dist  →  <repo>/../code
+  const nodeRepo = resolve(__dirname, '..', '..', '..');
+  const autoPath = join(nodeRepo, '..', 'code');
+  if (existsSync(join(autoPath, 'packages', 'server', 'src', 'index.ts'))) return autoPath;
+  return null;
+}
+
 const API_PORT = resolveApiPort();
 const API_BASE = `http://127.0.0.1:${API_PORT}`;
+const TEAMS_PATH = resolveTeamsPath();
 
 // ─── Core Supervisor ──────────────────────────────────────────────────────
 
 let child: ChildProcess | null = null;
-let stopping = false;     // true = supervisor is exiting (SIGINT)
-let userStopped = false;  // true = user clicked "Stop Node" — don't respawn
+let teamsChild: ChildProcess | null = null;
+let stopping = false;
+let userStopped = false;          // user clicked "Stop Node"
+let teamsUserStopped = false;     // user clicked "Stop Teams"
 const crashTimes: number[] = [];
+const teamsCrashTimes: number[] = [];
 
 function spawnNode(): ChildProcess {
   const cliPath = join(__dirname, 'cli.js');
-  const args = [cliPath, '--supervised', ...process.argv.slice(2)];
-  console.log(`[supervisor ${ts()}] Spawning: node ${args.join(' ')}`);
-  const proc = spawn(process.execPath, args, { stdio: 'inherit', windowsHide: true });
+  const args = [cliPath, '--supervised', ...process.argv.slice(2).filter(a => a !== '--teams-path' && !a.startsWith('--teams-path='))];
+  // Filter out --teams-path and its value
+  const filtered: string[] = [];
+  const rawArgs = process.argv.slice(2);
+  for (let i = 0; i < rawArgs.length; i++) {
+    if (rawArgs[i] === '--teams-path') { i++; continue; }
+    if (rawArgs[i].startsWith('--teams-path=')) continue;
+    filtered.push(rawArgs[i]);
+  }
+  const finalArgs = [cliPath, '--supervised', ...filtered];
+  console.log(`[supervisor ${ts()}] Spawning Node`);
+  const proc = spawn(process.execPath, finalArgs, { stdio: 'inherit', windowsHide: true });
   proc.on('exit', onChildExit);
+  return proc;
+}
+
+function spawnTeams(): ChildProcess | null {
+  if (!TEAMS_PATH) {
+    console.warn(`[supervisor ${ts()}] Cannot start Teams — path not found. Use --teams-path or set PANDO_TEAMS_PATH`);
+    return null;
+  }
+  const serverEntry = join(TEAMS_PATH, 'packages', 'server', 'src', 'index.ts');
+  console.log(`[supervisor ${ts()}] Spawning Teams (port ${TEAMS_PORT})`);
+  const proc = spawn('npx', ['tsx', serverEntry, '--port', String(TEAMS_PORT)], {
+    cwd: TEAMS_PATH,
+    stdio: 'inherit',
+    windowsHide: true,
+    shell: true,
+    env: { ...process.env },
+  });
+  proc.on('exit', onTeamsExit);
   return proc;
 }
 
 function onChildExit(code: number | null, signal: string | null): void {
   child = null;
-  lastState = { online: false, peers: 0, lux: 0, services: [], localHubPort: null };
+  lastState = { ...lastState, online: false, peers: 0, lux: 0, services: [] };
 
   if (stopping) return;
 
@@ -68,48 +126,76 @@ function onChildExit(code: number | null, signal: string | null): void {
     process.exit(78);
   }
 
-  // User clicked "Stop Node" or node exited cleanly — stay alive with tray, show "Start Node"
   if (userStopped || code === 0) {
-    console.log(`[supervisor ${ts()}] Node stopped${userStopped ? ' by user' : ' (exit 0)'}. Supervisor stays alive — use tray to restart.`);
+    console.log(`[supervisor ${ts()}] Node stopped${userStopped ? ' by user' : ' (exit 0)'}.`);
     userStopped = false;
     refreshTray();
     return;
   }
 
   if (code === RESTART_EXIT_CODE) {
-    console.log(`[supervisor ${ts()}] Restart requested (exit 75). Respawning in ${RESTART_DELAY_MS}ms…`);
+    console.log(`[supervisor ${ts()}] Node restart requested (exit 75). Respawning in ${RESTART_DELAY_MS}ms…`);
     refreshTray();
     setTimeout(() => { child = spawnNode(); refreshTray(); }, RESTART_DELAY_MS);
     return;
   }
 
-  // Crash — apply backoff
   const now = Date.now();
   crashTimes.push(now);
   const recent = crashTimes.filter(t => now - t < CRASH_WINDOW_MS);
   crashTimes.length = 0;
   crashTimes.push(...recent);
-  console.log(`[supervisor ${ts()}] Crash (code=${code ?? signal}). Recent crashes: ${recent.length}/${MAX_CRASHES}`);
+  console.warn(`[supervisor ${ts()}] Node crash (code=${code ?? signal}). Recent: ${recent.length}/${MAX_CRASHES}`);
   if (recent.length >= MAX_CRASHES) {
-    console.error(`[supervisor ${ts()}] Crash limit reached — stopping supervisor.`);
-    process.exit(1);
+    console.error(`[supervisor ${ts()}] Node crash limit reached.`);
+    refreshTray();
+    return; // Don't exit supervisor — Teams may still be running
   }
   refreshTray();
   setTimeout(() => { child = spawnNode(); refreshTray(); }, RESTART_DELAY_MS);
+}
+
+function onTeamsExit(code: number | null, signal: string | null): void {
+  teamsChild = null;
+  teamsOnline = false;
+
+  if (stopping) return;
+
+  if (teamsUserStopped || code === 0) {
+    console.log(`[supervisor ${ts()}] Teams stopped${teamsUserStopped ? ' by user' : ' (exit 0)'}.`);
+    teamsUserStopped = false;
+    refreshTray();
+    return;
+  }
+
+  const now = Date.now();
+  teamsCrashTimes.push(now);
+  const recent = teamsCrashTimes.filter(t => now - t < CRASH_WINDOW_MS);
+  teamsCrashTimes.length = 0;
+  teamsCrashTimes.push(...recent);
+  console.warn(`[supervisor ${ts()}] Teams crash (code=${code ?? signal}). Recent: ${recent.length}/${MAX_CRASHES}`);
+  if (recent.length >= MAX_CRASHES) {
+    console.error(`[supervisor ${ts()}] Teams crash limit reached.`);
+    refreshTray();
+    return;
+  }
+  refreshTray();
+  setTimeout(() => { teamsChild = spawnTeams(); refreshTray(); }, RESTART_DELAY_MS);
 }
 
 process.on('SIGINT', () => {
   stopping = true;
   console.log(`[supervisor ${ts()}] SIGINT received — shutting down.`);
   if (child) child.kill('SIGINT');
+  if (teamsChild) teamsChild.kill('SIGINT');
   setTimeout(() => process.exit(0), 3_000);
 });
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────
 
-function httpGet(path: string): Promise<string> {
+function httpGet(url: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const req = http.get(`${API_BASE}${path}`, (res) => {
+    const req = http.get(url, (res) => {
       let body = '';
       res.on('data', (c: Buffer) => { body += c.toString(); });
       res.on('end', () => resolve(body));
@@ -133,14 +219,12 @@ interface NodeState {
   peers: number;
   lux: number;
   services: ServiceInfo[];
-  localHubPort: number | null;  // detected local hub port, null if not running
+  localHubPort: number | null;
 }
 
 let lastState: NodeState = { online: false, peers: 0, lux: 0, services: [], localHubPort: null };
+let teamsOnline = false;
 
-// Detect local hub by reading ~/.pando/hub.json (written by hub on startup)
-// Format: { "port": 3002 }
-// Falls back to legacy ~/.pando/gateway.json
 function detectLocalHub(): number | null {
   for (const filename of ['hub.json', 'gateway.json']) {
     try {
@@ -153,14 +237,14 @@ function detectLocalHub(): number | null {
 }
 
 async function pollState(): Promise<void> {
+  // Poll Node
   try {
     const [statusRaw, servicesRaw] = await Promise.all([
-      httpGet('/v1/status'),
-      httpGet('/v1/services').catch(() => '{}'),
+      httpGet(`${API_BASE}/v1/status`),
+      httpGet(`${API_BASE}/v1/services`).catch(() => '{}'),
     ]);
     const status = JSON.parse(statusRaw);
     const svcData = JSON.parse(servicesRaw);
-
     const gwPort = detectLocalHub();
 
     lastState = {
@@ -172,6 +256,18 @@ async function pollState(): Promise<void> {
     };
   } catch {
     lastState = { ...lastState, online: false, peers: 0, lux: 0, services: [], localHubPort: null };
+  }
+
+  // Poll Teams (simple health check)
+  if (teamsChild) {
+    try {
+      await httpGet(`http://127.0.0.1:${TEAMS_PORT}/`);
+      teamsOnline = true;
+    } catch {
+      teamsOnline = false;
+    }
+  } else {
+    teamsOnline = false;
   }
 
   refreshTray();
@@ -190,7 +286,6 @@ function openUrl(url: string): void {
 
 // ─── System Tray ──────────────────────────────────────────────────────────
 
-// 16x16 amber "P" on dark background — PNG-in-ICO (works on Windows 10/11).
 const ICON_ICO_B64 =
   'AAABAAEAEBAAAAAAIADmAAAAFgAAAIlQTkcNChoKAAAADUlIRFIAAAAQAAAAEAgGAAAAH/P/YQAAAK1J' +
   'REFUeJxjlJNT+c9AAWCiRDNVDGBBF5AR+c1wtPchnP/nLyPDqw/MDF1rhBnWH+Ml3gUrD/IxKCSo' +
@@ -209,19 +304,25 @@ const ICON_PATH = getIconPath();
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 let tray: any = null;
 
-// Menu item indices — fixed layout, items are shown/hidden dynamically
+// Menu item indices — fixed layout
 const IDX = {
-  STATUS:        0,
-  SEP1:          1,
-  SERVICE_SLOT:  2,
-  SEP2:          3,
-  HUB_LOCAL: 4,
-  HUB_WEB:   5,
-  SEP3:          6,
-  RESTART:       7,
-  STOP:          8,
-  START:         9,
-  QUIT:          10,
+  NODE_STATUS:    0,
+  TEAMS_STATUS:   1,
+  SEP1:           2,
+  SERVICE_SLOT:   3,
+  SEP2:           4,
+  HUB_LOCAL:      5,
+  HUB_WEB:        6,
+  OPEN_TEAMS:     7,
+  SEP3:           8,
+  RESTART_NODE:   9,
+  STOP_NODE:      10,
+  START_NODE:     11,
+  RESTART_TEAMS:  12,
+  STOP_TEAMS:     13,
+  START_TEAMS:    14,
+  SEP4:           15,
+  QUIT:           16,
 };
 
 function makeItem(title: string, opts?: { enabled?: boolean; hidden?: boolean; tooltip?: string }) {
@@ -229,18 +330,25 @@ function makeItem(title: string, opts?: { enabled?: boolean; hidden?: boolean; t
 }
 
 function buildInitialMenu() {
+  const hasTeams = TEAMS_PATH !== null;
   return [
-    /*  0 STATUS        */  makeItem('Starting\u2026'),
-    /*  1 SEP1          */  makeItem(''),
-    /*  2 SERVICE       */  makeItem('', { hidden: true }),
-    /*  3 SEP2          */  makeItem('', { hidden: true }),
-    /*  4 HUB_LOCAL */  makeItem('Hub (local)', { enabled: true, hidden: true }),
-    /*  5 HUB_WEB   */  makeItem('Hub (web)', { enabled: true, hidden: true }),
-    /*  6 SEP3          */  makeItem(''),
-    /*  7 RESTART       */  makeItem('Restart Node', { enabled: true, hidden: true }),
-    /*  8 STOP          */  makeItem('Stop Node', { enabled: true, hidden: true }),
-    /*  9 START         */  makeItem('Start Node', { enabled: true, hidden: true }),
-    /* 10 QUIT          */  makeItem('Quit', { enabled: true }),
+    /*  0 NODE_STATUS    */  makeItem('Node: Starting\u2026'),
+    /*  1 TEAMS_STATUS   */  makeItem(hasTeams ? 'Teams: Starting\u2026' : 'Teams: Not configured', { hidden: !hasTeams }),
+    /*  2 SEP1           */  makeItem(''),
+    /*  3 SERVICE        */  makeItem('', { hidden: true }),
+    /*  4 SEP2           */  makeItem('', { hidden: true }),
+    /*  5 HUB_LOCAL      */  makeItem('Hub (local)', { enabled: true, hidden: true }),
+    /*  6 HUB_WEB        */  makeItem('Hub (web)', { enabled: true, hidden: true }),
+    /*  7 OPEN_TEAMS     */  makeItem(`Open Teams (localhost:${TEAMS_PORT})`, { enabled: true, hidden: !hasTeams }),
+    /*  8 SEP3           */  makeItem(''),
+    /*  9 RESTART_NODE   */  makeItem('Restart Node', { enabled: true, hidden: true }),
+    /* 10 STOP_NODE      */  makeItem('Stop Node', { enabled: true, hidden: true }),
+    /* 11 START_NODE     */  makeItem('Start Node', { enabled: true, hidden: true }),
+    /* 12 RESTART_TEAMS  */  makeItem('Restart Teams', { enabled: true, hidden: true }),
+    /* 13 STOP_TEAMS     */  makeItem('Stop Teams', { enabled: true, hidden: true }),
+    /* 14 START_TEAMS    */  makeItem('Start Teams', { enabled: true, hidden: true }),
+    /* 15 SEP4           */  makeItem(''),
+    /* 16 QUIT           */  makeItem('Quit', { enabled: true }),
   ];
 }
 
@@ -249,19 +357,33 @@ function refreshTray(): void {
 
   const nodeRunning = child !== null;
   const nodeReady = lastState.online;
+  const teamsRunning = teamsChild !== null;
+  const hasTeams = TEAMS_PATH !== null;
 
-  // Status text
-  let statusText: string;
+  // Node status text
+  let nodeStatusText: string;
   if (!nodeRunning) {
-    statusText = 'Stopped';
+    nodeStatusText = 'Node: Stopped';
   } else if (!nodeReady) {
-    statusText = 'Starting\u2026';
+    nodeStatusText = 'Node: Starting\u2026';
   } else {
-    statusText = `Online | ${lastState.peers} peer${lastState.peers !== 1 ? 's' : ''} | ${lastState.lux} Lux`;
+    nodeStatusText = `Node: ${lastState.peers} peer${lastState.peers !== 1 ? 's' : ''} | ${lastState.lux} Lux`;
   }
 
-  // Service line
-  const svc = lastState.services[0]; // primary service (pando-teams)
+  // Teams status text
+  let teamsStatusText: string;
+  if (!hasTeams) {
+    teamsStatusText = 'Teams: Not configured';
+  } else if (!teamsRunning) {
+    teamsStatusText = 'Teams: Stopped';
+  } else if (!teamsOnline) {
+    teamsStatusText = 'Teams: Starting\u2026';
+  } else {
+    teamsStatusText = `Teams: Online (port ${TEAMS_PORT})`;
+  }
+
+  // Service line (from node's /v1/services)
+  const svc = lastState.services[0];
   const hasSvc = nodeReady && !!svc;
   let svcText = '';
   if (hasSvc) {
@@ -271,17 +393,21 @@ function refreshTray(): void {
   }
 
   const hasLocalHub = nodeReady && lastState.localHubPort !== null;
-  const showHub = nodeReady && (hasLocalHub || true); // always show web hub when online
 
   try {
-    updateItem(IDX.STATUS,        statusText, { enabled: false });
-    updateItem(IDX.SERVICE_SLOT,  svcText,    { enabled: hasSvc && !!svc?.uiUrl, hidden: !hasSvc });
-    updateItem(IDX.SEP2,          '',         { hidden: !hasSvc && !showHub });
+    updateItem(IDX.NODE_STATUS,     nodeStatusText, { enabled: false });
+    updateItem(IDX.TEAMS_STATUS,    teamsStatusText, { enabled: false, hidden: !hasTeams });
+    updateItem(IDX.SERVICE_SLOT,    svcText,    { enabled: hasSvc && !!svc?.uiUrl, hidden: !hasSvc });
+    updateItem(IDX.SEP2,            '',         { hidden: !hasSvc && !hasLocalHub && !nodeReady });
     updateItem(IDX.HUB_LOCAL, `Hub (localhost:${lastState.localHubPort})`, { enabled: true, hidden: !hasLocalHub });
     updateItem(IDX.HUB_WEB,   'Hub (web)', { enabled: true, hidden: !nodeReady });
-    updateItem(IDX.RESTART,       'Restart Node', { enabled: true, hidden: !nodeRunning });
-    updateItem(IDX.STOP,          'Stop Node',    { enabled: true, hidden: !nodeRunning });
-    updateItem(IDX.START,         'Start Node',   { enabled: true, hidden: nodeRunning });
+    updateItem(IDX.OPEN_TEAMS, `Open Teams (localhost:${TEAMS_PORT})`, { enabled: teamsOnline, hidden: !hasTeams });
+    updateItem(IDX.RESTART_NODE,    'Restart Node', { enabled: true, hidden: !nodeRunning });
+    updateItem(IDX.STOP_NODE,       'Stop Node',    { enabled: true, hidden: !nodeRunning });
+    updateItem(IDX.START_NODE,      'Start Node',   { enabled: true, hidden: nodeRunning });
+    updateItem(IDX.RESTART_TEAMS,   'Restart Teams', { enabled: true, hidden: !teamsRunning || !hasTeams });
+    updateItem(IDX.STOP_TEAMS,      'Stop Teams',    { enabled: true, hidden: !teamsRunning || !hasTeams });
+    updateItem(IDX.START_TEAMS,     'Start Teams',   { enabled: true, hidden: teamsRunning || !hasTeams });
   } catch { /* ignore */ }
 }
 
@@ -300,9 +426,7 @@ function updateItem(seqId: number, title: string, opts?: { enabled?: boolean; hi
   });
 }
 
-async function initTray(
-  getChild: () => ChildProcess | null,
-): Promise<void> {
+async function initTray(): Promise<void> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let SysTray: any;
   try {
@@ -343,20 +467,36 @@ async function initTray(
       else if (seq === IDX.HUB_WEB) {
         openUrl('https://gateway-one-mu.vercel.app');
       }
-      else if (seq === IDX.START) {
+      else if (seq === IDX.OPEN_TEAMS) {
+        openUrl(`http://localhost:${TEAMS_PORT}`);
+      }
+      // Node controls
+      else if (seq === IDX.START_NODE) {
         if (!child) { child = spawnNode(); refreshTray(); }
       }
-      else if (seq === IDX.RESTART) {
-        const c = getChild(); if (c) c.kill('SIGINT');
+      else if (seq === IDX.RESTART_NODE) {
+        if (child) child.kill('SIGINT');
       }
-      else if (seq === IDX.STOP) {
+      else if (seq === IDX.STOP_NODE) {
         userStopped = true;
-        const c = getChild(); if (c) c.kill('SIGINT');
+        if (child) child.kill('SIGINT');
+      }
+      // Teams controls
+      else if (seq === IDX.START_TEAMS) {
+        if (!teamsChild) { teamsChild = spawnTeams(); refreshTray(); }
+      }
+      else if (seq === IDX.RESTART_TEAMS) {
+        if (teamsChild) teamsChild.kill('SIGINT');
+      }
+      else if (seq === IDX.STOP_TEAMS) {
+        teamsUserStopped = true;
+        if (teamsChild) teamsChild.kill('SIGINT');
       }
       else if (seq === IDX.QUIT) {
         stopping = true;
         if (child) child.kill('SIGINT');
-        setTimeout(() => process.exit(0), 2_000);
+        if (teamsChild) teamsChild.kill('SIGINT');
+        setTimeout(() => process.exit(0), 3_000);
       }
     } catch { /* ignore */ }
   });
@@ -375,7 +515,7 @@ process.on('uncaughtException', (err: Error) => {
   process.exit(1);
 });
 
-// Poll node status + services — first poll after 5s (wait for node boot), then every 10s
+// Poll state — first poll after 5s, then every 10s
 setTimeout(() => { pollState().catch(() => {}); }, 5_000);
 const pollTimer = setInterval(() => { pollState().catch(() => {}); }, POLL_INTERVAL_MS);
 pollTimer.unref();
@@ -383,13 +523,18 @@ pollTimer.unref();
 // Skip tray on headless systems
 const isHeadless = process.platform === 'linux' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY;
 if (!isHeadless) {
-  initTray(
-    () => child,
-  ).catch((e: unknown) => {
+  initTray().catch((e: unknown) => {
     console.log(`[supervisor] Tray init failed: ${e instanceof Error ? e.message : String(e)}`);
   });
 } else {
   console.log('[supervisor] Headless system detected — skipping system tray.');
 }
 
+// Spawn both processes
 child = spawnNode();
+if (TEAMS_PATH) {
+  teamsChild = spawnTeams();
+  console.log(`[supervisor] Teams path: ${TEAMS_PATH}`);
+} else {
+  console.log('[supervisor] Teams not found — running Node only. Use --teams-path to enable.');
+}

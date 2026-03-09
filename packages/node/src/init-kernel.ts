@@ -1,6 +1,7 @@
 import { WorkType, MessageType } from '@pando/shared';
 import { PandoLedger } from '@pando/ledger';
 import { PandoNetwork } from './kernel/network.js';
+import { debug } from './logger.js';
 import { LedgerSync } from './kernel/sync.js';
 import { GovernanceSync } from './kernel/governance.js';
 import { TaskQueue } from './platform/task-queue.js';
@@ -916,7 +917,7 @@ export async function initKernel(node: any): Promise<void> {
               });
             } catch {}
           }
-          console.log(`[peer-exchange] Re-shared peers with ${peers.length} connected peer(s)`);
+          debug(`[peer-exchange] Re-shared peers with ${peers.length} connected peer(s)`);
         }, delay);
       }
 
