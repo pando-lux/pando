@@ -3,7 +3,7 @@ import { defineConfig } from 'playwright/test';
 // Per-project test directories: tests/e2e/{project}/*.spec.ts
 // Run all:    npx playwright test
 // Run one:    npx playwright test --project pando-node
-const PROJECTS = ['pando-node', 'pando-code'];
+const PROJECTS = ['pando-node', 'pando-teams'];
 
 export default defineConfig({
   testDir: './tests/e2e',

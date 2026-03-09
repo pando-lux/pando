@@ -69,7 +69,7 @@ const config2 = loadConfig(tmpDir);
 assert(config2.apiUrl === 'http://localhost:9999', 'saveConfig updates config correctly');
 
 // resolveVariables replaces template vars (takes ProjectConfig)
-const resolved = resolveVariables('Visit {{GATEWAY_URL}}/status for {{PROJECT}}', {
+const resolved = resolveVariables('Visit {{HUB_URL}}/status for {{PROJECT}}', {
   project: 'self-test',
   rootDir: tmpDir,
   gatewayUrl: 'https://example.com',
@@ -224,14 +224,14 @@ if (fs.existsSync(playbooksDir)) {
 
   // Resolve variables
   const resolvedPb = resolvePlaybookVariables(gov!, {
-    GATEWAY_URL: 'https://test.example.com',
+    HUB_URL: 'https://test.example.com',
     API_URL: 'http://localhost:4100',
     TIMESTAMP: 'test-123',
   });
   const firstStep = resolvedPb.steps[0];
   assert(
     typeof firstStep.target === 'string' && firstStep.target.includes('test.example.com'),
-    'resolvePlaybookVariables replaces {{GATEWAY_URL}}'
+    'resolvePlaybookVariables replaces {{HUB_URL}}'
   );
 } else {
   console.log('  SKIP: playbooks/pando-node/ not found');

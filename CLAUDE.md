@@ -8,9 +8,9 @@
 
 ## What This Is
 
-Pando is a decentralized, AI-managed network. The currency is **Lux**. Every participant runs the same node. The node IS the network. Five independent packages (@pando/shared, @pando/identity, @pando/ledger, @pando/node, @pando/gateway) with optional service plugins.
+Pando is a decentralized, AI-managed network. The currency is **Lux**. Every participant runs the same node. The node IS the network. Five independent packages (@pando/shared, @pando/identity, @pando/ledger, @pando/node, @pando/hub) with optional service plugins.
 
-**The brain/body split:** @pando-code/core = brain (intelligence, memory, tools, agents, board, communication). @pando/node = body (P2P, identity, economy, governance). engine-adapter.ts = nervous system. **CRITICAL: Never rebuild PandoCode features in pando-node. See BIBLE.md Section 3.2.**
+**The brain/body split:** @pando-teams/core = brain (intelligence, memory, tools, agents, board, communication). @pando/node = body (P2P, identity, economy, governance). engine-adapter.ts = nervous system. **CRITICAL: Never rebuild PandoTeams features in pando-node. See BIBLE.md Section 3.2.**
 
 ## Service Architecture
 
@@ -18,7 +18,7 @@ Pando uses a **modular service plugin system**. Services are npm packages that i
 
 **How it works:**
 - `ServiceLoader` (in `packages/node/src/core/service-loader.ts`) auto-discovers installed service packages at startup
-- If `@pando-code/core` is installed → full node (AI engine, agents, teams, board)
+- If `@pando-teams/core` is installed → full node (AI engine, agents, teams, board)
 - If not installed → light node (P2P relay, ledger, identity only)
 - No config needed — presence of the npm package is the config
 
@@ -26,7 +26,7 @@ Pando uses a **modular service plugin system**. Services are npm packages that i
 - `PandoService` — `id`, `version`, `capabilities`, `start(ctx)`, `stop()`, `healthy()`
 - `ServiceContext` — what the node provides: `peerId`, `dataDir`, `apiPort`, `registerRoutes()`, `getCapability()`
 
-**Diagnostic endpoint:** `GET /services` — shows engine adapter status, ServiceLoader state, @pando-code/core installation
+**Diagnostic endpoint:** `GET /services` — shows engine adapter status, ServiceLoader state, @pando-teams/core installation
 
 **For future services:** Implement `PandoService`, export `createService()`, add package name to `SERVICE_PACKAGES` in service-loader.ts. See `docs/SERVICE-ARCHITECTURE-ROADMAP.md`.
 

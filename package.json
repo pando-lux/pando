@@ -11,7 +11,7 @@
     "packages/ledger",
     "packages/tests",
     "packages/node",
-    "packages/gateway",
+    "packages/hub",
     "packages/extension",
     "packages/mcp-server"
   ],

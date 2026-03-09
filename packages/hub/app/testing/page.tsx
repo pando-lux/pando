@@ -374,7 +374,7 @@ export default function TestingPage() {
             className="w-full text-xs font-mono bg-neutral-900 border border-neutral-700 rounded px-2 py-1.5 text-neutral-200 focus:outline-none focus:border-blue-500"
           >
             <option value="pando-node">pando-node</option>
-            <option value="pando-code">pando-code</option>
+            <option value="pando-teams">pando-teams</option>
           </select>
         </div>
 

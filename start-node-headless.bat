@@ -9,7 +9,7 @@ cd /d "%~dp0"
 if exist "%~dp0secrets\local.env.bat" call "%~dp0secrets\local.env.bat"
 
 :: Set gateway URL
-if not defined GATEWAY_PUBLIC_URL set "GATEWAY_PUBLIC_URL=https://gateway-one-mu.vercel.app"
+if not defined HUB_PUBLIC_URL set "HUB_PUBLIC_URL=https://gateway-one-mu.vercel.app"
 
 set "ARGS=%*"
 if "%ARGS%"=="" set "ARGS=--port 4100 --api-port 4000"

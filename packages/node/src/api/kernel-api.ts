@@ -209,7 +209,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
             repoUrl,
             tier: 2,
             envVars: {
-              PANDO_GATEWAY_URL: process.env.GATEWAY_PUBLIC_URL || 'https://gateway-one-mu.vercel.app',
+              PANDO_HUB_URL: process.env.HUB_PUBLIC_URL || 'https://gateway-one-mu.vercel.app',
               PANDO_PROJECT_ID: project.id,
               PANDO_PROJECT_API_KEY: (project as any).apiKey || '',
             },
@@ -321,7 +321,7 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
     fastify.get('/services', async () => {
       const adapter = node.getEngineAdapter?.();
       const serviceLoader = node.getServiceLoader?.();
-      const pandoCodeCorePath = 'node_modules/@pando-code/core';
+      const pandoCodeCorePath = 'node_modules/@pando-teams/core';
       let pandoCodeInstalled = false;
       let pandoCodeIsLink = false;
       try {

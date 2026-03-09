@@ -144,7 +144,7 @@ Builder peer selection just picks the first available candidate. No latency, loa
 ---
 ---
 
-# Agent & Engine Logic (pando-code)
+# Agent & Engine Logic (pando-teams)
 
 ---
 

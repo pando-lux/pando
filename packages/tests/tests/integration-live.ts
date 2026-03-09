@@ -44,7 +44,7 @@ async function main() {
     timeout: 15000,
     screenshotDir,
     variables: {
-      GATEWAY_URL: 'https://gateway-one-mu.vercel.app',
+      HUB_URL: 'https://gateway-one-mu.vercel.app',
       API_URL: 'http://127.0.0.1:4100',
     },
   });

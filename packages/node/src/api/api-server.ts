@@ -5,7 +5,7 @@
  * and other tools can interact with the node without reading
  * the DB directly.
  *
- * Routes requests through EngineAdapter to @pando-code/core for AI processing.
+ * Routes requests through EngineAdapter to @pando-teams/core for AI processing.
  */
 
 import Fastify from 'fastify';
@@ -505,7 +505,7 @@ export class ApiServer {
       const apiPort = this.node.getApiPort();
       registerTestingRoutes(v1, {
         rootDir: process.cwd(),
-        gatewayUrl: process.env.GATEWAY_PUBLIC_URL || `http://localhost:3222`,
+        gatewayUrl: process.env.HUB_PUBLIC_URL || `http://localhost:3222`,
         apiUrl: `http://localhost:${apiPort}`,
         apiPort,
       }, deps.apiToken);

@@ -291,7 +291,7 @@ All triggers feed into the same `appManager.update(appId)`:
 | Trigger | Source | Target |
 |---------|--------|--------|
 | Governance proposal | upgrade-protocol.ts | `update('pando-node')` |
-| PandoCode build complete | platform-api.ts `sendToEngine()` callback (4 sites) + init-kernel.ts chat_proxy (1 site) | `update(projectId)` — **PRIMARY trigger for user apps** |
+| PandoTeams build complete | platform-api.ts `sendToEngine()` callback (4 sites) + init-kernel.ts chat_proxy (1 site) | `update(projectId)` — **PRIMARY trigger for user apps** |
 | Manual API | `POST /v1/apps/:id/update` | `update(appId)` |
 | Health failure | AppManager monitor loop | `restart` or `rollback(appId)` |
 | GitHub webhook (passive) | `POST /v1/webhooks/github` — available but NOT the primary flow | `update(projectId)` — lookup by repo_url |
@@ -440,7 +440,7 @@ POST   /v1/webhooks/github         — GitHub push webhook receiver
 7. Remove port registry JSON logic
 8. Clean up index.ts exports
 
-**Test:** Full deploy flow end-to-end. PandoCode builds app → auto-update triggers → blue-green deploy → health check passes.
+**Test:** Full deploy flow end-to-end. PandoTeams builds app → auto-update triggers → blue-green deploy → health check passes.
 
 ### Phase 4: P2P Deploy Dispatch
 
@@ -453,7 +453,7 @@ POST   /v1/webhooks/github         — GitHub push webhook receiver
 
 ### ~~Phase 5: GitHub Webhook Integration~~ — REMOVED
 
-**Not needed.** The trigger is already in-code: PandoCode build completes → `appManager.update(projectId)` fires automatically (wired at 4 call sites in platform-api.ts + 1 in init-kernel.ts). GitHub is just storage — the node already knows when a build finishes because it ran the build. No webhook needed.
+**Not needed.** The trigger is already in-code: PandoTeams build completes → `appManager.update(projectId)` fires automatically (wired at 4 call sites in platform-api.ts + 1 in init-kernel.ts). GitHub is just storage — the node already knows when a build finishes because it ran the build. No webhook needed.
 
 If GitHub is replaced with another git host (or self-hosted repos) in the future, zero code changes needed — AppManager pulls from whatever `repo_url` is registered. The `/v1/webhooks/github` endpoint in app-api.ts remains available as a passive receiver if ever needed, but is not part of the core flow.
 
@@ -501,7 +501,7 @@ The current `triggerDeployPipeline()` flow that we're replacing:
 
 **AppManager replaces steps 2-4.** Step 1 (GitHub push) stays — it's called before `appManager.deploy()` or `appManager.update()` if the app has a GitHub repo.
 
-The GitHub push logic in `platform-api.ts` (repo creation, force-push) remains as a utility. It's called by the PandoCode build completion handler before triggering `appManager.update()`.
+The GitHub push logic in `platform-api.ts` (repo creation, force-push) remains as a utility. It's called by the PandoTeams build completion handler before triggering `appManager.update()`.
 
 ---
 
@@ -559,7 +559,7 @@ Before marking this roadmap COMPLETE, all of these must be true:
 - [ ] `DELETE /v1/apps/:id` stops process, removes nginx, cleans up
 - [ ] `GET /v1/apps` returns all apps with correct status
 - [ ] `GET /v1/apps/:id/history` returns deploy/update/rollback timeline
-- [ ] PandoCode build completion triggers `appManager.update()` (not legacy pipeline)
+- [ ] PandoTeams build completion triggers `appManager.update()` (not legacy pipeline)
 - [ ] `POST /v1/webhooks/github` triggers update on matching app
 - [ ] All 4 legacy files deleted (deploy-pipeline, hosting-adapters, gateway-deploy-pool, hosting-service)
 - [ ] `app-ports.json` no longer read or written anywhere
@@ -641,7 +641,7 @@ Node C (EC2-3):  apps.db → [pando-node, app-7, app-8]
                     │   Trigger Sources    │
                     ├─────────────────────┤
                     │ • Governance (node)  │
-                    │ • PandoCode build    │
+                    │ • PandoTeams build    │
                     │ • GitHub webhook     │
                     │ • Manual API call    │
                     │ • Health failure     │

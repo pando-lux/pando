@@ -1,7 +1,7 @@
 # Unified Pipeline Roadmap
 
 > **STATUS: COMPLETE** — All 7 phases done. See Implementation Status table at bottom.
-> One pipeline for everything. pando-node, pando-code, user apps — all just "apps."
+> One pipeline for everything. pando-node, pando-teams, user apps — all just "apps."
 
 ## The Problem Today
 
@@ -13,7 +13,7 @@ Three separate systems do similar things:
 | **UpgradeProtocol** | pando-node only | fetch, reset --hard | npm build + tsc fallback | exit(75) restart | Full governance | None |
 | **DeployManager** | CodePipeline patches | add, commit, revert | npm build | None | None | None |
 
-**Result:** Three codebases doing overlapping work. pando-code has NO pipeline at all. Credentials are half-hardcoded. No unified history.
+**Result:** Three codebases doing overlapping work. pando-teams has NO pipeline at all. Credentials are half-hardcoded. No unified history.
 
 ## The Target
 
@@ -23,7 +23,7 @@ Every piece of code in the network = an App in AppManager
 ┌─────────────────────────────────────────────────┐
 │                  App Registry                    │
 ├──────────────┬──────────┬───────────────────────┤
-│ pando-node   │ pando-code │ user-todo-app       │
+│ pando-node   │ pando-teams │ user-todo-app       │
 │ governance:y │ governance:y│ governance:n        │
 │ repo: pando- │ repo: pando-│ repo: pando-lux/   │
 │  lux/pando   │  lux/code  │  proj-a3f8          │
@@ -59,7 +59,7 @@ Governance (optional gate BEFORE pipeline):
 - **Works:** PM2 process management, health monitoring, circuit breaker
 - **Works:** P2P dispatch (forward deploy to remote nodes)
 - **Missing:** No governance gate option
-- **Missing:** pando-node and pando-code not registered as apps
+- **Missing:** pando-node and pando-teams not registered as apps
 - **Missing:** No "restart node" deploy action (only PM2 process restart)
 
 ### Upgrade Protocol
@@ -69,7 +69,7 @@ Governance (optional gate BEFORE pipeline):
 - **Works:** Catch-up timer for offline nodes
 - **Works:** Version pinning, emergency rollback
 - **Broken:** Completely separate from AppManager — duplicate git/build logic
-- **Missing:** Only handles pando-node, not pando-code
+- **Missing:** Only handles pando-node, not pando-teams
 
 ### Deploy Manager
 - **Works:** Git commit/revert for CodePipeline patches
@@ -113,10 +113,10 @@ Governance (optional gate BEFORE pipeline):
 ---
 
 ### Phase 2: Register Infrastructure as Apps
-> pando-node and pando-code become entries in the AppManager registry.
+> pando-node and pando-teams become entries in the AppManager registry.
 
 **What changes:**
-1. On node startup, register pando-node and pando-code in app-manager if not already registered:
+1. On node startup, register pando-node and pando-teams in app-manager if not already registered:
    ```
    app-manager.register({
      id: 'pando-node',
@@ -130,9 +130,9 @@ Governance (optional gate BEFORE pipeline):
    })
 
    app-manager.register({
-     id: 'pando-code',
-     name: 'Pando Code',
-     repoUrl: 'https://github.com/pando-lux/pando-code.git',
+     id: 'pando-teams',
+     name: 'Pando Teams',
+     repoUrl: 'https://github.com/pando-lux/pando-teams.git',
      tier: 3,
      governance: true,
      deployAction: 'restart-node',  // brain reload requires restart
@@ -155,9 +155,9 @@ Governance (optional gate BEFORE pipeline):
 
 **Files touched:**
 - `packages/node/src/core/app-manager.ts` — add tier 3, governance flag, deployAction
-- `packages/node/src/init-platform.ts` — register pando-node/pando-code on startup
+- `packages/node/src/init-platform.ts` — register pando-node/pando-teams on startup
 
-**Test:** `GET /v1/apps` shows pando-node and pando-code alongside user apps.
+**Test:** `GET /v1/apps` shows pando-node and pando-teams alongside user apps.
 
 ---
 
@@ -296,26 +296,26 @@ Governance (optional gate BEFORE pipeline):
 
 ---
 
-### Phase 6: pando-code Pipeline
-> pando-code gets the same treatment as pando-node.
+### Phase 6: pando-teams Pipeline
+> pando-teams gets the same treatment as pando-node.
 
 **What changes:**
-1. Create `pando-lux/pando-code` repo on GitHub (manual, one-time)
-2. pando-code registered as infrastructure app (Phase 2 already handles this)
-3. Upgrade proposal can target pando-code specifically:
-   - `POST /upgrade/propose` with `app: 'pando-code'`
+1. Create `pando-lux/pando-teams` repo on GitHub (manual, one-time)
+2. pando-teams registered as infrastructure app (Phase 2 already handles this)
+3. Upgrade proposal can target pando-teams specifically:
+   - `POST /upgrade/propose` with `app: 'pando-teams'`
    - Governance vote
-   - On approval: git pull pando-code → npm build → restart node (reloads brain)
+   - On approval: git pull pando-teams → npm build → restart node (reloads brain)
 
-4. EC2 nodes get pando-code:
+4. EC2 nodes get pando-teams:
    - Currently they don't run engines (no brain needed)
-   - When they do: same pipeline pulls and builds pando-code
+   - When they do: same pipeline pulls and builds pando-teams
 
 **Files touched:**
 - Mostly configuration — Phase 2 and Phase 4 handle the code
-- `packages/node/src/init-platform.ts` — ensure pando-code app registered with correct repo URL
+- `packages/node/src/init-platform.ts` — ensure pando-teams app registered with correct repo URL
 
-**Test:** Push to pando-lux/pando-code → governance proposal → approval → all nodes pull + rebuild + restart.
+**Test:** Push to pando-lux/pando-teams → governance proposal → approval → all nodes pull + rebuild + restart.
 
 ---
 
@@ -343,7 +343,7 @@ Phase 1 (Credentials) ──→ Phase 3 (GitOps) ──→ Phase 4 (Merge Upgrad
                      │                                    │
 Phase 2 (Register)  ─┘        Phase 5 (GitHub API) ──────┘
                                                           │
-                              Phase 6 (pando-code) ───────┘
+                              Phase 6 (pando-teams) ───────┘
                                                           │
                               Phase 7 (Cleanup) ──────────┘
 ```
@@ -368,7 +368,7 @@ Phases 1 and 2 can run in parallel. Phase 3 needs Phase 1. Phase 4 needs 2+3. Ph
 
 ### Council/Agents
 - **Before:** Separate upgrade system, no visibility into infra deployments
-- **After:** pando-node and pando-code are apps on the board. Same dashboard. Same history. Same pipeline.
+- **After:** pando-node and pando-teams are apps on the board. Same dashboard. Same history. Same pipeline.
 
 ### Developer (You)
 - **Before:** Push code, manually trigger upgrade, hope EC2 nodes update
@@ -385,16 +385,16 @@ Phases 1 and 2 can run in parallel. Phase 3 needs Phase 1. Phase 4 needs 2+3. Ph
 | Phase 3: Unified GitOps | ✅ DONE | (this commit) |
 | Phase 4: UpgradeProtocol uses GitOps | ✅ DONE | (this commit) |
 | Phase 5: GitHub Client | ✅ DONE | (this commit) |
-| Phase 6: pando-code pipeline | ✅ DONE | (registered as app in Phase 2, same pipeline) |
+| Phase 6: pando-teams pipeline | ✅ DONE | (registered as app in Phase 2, same pipeline) |
 | Phase 7: Cleanup | ✅ DONE | (this commit — safeGitReset removed, all git ops via GitOps) |
 
 ## Success Criteria
 
-- [x] `GET /v1/apps` shows pando-node, pando-code, and user apps in one list
+- [x] `GET /v1/apps` shows pando-node, pando-teams, and user apps in one list
 - [x] All git operations use contributed credentials (no hardcoded PATs)
 - [x] User can `/contribute github <token>` and agents use it for all git ops
 - [ ] Paid user contributes PAT, gets private repo builds (GitHubClient ready, needs integration)
-- [x] pando-code upgrades flow through same pipeline as pando-node
+- [x] pando-teams upgrades flow through same pipeline as pando-node
 - [x] Unified deployment history in one table (app_history)
 - [x] UpgradeProtocol is a governance gate using GitOps, not a separate pipeline
 - [x] 9/9 E2E tests still pass

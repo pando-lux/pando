@@ -1,8 +1,8 @@
-# Pando Codebase Audit
+# Pando Teamsbase Audit
 
 > **STATUS: REFERENCE ONLY** — Point-in-time snapshot. Some issues (C-1 shell injection, C-2 weak randomness) have been fixed since generation. Verify current state before acting on any item.
 > Generated: 2026-03-08
-> Scope: pando-node, pando-code, and cross-system boundaries
+> Scope: pando-node, pando-teams, and cross-system boundaries
 
 ---
 
@@ -11,21 +11,21 @@
 ### H-1: Lux Budget Cap Mismatch (Cross-System)
 
 - **Location**: `node/packages/node/src/core/engine-adapter.ts` (lines 51-82) vs `node/packages/shared/src/types.ts` (lines 241-267)
-- **Issue**: pando-code budgets in USD via `BudgetProvider`. engine-adapter converts at a fixed rate of `100 Lux/USD`. But pando-node enforces `DAILY_EMISSION_CAP = 500 Lux`. A single `$100 USD` task = `10,000 Lux`, which blows past the daily cap by 20x.
-- **Impact**: Budget enforcement is broken at the system boundary. Tasks that are valid in pando-code get rejected by the ledger.
+- **Issue**: pando-teams budgets in USD via `BudgetProvider`. engine-adapter converts at a fixed rate of `100 Lux/USD`. But pando-node enforces `DAILY_EMISSION_CAP = 500 Lux`. A single `$100 USD` task = `10,000 Lux`, which blows past the daily cap by 20x.
+- **Impact**: Budget enforcement is broken at the system boundary. Tasks that are valid in pando-teams get rejected by the ledger.
 - **Fix**: Sync the conversion rate with emission caps, or make engine-adapter aware of `DAILY_EMISSION_CAP` before submitting charges.
 
 ### H-2: Event Type Vocabulary Mismatch (Cross-System)
 
 - **Location**: `code/packages/core/src/types.ts` (lines 557-579) vs `node/packages/shared/src/types.ts` (lines 82-139)
-- **Issue**: pando-code uses `StreamEvent` types (`stream:chunk`, `tool:start`, `tool:result`, `task:progress`, `budget:warning`, `error:doom_loop`, `agent:spawned`, `reasoning:delta`). pando-node uses `MessageType` enum (`PING`, `PONG`, `QUERY`, `TRANSFER`, `AGENT_MESSAGE`, etc.). No shared event vocabulary exists.
+- **Issue**: pando-teams uses `StreamEvent` types (`stream:chunk`, `tool:start`, `tool:result`, `task:progress`, `budget:warning`, `error:doom_loop`, `agent:spawned`, `reasoning:delta`). pando-node uses `MessageType` enum (`PING`, `PONG`, `QUERY`, `TRANSFER`, `AGENT_MESSAGE`, etc.). No shared event vocabulary exists.
 - **Impact**: Events crossing system boundaries are silently dropped or misinterpreted.
 - **Fix**: Create a unified `PandoEvent` union type in a shared package, used by both systems.
 
 ### H-3: No Protocol Versioning on StreamEvents (Cross-System)
 
-- **Location**: `node/packages/shared/src/types.ts` (line 47) vs pando-code `StreamEvent` definition
-- **Issue**: pando-node stamps `MESSAGE_VERSION = 1` on P2P messages and validates it in `network.ts:588-612`. pando-code's `StreamEvent` has zero versioning. Format changes will silently break peers on different versions.
+- **Location**: `node/packages/shared/src/types.ts` (line 47) vs pando-teams `StreamEvent` definition
+- **Issue**: pando-node stamps `MESSAGE_VERSION = 1` on P2P messages and validates it in `network.ts:588-612`. pando-teams's `StreamEvent` has zero versioning. Format changes will silently break peers on different versions.
 - **Impact**: Silent protocol breakage during upgrades when peers run different versions.
 - **Fix**: Add a `version` field to `StreamEvent`, increment on format changes.
 
@@ -43,39 +43,39 @@
 ### M-2: Agent Status Enum Defined Separately (Cross-System)
 
 - **Location**: `code/packages/core/src/types.ts` (lines 237-246) vs `node/packages/identity/src/constants.ts`
-- **Issue**: pando-code defines `AgentStatus = "pending" | "active" | "idle" | "working" | "done" | "failed" | "terminated"`. pando-node identity likely defines a different set of statuses. No shared type exists.
-- **Impact**: When platform-api updates an agent's status, it might use a value not in pando-code's enum. Runtime mismatches won't be caught by TypeScript since the systems compile independently.
+- **Issue**: pando-teams defines `AgentStatus = "pending" | "active" | "idle" | "working" | "done" | "failed" | "terminated"`. pando-node identity likely defines a different set of statuses. No shared type exists.
+- **Impact**: When platform-api updates an agent's status, it might use a value not in pando-teams's enum. Runtime mismatches won't be caught by TypeScript since the systems compile independently.
 - **Fix**: Unify agent status enum in a shared types file.
 
 ### M-3: Missing Type Boundaries Between Systems (Cross-System)
 
 - **Location**: `code/packages/core/src/types.ts` (lines 46-65, 226-264) vs `node/packages/shared/src/types.ts`
-- **Issue**: pando-code defines `AgentRole`, `AgentScope`, `AgentStatus`, `AgentIdentity`. pando-node defines `AgentProfile`, `AgentPermissions`, `AgentCertificate` via `@pando/identity`. Neither re-exports the other's types.
-- **Impact**: Type-unsafe cross-system agent creation. engine-adapter uses @pando-code/core types but pando-node API expects @pando/identity types.
-- **Fix**: Re-export pando-code agent types from pando-node/shared, or create a shared agent types package.
+- **Issue**: pando-teams defines `AgentRole`, `AgentScope`, `AgentStatus`, `AgentIdentity`. pando-node defines `AgentProfile`, `AgentPermissions`, `AgentCertificate` via `@pando/identity`. Neither re-exports the other's types.
+- **Impact**: Type-unsafe cross-system agent creation. engine-adapter uses @pando-teams/core types but pando-node API expects @pando/identity types.
+- **Fix**: Re-export pando-teams agent types from pando-node/shared, or create a shared agent types package.
 
 ### M-4: Dependency Version Pinning Conflict (Cross-System)
 
 - **Location**: `code/packages/core/package.json` (lines 14-25) vs `node/package.json` (lines 42-72)
-- **Issue**: pando-code pins `"ai": "6.0.0"`, `"drizzle-orm": "0.39.0"`, `"@ai-sdk/anthropic": "3.0.0"` exactly. pando-node references `"@pando-code/core": "*"` (wildcard). TypeScript is `^5.5.0` in node but `5.8.2` in core.
+- **Issue**: pando-teams pins `"ai": "6.0.0"`, `"drizzle-orm": "0.39.0"`, `"@ai-sdk/anthropic": "3.0.0"` exactly. pando-node references `"@pando-teams/core": "*"` (wildcard). TypeScript is `^5.5.0` in node but `5.8.2` in core.
 - **Impact**: Latent breakage risk during upgrades. No version validation between systems.
 - **Fix**: Add explicit version constraints in node/package.json for shared dependencies.
 
 ### M-5: Asymmetric Crypto Capability (Cross-System)
 
-- **Location**: `node/packages/identity/src/core/` (hash.ts, signing.ts, encryption.ts) vs pando-code (no crypto)
-- **Issue**: pando-node has full crypto via `@pando/identity` (`sha256`, `sign`, `verify`, `encrypt`, `decrypt`). pando-code has zero crypto functions. engine-adapter calls governance AI review (line 541-543) but can't sign the review result.
+- **Location**: `node/packages/identity/src/core/` (hash.ts, signing.ts, encryption.ts) vs pando-teams (no crypto)
+- **Issue**: pando-node has full crypto via `@pando/identity` (`sha256`, `sign`, `verify`, `encrypt`, `decrypt`). pando-teams has zero crypto functions. engine-adapter calls governance AI review (line 541-543) but can't sign the review result.
 - **Impact**: Unsigned governance reviews can be spoofed.
 - **Fix**: Allow engine-adapter to access @pando/identity signing, or pass a signing callback.
 
-### M-6: Dual Scanner Systems (pando-code)
+### M-6: Dual Scanner Systems (pando-teams)
 
 - **Location**: `code/packages/core/src/graph/graph.ts` (lines 24-36)
 - **Issue**: Two scanner implementations coexist — regex-based (`scanFileRegex`) and AST-based (`scanFileAST`). TypeScript files try AST first, silently fall back to regex on failure. Other languages always use regex.
 - **Impact**: Maintenance burden. Silent fallback means AST parser failures go unnoticed. Inconsistent scan quality between languages.
 - **Fix**: Complete AST migration for all supported languages, or deprecate AST scanner and optimize regex.
 
-### M-7: Dual Memory Storage Systems (pando-code)
+### M-7: Dual Memory Storage Systems (pando-teams)
 
 - **Location**: `code/packages/core/src/memory/store.ts` + `code/packages/core/src/memory/memory-store.ts`
 - **Issue**: `KnowledgeStore` handles entities, flows, and conversations. `MemoryStore` handles lessons and preferences. Both have separate schemas and CRUD operations. `fetchContext()` in `query.ts` queries both systems.
@@ -89,14 +89,14 @@
 - **Impact**: Suboptimal builder selection under load. All work routes to the first peer.
 - **Fix**: Implement latency/load scoring for better peer selection.
 
-### M-9: Repurposed Database Fields (pando-code)
+### M-9: Repurposed Database Fields (pando-teams)
 
 - **Location**: `code/packages/core/src/engine/engine.ts` (lines 1913, 1919)
 - **Issue**: Database columns `layerLessons` and `tokensLessons` were repurposed to store Goal Stack (Layer 5) data. Comments document this but field names are misleading.
 - **Impact**: Schema confusion. New developers will misunderstand what these fields store.
 - **Fix**: Rename to `layerGoalStack` / `tokensGoalStack` with a migration.
 
-### M-10: Budget Field Naming Conflict (pando-code)
+### M-10: Budget Field Naming Conflict (pando-teams)
 
 - **Location**: `code/packages/core/src/types.ts` (lines 336-338), `code/packages/cli/src/index.ts` (lines 380, 384, 575, 583)
 - **Issue**: Modern fields `cost` / `budget` coexist with legacy aliases `costUSD` / `budgetUSD`. CLI still uses the legacy names.
@@ -122,7 +122,7 @@
 ### L-3: Template Route 503 Stubs (pando-node)
 
 - **Location**: `node/packages/node/src/api/platform-api.ts` (lines 4180-4201)
-- **Issue**: Five routes (`GET/POST/PUT/DELETE /templates`) return 503 with message "Template registry removed — brain now in @pando-code/core". Kept as backward-compat placeholders from Phase 105.
+- **Issue**: Five routes (`GET/POST/PUT/DELETE /templates`) return 503 with message "Template registry removed — brain now in @pando-teams/core". Kept as backward-compat placeholders from Phase 105.
 - **Fix**: Remove once all clients have migrated.
 
 ### L-4: Ignored Legacy Constructor Parameters (pando-node)
@@ -131,25 +131,25 @@
 - **Issue**: `_profileCache: any` and `_workspaceManager: any` are ignored (Phase 27). Callers pass `null as any`.
 - **Fix**: Remove parameters from constructor and call sites.
 
-### L-5: Legacy Memory Type Fields (pando-code)
+### L-5: Legacy Memory Type Fields (pando-teams)
 
 - **Location**: `code/packages/core/src/memory/memory-types.ts` (lines 30-33)
 - **Issue**: `steps: string[] | null` and `conditions: Record<string, string> | null` — always `null`, kept for DB compatibility.
 - **Fix**: Safe to keep, or remove with a migration that drops the columns.
 
-### L-6: Legacy Database Tables (pando-code)
+### L-6: Legacy Database Tables (pando-teams)
 
 - **Location**: `code/packages/core/src/db/schema.ts` (lines 241-245)
 - **Issue**: Three old tables exported: `entityKnowledge`, `flows`, `knowledgeSessions`. Only used in migrations, not in active code.
 - **Fix**: Move to migration-only exports or archive.
 
-### L-7: TurnSummary Type Duplication (pando-code)
+### L-7: TurnSummary Type Duplication (pando-teams)
 
 - **Location**: `code/packages/cli/src/utils.ts` (line 76)
 - **Issue**: `TurnSummary` interface defines `costUSD: number` which duplicates `BudgetState.costUSD` from types.ts.
 - **Fix**: Use `BudgetState` type directly.
 
-### L-8: scanFileAST Not Exported (pando-code)
+### L-8: scanFileAST Not Exported (pando-teams)
 
 - **Location**: `code/packages/core/src/index.ts` (line 78)
 - **Issue**: Only `scanFile` (regex) is exported from public API. `scanFileAST` is internal-only. Users of the public API always get regex-based scanning.
@@ -158,13 +158,13 @@
 ### L-9: API Endpoint Naming Collision (Cross-System)
 
 - **Location**: `code/packages/server/src/index.ts` (line 41) vs `node/packages/node/src/api/platform-api.ts` (line 123)
-- **Issue**: pando-code uses `/v1/chat`, pando-node uses `/v1/chat/message`. If both servers run on the same port, `/v1/chat/message` hits node but `/v1/chat` returns 404 on node.
+- **Issue**: pando-teams uses `/v1/chat`, pando-node uses `/v1/chat/message`. If both servers run on the same port, `/v1/chat/message` hits node but `/v1/chat` returns 404 on node.
 - **Fix**: Standardize endpoint naming or document which system owns which routes.
 
 ### L-10: Config Schema Validation Gap (pando-node)
 
 - **Location**: `node/packages/node/src/core/engine-adapter.ts` (line 508)
-- **Issue**: `const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');` — unsafe optional chaining with no validation that `config.dataDir` is a valid path. pando-code uses Zod schemas for strict config validation; pando-node does not.
+- **Issue**: `const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');` — unsafe optional chaining with no validation that `config.dataDir` is a valid path. pando-teams uses Zod schemas for strict config validation; pando-node does not.
 - **Fix**: Add Zod schema validation to node config loading.
 
 ---
@@ -179,7 +179,7 @@ These are properly handled migrations, documented here for completeness:
 | Phase 57 | LocalStorageBackend removed, StorageBackend now required | storage-backend.ts, thread-store.ts |
 | Phase 69 | Auto-wrap removed, credentials in MongoDB | init-kernel.ts:591 |
 | Phase 86 | Sessions removed, auth is now stateless JWT | user-accounts.ts:3, init-platform.ts:743 |
-| Phase 105 | Brain state moved to @pando-code/core, template registry removed | platform-api.ts, index.ts:862 |
+| Phase 105 | Brain state moved to @pando-teams/core, template registry removed | platform-api.ts, index.ts:862 |
 | N/A | Lesson system moved from KnowledgeStore to MemoryStore | memory/store.ts:363 |
 | N/A | Deep-scan removed, AST graph + memories are the knowledge system | engine.ts:44 |
 | N/A | makeProjectDeployCallback removed, deployment is agent-driven | index.ts:939 |

@@ -1,6 +1,6 @@
 # Self-Upgrade Roadmap — Autonomous Self-Modification Pipeline
 
-> **STATUS: PHASE 1 (commit-and-propose) DONE, PHASE 2 (Mac as 2nd PandoCode node) DONE** — Phases 3-7 remain TODO.
+> **STATUS: PHASE 1 (commit-and-propose) DONE, PHASE 2 (Mac as 2nd PandoTeams node) DONE** — Phases 3-7 remain TODO.
 > **Created:** 2026-03-09 after full live testing session
 > **Goal:** Make pando-infra council fully autonomous: detect → edit → build → commit → push → propose → upgrade all nodes
 
@@ -14,14 +14,14 @@
 - **Council receives tasks**: lead agent picks up board tasks, edits files in the real pando repo
 - **Gateway web UI**: 15/15 Playwright tests pass, all pages render (council, network, agents, governance, projects, etc.)
 - **API pipeline**: 9/9 E2E tests pass (apps, governance, teams, templates, board CRUD, agent spawn/stop)
-- **pando-code + pando-node same upgrade**: `npm run build` compiles entire monorepo
+- **pando-teams + pando-node same upgrade**: `npm run build` compiles entire monorepo
 
 ### What DOESN'T WORK (the gaps to fix)
 
 | Gap | Severity | Description |
 |-----|----------|-------------|
 | **Commit→push loop unreliable** | CRITICAL | Lead agent edits files but doesn't reliably commit+push+propose. Task stays "pending". |
-| **Single PandoCode node** | CRITICAL | Only Windows has Claude Code. EC2 nodes are compute-only. Single point of failure for ALL AI. |
+| **Single PandoTeams node** | CRITICAL | Only Windows has Claude Code. EC2 nodes are compute-only. Single point of failure for ALL AI. |
 | **Board state lost on migration** | HIGH | Board tasks are local SQLite. `team-state.json` git backup designed but NOT wired. |
 | **No engine restart** | HIGH | If Claude Code CLI process dies, agent is gone. No watchdog. Requires node restart. |
 | **governanceRequired not enforced** | MEDIUM | Code pushed to GitHub BEFORE governance approval. Flag stored but never checked. |
@@ -57,14 +57,14 @@
 
 ---
 
-## Phase 2: Install PandoCode on EC2 (CRITICAL)
+## Phase 2: Install PandoTeams on EC2 (CRITICAL)
 
-**Problem:** Only Windows has Claude Code binary + @pando-code/core. If Windows goes down, ALL team automation stops. EC2 orphan detection fires but can't claim teams (no engine).
+**Problem:** Only Windows has Claude Code binary + @pando-teams/core. If Windows goes down, ALL team automation stops. EC2 orphan detection fires but can't claim teams (no engine).
 
 **Steps:**
 1. SSH to EC2-1 (54.160.217.16): install Claude Code CLI binary
 2. Set up `ANTHROPIC_API_KEY` env var (or credentials file)
-3. Install @pando-code/core as dependency
+3. Install @pando-teams/core as dependency
 4. Change node mode from `compute` to default (so EngineAdapter starts)
 5. Restart pando-node on EC2-1
 6. Verify: `GET /v1/engines` shows engines on EC2-1
@@ -95,7 +95,7 @@ ssh -i ~/.ssh/lightsail-default.pem ubuntu@34.201.82.126
 
 ## Phase 3: Wire Board State Recovery (HIGH)
 
-**Problem:** Board tasks live in local SQLite (~/.pando/teams/{teamId}/.pando-code.db). If managing node crashes, pending tasks are lost. Recovery path designed but not implemented.
+**Problem:** Board tasks live in local SQLite (~/.pando/teams/{teamId}/.pando-teams.db). If managing node crashes, pending tasks are lost. Recovery path designed but not implemented.
 
 **Design (already in BIBLE.md 5.10.10):**
 - After each task update, write `team-state.json` to git in team's workspace
@@ -157,10 +157,10 @@ ssh -i ~/.ssh/lightsail-default.pem ubuntu@34.201.82.126
 
 | Section | What to add/fix |
 |---------|----------------|
-| **NEW: 5.10.9b** | "When PandoCode Process Crashes" — engine pool failure, CLI death detection, board preservation |
+| **NEW: 5.10.9b** | "When PandoTeams Process Crashes" — engine pool failure, CLI death detection, board preservation |
 | **5.10.10** | Update board replication status when Phase 3 is done |
 | **5.8.2** | Note that `governanceRequired` flag is stored but not enforced (honest docs) |
-| **10 (Tech Debt)** | Add: commit→push reliability, single PandoCode node, board recovery, engine watchdog |
+| **10 (Tech Debt)** | Add: commit→push reliability, single PandoTeams node, board recovery, engine watchdog |
 | **3.2.9** | Add: Claude Code session failure modes and recovery |
 | **Cleanup** | Remove legacy `/v1/council/*` references (7 locations identified) |
 
@@ -227,16 +227,16 @@ init-platform.ts     — Bootstrap, orphan callback, P2P upgrade handler
 core-api.ts          — /v1/teams/*, /v1/upgrade/*, /v1/governance/*
 kernel-api.ts        — /v1/governance/propose (no auth check — see Phase 5)
 git-ops.ts           — ALL git operations, safeGitRef/safeCommitHash
-index.ts (PandoNode) — God object, subsystem init, pando-code registration
+index.ts (PandoNode) — God object, subsystem init, pando-teams registration
 capability-detector  — Claude Code binary detection
 node-pool.ts         — Gateway multi-node failover
 ```
 
 ### Infrastructure
 ```
-Windows (dev):   P2P 4100, API 4000, PandoCode ✅, manages pando-infra
-EC2-1:           54.160.217.16, P2P 4001, API 4000, compute-only (no PandoCode)
-EC2-2:           34.201.82.126, P2P 4001, API 4000, compute-only (no PandoCode)
+Windows (dev):   P2P 4100, API 4000, PandoTeams ✅, manages pando-infra
+EC2-1:           54.160.217.16, P2P 4001, API 4000, compute-only (no PandoTeams)
+EC2-2:           34.201.82.126, P2P 4001, API 4000, compute-only (no PandoTeams)
 Gateway:         https://gateway-one-mu.vercel.app (Vercel auto-deploy from master)
 SSH:             ssh -i ~/.ssh/lightsail-default.pem ubuntu@<IP>
 EC2 path:        /opt/pando

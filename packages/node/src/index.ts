@@ -321,11 +321,11 @@ export class PandoNode {
       governance: true,
       deployAction: 'restart-node',
     });
-    // Register pando-code as infrastructure app (tier 3)
+    // Register pando-teams as infrastructure app (tier 3)
     this.appManager.register({
-      id: 'pando-code',
-      name: 'Pando Code',
-      repoUrl: 'https://github.com/pando-lux/pando-code.git',
+      id: 'pando-teams',
+      name: 'Pando Teams',
+      repoUrl: 'https://github.com/pando-lux/pando-teams.git',
       buildCmd: 'npm run build',
       tier: 3,
       governance: true,
@@ -864,7 +864,7 @@ export class PandoNode {
       writeFileSync(claudeMdPath, content);
     }
 
-    // Team-state.json import removed — brain state now managed by @pando-code/core EngineAdapter.
+    // Team-state.json import removed — brain state now managed by @pando-teams/core EngineAdapter.
 
     // Update project record with workspace path
     await this.projectStore.updateProject(projectId, { workspaceDir: wsDir });
@@ -887,7 +887,7 @@ export class PandoNode {
     } catch { return null; }
   }
 
-  // exportTeamState removed — brain state now managed by @pando-code/core.
+  // exportTeamState removed — brain state now managed by @pando-teams/core.
 
   /**
    * Phase 104: Create project-scoped onCommit callback.
@@ -949,12 +949,12 @@ export class PandoNode {
   // ensureProjectOrchestrator removed — project routing handled by EngineAdapter.
 
   // ----------------------------------------------------------
-  // Engine System — EngineAdapter connects to @pando-code/core brain
+  // Engine System — EngineAdapter connects to @pando-teams/core brain
   // ----------------------------------------------------------
 
   /**
-   * Start the EngineAdapter — connects pando-node to @pando-code/core.
-   * Connects pando-node to @pando-code/core for AI processing.
+   * Start the EngineAdapter — connects pando-node to @pando-teams/core.
+   * Connects pando-node to @pando-teams/core for AI processing.
    */
   async startEngine(): Promise<void> {
     if (this.engineAdapter?.available) return;
@@ -982,7 +982,7 @@ export class PandoNode {
           return { repoUrl: project.repoUrl || project.githubRepo || undefined, name: project.name };
         },
       });
-      console.log('[engine] EngineAdapter started — PandoCode brain connected.');
+      console.log('[engine] EngineAdapter started — PandoTeams brain connected.');
     } catch (err: any) {
       console.warn('[engine] EngineAdapter failed to start:', err.message);
       this.engineAdapter = null;
@@ -1201,7 +1201,7 @@ export class PandoNode {
   }
 
   /**
-   * Route a chat/build request to a remote PandoCode peer via P2P chat_proxy.
+   * Route a chat/build request to a remote PandoTeams peer via P2P chat_proxy.
    * Only routes to remote peers (self-routing is handled by the caller via findBestBuilder).
    * Returns immediately with queued status. Results come back via SSE/thread.
    */
@@ -1707,7 +1707,7 @@ export { LedgerSync } from './kernel/sync.js';
 export { GovernanceSync } from './kernel/governance.js';
 export { FileRegistry } from './platform/file-registry.js';
 export { getDefaultConfig } from './config.js';
-// Engine adapter — the nervous system between pando-node (body) and pando-code (brain)
+// Engine adapter — the nervous system between pando-node (body) and pando-teams (brain)
 export { EngineAdapter } from './core/engine-adapter.js';
 export type { AdapterConfig, ReviewResult } from './core/engine-adapter.js';
 export { Scheduler } from './platform/scheduler.js';

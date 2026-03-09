@@ -8,7 +8,7 @@
  * @pando/ledger, and external npm packages. NOT from platform/*.
  */
 
-// Engine Adapter — the ONE connection to @pando-code/core
+// Engine Adapter — the ONE connection to @pando-teams/core
 export { EngineAdapter, PANDO_INFRA_AGENTS, BUILT_IN_TEMPLATES } from './engine-adapter.js';
 export type { AdapterConfig, ReviewResult, TeamAgentConfig, AgentTemplate } from './engine-adapter.js';
 

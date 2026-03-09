@@ -485,7 +485,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const lawViolation = violatesTwoLaws(`${title} ${description || ''}`);
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
       const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoTeams not available' });
       const taskId = adapter.addTeamBoardTask(teamId, title, description);
       if (!taskId) return reply.code(500).send({ error: 'Failed to create task' });
       return { status: 'created', taskId };
@@ -502,7 +502,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         return reply.code(400).send({ error: 'Progress must be a string' });
       }
       const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoTeams not available' });
       const ok = adapter.updateTeamBoardTask(teamId, taskId, {
         status: body?.status,
         progress: typeof body?.progress === 'string' ? body.progress.slice(0, 1000) : undefined,
@@ -515,7 +515,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const teamId = request.params.teamId as string;
       const adapter = node.getEngineAdapter();
       if (!adapter?.available) {
-        return reply.code(503).send({ error: 'PandoCode not available on this node' });
+        return reply.code(503).send({ error: 'PandoTeams not available on this node' });
       }
       if (!adapter.isTeamActive(teamId)) {
         return reply.code(404).send({ error: `Team "${teamId}" is not running on this node` });
@@ -575,7 +575,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
       const adapter = node.getEngineAdapter();
       if (!adapter?.available) {
-        return reply.code(503).send({ error: 'PandoCode not available on this node' });
+        return reply.code(503).send({ error: 'PandoTeams not available on this node' });
       }
       const severity = /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(message) ? 'BUG' : 'FEATURE';
       const taskTitle = `[${severity}:user] ${message.slice(0, 120)}`;
@@ -686,7 +686,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         const teamId = request.params.teamId as string;
         const adapter = node.getEngineAdapter();
         if (!adapter?.available) {
-          return reply.code(503).send({ error: 'PandoCode not available on this node' });
+          return reply.code(503).send({ error: 'PandoTeams not available on this node' });
         }
         if (!adapter.isTeamActive(teamId)) {
           return reply.code(404).send({ error: `Team "${teamId}" is not running on this node` });
@@ -718,7 +718,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         const teamId = request.params.teamId as string;
         const adapter = node.getEngineAdapter();
         if (!adapter?.available) {
-          return reply.code(503).send({ error: 'PandoCode not available on this node' });
+          return reply.code(503).send({ error: 'PandoTeams not available on this node' });
         }
         if (!adapter.isTeamActive(teamId)) {
           return reply.code(404).send({ error: `Team "${teamId}" is not running on this node` });
@@ -800,7 +800,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         const { teamId, agentId } = request.params as any;
         const adapter = node.getEngineAdapter();
         if (!adapter?.available) {
-          return reply.code(503).send({ error: 'PandoCode not available on this node' });
+          return reply.code(503).send({ error: 'PandoTeams not available on this node' });
         }
         if (!adapter.isTeamActive(teamId)) {
           return reply.code(404).send({ error: `Team "${teamId}" is not running on this node` });
@@ -850,7 +850,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       }
     });
 
-    // GET /teams/:teamId/cost — Team cost summary from PandoCode budget_usage table
+    // GET /teams/:teamId/cost — Team cost summary from PandoTeams budget_usage table
     fastify.get('/teams/:teamId/cost', async (request: any, reply: any) => {
       try {
         const teamId = (request.params as any).teamId;
@@ -863,7 +863,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       }
     });
 
-    // GET /teams/:teamId/activity — Recent messages + tool_calls from PandoCode DB
+    // GET /teams/:teamId/activity — Recent messages + tool_calls from PandoTeams DB
     fastify.get('/teams/:teamId/activity', async (request: any, reply: any) => {
       try {
         const teamId = (request.params as any).teamId;
@@ -1028,7 +1028,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const lawViolation = violatesTwoLaws(message);
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
       const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoTeams not available' });
       const severity = /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(message) ? 'BUG' : 'FEATURE';
       const taskTitle = `[${severity}:user] ${message.slice(0, 120)}`;
       const taskId = adapter.addTeamBoardTask('pando-infra', taskTitle, message.slice(0, 500));
@@ -1042,7 +1042,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
     fastify.post('/council/trigger/:agent', async (request: any, reply: any) => {
       const agentId = request.params.agent as string;
       const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoTeams not available' });
       if (!adapter.isTeamActive('pando-infra')) return reply.code(503).send({ error: 'pando-infra team not running' });
       const message = (request.body as any)?.message || 'Run your checks now.';
       if (typeof message !== 'string' || message.length > 5000) {
@@ -1061,7 +1061,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const lawViolation = violatesTwoLaws(`${title} ${body?.description || ''}`);
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
       const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoTeams not available' });
       const taskId = adapter.addTeamBoardTask('pando-infra', title, body?.description);
       if (!taskId) return reply.code(500).send({ error: 'Failed to create task' });
       return { status: 'created', taskId };
@@ -1071,7 +1071,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const taskId = request.params.taskId as string;
       const body = request.body as any;
       const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoTeams not available' });
       const ok = adapter.updateTeamBoardTask('pando-infra', taskId, { status: body?.status, progress: body?.progress });
       return ok ? { status: 'updated' } : reply.code(404).send({ error: 'Task not found' });
     });
@@ -1095,7 +1095,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const lawViolation = violatesTwoLaws(message);
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
       const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return reply.code(503).send({ error: 'PandoCode not available' });
+      if (!adapter?.available) return reply.code(503).send({ error: 'PandoTeams not available' });
       const ok = adapter.sendTeamMessage('pando-infra', from, to, message);
       return ok ? { status: 'sent' } : reply.code(500).send({ error: 'Failed to send message' });
     });

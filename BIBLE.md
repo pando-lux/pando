@@ -24,13 +24,13 @@ Pando is independent packages composed by the node.
 
 ```
 @pando/identity    Pure crypto primitives. No dependencies. No storage.
-@pando-code/core   AI coding engine. No @pando/* dependencies. Standalone product.
+@pando-teams/core   AI coding engine. No @pando/* dependencies. Standalone product.
 @pando/tests       Testing framework. No @pando/* dependencies. Standalone product.
 @pando/ledger      SQLite ledger. Depends on @pando/shared only.
 @pando/shared      Types + crypto constants. Leaf dependency.
 
 @pando/node        THE COMPOSER. Uses all of the above. Adds P2P, governance, storage, HTTP API.
-@pando/gateway     Web UI. Reads from @pando/node HTTP API.
+@pando/hub     Web UI. Reads from @pando/node HTTP API.
 ```
 
 **Dependency rule: one-way, never circular.**
@@ -44,7 +44,7 @@ shared < ledger < node
 ### The Brain / Body / Nervous System
 
 ```
-@pando-code/core = THE BRAIN
+@pando-teams/core = THE BRAIN
   All intelligence. Task management. Memory. Sub-agents. Tools.
   Standalone product — works without pando-node.
   Doesn't import @pando/node. Doesn't know about P2P, Lux, or governance.
@@ -56,7 +56,7 @@ shared < ledger < node
 engine-adapter.ts = THE NERVOUS SYSTEM (~1,393 lines)
   The ONE file that connects brain to body.
   Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
-  Starts teams (startTeam) using PandoCode's native agent/board system.
+  Starts teams (startTeam) using PandoTeams's native agent/board system.
   Pando tools are just HTTP calls to the node's own API — the engine doesn't know the difference.
 ```
 
@@ -103,28 +103,28 @@ Pure cryptographic primitives. No storage, no SQLite, no MongoDB, no network.
 
 **Key files:** `core/keypair.ts`, `core/signing.ts`, `core/encryption.ts`, `identity/agent-profile.ts`, `identity/signed-action.ts`, `auth/verifier.ts`, `auth/jwt.ts`
 
-### 3.2 @pando-code/core
+### 3.2 @pando-teams/core
 
 **Location:** Separate repo at `pando/code/`
-**Lines:** 60K+ TypeScript | **Status:** DONE as standalone. Network integration infra built (EnginePool, Scheduler, PandoServer). Claude Code CLI provider DONE (in pando-code repo).
+**Lines:** 60K+ TypeScript | **Status:** DONE as standalone. Network integration infra built (EnginePool, Scheduler, PandoServer). Claude Code CLI provider DONE (in pando-teams repo).
 
 The AI coding engine. Multi-provider (Anthropic, OpenAI, Google, Ollama, Claude Code CLI). Multi-agent orchestration. Persistent memory. AST-based code intelligence.
 
-**CRITICAL: PandoCode is a COMPLETE agent platform. Before building ANY agent/team/communication/task system in pando-node, check if PandoCode already provides it. It almost certainly does. See the capability reference below.**
+**CRITICAL: PandoTeams is a COMPLETE agent platform. Before building ANY agent/team/communication/task system in pando-node, check if PandoTeams already provides it. It almost certainly does. See the capability reference below.**
 
 #### 3.2.1 Engine & Tools
 
-- `PandoCode` class — the engine. Create, send messages, get streaming responses.
+- `PandoTeams` class — the engine. Create, send messages, get streaming responses.
 - 9-layer frame system (L0 identity → L8 project context). `FrameBuilder.build()` is the ONLY prompt assembly path.
 - 20+ built-in tools (+ MCP tools at runtime) — read_file, write_file, edit_file, bash, glob, grep, spawn_agent, manage_tasks, send_message, save_memory, query_memory, check_agents, list_files, undo, multiedit, genome, test, run_tests, etc.
 - Guardrails — hard (enforced), role permissions matrix, risk tiers, git checkpoints.
 - Knowledge graph — AST-based, 1000+ symbols, 13K+ cross-references.
 - MCP client — connects to external MCP servers (Playwright built-in).
-- **API mode** — `PandoCode.create()` + `engine.send()` works programmatically. No CLI required.
+- **API mode** — `PandoTeams.create()` + `engine.send()` works programmatically. No CLI required.
 
 #### 3.2.2 Agent System (ALREADY BUILT — do NOT recreate)
 
-PandoCode has a **full persistent agent system**. Do NOT build a parallel one in pando-node.
+PandoTeams has a **full persistent agent system**. Do NOT build a parallel one in pando-node.
 
 - **Persistent agent profiles** in SQLite `agents` table (id, role, model, systemPrompt, tools, scope, status, sessionId, displayName, description, createdAt + optional identity: parentId, publicKey, certificate)
 - **NOT per-engine** — agent profiles are global in the database, not scoped to a single engine
@@ -140,11 +140,11 @@ PandoCode has a **full persistent agent system**. Do NOT build a parallel one in
 | `coordinator` | planning + delegation | Team coordination |
 | `planner` | planning | Architecture planning |
 
-- **Agent UI** — Agents tab in PandoCode web UI: create, delete, rename, view sessions, status badges
+- **Agent UI** — Agents tab in PandoTeams web UI: create, delete, rename, view sessions, status badges
 - **Agent API** — `POST /v1/agents` (create), `GET /v1/agents` (list), `PATCH /v1/agents/:id`, `DELETE /v1/agents/:id`
 - **Sub-agents** — ephemeral workers spawned by `spawn_agent` tool. Temporary, no DB record. Used by lead agents to delegate work.
 
-**KEY RULE: pando-node should create agent profiles via PandoCode's API, not maintain its own agent registry.**
+**KEY RULE: pando-node should create agent profiles via PandoTeams's API, not maintain its own agent registry.**
 
 #### 3.2.3 Board (Task Tracking — ALREADY BUILT)
 
@@ -155,7 +155,7 @@ PandoCode has a **full persistent agent system**. Do NOT build a parallel one in
 - **Board UI** — Board tab: unified task list, filter by agent/status, sort, cancel/retry actions
 - **Board API** — `GET /v1/board` (current session), `GET /v1/board/all` (cross-session), `POST /v1/board/tasks`, `PATCH /v1/board/tasks/:id`
 - **Discoveries** — structured observations (category, confidence) extracted from file reads. Injected into board snapshot.
-- **Board snapshot NOT in prompt frame** (PandoCode Option B). pando-node injects board state in the scheduler tick MESSAGE instead. See Section 5.10.3.
+- **Board snapshot NOT in prompt frame** (PandoTeams Option B). pando-node injects board state in the scheduler tick MESSAGE instead. See Section 5.10.3.
 
 **KEY RULE: Use board tasks for issue tracking, not a custom FindingsStore. Board tasks already have the status lifecycle needed.**
 
@@ -181,7 +181,7 @@ PandoCode has a **full persistent agent system**. Do NOT build a parallel one in
 
 #### 3.2.6 Infrastructure (ALREADY BUILT)
 
-- **EnginePool** (`pool/engine-pool.ts`) — Multi-engine management. `Map<id, PandoCode>` with lazy creation, TTL eviction, lifecycle hooks (`onAfterCreate`), max limits, concurrent-safe. ~290 lines.
+- **EnginePool** (`pool/engine-pool.ts`) — Multi-engine management. `Map<id, PandoTeams>` with lazy creation, TTL eviction, lifecycle hooks (`onAfterCreate`), max limits, concurrent-safe. ~290 lines.
 - **Scheduler** (`pool/scheduler.ts`) — Periodic task execution. Named tasks with interval + prompt + callbacks (onEvent, onComplete, onError). Sends to engines via pool. Pause/resume/trigger. ~200 lines.
 - **PandoServer** (`server/server.ts`) — HTTP API with SSE streaming. Engine/schedule/health endpoints. ~200 lines.
 - **One engine = one session = one active agent at a time**
@@ -204,15 +204,15 @@ PandoCode has a **full persistent agent system**. Do NOT build a parallel one in
 - Zero @pando/* imports. Structural typing for integration.
 - Dual budget: `UsdBudgetProvider` (standalone) vs `LuxBudgetProvider` (injected by node).
 - Custom tools registered at runtime via `engine.tools.register()`.
-- **pando-node's ONLY job:** register pando_* tools + inject Lux budget + set system prompts via agentOverride. Everything else (agents, board, memory, communication, model selection) is PandoCode's responsibility.
+- **pando-node's ONLY job:** register pando_* tools + inject Lux budget + set system prompts via agentOverride. Everything else (agents, board, memory, communication, model selection) is PandoTeams's responsibility.
 
 #### 3.2.9 Claude Code CLI as Agent Runtime (IMPLEMENTED + VERIFIED)
 
-Claude Code is NOT a dumb model API. It is a **persistent agent runtime** with its own session management, tool system, and memory. It lives in `@pando-code/core`, NOT in pando-node.
+Claude Code is NOT a dumb model API. It is a **persistent agent runtime** with its own session management, tool system, and memory. It lives in `@pando-teams/core`, NOT in pando-node.
 
 > **Full roadmap:** `pando/code/docs/CLAUDE-CODE-AGENT-ROADMAP.md`
 
-**Key files in pando-code repo:**
+**Key files in pando-teams repo:**
 - `packages/core/src/provider/claude-code.ts` — `createClaudeCodeModel()` returns LanguageModelV3-compatible object. Persistent sessions via `--session-id`/`--resume`. Windows-safe (no shell, stdin pipe, full path resolve). System text length guard (32K limit).
 - `packages/core/src/provider/provider.ts` — `ProviderName` includes `"claude-code"`. `createModel()` routes `modelId === "claude-code"` to the CLI provider with server port.
 - `packages/core/src/engine/engine.ts` — Input wrapping ([BOARD]+[GOALS]+[SITUATION]+[MESSAGE]), reflection follow-up with `_inReflectionFollowUp` recursion guard, `_claudeCodeLock` for sequential turn execution.
@@ -233,9 +233,9 @@ Claude Code is NOT a dumb model API. It is a **persistent agent runtime** with i
    - Claude Code evaluates: "No lessons." for trivial tasks, saves genuine insights via `curl -s -X POST http://127.0.0.1:<port>/v1/memories`.
    - **Proven:** Claude Code autonomously saved a lesson about Windows 32K command-line limit during testing.
 
-4. **No MCP dependency:** All agent operations use PandoCode's HTTP API. MCP is optional enhancement.
+4. **No MCP dependency:** All agent operations use PandoTeams's HTTP API. MCP is optional enhancement.
 
-5. **`--append-system-prompt`** (not `--system-prompt`) — keeps Claude Code's own tool instructions, adds PandoCode identity + memory API instructions on top. Length-guarded: truncated with warning if system text exceeds 28K chars (Windows CreateProcessW 32K limit).
+5. **`--append-system-prompt`** (not `--system-prompt`) — keeps Claude Code's own tool instructions, adds PandoTeams identity + memory API instructions on top. Length-guarded: truncated with warning if system text exceeds 28K chars (Windows CreateProcessW 32K limit).
 
 6. **Sequential turn execution** — `_claudeCodeLock` promise chain ensures concurrent `send()` calls (e.g., user message while reflection is in-flight) execute sequentially. Prevents race conditions with `--resume` on the same Claude Code session.
 
@@ -246,17 +246,17 @@ Claude Code is NOT a dumb model API. It is a **persistent agent runtime** with i
 | Frame layers | System messages via FrameBuilder | Board/Goals/Situation in input message wrapper |
 | Memory | Injected into L3 system message | Agent-pulled via HTTP API |
 | Reflection | Engine's reflection pipeline (callReflectionModel) | Post-response follow-up → Claude Code calls POST /v1/memories |
-| Tools | PandoCode's tool registry (injected into LLM API call) | Claude Code's own tools (Read, Edit, Bash, Grep, Glob) + curl to HTTP API |
+| Tools | PandoTeams's tool registry (injected into LLM API call) | Claude Code's own tools (Read, Edit, Bash, Grep, Glob) + curl to HTTP API |
 | Custom tools | `engine.tools.register()` → model sees them natively | **SILENTLY DROPPED** by claude-code.ts → must use HTTP API endpoints instead |
-| Session | PandoCode manages conversation history | Claude Code manages via --session-id |
+| Session | PandoTeams manages conversation history | Claude Code manages via --session-id |
 | Process | N/A (API call) | Spawn-per-turn with session resume (persistent process is Phase 6) |
 | Concurrency | Parallel OK | Sequential via lock (single Claude Code session) |
 
 #### 3.2.10 Tool Architecture: API Models vs Claude Code (CRITICAL)
 
-**The tool gap:** PandoCode registers tools via `engine.tools.register()` and passes them to `model.doStream({tools})`. API models (Gemini, GPT, Anthropic direct) receive and use these tools natively. **Claude Code CLI ignores the `tools` parameter entirely** — `claude-code.ts` never passes tools to the CLI process. Tools are silently dropped.
+**The tool gap:** PandoTeams registers tools via `engine.tools.register()` and passes them to `model.doStream({tools})`. API models (Gemini, GPT, Anthropic direct) receive and use these tools natively. **Claude Code CLI ignores the `tools` parameter entirely** — `claude-code.ts` never passes tools to the CLI process. Tools are silently dropped.
 
-**Why:** Claude Code CLI has its own fixed toolset (Bash, Read, Write, Edit, Grep, Glob, Agent) and MCP support. It doesn't accept custom tools via command-line args. PandoCode's tool registry was designed for API models.
+**Why:** Claude Code CLI has its own fixed toolset (Bash, Read, Write, Edit, Grep, Glob, Agent) and MCP support. It doesn't accept custom tools via command-line args. PandoTeams's tool registry was designed for API models.
 
 **The solution — HTTP API as universal tool interface:**
 
@@ -275,7 +275,7 @@ For Claude Code agents, ALL operations must be done via `curl` to the node's HTT
 | List templates | `GET /v1/templates` |
 | Propose governance | `POST /v1/governance/propose` with `{title, description, category, commitHash}` |
 
-**For API models:** PandoCode tools (`manage_tasks`, `send_message`, `check_agents`, `manage_team`) work natively via `engine.tools.register()`. No curl needed.
+**For API models:** PandoTeams tools (`manage_tasks`, `send_message`, `check_agents`, `manage_team`) work natively via `engine.tools.register()`. No curl needed.
 
 **PromptContext.model field:** `PromptContext` includes `model?: string` so prompt template functions can differentiate behavior if needed. Currently all agents use `claude-code` so prompts contain curl commands.
 
@@ -285,18 +285,18 @@ For Claude Code agents, ALL operations must be done via `curl` to the node's HTT
 - **Claude Code's own context**: Its built-in tools, CLAUDE.md, memory files. We don't control this — it's additive to our system prompt.
 
 **CRITICAL RULES:**
-- Never put model/provider logic in pando-node. Model selection is a brain (PandoCode) decision.
+- Never put model/provider logic in pando-node. Model selection is a brain (PandoTeams) decision.
 - Claude Code cannot be launched inside another Claude Code session. Provider deletes `CLAUDECODE` env var.
 - API-path models are UNCHANGED by this architecture. Only Claude Code gets the new treatment.
 - Reflection messages MUST skip conversation DB persistence to avoid history pollution.
-- Never reference PandoCode tools (manage_tasks, send_message) in Claude Code agent prompts. Use HTTP API curl commands instead.
-- The `manage_team` PandoCode tool is kept for API models but also has HTTP API equivalents for Claude Code.
+- Never reference PandoTeams tools (manage_tasks, send_message) in Claude Code agent prompts. Use HTTP API curl commands instead.
+- The `manage_team` PandoTeams tool is kept for API models but also has HTTP API equivalents for Claude Code.
 
-#### 3.2.11 PandoCode Web UI — Network Teams (Phase 4+5 COMPLETE)
+#### 3.2.11 PandoTeams Web UI — Network Teams (Phase 4+5 COMPLETE)
 
-**Location:** `packages/web/src/views/NetworkTeamsView.tsx` in pando-code repo
+**Location:** `packages/web/src/views/NetworkTeamsView.tsx` in pando-teams repo
 
-The pando-code web UI (port 4873) has a "Network" tab (sidebar "N" icon) that shows teams managed by pando-node:
+The pando-teams web UI (port 4873) has a "Network" tab (sidebar "N" icon) that shows teams managed by pando-node:
 
 **Phase 4 — Network Teams Dashboard:**
 - Fetches teams from pando-node via `GET /v1/teams` (CORS enabled, no proxy needed)
@@ -312,9 +312,9 @@ The pando-code web UI (port 4873) has a "Network" tab (sidebar "N" icon) that sh
 - Model badge (purple pill) and status indicator on each agent row
 - Messages fetched on-demand (role-colored: blue=assistant, green=user)
 
-**Network linking detection:** PandoCode checks for `PANDO_PROJECT.json` in project dir or `~/.pando/projects/`. Config exposes `{ linked, nodeUrl, nodeId, projectId }` via `GET /v1/network`. The web UI reads nodeUrl and fetches directly from pando-node.
+**Network linking detection:** PandoTeams checks for `PANDO_PROJECT.json` in project dir or `~/.pando/projects/`. Config exposes `{ linked, nodeUrl, nodeId, projectId }` via `GET /v1/network`. The web UI reads nodeUrl and fetches directly from pando-node.
 
-**Key files (pando-code repo):**
+**Key files (pando-teams repo):**
 - `packages/web/src/views/NetworkTeamsView.tsx` — main view (507+ lines)
 - `packages/web/src/api.ts` — `fetchFromNode()`, `nodeTeams()`, `nodeAgentMessages()`, etc.
 - `packages/web/src/components/Sidebar.tsx` — "network" nav item
@@ -379,12 +379,12 @@ api/       HTTP API (kernel-api, core-api, platform-api, testing-api, server, mi
 **Import boundary rule (enforced):** kernel → only kernel + @pando/*. core → kernel + @pando/*. platform → core + kernel + @pando/*. Never upward.
 
 **Four node types** (see Section 5.5 for full details):
-- `contributor` — PandoCode + local API keys. Builds apps, earns Lux. The common case.
+- `contributor` — PandoTeams + local API keys. Builds apps, earns Lux. The common case.
 - `secure` — EC2 with MongoDB + CredentialStore. Handles contributed keys, simple AI.
 - `lightweight` — P2P, ledger, governance only. Routes AI work to peers.
 - `full` — Contributor + local MongoDB. Full self-sufficiency (dev machines).
 
-### 3.6 @pando/gateway
+### 3.6 @pando/hub
 
 **Location:** `packages/gateway/` in pando/node monorepo
 **Stack:** Next.js 16 + Tailwind
@@ -418,8 +418,8 @@ Reads from @pando/node HTTP API. No direct database access.
 
 | Component | File | Status | What it does |
 |---|---|---|---|
-| **EngineAdapter** | `core/engine-adapter.ts` | DONE | The ONE pando-code integration point. PandoCode contributor nodes only. Multi-engine, routing, Pando tools, Lux budget. |
-| **AppManager** | `core/app-manager.ts` | DONE | Unified app lifecycle: SQLite registry (apps.db), three tiers (1=static/S3, 2=server/PM2, 3=infrastructure), governance gate, blue-green deploy, health monitoring, rollback, P2P dispatch. pando-node + pando-code registered as tier 3 apps on startup. See Section 5.8. |
+| **EngineAdapter** | `core/engine-adapter.ts` | DONE | The ONE pando-teams integration point. PandoTeams contributor nodes only. Multi-engine, routing, Pando tools, Lux budget. |
+| **AppManager** | `core/app-manager.ts` | DONE | Unified app lifecycle: SQLite registry (apps.db), three tiers (1=static/S3, 2=server/PM2, 3=infrastructure), governance gate, blue-green deploy, health monitoring, rollback, P2P dispatch. pando-node + pando-teams registered as tier 3 apps on startup. See Section 5.8. |
 | **CredentialStore** | `core/credential-store.ts` | DONE | AES-256-GCM encrypt/decrypt. Secure compute nodes (EC2) only. |
 | **StorageBackend** | `core/storage-backend.ts` | DONE | MongoDB direct or HTTP proxy to compute nodes |
 | **UpgradeProtocol** | `core/upgrade-protocol.ts` | DONE | Governance gate + security validation + safe restart for infrastructure upgrades. Uses GitOps for all git operations. |
@@ -440,7 +440,7 @@ Reads from @pando/node HTTP API. No direct database access.
 
 | Component | File | Status | What it does |
 |---|---|---|---|
-| **CapabilityDetector** | `platform/capability-detector.ts` | DONE | Auto-detect: PandoCode, storage, compute, hosting. Claude Code auth: ANTHROPIC_API_KEY env, ~/.claude/.credentials.json (OAuth), ~/.claude/history.jsonl+settings.json (Max/Pro plan). |
+| **CapabilityDetector** | `platform/capability-detector.ts` | DONE | Auto-detect: PandoTeams, storage, compute, hosting. Claude Code auth: ANTHROPIC_API_KEY env, ~/.claude/.credentials.json (OAuth), ~/.claude/history.jsonl+settings.json (Max/Pro plan). |
 | **ResourceMarketplace** | `platform/resource-marketplace.ts` | DONE | GossipSub price broadcasting, resource discovery, metering |
 | **ContentRegistry** | `platform/content-registry.ts` | DONE | Content management |
 | **ThreadStore** | `platform/thread-store.ts` | DONE | Chat thread persistence. Non-blocking writes (local cache immediate, HTTP storage async). Requires MongoDB (EC2) or HTTP proxy for persistence. |
@@ -488,7 +488,7 @@ Fastify on API port (default 4000). Bearer token auth on writes (`~/.pando/api-t
 | `pando/deploy-app` | EC2 (secure) | Clone from GitHub, auto-detect tier, deploy to S3 (Tier 1) or PM2+nginx (Tier 2). Requires `credentialAccess` for S3 creds. |
 | `pando/storage-proxy` | EC2 (secure) | Proxy MongoDB CRUD for non-MongoDB nodes. |
 | `pando/upgrade-node` | Any | Trigger git pull + build + restart. |
-| `chat_proxy` | PandoCode nodes | Forward chat message for engine processing. |
+| `chat_proxy` | PandoTeams nodes | Forward chat message for engine processing. |
 
 **How inter-node dispatch works:** Caller uses `httpPeerClient.dispatchRequest(peerId, handlerType, payload)` → HTTP POST to peer's `/v1/internal/dispatch` → peer's `RequestReplyManager.getHandler(type)` looks up handler → executes → returns result. All requests are Ed25519-signed with 60s replay protection. See Section 4.5 for full details.
 
@@ -508,7 +508,7 @@ Capability profile exchange                Doorman classify/chat proxy
 Team registry sync + heartbeat             Resource proof challenges
 Upgrade broadcast                          Task forwarding
                                            Reputation queries
-                                           Chat proxy to PandoCode node
+                                           Chat proxy to PandoTeams node
                                            Upgrade trigger (node-to-node)
                                            Any registered handler dispatch
 ```
@@ -616,7 +616,7 @@ The network has **two distinct compute paths**. Keys never travel. Work travels 
 
 #### Path A: Simple AI (chat, questions, doorman classification)
 
-No PandoCode involved. Uses contributed API keys on secure proxy nodes (EC2).
+No PandoTeams involved. Uses contributed API keys on secure proxy nodes (EC2).
 
 ```
 User asks: "What is machine learning?"
@@ -641,9 +641,9 @@ Response returned to user
 
 **Contributed API keys** (via `/contribute openai sk-xxx`) are encrypted and stored in MongoDB on EC2. Used server-side on EC2 for simple LLM calls. The contributor doesn't need to run a node.
 
-**Local API keys** (contributor node with OPENAI_API_KEY in env) can handle Path A locally — no EC2 needed. This is the common case for contributor nodes that have both PandoCode and an OpenAI key.
+**Local API keys** (contributor node with OPENAI_API_KEY in env) can handle Path A locally — no EC2 needed. This is the common case for contributor nodes that have both PandoTeams and an OpenAI key.
 
-#### Path B: Build (PandoCode — full app construction)
+#### Path B: Build (PandoTeams — full app construction)
 
 ```
 User says: "Build me a bakery website"
@@ -656,14 +656,14 @@ Doorman classifies: intent = "build"
   → Project metadata created and saved on network
   |
   v
-Node finds best PandoCode peer on the network:
-  → Query capability registry for peers with pando-code: true
-  → Could be SELF (if this node has PandoCode) or a REMOTE peer
+Node finds best PandoTeams peer on the network:
+  → Query capability registry for peers with pando-teams: true
+  → Could be SELF (if this node has PandoTeams) or a REMOTE peer
   → Route build job to that peer
-  → If NO PandoCode peers available → degrade gracefully
+  → If NO PandoTeams peers available → degrade gracefully
   |
   v
-PandoCode peer processes the build:
+PandoTeams peer processes the build:
   → Engine Adapter creates Project Engine for this projectId
   → Project Engine plans on its Board: "Goal: Build bakery website"
   → Spawns builder sub-agent → writes HTML/CSS/JS
@@ -672,7 +672,7 @@ PandoCode peer processes the build:
   → Uses pando_deploy tool → deploys to hosting
   |
   v
-PandoCode uses contributor's configured provider:
+PandoTeams uses contributor's configured provider:
   a) API-based agents (default: Google/Gemini, or OpenAI, Anthropic, Ollama)
   b) Claude Code CLI as persistent agent runtime (DONE — see Section 3.2.9)
   |
@@ -683,13 +683,13 @@ SSE streams progress back → to user
 User sees: "Your bakery website is live at https://..."
 ```
 
-**Key routing principle:** The receiving node does NOT assume it will process the build. It calls `findBestBuilder()` which queries the capability registry for all PandoCode peers (including self). If self has a local engine, it processes locally; otherwise it routes to the best remote peer via HTTP (`routeChatProxyP2P()` uses `httpPeerClient.dispatchRequest()` under the hood). This is critical because the public gateway connects to a random node — that node is a router, not necessarily a builder. The legacy `hasClaudeCodeAuth()` check (Anthropic-only) has been removed — routing is now fully provider-agnostic.
+**Key routing principle:** The receiving node does NOT assume it will process the build. It calls `findBestBuilder()` which queries the capability registry for all PandoTeams peers (including self). If self has a local engine, it processes locally; otherwise it routes to the best remote peer via HTTP (`routeChatProxyP2P()` uses `httpPeerClient.dispatchRequest()` under the hood). This is critical because the public gateway connects to a random node — that node is a router, not necessarily a builder. The legacy `hasClaudeCodeAuth()` check (Anthropic-only) has been removed — routing is now fully provider-agnostic.
 
-**PandoCode contributor's keys stay LOCAL.** They never leave the contributor's machine. The network routes work TO the compute, not keys FROM storage.
+**PandoTeams contributor's keys stay LOCAL.** They never leave the contributor's machine. The network routes work TO the compute, not keys FROM storage.
 
-**Build resilience:** Code is committed to GitHub during build. If the PandoCode node goes offline mid-build, another node clones from GitHub and continues.
+**Build resilience:** Code is committed to GitHub during build. If the PandoTeams node goes offline mid-build, another node clones from GitHub and continues.
 
-**Subsequent messages** with `projectId` route directly to that project's engine on the PandoCode node that owns it.
+**Subsequent messages** with `projectId` route directly to that project's engine on the PandoTeams node that owns it.
 
 #### Pipeline 4: Full User Journey (end-to-end, PROVEN — commit e6fe16b1)
 
@@ -697,7 +697,7 @@ User sees: "Your bakery website is live at https://..."
 User → Gateway → Chat message "Build me a websocket server"
   → Doorman classifies: intent=build, tier=complex
   → Project created in ProjectStore with workspaceDir (~/.pando/projects/{projectId}/)
-  → Engine dispatched (local or remote PandoCode peer via findBestBuilder())
+  → Engine dispatched (local or remote PandoTeams peer via findBestBuilder())
   → Engine builds in ~/.pando/projects/{projectId}/
   → Build completes → deploy result AWAITED (not fire-and-forget)
     → Success: deploy message pushed to chat thread + SSE `app_deployed` event
@@ -710,10 +710,10 @@ User → Gateway → Chat message "Build me a websocket server"
 
 **Workspace-based deploy (DONE — commit 346cefd2):** Chat-created projects that lack `repo_url` use workspace-based deploy. `resolveWorkspace()` finds content at `~/.pando/projects/{projectId}/` and `copyWorkspaceToAppDir()` copies it to hosted-apps. Auto-recovery: if workspace is empty but project has `repoUrl` in ProjectStore, `ensureProjectWorkspace()` auto-clones from GitHub via `git init → fetch → checkout`. The `repoUrl` field is optional in app registration (POST /apps).
 
-#### Standalone PandoCode (direct, not through the network)
+#### Standalone PandoTeams (direct, not through the network)
 
 ```
-Developer opens PandoCode directly on their machine
+Developer opens PandoTeams directly on their machine
   → Builds app locally (their keys, their machine)
   → When ready: submits project to Pando ecosystem
   → Governance review (live mode — all 6 layers)
@@ -721,12 +721,12 @@ Developer opens PandoCode directly on their machine
   → Other nodes can discover, deploy, fork it
 ```
 
-This is a separate entry point. Not through the gateway. Developer uses PandoCode as a product, then optionally publishes to the network.
+This is a separate entry point. Not through the gateway. Developer uses PandoTeams as a product, then optionally publishes to the network.
 
 ### 5.2 Multi-Project Engine Management
 
 ```
-Engine Adapter manages: Map<string, PandoCode>
+Engine Adapter manages: Map<string, PandoTeams>
 
   "system"     → System Engine (always running)
                   Manages pando-node itself.
@@ -749,7 +749,7 @@ Each engine:
   - Has its own MemoryStore (lessons, reflections)
   - Has its own sub-agents (builder, tester, explorer)
   - Has Pando tools registered (calls node HTTP API)
-  - Is a STANDARD pando-code engine instance
+  - Is a STANDARD pando-teams engine instance
   - Doesn't know about other engines
   - Doesn't know it's inside pando-node
 
@@ -761,16 +761,16 @@ Each engine:
 ```
 
 **Routing rule:**
-- `POST /v1/chat/message { projectId: "proj-abc" }` → route to the PandoCode peer that owns this project's engine
+- `POST /v1/chat/message { projectId: "proj-abc" }` → route to the PandoTeams peer that owns this project's engine
 - `POST /v1/chat/message { no projectId }` → Doorman classifies → Path A (question) or Path B (build) or report (board task on target project)
 - `POST /v1/council/request` → create board task on the council board (bug report, feature request)
 
 **See Section 5.10 for the universal project pattern** — every project (including council) uses the same board-as-queue, scheduler tick, agent team architecture.
 
-### 5.3 Standalone pando-code vs Inside pando-node
+### 5.3 Standalone pando-teams vs Inside pando-node
 
 ```
-STANDALONE pando-code              PANDO-NODE pando-code
+STANDALONE pando-teams              PANDO-NODE pando-teams
 (any dev, any project)             (inside the network)
 
   20+ built-in tools                 20+ built-in tools       IDENTICAL
@@ -797,11 +797,11 @@ STANDALONE pando-code              PANDO-NODE pando-code
                                      (via tools)
 ```
 
-pando-code doesn't import @pando/node. It just has extra tools registered. That's the ENTIRE difference.
+pando-teams doesn't import @pando/node. It just has extra tools registered. That's the ENTIRE difference.
 
 **Two entry points for building:**
-- **Through the network:** User → Gateway → any node → find PandoCode peer → build. The network orchestrates.
-- **Standalone:** Developer runs PandoCode directly → builds locally → submits to Pando ecosystem via governance.
+- **Through the network:** User → Gateway → any node → find PandoTeams peer → build. The network orchestrates.
+- **Standalone:** Developer runs PandoTeams directly → builds locally → submits to Pando ecosystem via governance.
 
 ### 5.4 Governance Security Pipeline (6 layers + AI review)
 
@@ -838,7 +838,7 @@ DECISION: APPROVE or REJECT
 
 **Security files list:** `credential-store.ts`, `credential-vault.ts`, `request-reply.ts`, `guardrails.ts`, `security-monitor.ts`, `governance.ts`, `upgrade-protocol.ts`, `payment-gate.ts`. Modifying any of these requires "security" or "credential" in the proposal description.
 
-**Layer 5 (AI review) only runs on PandoCode contributor nodes** (they have an engine to review with). On lightweight/secure nodes without PandoCode, Layer 5 is skipped (fail-open). Layers 1-4 and 6 are deterministic and run everywhere.
+**Layer 5 (AI review) only runs on PandoTeams contributor nodes** (they have an engine to review with). On lightweight/secure nodes without PandoTeams, Layer 5 is skipped (fail-open). Layers 1-4 and 6 are deterministic and run everywhere.
 
 **Auto-approve** when <=8 peers (dev mode). All logged to `governance_audit` table.
 
@@ -849,10 +849,10 @@ DECISION: APPROVE or REJECT
 │                        THE PANDO NETWORK                            │
 │                                                                     │
 │  ┌──────────────┐   ┌──────────────┐   ┌──────────────┐           │
-│  │ PandoCode    │   │ EC2 Secure   │   │ Lightweight  │           │
+│  │ PandoTeams    │   │ EC2 Secure   │   │ Lightweight  │           │
 │  │ Contributor  │   │ Compute      │   │ Node         │           │
 │  │              │   │              │   │              │           │
-│  │ - PandoCode  │   │ - MongoDB    │   │ - P2P only   │           │
+│  │ - PandoTeams  │   │ - MongoDB    │   │ - P2P only   │           │
 │  │ - Local keys │   │ - Cred Store │   │ - Ledger     │           │
 │  │ - Claude Code│   │ - Contrib'd  │   │ - Relay      │           │
 │  │ - Earns Lux  │   │   API keys   │   │ - Relay fees │           │
@@ -864,14 +864,14 @@ DECISION: APPROVE or REJECT
 +─────────────────────────────────────────────────────────────────────+
 ```
 
-#### Type 1: PandoCode Contributor Node (the common case)
+#### Type 1: PandoTeams Contributor Node (the common case)
 
-A regular user with PandoCode installed. The backbone of network intelligence.
+A regular user with PandoTeams installed. The backbone of network intelligence.
 
-- Has PandoCode + Engine Adapter
-- Has their OWN API keys locally (PandoCode `.env` or env vars — default: Google/Gemini)
+- Has PandoTeams + Engine Adapter
+- Has their OWN API keys locally (PandoTeams `.env` or env vars — default: Google/Gemini)
 - Keys **NEVER leave** the machine — work comes TO them
-- Advertises capability: `pando-code: true` in capability profile
+- Advertises capability: `pando-teams: true` in capability profile
 - Network routes build jobs to them via HTTP (HttpPeerClient)
 - Can set limits: max requests/day, budget caps, model preferences (NOT YET BUILT)
 - Earns Lux per job completed (BUILT — `WorkType.COMPUTE_CONTRIBUTED`, daily cap: 50 jobs/day via `PANDO_DAILY_COMPUTE_CAP`)
@@ -880,7 +880,7 @@ A regular user with PandoCode installed. The backbone of network intelligence.
 ```
 Build request arrives via HTTP (routed by any node that received user's message)
   → Engine Adapter creates project engine
-  → PandoCode builds using LOCAL keys (contributor's configured provider)
+  → PandoTeams builds using LOCAL keys (contributor's configured provider)
   → Code committed to GitHub (checkpoint)
   → Deployed via pando_deploy tool
   → Earns Lux based on compute cost
@@ -894,38 +894,38 @@ Trusted infrastructure. Stores network-level contributed credentials. **Deploys 
 - Stores contributed API keys (encrypted AES-256-GCM)
 - Handles Path A (simple AI): decrypts contributed key → makes LLM call → returns response
 - **Handles deployment** (`pando/deploy-app`): clones from GitHub, deploys to S3 (Tier 1) or PM2+nginx (Tier 2 — PM2 here manages deployed USER APPS, not pando-node itself)
-- Could run PandoCode for builds if installed (not currently — EC2 nodes are secure-only)
+- Could run PandoTeams for builds if installed (not currently — EC2 nodes are secure-only)
 - Proxy: decrypts credentials for other node types on HTTP request (code_repository only)
 - Proxy: HTTP storage backend for non-MongoDB nodes (thread store, project store, etc.)
 
-**Capability profile broadcasts:** `credentialAccess: true`, `storageBackend: 'mongodb'`. These are the fields the deploy pipeline uses to find deploy targets — NOT `shareCompute`/`compute_cpu` (those identify PandoCode builders).
+**Capability profile broadcasts:** `credentialAccess: true`, `storageBackend: 'mongodb'`. These are the fields the deploy pipeline uses to find deploy targets — NOT `shareCompute`/`compute_cpu` (those identify PandoTeams builders).
 
 #### Type 3: Lightweight Node
 
 Minimal participant. P2P, ledger, governance. No AI compute.
 
-- Routes AI work to peers who have PandoCode or secure compute
+- Routes AI work to peers who have PandoTeams or secure compute
 - Earns relay fees (0.1% of transfers)
 - Participates in governance voting
 - Contributes to P2P mesh health
 
 #### Type 4: Full Dev Node (Type 1 + local MongoDB)
 
-Developer's machine. PandoCode + local MongoDB for full self-sufficiency.
+Developer's machine. PandoTeams + local MongoDB for full self-sufficiency.
 
 ```
 Routing priority for AI work:
 1. Path A (questions): local OpenAI key → CredentialStore → EC2 proxy via HTTP
-2. Path B (builds): find best PandoCode peer on network (could be self) → route via HTTP
+2. Path B (builds): find best PandoTeams peer on network (could be self) → route via HTTP
 3. No capable peers available → degrade gracefully (canned doorman response)
 ```
 
-### 5.6 Periodic Autonomous Behavior (PandoCode contributor nodes only)
+### 5.6 Periodic Autonomous Behavior (PandoTeams contributor nodes only)
 
-On nodes with PandoCode, the Scheduler sends periodic "check" messages to the system engine. The engine decides what to do. Lightweight and secure-only nodes don't have engines and skip this entirely.
+On nodes with PandoTeams, the Scheduler sends periodic "check" messages to the system engine. The engine decides what to do. Lightweight and secure-only nodes don't have engines and skip this entirely.
 
 ```
-pando-node (body)                         pando-code (brain)
+pando-node (body)                         pando-teams (brain)
 
   setInterval(5 min):
     adapter.send("system",               → System Engine receives
@@ -945,7 +945,7 @@ pando-node (body)                         pando-code (brain)
 
 No tick loop. No orchestrator. No message bus. The engine runs when it has something to do.
 
-### 5.7 The Actors (PandoCode contributor nodes only)
+### 5.7 The Actors (PandoTeams contributor nodes only)
 
 **Per-project actors** (user projects — see Section 5.10 for the universal pattern):
 
@@ -965,7 +965,7 @@ No tick loop. No orchestrator. No message bus. The engine runs when it has somet
 
 ### 5.8 App Lifecycle (AppManager) — Unified Pipeline
 
-**Everything is an app.** pando-node, pando-code, and user apps all run through the same AppManager pipeline. SQLite `apps.db` is the single source of truth per node. See `docs/UNIFIED-PIPELINE-ROADMAP.md` for the full roadmap.
+**Everything is an app.** pando-node, pando-teams, and user apps all run through the same AppManager pipeline. SQLite `apps.db` is the single source of truth per node. See `docs/UNIFIED-PIPELINE-ROADMAP.md` for the full roadmap.
 
 #### 5.8.1 The Unified Pipeline
 
@@ -983,13 +983,13 @@ Governance is a gate BEFORE the pipeline, not a separate pipeline. If `app.gover
 |---|---|---|---|
 | 1 | Static | S3 upload | Portfolio sites, landing pages |
 | 2 | Server | PM2 start + nginx reverse proxy | Express apps, WebSocket servers |
-| 3 | Infrastructure | exit(75) → node restart | pando-node, pando-code |
+| 3 | Infrastructure | exit(75) → node restart | pando-node, pando-teams |
 
-**Infrastructure as apps (IMPLEMENTED — Phase 2).** On node startup, `index.ts` registers pando-node and pando-code as tier 3 apps:
+**Infrastructure as apps (IMPLEMENTED — Phase 2).** On node startup, `index.ts` registers pando-node and pando-teams as tier 3 apps:
 
 ```
 pando-node:  tier 3, governance: true,  deployAction: 'restart-node'
-pando-code:  tier 3, governance: true,  deployAction: 'restart-node'
+pando-teams:  tier 3, governance: true,  deployAction: 'restart-node'
 ```
 
 `GET /v1/apps` shows infrastructure alongside user apps. Same registry. Same history table. Same API.
@@ -1058,13 +1058,13 @@ All git operations consolidated into a single `GitOps` class (`core/git-ops.ts`)
 
 **PROVEN LIVE (2026-03-06) — BOTH TIERS:**
 
-**Tier 1 (S3 static):** "build me a portfolio website" → PandoCode (Gemini 2.5 Flash) built index.html + style.css → GitHub push → EC2 cloned → Tier 1 detected → S3 upload with gateway vars injected → live at `http://pando-deployments.s3-website-us-east-1.amazonaws.com/public/{projectId}/index.html` → marketplace listing with `deploymentStatus: live`.
+**Tier 1 (S3 static):** "build me a portfolio website" → PandoTeams (Gemini 2.5 Flash) built index.html + style.css → GitHub push → EC2 cloned → Tier 1 detected → S3 upload with gateway vars injected → live at `http://pando-deployments.s3-website-us-east-1.amazonaws.com/public/{projectId}/index.html` → marketplace listing with `deploymentStatus: live`.
 
-**Tier 2 (PM2+nginx):** "build me a real-time chat room app with WebSockets" → PandoCode built Express+ws server → GitHub push → EC2 cloned → Tier 2 detected (express+ws deps, scripts.start) → `npm install` (66 modules) → PM2 start on port 3009 → nginx reverse proxy config written → live at `http://3.226.89.40/apps/{projectId}/` → HTTP 200, WebSocket upgrade working through nginx.
+**Tier 2 (PM2+nginx):** "build me a real-time chat room app with WebSockets" → PandoTeams built Express+ws server → GitHub push → EC2 cloned → Tier 2 detected (express+ws deps, scripts.start) → `npm install` (66 modules) → PM2 start on port 3009 → nginx reverse proxy config written → live at `http://3.226.89.40/apps/{projectId}/` → HTTP 200, WebSocket upgrade working through nginx.
 
 **CRITICAL: Builder vs Deployer targeting (the #1 gotcha)**
 ```
-findBestBuilder()              → shareCompute === true && compute_cpu === true   → PandoCode CONTRIBUTOR nodes
+findBestBuilder()              → shareCompute === true && compute_cpu === true   → PandoTeams CONTRIBUTOR nodes
 appManager.findDeployTarget()  → credentialAccess === true && storageBackend === 'mongodb'  → EC2 SECURE nodes
 
 These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse them.
@@ -1072,14 +1072,14 @@ These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse 
 
 **Security model:**
 - **Credentials (AWS S3, GitHub) ONLY exist on EC2 secure nodes** — decrypted in-memory via `CREDENTIAL_MASTER_KEY`
-- **PandoCode contributor nodes NEVER touch deployment credentials** — they only build code
-- **GitHub is the handoff point** — PandoCode pushes code to GitHub, EC2 clones from GitHub. No workspace transfer over HTTP.
+- **PandoTeams contributor nodes NEVER touch deployment credentials** — they only build code
+- **GitHub is the handoff point** — PandoTeams pushes code to GitHub, EC2 clones from GitHub. No workspace transfer over HTTP.
 - **EC2 tripwire** — any SSH/SSM/debugger detected → wipe credentials + shutdown immediately
 
 **Workspace directories:**
 - Engine workspace: `~/.pando/projects/{projectId}/` (set by platform-api.ts after project creation)
 - EC2 deploy workspace: `{dataDir}/hosted-apps/{projectId}/` (cloned from GitHub on the secure node)
-- PandoCode database: `.pando-code.db` inside the project workspace
+- PandoTeams database: `.pando-teams.db` inside the project workspace
 
 **Timeout chain (production-tuned):**
 - HTTP credential proxy: 30s (decrypting GitHub token via EC2)
@@ -1095,7 +1095,7 @@ These are DIFFERENT node types. Builders BUILD. Deployers DEPLOY. Never confuse 
 
 **Deploy result push (DONE — commit e6fe16b1):**
 
-Deploy result is now AWAITED (not fire-and-forget). After PandoCode finishes building:
+Deploy result is now AWAITED (not fire-and-forget). After PandoTeams finishes building:
 ```
 Build completes → appMgr.update(projectId) awaited
   ├─ SUCCESS:
@@ -1157,14 +1157,14 @@ All shell command execution in app-manager.ts uses `execFileSync()` with array a
 - Thread messages: 404 on non-existent thread IDs (was auto-creating)
 - P2P sync: 7 unhandled promise rejections now caught and logged
 
-### 5.9 PandoCode Network Linking
+### 5.9 PandoTeams Network Linking
 
-PandoCode works as a standalone developer tool (like Claude Code). Optionally, it links to the Pando network.
+PandoTeams works as a standalone developer tool (like Claude Code). Optionally, it links to the Pando network.
 
 ```
 STANDALONE MODE (default)                LINKED MODE (network contributor)
 ─────────────────────────                ─────────────────────────────────
-PandoCode is just a dev tool.            PandoCode is a network resource.
+PandoTeams is just a dev tool.            PandoTeams is a network resource.
 
 - Projects saved wherever you want       - Network workspace: ~/.pando/projects/
 - Your keys, your machine                - Node can CREATE projects here
@@ -1177,14 +1177,14 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 ```
 
 **How linking works:**
-1. PandoCode setting: `network.linked: true` (in PandoCode config)
-2. PandoCode setting: `network.nodeUrl: "http://localhost:4000"` (local node API)
+1. PandoTeams setting: `network.linked: true` (in PandoTeams config)
+2. PandoTeams setting: `network.nodeUrl: "http://localhost:4000"` (local node API)
 3. When linked, node's Engine Adapter can create project engines
 4. Network-created projects go to `~/.pando/projects/{projectId}/`
 5. Project metadata (visibility, owner) set by node based on user request
 6. When build completes → AppManager.update() triggers (GitHub → deploy → marketplace)
 
-**BUILT.** Engine Adapter creates `~/.pando/projects/{id}/` directories with `PANDO_PROJECT.json` metadata (nodeUrl, nodeId, projectId, linked flag). PandoCode detects this on config load via `detectNetworkLinking()` in `config/index.ts` — scans project path + `~/.pando/projects/` for linked metadata. Exposes `GET /api/network` (PandoCode server) and `GET /v1/network` (Hono API) for clients to check linking status.
+**BUILT.** Engine Adapter creates `~/.pando/projects/{id}/` directories with `PANDO_PROJECT.json` metadata (nodeUrl, nodeId, projectId, linked flag). PandoTeams detects this on config load via `detectNetworkLinking()` in `config/index.ts` — scans project path + `~/.pando/projects/` for linked metadata. Exposes `GET /api/network` (PandoTeams server) and `GET /v1/network` (Hono API) for clients to check linking status.
 
 ### 5.10 Team Architecture — Unified Project Management
 
@@ -1194,7 +1194,7 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 
 **Every project on Pando is managed by a team.** The pando-infra team (formerly "council") and user project teams use the SAME infrastructure. There is no special council framework.
 
-**CRITICAL RULE: Never build agent/communication/task systems in pando-node. PandoCode already has them. See Section 3.2.**
+**CRITICAL RULE: Never build agent/communication/task systems in pando-node. PandoTeams already has them. See Section 3.2.**
 
 #### 5.10.1 The Pattern
 
@@ -1202,7 +1202,7 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 ┌─────────────────────────────────────────────────────────────────────┐
 │             EVERY TEAM USES THIS PATTERN                            │
 │                                                                     │
-│  PandoCode Engine (one per agent in the team)                      │
+│  PandoTeams Engine (one per agent in the team)                      │
 │  ├─ Board ← THE work queue (user requests, bugs, system issues)    │
 │  ├─ Agents ← the team (lead + others spawned on demand)           │
 │  ├─ Memory ← learns across sessions (persistent)                  │
@@ -1223,7 +1223,7 @@ PandoCode is just a dev tool.            PandoCode is a network resource.
 │                     DATA SEPARATION                                 │
 ├─────────────────────────────┬───────────────────────────────────────┤
 │ LAYER 1: Team Registry      │ LAYER 2: Board + Agent State          │
-│ (~/.pando/teams/teams.db)   │ (~/.pando/teams/{teamId}/.pando-code.db)│
+│ (~/.pando/teams/teams.db)   │ (~/.pando/teams/{teamId}/.pando-teams.db)│
 │                             │                                       │
 │ WHAT: routing metadata      │ WHAT: application state               │
 │  - team id, name            │  - board tasks (title, status)        │
@@ -1267,7 +1267,7 @@ CREATE TABLE team_config (
 );
 ```
 
-**No board tables. No message tables.** Board and messages live in PandoCode's local SQLite on the managing node. This is the key architectural decision that prevents P2P data flooding at scale.
+**No board tables. No message tables.** Board and messages live in PandoTeams's local SQLite on the managing node. This is the key architectural decision that prevents P2P data flooding at scale.
 
 **GossipSub sync:** Topic `pando/teams`. Mirrors LedgerSync pattern — subscribeTopic on startup, requestSync on peer connect (5s + 30s retry), dedup by processed IDs. Three message types: `team_config_update`, `team_sync_request`, `team_sync_response`.
 
@@ -1335,13 +1335,13 @@ Validation:
 ```
 1. User → gateway → any pando node
 2. Doorman classifies: "build" intent
-3. findBestBuilder() → PandoCode-capable node (shareCompute + compute_cpu)
+3. findBestBuilder() → PandoTeams-capable node (shareCompute + compute_cpu)
 4. Builder node:
    a. Creates project in ProjectStore (business metadata)
    b. Creates team in team registry:
       { id: "team-xxx", repos: [], agentCount: 1, governanceRequired: false }
    c. Broadcasts team_config_update via GossipSub → all nodes learn routing
-   d. Spawns PandoCode engine for lead agent
+   d. Spawns PandoTeams engine for lead agent
    e. Lead builds the app, triggers deploy
 5. Team stays active for future updates
 ```
@@ -1358,7 +1358,7 @@ Validation:
 #### 5.10.7 Team Bootstrap (First Run)
 
 ```
-Node starts with PandoCode available:
+Node starts with PandoTeams available:
 
   1. Initialize TeamRegistry (teams.db)
   2. Sync from peers (GossipSub catch-up)
@@ -1380,9 +1380,9 @@ Node starts with PandoCode available:
        Do nothing — someone else runs it
 
   4. For each team where managingNode == self:
-     a. Create PandoCode workspace: ~/.pando/teams/{teamId}/
+     a. Create PandoTeams workspace: ~/.pando/teams/{teamId}/
      b. If repo has .pando/team-state.json → read it, seed local board
-     c. Create PandoCode engines per agent config (stored locally, not in registry)
+     c. Create PandoTeams engines per agent config (stored locally, not in registry)
      d. Register pando_* tools on each engine
      e. Register scheduler ticks per agent's tickIntervalMs
      f. Start heartbeat (update registry + broadcast every tick)
@@ -1419,7 +1419,7 @@ Lead detects issue → needs a code fix:
 ```
 
 **Key primitives (BOTH BUILT AND VERIFIED):**
-- `spawn_agent({ working_directory })` — PandoCode enhancement. Sub-agent works in a different directory than parent.
+- `spawn_agent({ working_directory })` — PandoTeams enhancement. Sub-agent works in a different directory than parent.
 - `pando_workspace({ repo })` — pando-node tool. Clones/pulls any repo. Detects local repos without network.
 
 #### 5.10.9 Node Death + Team Handoff
@@ -1429,7 +1429,7 @@ Node A was running team "pando-infra". Node A goes offline.
 
 DETECTION (three paths):
   Path A — New request arrives, managingNode offline + heartbeat stale (>20min)
-  Path B — Periodic orphan scan (every 5min on PandoCode nodes)
+  Path B — Periodic orphan scan (every 5min on PandoTeams nodes)
   Path C — P2P peer disconnect event → wait 5min → claim if still offline
 
 CLAIMING:
@@ -1461,9 +1461,9 @@ BOARD RECOVERY (three sources, in priority order):
 
 Each agent gets a system prompt via `agentOverride` on `engine.send()`. Prompts are defined in seed configs (constants in engine-adapter.ts), NOT in a separate file.
 
-**Frame behavior with agentOverride:** The override replaces only the stable layer (L0-2). All dynamic layers still flow: knowledge (L3 — memories), situation (L5b — team awareness, budget), goals (L5), conversation history. Board is NOT in the frame (PandoCode Option B) — pando-node injects it in the tick message instead.
+**Frame behavior with agentOverride:** The override replaces only the stable layer (L0-2). All dynamic layers still flow: knowledge (L3 — memories), situation (L5b — team awareness, budget), goals (L5), conversation history. Board is NOT in the frame (PandoTeams Option B) — pando-node injects it in the tick message instead.
 
-**Board snapshot injection:** pando-node reads the board from the team's PandoCode DB and includes it in the scheduler tick message. This is pando-node's responsibility (engine-adapter.ts), not PandoCode's.
+**Board snapshot injection:** pando-node reads the board from the team's PandoTeams DB and includes it in the scheduler tick message. This is pando-node's responsibility (engine-adapter.ts), not PandoTeams's.
 
 **Board snapshot format:** `getBoardSnapshot(dbPath)` returns a formatted string:
 ```
@@ -1474,11 +1474,11 @@ BOARD STATE (N active tasks):
 Priority ordering: CRITICAL > BUG:user > WARNING > FEATURE:user > other. Limit 20 tasks.
 
 **Lead vs non-lead tick asymmetry (by design):**
-- **Lead agents** use a **custom setInterval** (not the PandoCode Scheduler) because they need dynamic inbox+board injection into every tick message. The lead tick reads `getTeamInbox()` + `getBoardSnapshot()` fresh and wraps the tick prompt with this live state data.
-- **Non-lead agents** (observer, QA) use the **PandoCode Scheduler** with static prompts — their tick message is the same every time (e.g., "Check network health and report issues").
+- **Lead agents** use a **custom setInterval** (not the PandoTeams Scheduler) because they need dynamic inbox+board injection into every tick message. The lead tick reads `getTeamInbox()` + `getBoardSnapshot()` fresh and wraps the tick prompt with this live state data.
+- **Non-lead agents** (observer, QA) use the **PandoTeams Scheduler** with static prompts — their tick message is the same every time (e.g., "Check network health and report issues").
 - This asymmetry is intentional: leads need fresh state data per tick to make triage decisions, while observers/QA just need their base prompt to perform their fixed role.
 
-**Team inbox key structure:** Messages between agents are stored in the `.pando-code.db` `state` table:
+**Team inbox key structure:** Messages between agents are stored in the `.pando-teams.db` `state` table:
 - Schema: `state(key TEXT PRIMARY KEY, value TEXT, updated_at TEXT, expires_at TEXT)` — NOTE: NO `engine_id` column (was a bug, fixed)
 - Key: `msg:{toAgentId}:{uuid}`
 - Value: JSON `{ from: agentId, message: string, timestamp: ISO8601 }`
@@ -1489,7 +1489,7 @@ Priority ordering: CRITICAL > BUG:user > WARNING > FEATURE:user > other. Limit 2
 
 **Engine lifecycle:**
 ```
-Node startup with PandoCode:
+Node startup with PandoTeams:
   │
   ├─ engine-adapter.ts start():
   │   ├─ Creates EnginePool (shared DB for cross-engine send_message)
@@ -1518,7 +1518,7 @@ GOTCHAS:
   3. All agents in a team must share the same SQLite DB for send_message to work
   4. CRITICAL: startSession() must be called BEFORE tool re-registration
   5. manage_tasks sessionId must reference a real session (FK constraint)
-  6. Board is NOT in the frame (PandoCode Option B) — inject in tick message
+  6. Board is NOT in the frame (PandoTeams Option B) — inject in tick message
 ```
 
 #### 5.10.12 API Endpoints
@@ -1538,7 +1538,7 @@ DELETE /v1/teams/:teamId              — Stop team, mark orphaned
 
 All board endpoints follow the same pattern:
 1. Check registry: is managing node == self?
-2. YES → operate on local PandoCode SQLite
+2. YES → operate on local PandoTeams SQLite
 3. NO → HTTP request to managing node
 
 **Legacy endpoints** (`/v1/council/*`) will be removed after migration. Do NOT build on them.
@@ -1560,7 +1560,7 @@ See `docs/TEAM-ARCHITECTURE.md` Section 17 for the complete legacy code audit (1
 
 | Failure | Recovery |
 |---|---|
-| Managing node dies | Handoff: another PandoCode node claims team (Section 5.10.9). Board recovered from git. |
+| Managing node dies | Handoff: another PandoTeams node claims team (Section 5.10.9). Board recovered from git. |
 | Too many user requests | Board is the buffer. Rate limited: 3/hour per IP. Lead batches similar. |
 | Bad/spam requests | Board task dedup. Rate limit. Two Laws filter. Lead deprioritizes low-value. |
 | Team creates too many tasks | Lead closes stale tasks (>24h). Spawns parallel builders if backlog >10. |
@@ -1578,7 +1578,7 @@ Pando-node is designed as a **lightweight, modular platform**. The core node han
 ```typescript
 // @pando/shared/types.ts — the contract all services implement
 interface PandoService {
-  readonly id: string;           // 'pando-code', 'pando-exchange'
+  readonly id: string;           // 'pando-teams', 'pando-exchange'
   readonly version: string;
   readonly capabilities: string[];
   start(ctx: ServiceContext): Promise<void>;
@@ -1603,7 +1603,7 @@ interface ServiceContext {
 Auto-discovers installed npm packages and loads them as services:
 
 ```
-SERVICE_PACKAGES = ['@pando-code/core', /* future: '@pando/exchange', '@pando/storage' */]
+SERVICE_PACKAGES = ['@pando-teams/core', /* future: '@pando/exchange', '@pando/storage' */]
 
 for each package:
   try import(pkg) → call createService() → svc.start(ctx) → register
@@ -1618,8 +1618,8 @@ for each package:
 # Light node (relay + validate only):
 npm install && node cli.js              # default — no services
 
-# AI node (adds PandoCode):
-npm install @pando-code/core && node cli.js  # auto-detects, loads AI engine
+# AI node (adds PandoTeams):
+npm install @pando-teams/core && node cli.js  # auto-detects, loads AI engine
 
 # Future: DEX node:
 npm install @pando/exchange && node cli.js
@@ -1703,46 +1703,46 @@ resolveGitCredential(repoUrl, userId?)
 - ~~Hardcoded PATs in git remote URLs~~ — DEPRECATED. Use credential resolution instead.
 - ~~Extracting PAT from `git remote get-url origin`~~ — DEPRECATED. The `pando_workspace` tool now calls `resolveGitCredential()`.
 
-#### Model B: Local Credentials (PandoCode contributor)
+#### Model B: Local Credentials (PandoTeams contributor)
 
-Used by Path B (builds). Contributor runs PandoCode with their own keys.
+Used by Path B (builds). Contributor runs PandoTeams with their own keys.
 
 ```
 Contributor's machine:
-  PandoCode's .env file (auto-loaded by engine-adapter)
+  PandoTeams's .env file (auto-loaded by engine-adapter)
   OR local env vars (GOOGLE_GENERATIVE_AI_API_KEY, ANTHROPIC_API_KEY, OPENAI_API_KEY)
   OR Claude Code CLI authenticated (DONE — see Section 3.2.9)
-  → PandoCode uses local keys directly
+  → PandoTeams uses local keys directly
   → Keys NEVER leave the machine
   → Work comes TO the contributor via HTTP
   → Contributor earns Lux for compute
 ```
 
-No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoCode's `.env` file or local env vars on the contributor's own machine.
+No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoTeams's `.env` file or local env vars on the contributor's own machine.
 
 **IMMUTABLE RULES (both models):**
 - NEVER transmit raw API keys over the network (P2P or HTTP)
 - NEVER log, print, or output credential values
 - NEVER store keys in docs, code, comments, agent reports
 - Contributed keys: ONLY decrypted and used on EC2 (server-side)
-- Local keys: ONLY used by local PandoCode process
+- Local keys: ONLY used by local PandoTeams process
 - NEVER hardcode PATs in git remote URLs — use `resolveGitCredential()`
 
 ---
 
 ## 6. THE ENGINE ADAPTER (detailed spec)
 
-The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-code/core. Currently ~1,393 lines. It only exists on **PandoCode contributor nodes** and **full dev nodes**.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-teams/core. Currently ~1,393 lines. It only exists on **PandoTeams contributor nodes** and **full dev nodes**.
 
-**Key principle:** PandoCode uses its OWN configured provider and model. The engine-adapter does NOT override the model. Contributors choose their provider (default: Google/gemini-2.5-flash).
+**Key principle:** PandoTeams uses its OWN configured provider and model. The engine-adapter does NOT override the model. Contributors choose their provider (default: Google/gemini-2.5-flash).
 
 **API key loading order** (`injectApiKeys()`):
-1. Load PandoCode's `.env` file (resolved via `@pando-code/core` package path)
+1. Load PandoTeams's `.env` file (resolved via `@pando-teams/core` package path)
 2. Check local env vars (contributor's shell environment)
 3. CredentialStore fallback (EC2 nodes with MongoDB only)
 
 ```
-PandoCode reads: GOOGLE_GENERATIVE_AI_API_KEY  (default provider)
+PandoTeams reads: GOOGLE_GENERATIVE_AI_API_KEY  (default provider)
            OR:   ANTHROPIC_API_KEY, OPENAI_API_KEY (alternative providers)
            OR:   Claude Code CLI (persistent agent runtime — see Section 3.2.9)
 ```
@@ -1817,9 +1817,9 @@ LuxBudgetProvider {
 
 ---
 
-## 7. PANDO-CODE UPGRADES NEEDED
+## 7. PANDO-TEAMS UPGRADES NEEDED
 
-These are additions to @pando-code/core (the separate repo). No refactoring — all new code.
+These are additions to @pando-teams/core (the separate repo). No refactoring — all new code.
 
 ### DONE (infrastructure built)
 
@@ -1840,13 +1840,13 @@ These are additions to @pando-code/core (the separate repo). No refactoring — 
 ### How pando-node uses it
 
 ```typescript
-import { EnginePool, Scheduler } from "@pando-code/core";
+import { EnginePool, Scheduler } from "@pando-teams/core";
 
 // engine-adapter.ts uses EnginePool directly (not PandoServer)
-// PandoCode uses its OWN configured provider/model (contributor's choice)
+// PandoTeams uses its OWN configured provider/model (contributor's choice)
 // API keys from LOCAL env (contributor's own keys)
 const pool = new EnginePool({
-  // No defaultModel — PandoCode uses config (default: google/gemini-2.5-flash)
+  // No defaultModel — PandoTeams uses config (default: google/gemini-2.5-flash)
   maxEngines: 20,
   idleTTLMs: 30 * 60 * 1000,
   onAfterCreate: async (id, engine) => {
@@ -1866,21 +1866,21 @@ scheduler.register({
 });
 ```
 
-### PandoCode + Claude Code CLI (DONE — in pando-code repo)
+### PandoTeams + Claude Code CLI (DONE — in pando-teams repo)
 
-Claude Code CLI is a provider in `@pando-code/core`, not in pando-node:
+Claude Code CLI is a provider in `@pando-teams/core`, not in pando-node:
 
 ```
-User selects "claude-code" from PandoCode's model dropdown
-  → PandoCode's engine calls provider.doStream() as always
+User selects "claude-code" from PandoTeams's model dropdown
+  → PandoTeams's engine calls provider.doStream() as always
   → claude-code provider spawns `claude -p` with frame as --system-prompt
   → Claude Code does file editing, testing, git commits using its own tools
   → Pando MCP tools (deploy, governance, status) available via --mcp-config
   → Response parsed from stream-json → LanguageModelV3 stream parts
-  → PandoCode's post-turn hooks run normally (reflection, memory, board)
+  → PandoTeams's post-turn hooks run normally (reflection, memory, board)
 ```
 
-**Key files:** `provider/claude-code.ts` in `@pando-code/core` (provider implementation)
+**Key files:** `provider/claude-code.ts` in `@pando-teams/core` (provider implementation)
 
 **pando-node's role:** NONE. pando-node calls `engine.send()` and doesn't know what model is running.
 
@@ -1896,8 +1896,8 @@ This makes a contributor's Claude Code subscription a network resource — they 
 |---|---|---|---|---|
 | EC2-1 | 44.196.69.210 | i-066e87f7440e7e2f5 | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY, --relay, Elastic IP |
 | EC2-2 | 3.226.89.40 | i-002a88a1372adfbdb | Compute (trusted) | MongoDB, systemd, CREDENTIAL_MASTER_KEY, --relay, Elastic IP |
-| Windows | 100.87.67.78 | — | Contributor | PandoCode, Claude Code, P2P port 4100, API port 4000 |
-| Mac | — | — | Contributor | PandoCode (2nd node), nohup (no auto-restart) |
+| Windows | 100.87.67.78 | — | Contributor | PandoTeams, Claude Code, P2P port 4100, API port 4000 |
+| Mac | — | — | Contributor | PandoTeams (2nd node), nohup (no auto-restart) |
 
 
 **Public gateway:** https://gateway-one-mu.vercel.app
@@ -1974,7 +1974,7 @@ npx playwright test
 
 # Run per-project tests
 npx playwright test --project pando-node
-npx playwright test --project pando-code
+npx playwright test --project pando-teams
 ```
 
 ### 8.3 Node CLI Flags
@@ -1995,9 +1995,9 @@ npx playwright test --project pando-code
 - `PANDO_STORAGE_URL` — MongoDB connection URL (secure compute nodes only)
 - `CREDENTIAL_MASTER_KEY` — 256-bit hex key for credential encryption (secure compute nodes only)
 - `GATEWAY_PUBLIC_URL` — Public gateway URL for deployed apps
-- `GOOGLE_GENERATIVE_AI_API_KEY` — PandoCode default provider (Google/Gemini). Auto-loaded from PandoCode's `.env`.
-- `OPENAI_API_KEY` — For doorman classification (local) or alternative PandoCode provider. Auto-loaded from PandoCode's `.env`.
-- `ANTHROPIC_API_KEY` — Alternative PandoCode provider (Anthropic/Claude)
+- `GOOGLE_GENERATIVE_AI_API_KEY` — PandoTeams default provider (Google/Gemini). Auto-loaded from PandoTeams's `.env`.
+- `OPENAI_API_KEY` — For doorman classification (local) or alternative PandoTeams provider. Auto-loaded from PandoTeams's `.env`.
+- `ANTHROPIC_API_KEY` — Alternative PandoTeams provider (Anthropic/Claude)
 - `PUBLIC_IP` — Public IP address for Tier 2 deployment URLs (EC2 nodes). Used to construct `http://{PUBLIC_IP}/apps/{projectId}/`.
 - `API_AUTH_DISABLED=true` — Dev mode: bypasses API token auth AND JWT verification for chat endpoints
 
@@ -2005,7 +2005,7 @@ npx playwright test --project pando-code
 
 ## 9. BRAIN-KILL MIGRATION (COMPLETED 2026-03-06)
 
-9,414 lines of legacy orchestrator code deleted. All AI now flows through `engine-adapter.ts` → @pando-code/core. No dual coordination system.
+9,414 lines of legacy orchestrator code deleted. All AI now flows through `engine-adapter.ts` → @pando-teams/core. No dual coordination system.
 
 ---
 
@@ -2017,26 +2017,26 @@ npx playwright test --project pando-code
 
 | Issue | Location | Status |
 |---|---|---|
-| **engine-adapter injectApiKeys** | `core/engine-adapter.ts` | DONE — loads PandoCode's `.env` first, then checks local env, then CredentialStore fallback for EC2. Clear warning if no keys. |
+| **engine-adapter injectApiKeys** | `core/engine-adapter.ts` | DONE — loads PandoTeams's `.env` first, then checks local env, then CredentialStore fallback for EC2. Clear warning if no keys. |
 | **Doorman AI classification** | `api/api-server.ts` | DONE — 3-level priority: local OPENAI_API_KEY → CredentialStore → HTTP proxy to EC2 peer. |
 | **Doorman HTTP proxy** | `api-server.ts` | DONE — `pando/doorman-classify` and `pando/doorman-chat` handlers on EC2. All nodes route to EC2 via `httpPeerClient.dispatchRequest()`. Tested live: "What is machine learning?" → AI answer via HTTP. |
-| **PandoCode provider-agnostic** | `core/engine-adapter.ts` | DONE — Adapter no longer forces `claude-sonnet-4-6`. PandoCode uses its own configured provider (default: Google/gemini-2.5-flash). Contributors choose their own provider+model. Gemini pricing added to Lux table. |
-| **PandoCode .env auto-load** | `core/engine-adapter.ts` | DONE — Resolves `@pando-code/core` package path, loads `.env` from pando-code repo root. Handles Windows CRLF. Keys available to PandoCode engines without manual env setup. |
+| **PandoTeams provider-agnostic** | `core/engine-adapter.ts` | DONE — Adapter no longer forces `claude-sonnet-4-6`. PandoTeams uses its own configured provider (default: Google/gemini-2.5-flash). Contributors choose their own provider+model. Gemini pricing added to Lux table. |
+| **PandoTeams .env auto-load** | `core/engine-adapter.ts` | DONE — Resolves `@pando-teams/core` package path, loads `.env` from pando-teams repo root. Handles Windows CRLF. Keys available to PandoTeams engines without manual env setup. |
 | **Thread store non-blocking** | `platform/thread-store.ts` | DONE — `addMessage()` updates local cache immediately, persists to HTTP storage backend async. Eliminated 15s+ blocking on storage timeouts per chat message. |
-| **Async build routing** | `api/platform-api.ts` | DONE — Build requests return immediately with project+thread ID. PandoCode engine runs in background. Results arrive via SSE + thread store. No more 120s HTTP timeouts. |
+| **Async build routing** | `api/platform-api.ts` | DONE — Build requests return immediately with project+thread ID. PandoTeams engine runs in background. Results arrive via SSE + thread store. No more 120s HTTP timeouts. |
 | **Dev auth bypass** | `api/api-server.ts` | DONE — `API_AUTH_DISABLED=true` now also bypasses JWT verification for chat endpoints (uses node's peerId as dev identity). |
-| **Path B end-to-end** | Full pipeline | TESTED LIVE — "build me a portfolio website" → doorman classifies (HTTP to EC2) → project created → PandoCode builds → DeployPipeline → GitHub push → HTTP deploy to EC2 → S3 upload → live URL returned → marketplace listing. Full pipeline proven. |
-| **Unified build routing** | `api/platform-api.ts` | DONE — `findBestBuilder()` replaces the split `hasClaudeCodeAuth` logic. All 4 build handlers use unified flow: create project → find best PandoCode peer (including self) → route. `hasClaudeCodeAuth()` removed from routing (was Anthropic-only, broken for Gemini). |
+| **Path B end-to-end** | Full pipeline | TESTED LIVE — "build me a portfolio website" → doorman classifies (HTTP to EC2) → project created → PandoTeams builds → DeployPipeline → GitHub push → HTTP deploy to EC2 → S3 upload → live URL returned → marketplace listing. Full pipeline proven. |
+| **Unified build routing** | `api/platform-api.ts` | DONE — `findBestBuilder()` replaces the split `hasClaudeCodeAuth` logic. All 4 build handlers use unified flow: create project → find best PandoTeams peer (including self) → route. `hasClaudeCodeAuth()` removed from routing (was Anthropic-only, broken for Gemini). |
 | **Circuit breaker fix** | `cli.ts`, `supervisor.ts`, `kernel/` | DONE — Port-conflict exits use code 78 (supervisor won't respawn). Immediate circuit breaker reset on successful boot. Thresholds raised (crash-guard 3→6, circuit-breaker 3→5). |
-| **App Lifecycle (AppManager)** | `core/app-manager.ts`, `api/app-api.ts` | DONE — Unified pipeline with 3 tiers (static/server/infrastructure), governance gate, blue-green deploy, health monitoring, rollback, P2P dispatch. pando-node + pando-code registered as tier 3 infra apps on startup. See Section 5.8. |
+| **App Lifecycle (AppManager)** | `core/app-manager.ts`, `api/app-api.ts` | DONE — Unified pipeline with 3 tiers (static/server/infrastructure), governance gate, blue-green deploy, health monitoring, rollback, P2P dispatch. pando-node + pando-teams registered as tier 3 infra apps on startup. See Section 5.8. |
 | **Credential Resolution** | `platform/resource-registry.ts` | DONE — `resolveGitCredential(repoUrl, userId?)` resolves GitHub PATs from contributed credentials. User-scoped support. Replaces hardcoded PATs in git remote URLs. See Section 5.12.1. |
-| **Infrastructure as Apps** | `index.ts`, `core/app-manager.ts` | DONE — AppManager schema extended with `tier: 3`, `governance: boolean`, `deployAction: 'pm2' \| 'restart-node'`. pando-node and pando-code registered on startup. `GET /v1/apps` shows all. |
+| **Infrastructure as Apps** | `index.ts`, `core/app-manager.ts` | DONE — AppManager schema extended with `tier: 3`, `governance: boolean`, `deployAction: 'pm2' \| 'restart-node'`. pando-node and pando-teams registered on startup. `GET /v1/apps` shows all. |
 | **Deploy result push to chat** | `api/platform-api.ts` | DONE — Deploy result awaited (not fire-and-forget). Success/failure pushed to chat thread + SSE. Commit e6fe16b1. |
 | **Marketplace enrichment** | `api/platform-api.ts` | DONE — GET /v1/marketplace and GET /v1/marketplace/:id enriched with AppManager deployment data (status, url, tier, commit, deployedAt). Commit e6fe16b1. |
-| **Engine memory leak** | `core/engine-adapter.ts`, `api/app-api.ts` | DONE — stopTeamAgent/stopTeam/app DELETE now destroy PandoCode engine processes via engine.shutdown() + pool cleanup. Previously leaked zombie engines (13 at 95% memory). Commit 5b94cd77. |
+| **Engine memory leak** | `core/engine-adapter.ts`, `api/app-api.ts` | DONE — stopTeamAgent/stopTeam/app DELETE now destroy PandoTeams engine processes via engine.shutdown() + pool cleanup. Previously leaked zombie engines (13 at 95% memory). Commit 5b94cd77. |
 | **Tick overlap guard** | `core/engine-adapter.ts` | DONE — Lead agent tick handler now skips if previous tick still running. Prevents concurrent sends to same engine. Commit 919b92a0. |
 | **Commit→push loop unreliable** | `api/core-api.ts` | FIXED — Atomic `POST /v1/infra/commit-and-propose` endpoint replaces 5+ sequential bash commands. Build-gated: fails fast on build errors, unstages changes for retry. See Section 10b. |
-| **Single PandoCode node** | Infrastructure | FIXED — Mac is 2nd PandoCode node. 4-node mesh: Windows (dev+PandoCode), EC2-1 (compute+relay), EC2-2 (compute+relay), Mac (PandoCode). |
+| **Single PandoTeams node** | Infrastructure | FIXED — Mac is 2nd PandoTeams node. 4-node mesh: Windows (dev+PandoTeams), EC2-1 (compute+relay), EC2-2 (compute+relay), Mac (PandoTeams). |
 | **GossipSub message rejection after restart** | `kernel/network.ts` | FIXED — Signed messages from connected peers now allowed through even without public key on file. Transport-level Noise encryption already authenticates the peer, so rejecting unverifiable messages from connected peers was unnecessary and broke message flow after restarts. |
 
 ### Restart Architecture (Verified 2026-03-08)
@@ -2097,8 +2097,8 @@ The `resourceId` is generated when a credential is contributed (via `/contribute
 
 | Issue | Location | Problem |
 |---|---|---|
-| **PandoCode Network Linking** | PandoCode config + engine-adapter | BUILT — Node creates PANDO_PROJECT.json, PandoCode detects via `detectNetworkLinking()`. `GET /api/network` endpoint. See Section 5.9. |
-| ~~**Claude Code CLI provider**~~ | `@pando-code/core` provider/claude-code.ts | **DONE.** Lives in pando-code repo as a provider. Shows in model dropdown. See Section 3.2.9. |
+| **PandoTeams Network Linking** | PandoTeams config + engine-adapter | BUILT — Node creates PANDO_PROJECT.json, PandoTeams detects via `detectNetworkLinking()`. `GET /api/network` endpoint. See Section 5.9. |
+| ~~**Claude Code CLI provider**~~ | `@pando-teams/core` provider/claude-code.ts | **DONE.** Lives in pando-teams repo as a provider. Shows in model dropdown. See Section 3.2.9. |
 | **Contributor limits** | Partially built | Contributors need to set max requests/day, budget caps. Daily compute cap (50 jobs/day) is built. Per-user API limits not yet implemented. |
 | ~~**Node mode CLI flag**~~ | `cli.ts` | **FIXED.** Modes: `contributor|secure|lightweight|full`. Legacy `compute|relay` kept as aliases. |
 | ~~**S3 upload awaiting**~~ | `index.ts` | **FIXED.** Uses `Promise.all(uploadPromises)` instead of 2s sleep. Upload errors surfaced in console. |
@@ -2107,7 +2107,7 @@ The `resourceId` is generated when a credential is contributed (via `/contribute
 | **Chat-created projects lack repo_url** | `api/platform-api.ts` | Chat-created projects use workspace-based deploy (workspaceDir). EC2 deploy dispatch requires GitHub repo to clone. Workspace-to-GitHub push before deploy dispatch needed. Being fixed separately. |
 | **Board state partially durable** | `core/team-registry.ts`, `init-platform.ts` | P2P board sync implemented (BOARD_STATE_REQUEST/RESPONSE) but on-demand only — claiming node requests from peers. If the old managing node is dead, board data from that node is lost. **Tested 2026-03-09:** orphan detection + team claim + agent restart all work. Local board persists across claims. Need proactive replication for full durability. |
 | **No engine watchdog** | `core/engine-adapter.ts` | Dead CLI process = dead agent until node restart. No health monitoring of spawned Claude Code processes. If the CLI crashes silently, the agent stops working with no alert or auto-restart. |
-| **Mac node has no auto-restart** | Infrastructure | Mac PandoCode node runs via `nohup` — no systemd, no supervisor. If the process dies, it stays dead until manual restart. Needs launchd or equivalent. |
+| **Mac node has no auto-restart** | Infrastructure | Mac PandoTeams node runs via `nohup` — no systemd, no supervisor. If the process dies, it stays dead until manual restart. Needs launchd or equivalent. |
 | ~~**deployPeerId not persisting**~~ | `platform-api.ts:3685` | **ALREADY HANDLED.** Saved to both ProjectStore (MongoDB) and ProjectRegistry (local). |
 | ~~**Unified Pipeline Phases 3-7**~~ | `core/git-ops.ts`, `core/github-client.ts` | **DONE.** All 7 phases complete. GitOps class centralizes all git operations. GitHubClient for autonomous repo creation. All consumers refactored. See Section 5.8.2. |
 | ~~**UpgradeProtocol/AppManager duplication**~~ | `core/upgrade-protocol.ts`, `core/app-manager.ts` | **DONE.** Both now use GitOps for all git operations. UpgradeProtocol handles governance + security + safe restart. AppManager handles deployment lifecycle. No more duplicate git logic. |
@@ -2116,7 +2116,7 @@ The `resourceId` is generated when a credential is contributed (via `/contribute
 
 | Issue | Location | Problem |
 |---|---|---|
-| **Private/offline mode** | Various | Ollama provider exists in pando-code but not wired. SQLite fallback unclear. |
+| **Private/offline mode** | Various | Ollama provider exists in pando-teams but not wired. SQLite fallback unclear. |
 | **Governance fork resolution** | Designed only | 5-step resolution protocol, zero code. No conflict detection. |
 | **Distributed tracing** | Designed only | traceId, correlation IDs — designed but not built. |
 
@@ -2138,13 +2138,13 @@ The end-state: **no human intervention required.** The pando-infra team monitors
 
 ### Team Lead Model: Claude Code (Persistent Sessions)
 
-The pando-infra lead agent uses Claude Code as its model inside PandoCode. This gives it:
+The pando-infra lead agent uses Claude Code as its model inside PandoTeams. This gives it:
 - **Persistent sessions** via `--session-id`/`--resume` — context survives across ticks
 - **Native CLI tools** — bash, read, write, edit, grep, glob (no synthetic tool wrappers)
-- **Full codebase access** — can read, understand, and modify any file in pando-node or pando-code
+- **Full codebase access** — can read, understand, and modify any file in pando-node or pando-teams
 - **Tool chaining** — can run tests, check build output, iterate on fixes
 
-Observer and QA agents also use claude-code — all 3 pando-infra agents run on the same model. User project leads can use any model — PandoCode handles provider selection.
+Observer and QA agents also use claude-code — all 3 pando-infra agents run on the same model. User project leads can use any model — PandoTeams handles provider selection.
 
 ### The Self-Sustaining Loop (pando-infra team)
 
@@ -2193,7 +2193,7 @@ Observer and QA agents also use claude-code — all 3 pando-infra agents run on 
      4. Stash uncommitted changes (pando-auto-stash-{timestamp})
      5. git reset --hard origin/master
      6. npm install (non-fatal — build may succeed without it)
-     7. build() — tries `npm run build` first, falls back to `npx tsc -p packages/node/tsconfig.json` (EC2 nodes lack @pando-code/core). On total failure → git reset --hard <previous>
+     7. build() — tries `npm run build` first, falls back to `npx tsc -p packages/node/tsconfig.json` (EC2 nodes lack @pando-teams/core). On total failure → git reset --hard <previous>
      8. Record success, mark proposalId as applied
      9. Safe restart: 0 active workers + 0 pending messages → exit(75)
 
@@ -2271,11 +2271,11 @@ Atomic pipeline that replaces 5+ sequential bash commands with a single curl cal
 3. **Exit code 75 = restart.** Exit code 78 = port conflict (don't respawn). Any other crash = backoff respawn.
 4. **Teams survive restart.** Team registry persists in SQLite. Claude Code persistent sessions resume. Board tasks persist. Memory persists. Teams re-bootstrap from registry on startup.
 5. **Stale code detection.** `runningCommit` (snapshot at boot) vs `git rev-parse HEAD` (current). Mismatch → restart needed.
-6. **Build must pass.** `upgrade-protocol.ts build()` tries `npm run build`, falls back to targeted `npx tsc -p packages/node/tsconfig.json` (for EC2 nodes missing @pando-code/core). If both fail → rollback to previous commit. No broken deploys.
+6. **Build must pass.** `upgrade-protocol.ts build()` tries `npm run build`, falls back to targeted `npx tsc -p packages/node/tsconfig.json` (for EC2 nodes missing @pando-teams/core). If both fail → rollback to previous commit. No broken deploys.
 7. **Two Laws filter.** All user input and board tasks filtered. Teams cannot be weaponized.
 8. **npm install before build.** New deps may have been added between commits. `npm install` runs before `build()` in upgrade-protocol.ts. Failure is non-fatal (build may still work if deps didn't change).
 9. **Hash verification is the security gate.** Push to origin is deferred until governance approves (M-7 fix). Nodes only upgrade to the exact commit hash approved by governance. `merge-base --is-ancestor` ensures the hash is in origin/master's history.
-10. **Team handoff is automatic.** If a managing node dies, any PandoCode-capable node claims the orphaned team. Board recovered from git. No manual intervention needed.
+10. **Team handoff is automatic.** If a managing node dies, any PandoTeams-capable node claims the orphaned team. Board recovered from git. No manual intervention needed.
 
 ### The Goal
 
@@ -2287,12 +2287,12 @@ Atomic pipeline that replaces 5+ sequential bash commands with a single curl cal
 
 **4-Node Mesh (LIVE):**
 
-| Node | Role | PandoCode | Relay | Notes |
+| Node | Role | PandoTeams | Relay | Notes |
 |---|---|---|---|---|
 | Windows | Dev machine | Yes | No | P2P port 4100, API port 4000. Primary dev + CEO agent. |
 | EC2-1 (44.196.69.210) | Compute + relay | No | Yes (`--relay`) | systemd, MongoDB, NAT traversal relay, Elastic IP |
 | EC2-2 (3.226.89.40) | Compute + relay | No | Yes (`--relay`) | systemd, MongoDB, NAT traversal relay, Elastic IP |
-| Mac | PandoCode | Yes | No | 2nd PandoCode contributor. No auto-restart (nohup). |
+| Mac | PandoTeams | Yes | No | 2nd PandoTeams contributor. No auto-restart (nohup). |
 
 EC2 nodes run with `--relay` flag enabling circuit relay for NAT traversal — Windows and Mac nodes behind NAT can reach each other through EC2 relays. Dev infrastructure details (IPs, SSH, peer IDs, auth tokens, quick commands) are in `infra/DEV-MODE.md` (gitignored).
 
@@ -2351,8 +2351,8 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 | File | Purpose |
 |---|---|
 | `core/team-registry.ts` | **NEW.** Team registry (SQLite), GossipSub sync, heartbeat, orphan detection, handoff, P2P board proxy. See Section 5.10. |
-| `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. Team agent setup via startTeam(). Does NOT handle model selection — that's PandoCode's job. |
-| `core/app-manager.ts` | Unified pipeline: 3 tiers, governance gate, deploy/update/rollback/health. SQLite apps.db. pando-node + pando-code = tier 3 infra apps. See Section 5.8. |
+| `core/engine-adapter.ts` | THE integration point. Multi-engine, routing, Pando tools, Lux budget. Team agent setup via startTeam(). Does NOT handle model selection — that's PandoTeams's job. |
+| `core/app-manager.ts` | Unified pipeline: 3 tiers, governance gate, deploy/update/rollback/health. SQLite apps.db. pando-node + pando-teams = tier 3 infra apps. See Section 5.8. |
 | `core/credential-store.ts` | AES-256-GCM encrypt/decrypt |
 | `core/http-peer-client.ts` | Direct HTTP for all inter-node operations. Ed25519-signed. See Section 4.5. |
 | `core/storage-backend.ts` | MongoDB or HTTP proxy |
@@ -2430,10 +2430,10 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 - HTTP API (Fastify)
 - Governance (security pipeline)
 
-**PandoCode contributor (adds to baseline):**
-- @pando-code/core + Engine Adapter (one file, one dependency)
-- Local API keys (any provider — PandoCode's `.env` or local env vars. Default: Google/gemini-2.5-flash)
-- OR Claude Code CLI installed — PandoCode selects "claude-code" as provider internally. pando-node doesn't know or care.
+**PandoTeams contributor (adds to baseline):**
+- @pando-teams/core + Engine Adapter (one file, one dependency)
+- Local API keys (any provider — PandoTeams's `.env` or local env vars. Default: Google/gemini-2.5-flash)
+- OR Claude Code CLI installed — PandoTeams selects "claude-code" as provider internally. pando-node doesn't know or care.
 - That's it. Contributor earns Lux for processing build jobs.
 
 **Secure compute / EC2 (adds to baseline):**
@@ -2455,9 +2455,9 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 1. **Pando tools are just HTTP calls to 127.0.0.1.** The engine calls `pando_deploy` which does `POST http://127.0.0.1:4000/v1/apps/:id/deploy`. The engine doesn't import pando-node. The tools are the entire integration layer. (Must use `127.0.0.1`, not `localhost` — Node.js `fetch()` can fail silently with `localhost` on some platforms.)
 
-2. **Each project gets its own engine instance.** The adapter manages `Map<projectId, PandoCode>`. Engines don't know about each other. They communicate only through Pando tools (which call the shared HTTP API).
+2. **Each project gets its own engine instance.** The adapter manages `Map<projectId, PandoTeams>`. Engines don't know about each other. They communicate only through Pando tools (which call the shared HTTP API).
 
-3. **Team agents are standard PandoCode agents.** Every team (pando-infra or user project) consists of PandoCode engine instances in the EnginePool — each with their own session, memory, and board. They use PandoCode's native send_message for communication and board tasks for issue tracking. pando-node only adds pando_* tools, Lux budget, and the team registry for routing. Do NOT build custom agent/communication systems — PandoCode already has them (see Section 3.2). The pando-infra team has 3 agents (lead + observer + QA). User project teams start with 1 (lead) and can grow.
+3. **Team agents are standard PandoTeams agents.** Every team (pando-infra or user project) consists of PandoTeams engine instances in the EnginePool — each with their own session, memory, and board. They use PandoTeams's native send_message for communication and board tasks for issue tracking. pando-node only adds pando_* tools, Lux budget, and the team registry for routing. Do NOT build custom agent/communication systems — PandoTeams already has them (see Section 3.2). The pando-infra team has 3 agents (lead + observer + QA). User project teams start with 1 (lead) and can grow.
 
 4. **Governance is NOT an AI agent.** It's deterministic code in kernel/governance.ts. It only calls the AI (via adapter.reviewDiff) for Layer 5 smart analysis. The 6-layer pipeline is deterministic code, not an LLM.
 
@@ -2469,7 +2469,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 8. **`createRequire` for CJS in ESM.** @pando/tests and better-sqlite3 are CJS, node is ESM. `createRequire(import.meta.url)` bridges this in testing-api.ts and engine-adapter.ts (cached at startup for board operations). Not a bug.
 
-9. **Standalone pando-code is identical to pando-node's engines.** The only difference is: inside pando-node, engines get Pando tools registered and Lux budget instead of USD. The engine code is the same.
+9. **Standalone pando-teams is identical to pando-node's engines.** The only difference is: inside pando-node, engines get Pando tools registered and Lux budget instead of USD. The engine code is the same.
 
 10. **No process isolation needed.** The old orchestrator needed child processes because the tick loop blocked the event loop. `engine.send()` is async and non-blocking. All engines run in the main process (or a single worker thread if memory is a concern).
 
@@ -2477,11 +2477,11 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 12. **`_start()` is a thin coordinator.** It calls `initKernel(this)`, `initCore(this)`, `initPlatform(this)` via dynamic `await import()`. Each init file is a standalone function that sets up its layer. This pattern was chosen to break the 3,772-line monolith while keeping the PandoNode class interface unchanged.
 
-13. **Keys don't travel. Work travels.** Contributed API keys stay on EC2 (Path A — simple AI). PandoCode contributor keys stay on their machine (Path B — builds). The network routes WORK to where the keys are, never the other way around. `injectApiKeys()` loads: (1) PandoCode's `.env` file, (2) local env vars, (3) CredentialStore fallback (EC2 only). It does NOT pull keys over the network.
+13. **Keys don't travel. Work travels.** Contributed API keys stay on EC2 (Path A — simple AI). PandoTeams contributor keys stay on their machine (Path B — builds). The network routes WORK to where the keys are, never the other way around. `injectApiKeys()` loads: (1) PandoTeams's `.env` file, (2) local env vars, (3) CredentialStore fallback (EC2 only). It does NOT pull keys over the network.
 
-14. **Two kinds of "contribute."** `/contribute openai sk-xxx` donates a key to the network (encrypted on EC2, used server-side for Path A). Running PandoCode on your node contributes your COMPUTE (your local keys, your machine, you earn Lux for builds).
+14. **Two kinds of "contribute."** `/contribute openai sk-xxx` donates a key to the network (encrypted on EC2, used server-side for Path A). Running PandoTeams on your node contributes your COMPUTE (your local keys, your machine, you earn Lux for builds).
 
-15. **Builder targeting ≠ Deploy targeting.** `findBestBuilder()` looks for `shareCompute + compute_cpu` (PandoCode contributor nodes). `AppManager.findDeployTarget()` looks for `credentialAccess + storageBackend='mongodb'` (EC2 secure nodes). These are DIFFERENT node types. If you mix them up, deploys silently fail because PandoCode nodes can't decrypt S3 credentials.
+15. **Builder targeting ≠ Deploy targeting.** `findBestBuilder()` looks for `shareCompute + compute_cpu` (PandoTeams contributor nodes). `AppManager.findDeployTarget()` looks for `credentialAccess + storageBackend='mongodb'` (EC2 secure nodes). These are DIFFERENT node types. If you mix them up, deploys silently fail because PandoTeams nodes can't decrypt S3 credentials.
 
 16. **AppManager update result is awaited and pushed to chat.** `appManager.update(projectId)` is awaited from platform-api.ts after build completion. On success: deploy message pushed to chat thread via `threadStore.addMessage()` + SSE event `app_deployed`. On failure: failure message pushed to chat thread + SSE event `app_deploy_status`. History is recorded in apps.db regardless of success/failure.
 
@@ -2489,13 +2489,13 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 18. **Marketplace filters test artifacts.** `getMarketplaceAsync()` uses a regex to strip projects named "hello world", "test app", "demo", "example", etc. If your test project doesn't show up in the marketplace, that's why. Use a real project name.
 
-18. **Project workspaces are `~/.pando/projects/{projectId}/`.** Engine adapter creates the directory and passes it as `projectPath` to PandoCode. The engine writes files there. The deploy pipeline reads `workspaceDir` from the project record to know where to git push from. If `workspaceDir` is missing, GitHub push fails with "workspaceDir required".
+18. **Project workspaces are `~/.pando/projects/{projectId}/`.** Engine adapter creates the directory and passes it as `projectPath` to PandoTeams. The engine writes files there. The deploy pipeline reads `workspaceDir` from the project record to know where to git push from. If `workspaceDir` is missing, GitHub push fails with "workspaceDir required".
 
 19. **Board task dedup is by exact title match.** `addBoardTask()` checks if a pending/in_progress task with the identical title exists and returns its ID instead of creating a duplicate. This prevents user spam but doesn't catch semantically similar reports (e.g., "login broken" vs "login page crashes"). The council handles semantic dedup by batching similar issues during tick processing.
 
-20. **Claude Code is a PandoCode provider, NOT a pando-node feature.** Model/provider selection lives in `@pando-code/core`. pando-node calls `engine.send()` and doesn't know what model is running. NEVER put model-routing logic in engine-adapter.ts or platform-api.ts. This mistake was made once (ClaudeCodeSession in engine-adapter) and reverted. The brain/body boundary is inviolable.
+20. **Claude Code is a PandoTeams provider, NOT a pando-node feature.** Model/provider selection lives in `@pando-teams/core`. pando-node calls `engine.send()` and doesn't know what model is running. NEVER put model-routing logic in engine-adapter.ts or platform-api.ts. This mistake was made once (ClaudeCodeSession in engine-adapter) and reverted. The brain/body boundary is inviolable.
 
-21. **Claude Code nested session prevention.** The claude-code provider in PandoCode deletes the `CLAUDECODE` env var from the subprocess environment. Without this, spawning Claude Code from within a Claude Code session fails. This is handled in `@pando-code/core`, not pando-node.
+21. **Claude Code nested session prevention.** The claude-code provider in PandoTeams deletes the `CLAUDECODE` env var from the subprocess environment. Without this, spawning Claude Code from within a Claude Code session fails. This is handled in `@pando-teams/core`, not pando-node.
 
 22. **Doorman severity classification uses word-variant regex.** `crash(es|ed|ing)`, `bug`, `error`, `fail(s|ed|ing)` all match as BUG. Without the variant suffixes, "crashes" would be classified as FEATURE (word boundary `\bcrash\b` doesn't match "crashes"). This was a real production bug found in E2E testing.
 
@@ -2511,13 +2511,13 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 
 28. **`npm install` must run before `npm run build` during upgrade.** If new dependencies were added between commits (e.g., `mongodb` package added), the build fails on the receiving node because node_modules is stale. Both `upgrade-protocol.ts:pullAndUpgrade()` and the `/upgrade` API endpoint run `npm install` before build. The root `package.json` also has a `prebuild` hook that installs specific missing deps (targeted, not full `npm install`, to avoid `file:` reference failures on EC2).
 
-29. **`file:` dependencies break `npm install` on EC2.** `"@pando-code/core": "file:../code/packages/core"` only works on the dev machine where `../code/` exists. On EC2, full `npm install` fails because the path doesn't exist. The `prebuild` script works around this by installing only specific missing packages (`npm install mongodb --no-save`) instead of running full `npm install`. If you add a new dependency, ensure it gets installed via the targeted prebuild OR ensure `npm install` failure is non-fatal in upgrade-protocol.ts (it is — the catch logs a warning and continues).
+29. **`file:` dependencies break `npm install` on EC2.** `"@pando-teams/core": "file:../code/packages/core"` only works on the dev machine where `../code/` exists. On EC2, full `npm install` fails because the path doesn't exist. The `prebuild` script works around this by installing only specific missing packages (`npm install mongodb --no-save`) instead of running full `npm install`. If you add a new dependency, ensure it gets installed via the targeted prebuild OR ensure `npm install` failure is non-fatal in upgrade-protocol.ts (it is — the catch logs a warning and continues).
 
 30. **Auto-upgrade has 3 trigger paths.** (a) `onUpgradeApproved` callback fires immediately on the proposing node when governance passes. (b) GossipSub broadcast on `pando/upgrades` topic notifies connected peers. (c) Catchup timer (every 5min, 30s startup delay) scans all governance proposals for `status:'passed' + category:'upgrade'` and calls `pullAndUpgrade` for any not yet applied. Path C is the safety net — handles offline peers, missed broadcasts, and nodes that joined after the broadcast. If upgrade isn't happening, check `journalctl` for `[upgrade] Catch-up:` messages.
 
 31. **EC2 pando directory is `/opt/pando`, NOT `/opt/pando/node`.** The repo is cloned directly into `/opt/pando`. The monorepo root IS `/opt/pando`. Agents assuming `/opt/pando/node` will get "No such file or directory" errors on every command.
 
-32. **pando-node and pando-code are apps in AppManager.** `GET /v1/apps` returns them alongside user apps. They are tier 3 (infrastructure) with `governance: true` and `deployAction: 'restart-node'`. This is the unified pipeline — same registry, same history table, same API. However, UpgradeProtocol still runs its own git/build/deploy logic for now (Phases 3-7 will merge them). Don't be confused by the temporary duplication.
+32. **pando-node and pando-teams are apps in AppManager.** `GET /v1/apps` returns them alongside user apps. They are tier 3 (infrastructure) with `governance: true` and `deployAction: 'restart-node'`. This is the unified pipeline — same registry, same history table, same API. However, UpgradeProtocol still runs its own git/build/deploy logic for now (Phases 3-7 will merge them). Don't be confused by the temporary duplication.
 
 33. **Never hardcode PATs in git remote URLs.** Use `ResourceRegistry.resolveGitCredential(repoUrl, userId?)` instead. It resolves contributed credentials dynamically, supports user-scoped PATs for private repos, and injects the token into the URL at call time. The old pattern of extracting PATs from `git remote get-url origin` is deprecated.
 

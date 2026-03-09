@@ -26,7 +26,7 @@ pando-infra:      [Lead + Observer + QA] → pre-seeded, same pipeline, jumpstar
 Future user team: [Lead] → user picks template → lead fills in the gaps
 ```
 
-**Tool architecture:** PandoCode tools (manage_tasks, send_message, etc.) work for API
+**Tool architecture:** PandoTeams tools (manage_tasks, send_message, etc.) work for API
 models (Gemini, GPT) but are silently dropped for Claude Code CLI. All agent operations
 are exposed as HTTP API endpoints. Claude Code agents use curl. See BIBLE.md Section 3.2.10.
 
@@ -40,8 +40,8 @@ are exposed as HTTP API endpoints. Claude Code agents use curl. See BIBLE.md Sec
 - **Phase 3** (ea2559bc): Custom JSON templates on disk, template CRUD API, `getTemplates()` merges built-in+custom
 - **Phase 6.1** (3ae904f3): Session persistence — save/restore Claude CLI session IDs across restarts
 - **Phase 7** (ea2559bc + e622e1f4): All team API endpoints complete (status, tasks, agents, cost, spawn, stop, message)
-- **Claude Code tool fix** (e622e1f4): HTTP API for all agent operations, prompts use curl not PandoCode tools, state table schema fixed
-- **pando-code** (d948ed6): `createClaudeCodeModel()` accepts `initialSessionId`, exposes `getSessionId()`
+- **Claude Code tool fix** (e622e1f4): HTTP API for all agent operations, prompts use curl not PandoTeams tools, state table schema fixed
+- **pando-teams** (d948ed6): `createClaudeCodeModel()` accepts `initialSessionId`, exposes `getSessionId()`
 
 ### Live Tested ✅
 - Lead processes board tasks autonomously ✅
@@ -50,10 +50,10 @@ are exposed as HTTP API endpoints. Claude Code agents use curl. See BIBLE.md Sec
 - Inter-agent messaging via HTTP API ✅
 - Template CRUD (list, create, delete) ✅
 - Board task CRUD (create, update via PATCH) ✅
-- `manage_team` PandoCode tool: NOT usable with Claude Code CLI (by design — use HTTP API instead) ✅
+- `manage_team` PandoTeams tool: NOT usable with Claude Code CLI (by design — use HTTP API instead) ✅
 
-- **Phase 4** (pando-code 0120cd2): Network Teams view — dashboard, team cards, agents, board, cost
-- **Phase 5** (pando-code 8c820cd, pando-node f8d0c5dd): Agent detail panel — messages, per-agent cost, model badges
+- **Phase 4** (pando-teams 0120cd2): Network Teams view — dashboard, team cards, agents, board, cost
+- **Phase 5** (pando-teams 8c820cd, pando-node f8d0c5dd): Agent detail panel — messages, per-agent cost, model badges
 
 ### Still TODO
 - **Phase 6.2+**: Cross-node migration, graceful degradation
@@ -284,18 +284,18 @@ DELETE /v1/templates/:id               → delete custom template (can't delete 
 
 ---
 
-## Phase 4: PandoCode Web UI — Network Projects
+## Phase 4: PandoTeams Web UI — Network Projects
 
 ### 4.1 Linked Workspaces Config
-- **In pando-code repo**: `PandoCodeConfig.network` option
+- **In pando-teams repo**: `PandoTeamsConfig.network` option
 - `network.enabled: boolean` — toggle pando-node link
 - `network.autoDiscover: boolean` — scan `~/.pando/teams/` for team DBs
-- pando-code stays standalone when disabled (default)
+- pando-teams stays standalone when disabled (default)
 
 ### 4.2 Project Hub — Network Projects Section
 - "Network Projects" section below local projects
 - Each card: project name, team name, agent count, status
-- Click: opens team's `.pando-code.db` as active project
+- Click: opens team's `.pando-teams.db` as active project
 
 ### 4.3 Settings — Network Toggle
 - Settings page "Pando Node" section
@@ -303,7 +303,7 @@ DELETE /v1/templates/:id               → delete custom template (can't delete 
 
 ### TEST MILESTONE 4
 ```
-✓ pando-code web UI shows network projects when enabled
+✓ pando-teams web UI shows network projects when enabled
 ✓ Click project → loads team DB → shows agents, board, history
 ✓ Settings toggle ON/OFF works
 ✓ Auto-discovery finds team DBs in ~/.pando/teams/
@@ -343,22 +343,22 @@ DELETE /v1/templates/:id               → delete custom template (can't delete 
 
 **Where sessions live:**
 - Claude Code CLI sessions: `~/.claude/` (filesystem, managed by Claude)
-- PandoCode sessions: `.pando-code.db` `sessions` table
+- PandoTeams sessions: `.pando-teams.db` `sessions` table
 - Claude CLI session ID: **closure variable** in `createClaudeCodeModel()` — NOT persisted
 
 **What survives restart:**
-- `.pando-code.db`: board_tasks, memories, messages, agent profiles ✓
+- `.pando-teams.db`: board_tasks, memories, messages, agent profiles ✓
 - Claude CLI session files in `~/.claude/` ✓
 - **LOST**: Closure variable linking engine to CLI session → every restart = fresh session
 
 **Cross-node migration:**
 - Team metadata synced via GossipSub `pando:teams` topic
-- `.pando-code.db` local-only → new node starts fresh
+- `.pando-teams.db` local-only → new node starts fresh
 - Acceptable: board + memories provide enough context to continue
 
 ### 6.1 Session ID Persistence
 
-**pando-code changes (claude-code.ts):**
+**pando-teams changes (claude-code.ts):**
 1. `createClaudeCodeModel({ initialSessionId? })` — resume previous session
 2. `model.getSessionId()` — expose current session ID
 3. Validate session before `--resume` (may be cleaned up)
@@ -431,7 +431,7 @@ DELETE /v1/templates/:id               → delete custom template (can't delete 
 
 ### 8.3 Team Dashboard
 - Aggregate team data across all nodes
-- Detail delegated to pando-code web UI
+- Detail delegated to pando-teams web UI
 
 ---
 
@@ -470,7 +470,7 @@ PHASE 1 — Foundation Cleanup (NOW):
 PHASE 2 — Template System:
   2.1  Built-in templates (TypeScript)         ← engine-adapter.ts
   2.2  AgentTemplate interface                 ← engine-adapter.ts
-  2.3  manage_team tool for leads              ← engine-adapter.ts + pando-code
+  2.3  manage_team tool for leads              ← engine-adapter.ts + pando-teams
   2.4  Lead autonomous team management         ← prompt engineering
   → TEST MILESTONE 2
 
@@ -481,10 +481,10 @@ PHASE 3 — Custom Templates:
   3.4  User-submitted templates (future)       ← gateway
   → TEST MILESTONE 3
 
-PHASE 4 — PandoCode Web UI:                   ← pando-code repo
+PHASE 4 — PandoTeams Web UI:                   ← pando-teams repo
   → TEST MILESTONE 4
 
-PHASE 5 — Agent Visibility:                   ← pando-code repo
+PHASE 5 — Agent Visibility:                   ← pando-teams repo
   → TEST MILESTONE 5
 
 PHASE 6 — Session Persistence:                ← both repos

@@ -21,7 +21,7 @@ import { homedir } from 'os';
 
 // ─── Config ─────────────────────────────────────────────────────────────
 
-const GATEWAY_URL = 'https://gateway-one-mu.vercel.app';
+const HUB_URL = 'https://gateway-one-mu.vercel.app';
 // Use 127.0.0.1 explicitly — localhost resolves to ::1 (IPv6) on some systems
 const NODE_API_URL = 'http://127.0.0.1:4100';
 
@@ -81,7 +81,7 @@ async function apiRaw(method: string, path: string, body?: any, token?: string):
 
 test.describe('4.2 — Gateway UI', () => {
   test('Home page renders with hero and nav', async ({ page }) => {
-    await page.goto(GATEWAY_URL);
+    await page.goto(HUB_URL);
     // Use more specific locator — 'pando' appears multiple times
     await expect(page.locator('nav >> text=pando').first()).toBeVisible();
     await expect(page.locator('h1')).toContainText('internet');
@@ -89,91 +89,91 @@ test.describe('4.2 — Gateway UI', () => {
   });
 
   test('Status dashboard loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/dashboard`);
+    await page.goto(`${HUB_URL}/dashboard`);
     // Don't use networkidle — pages have SSE/WS connections
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Peers page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/network`);
+    await page.goto(`${HUB_URL}/network`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Wallet page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/wallet`);
+    await page.goto(`${HUB_URL}/wallet`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Chat page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/chat`);
+    await page.goto(`${HUB_URL}/chat`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Projects page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/projects`);
+    await page.goto(`${HUB_URL}/projects`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Governance page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/governance`);
+    await page.goto(`${HUB_URL}/governance`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Resources page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/resources`);
+    await page.goto(`${HUB_URL}/resources`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Marketplace page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/marketplace`);
+    await page.goto(`${HUB_URL}/marketplace`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Login page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/login`);
+    await page.goto(`${HUB_URL}/login`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Register page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/register`);
+    await page.goto(`${HUB_URL}/register`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Explore page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/explore`);
+    await page.goto(`${HUB_URL}/explore`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Agents page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/agents`);
+    await page.goto(`${HUB_URL}/agents`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Search page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/search`);
+    await page.goto(`${HUB_URL}/search`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('No broken navigation links', async ({ page }) => {
-    await page.goto(GATEWAY_URL);
+    await page.goto(HUB_URL);
     const links = await page.locator('nav a[href]').all();
     for (const link of links) {
       const href = await link.getAttribute('href');
       if (href && href.startsWith('/')) {
-        const response = await page.goto(`${GATEWAY_URL}${href}`);
+        const response = await page.goto(`${HUB_URL}${href}`);
         expect(response?.status(), `${href} returned ${response?.status()}`).toBeLessThan(500);
         await page.goBack();
       }
@@ -187,7 +187,7 @@ test.describe('4.2 — Gateway UI', () => {
 
 test.describe('4.3 — Auth Flow', () => {
   test('Login page loads (may redirect if already logged in)', async ({ page }) => {
-    const response = await page.goto(`${GATEWAY_URL}/login`);
+    const response = await page.goto(`${HUB_URL}/login`);
     expect(response?.status()).toBeLessThan(500);
     await page.waitForLoadState('domcontentloaded');
     // Page either shows login form or redirects to home (if already claimed)
@@ -195,7 +195,7 @@ test.describe('4.3 — Auth Flow', () => {
   });
 
   test('Register page loads (may redirect if already logged in)', async ({ page }) => {
-    const response = await page.goto(`${GATEWAY_URL}/register`);
+    const response = await page.goto(`${HUB_URL}/register`);
     expect(response?.status()).toBeLessThan(500);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
@@ -319,7 +319,7 @@ test.describe('4.6 — Ledger & Economy', () => {
   });
 
   test('Transaction history via gateway', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/wallet`);
+    await page.goto(`${HUB_URL}/wallet`);
     await page.waitForLoadState('domcontentloaded');
     // Wait for content to render (up to 10s)
     await page.waitForTimeout(3000);
@@ -329,7 +329,7 @@ test.describe('4.6 — Ledger & Economy', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════
-// 4.7 — Agent System (PandoCode Integration)
+// 4.7 — Agent System (PandoTeams Integration)
 // ═════════════════════════════════════════════════════════════════════════
 
 test.describe('4.7 — Agent System', () => {
@@ -347,16 +347,16 @@ test.describe('4.7 — Agent System', () => {
   });
 
   test('Agents page on gateway shows hierarchy', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/agents`);
+    await page.goto(`${HUB_URL}/agents`);
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(3000);
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
-  test('PandoCode engine detected as capability', async () => {
+  test('PandoTeams engine detected as capability', async () => {
     const data = await apiGet('/v1/capabilities', token);
     expect(data.capabilities).toBeTruthy();
-    expect(data.capabilities).toContain('pando-code');
+    expect(data.capabilities).toContain('pando-teams');
   });
 });
 
@@ -401,7 +401,7 @@ test.describe('4.9 — Governance & Auto-Upgrade', () => {
   });
 
   test('Governance page on gateway loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/governance`);
+    await page.goto(`${HUB_URL}/governance`);
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(3000);
     const body = await page.textContent('body');
@@ -588,7 +588,7 @@ test.describe('4.10 — Static App Lifecycle', () => {
   });
 
   test('Marketplace page on gateway shows projects', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/marketplace`);
+    await page.goto(`${HUB_URL}/marketplace`);
     await page.waitForLoadState('domcontentloaded');
     await page.waitForTimeout(3000);
     await expect(page.locator('body')).not.toBeEmpty();
@@ -732,10 +732,10 @@ test.describe('4.12 — Resource & Marketplace', () => {
     expect(data).toBeTruthy();
   });
 
-  test('PandoCode is the only AI backend', async () => {
+  test('PandoTeams is the only AI backend', async () => {
     const data = await apiGet('/v1/capabilities', token);
-    expect(data.capabilities).toContain('pando-code');
-    // Verify PandoCode is detected and active
+    expect(data.capabilities).toContain('pando-teams');
+    // Verify PandoTeams is detected and active
     const status = await apiGet('/v1/status', token);
     expect(status.connected).toBe(true);
   });
@@ -747,19 +747,19 @@ test.describe('4.12 — Resource & Marketplace', () => {
 
 test.describe('Gateway API routes', () => {
   test('Gateway /api/status returns data', async ({ page }) => {
-    const response = await page.goto(`${GATEWAY_URL}/api/status`);
+    const response = await page.goto(`${HUB_URL}/api/status`);
     expect(response?.status()).toBe(200);
     const text = await page.textContent('body');
     expect(text).toContain('identity');
   });
 
   test('Gateway /api/peers returns data', async ({ page }) => {
-    const response = await page.goto(`${GATEWAY_URL}/api/peers`);
+    const response = await page.goto(`${HUB_URL}/api/peers`);
     expect(response?.status()).toBe(200);
   });
 
   test('Gateway /api/agents/tree returns data', async ({ page }) => {
-    const response = await page.goto(`${GATEWAY_URL}/api/agents/tree`);
+    const response = await page.goto(`${HUB_URL}/api/agents/tree`);
     expect(response?.status()).toBe(200);
   });
 });
@@ -1145,115 +1145,115 @@ test.describe('4.23 — Council Extended', () => {
 
 test.describe('4.24 — Gateway Extended Pages', () => {
   test('Council page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/council`);
+    await page.goto(`${HUB_URL}/council`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Monitor page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/monitor`);
+    await page.goto(`${HUB_URL}/monitor`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Scheduler page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/scheduler`);
+    await page.goto(`${HUB_URL}/scheduler`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Content page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/content`);
+    await page.goto(`${HUB_URL}/content`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Services page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/services`);
+    await page.goto(`${HUB_URL}/services`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Capacity page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/capacity`);
+    await page.goto(`${HUB_URL}/capacity`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Apps page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/apps`);
+    await page.goto(`${HUB_URL}/apps`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Node setup page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/node-setup`);
+    await page.goto(`${HUB_URL}/node-setup`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Strategy page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/strategy`);
+    await page.goto(`${HUB_URL}/strategy`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Resources guide page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/resources/guide`);
+    await page.goto(`${HUB_URL}/resources/guide`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Dev page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/dev`);
+    await page.goto(`${HUB_URL}/dev`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Explore activity page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/explore/activity`);
+    await page.goto(`${HUB_URL}/explore/activity`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Explore economy page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/explore/economy`);
+    await page.goto(`${HUB_URL}/explore/economy`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Explore health page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/explore/health`);
+    await page.goto(`${HUB_URL}/explore/health`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Explore network page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/explore/network`);
+    await page.goto(`${HUB_URL}/explore/network`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Explore governance page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/explore/governance`);
+    await page.goto(`${HUB_URL}/explore/governance`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Explore tasks page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/explore/tasks`);
+    await page.goto(`${HUB_URL}/explore/tasks`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Explore how it works page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/explore/how-it-works`);
+    await page.goto(`${HUB_URL}/explore/how-it-works`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
 
   test('Explore strategy page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/explore/strategy`);
+    await page.goto(`${HUB_URL}/explore/strategy`);
     await page.waitForLoadState('domcontentloaded');
     await expect(page.locator('body')).not.toBeEmpty();
   });
@@ -1673,20 +1673,20 @@ test.describe('5.6 — Content Discovery Flow (functional)', () => {
 });
 
 // ═════════════════════════════════════════════════════════════════════════
-// 5.7 — PandoCode Engine Verification (functional)
+// 5.7 — PandoTeams Engine Verification (functional)
 // ═════════════════════════════════════════════════════════════════════════
 
-test.describe('5.7 — PandoCode Engine Verification (functional)', () => {
+test.describe('5.7 — PandoTeams Engine Verification (functional)', () => {
   let token: string;
 
   test.beforeAll(() => {
     token = loadApiToken();
   });
 
-  test('Capabilities include pando-code', async () => {
+  test('Capabilities include pando-teams', async () => {
     const data = await apiGet('/v1/capabilities', token);
     expect(data.capabilities).toBeTruthy();
-    expect(data.capabilities).toContain('pando-code');
+    expect(data.capabilities).toContain('pando-teams');
   });
 
   test('Status shows connected node with version info', async () => {
@@ -2440,7 +2440,7 @@ test.describe('10.1 — Testing API Endpoints', () => {
 
 test.describe('10.2 — Testing Gateway Page', () => {
   test('Testing dashboard page loads', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/testing`, { waitUntil: 'domcontentloaded', timeout: 15000 });
+    await page.goto(`${HUB_URL}/testing`, { waitUntil: 'domcontentloaded', timeout: 15000 });
     await expect(page.locator('body')).toBeVisible();
     const text = await page.textContent('body');
     expect(text?.length).toBeGreaterThan(50);

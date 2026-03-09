@@ -39,9 +39,9 @@ Complete these remaining roadmap items before anything else:
 
 ---
 
-## Priority 2: PandoCode Web UI Testing (CRITICAL)
+## Priority 2: PandoTeams Web UI Testing (CRITICAL)
 
-The pando-code web UI (port 4873) has a "Network" tab that shows teams from pando-node.
+The pando-teams web UI (port 4873) has a "Network" tab that shows teams from pando-node.
 
 ### What to Test (as a real user would)
 - **Navigate to Network tab** — does it show the pando-infra team?
@@ -54,7 +54,7 @@ The pando-code web UI (port 4873) has a "Network" tab that shows teams from pand
 - **Board tasks** — are they listed? Do they show correct status?
 - **Auto-refresh** — does the dashboard update every 30s without manual reload?
 - **"Not connected" state** — what happens if pando-node is down?
-- **Council visibility** — since council runs on this Windows node (only node with pando-code), we should see the 3 council agents (lead + observer + QA) working live
+- **Council visibility** — since council runs on this Windows node (only node with pando-teams), we should see the 3 council agents (lead + observer + QA) working live
 
 ### How to Test
 Use Playwright with headed browser (or the MCP browser tools) to navigate to `http://localhost:4873` and interact with the UI. Validate real data, not just page loads.

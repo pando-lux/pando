@@ -1,15 +1,15 @@
 /**
- * PandoCode — Claude Code Agent Runtime E2E Tests
+ * PandoTeams — Claude Code Agent Runtime E2E Tests
  *
  * Tests the Claude Code agent integration end-to-end:
  *   - Memory HTTP API (search, list, create, health)
- *   - Claude Code chat via PandoCode engine
+ *   - Claude Code chat via PandoTeams engine
  *   - Model switching
  *   - Reflection pipeline (fires after response, saves lessons)
  *   - Case-insensitive memory search
  *
  * Prerequisites:
- *   - PandoCode server running on port 4873
+ *   - PandoTeams server running on port 4873
  *   - Claude Code CLI installed and authenticated
  */
 
@@ -57,7 +57,7 @@ async function chatSSE(message: string, timeoutMs = 120_000): Promise<{ chunks: 
 
 // ── Server Health ────────────────────────────────────────────────────
 
-test.describe('PandoCode Server', () => {
+test.describe('PandoTeams Server', () => {
   test('server is running and healthy', async () => {
     const { status, data } = await apiGet('/status');
     expect(status).toBe(200);

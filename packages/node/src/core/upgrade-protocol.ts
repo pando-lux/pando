@@ -157,11 +157,11 @@ export class UpgradeProtocol {
 
   /**
    * Attempt a safe restart. Exits with RESTART_EXIT_CODE (75) only when:
-   * - 0 active workers (no PandoCode sessions in progress)
+   * - 0 active workers (no PandoTeams sessions in progress)
    * - No pending requests in-flight
    *
    * If not safe, logs a warning and returns — the next upgrade cycle will retry.
-   * NEVER call process.exit() if workers are active: kills running PandoCode sessions.
+   * NEVER call process.exit() if workers are active: kills running PandoTeams sessions.
    */
   private safeRestart(builtCommit: string): void {
     // Guard: if the built commit matches the running commit, no restart needed
@@ -291,7 +291,7 @@ export class UpgradeProtocol {
 
     // Step 6a: Detect npm-linked packages before npm install wipes them.
     // npm link creates symlinks that npm install removes. We re-establish them after.
-    const pandoCodeCorePath = join(this.repoDir, 'node_modules', '@pando-code', 'core');
+    const pandoCodeCorePath = join(this.repoDir, 'node_modules', '@pando-teams', 'core');
     let wasLinked = false;
     let linkTarget = '';
     try {
@@ -300,7 +300,7 @@ export class UpgradeProtocol {
       if (stat.isSymbolicLink()) {
         linkTarget = readlinkSync(pandoCodeCorePath, 'utf-8');
         wasLinked = true;
-        console.log(`[upgrade] @pando-code/core is npm-linked → ${linkTarget}`);
+        console.log(`[upgrade] @pando-teams/core is npm-linked → ${linkTarget}`);
       }
     } catch { /* not installed or not a symlink */ }
 
@@ -323,16 +323,16 @@ export class UpgradeProtocol {
         let stillLinked = false;
         try { stillLinked = lstat2(pandoCodeCorePath).isSymbolicLink(); } catch { /* gone */ }
         if (!stillLinked) {
-          console.log('[upgrade] Re-linking @pando-code/core...');
-          execSync('npm link @pando-code/core', {
+          console.log('[upgrade] Re-linking @pando-teams/core...');
+          execSync('npm link @pando-teams/core', {
             cwd: this.repoDir, timeout: 60_000, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true,
           });
-          console.log('[upgrade] @pando-code/core re-linked successfully');
+          console.log('[upgrade] @pando-teams/core re-linked successfully');
         } else {
-          console.log('[upgrade] @pando-code/core symlink survived npm install');
+          console.log('[upgrade] @pando-teams/core symlink survived npm install');
         }
       } catch (err: any) {
-        console.warn(`[upgrade] Failed to re-link @pando-code/core: ${(err.stderr?.toString() || err.message)?.slice(0, 200)}`);
+        console.warn(`[upgrade] Failed to re-link @pando-teams/core: ${(err.stderr?.toString() || err.message)?.slice(0, 200)}`);
       }
     }
 

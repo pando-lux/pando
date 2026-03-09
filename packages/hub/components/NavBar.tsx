@@ -35,7 +35,7 @@ export default function NavBar() {
     let cancelled = false;
     const fetchHealth = async () => {
       try {
-        const res = await fetch("/api/gateway/status", { signal: AbortSignal.timeout(5000) });
+        const res = await fetch("/api/hub/status", { signal: AbortSignal.timeout(5000) });
         if (res.ok && !cancelled) {
           const data = await res.json();
           setNodeHealth({ healthyCount: data.healthyCount, totalCount: data.totalCount });

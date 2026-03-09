@@ -649,8 +649,8 @@ Be friendly and helpful. Keep answers short.`
 
     });
 
-    // Start EngineAdapter — connects to @pando-code/core brain.
-    // 'secure' and 'lightweight' modes skip engines (cloud instances don't have PandoCode).
+    // Start EngineAdapter — connects to @pando-teams/core brain.
+    // 'secure' and 'lightweight' modes skip engines (cloud instances don't have PandoTeams).
     if (node.config.nodeMode !== 'compute' && node.config.nodeMode !== 'relay'
       && node.config.nodeMode !== 'secure' && node.config.nodeMode !== 'lightweight') {
       await node.startEngine();
@@ -659,7 +659,7 @@ Be friendly and helpful. Keep answers short.`
     }
 
     // ── Service Loader ─────────────────────────────────────────────────
-    // Initialize the modular service loader. Currently loads @pando-code/core
+    // Initialize the modular service loader. Currently loads @pando-teams/core
     // if installed as an npm package (future: @pando/exchange, @pando/storage).
     // This runs AFTER startEngine() during the transition period — eventually
     // ServiceLoader will replace startEngine() entirely.
@@ -693,13 +693,13 @@ Be friendly and helpful. Keep answers short.`
       });
       (node as any).serviceLoader = serviceLoader;
       // If the engine adapter is already running, skip loadAll() to avoid double-loading
-      // @pando-code/core. Otherwise, call loadAll() as a fallback discovery mechanism
-      // so future services that aren't @pando-code/core always load through ServiceLoader.
+      // @pando-teams/core. Otherwise, call loadAll() as a fallback discovery mechanism
+      // so future services that aren't @pando-teams/core always load through ServiceLoader.
       if (node.getEngineAdapter?.()?.available) {
         // Engine started directly — register it in ServiceLoader so /v1/services reports it
         const { createEngineService } = await import('./core/engine-adapter.js');
         serviceLoader.register(createEngineService(node.getEngineAdapter()));
-        console.log('[services] ServiceLoader initialized — engine registered as pando-code service.');
+        console.log('[services] ServiceLoader initialized — engine registered as pando-teams service.');
       } else {
         console.log('[services] ServiceLoader initialized — no engine, calling loadAll() for service discovery.');
         await serviceLoader.loadAll();
@@ -764,7 +764,7 @@ Be friendly and helpful. Keep answers short.`
       };
 
       // Auto-bootstrap pando-infra — delayed to allow P2P team sync first.
-      // Without this delay, both PandoCode-capable nodes create pando-infra
+      // Without this delay, both PandoTeams-capable nodes create pando-infra
       // independently (split-brain). The delay lets team_sync_response arrive
       // so we know if another node already manages the team.
       const TEAM_SYNC_WAIT_MS = 10_000; // 10s — enough for P2P sync round-trip

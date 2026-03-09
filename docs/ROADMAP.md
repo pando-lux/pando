@@ -48,7 +48,7 @@ See `docs/COUNCIL-ROADMAP.md` for the full ordered backlog. Summary:
 
 - Rotate AWS credentials (IAM console)
 - Scrub secrets from git history (`git filter-repo`)
-- Make pando-code repo public
+- Make pando-teams repo public
 - EC2 SSH security group update
 - Vercel gateway env vars configuration
 - Gateway dashboard UI improvements

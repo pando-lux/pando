@@ -213,7 +213,7 @@ async function main() {
 
   // --mode <full|contributor|secure|lightweight> (node specialization, default: full)
   // 'full' = everything (default for double-click launchers, zero config)
-  // 'contributor' = full + shareCompute (contributes PandoCode AI compute, earns Lux)
+  // 'contributor' = full + shareCompute (contributes PandoTeams AI compute, earns Lux)
   // 'secure' = EC2 with MongoDB, credential storage, deploy target (legacy alias: 'compute')
   // 'lightweight' = P2P only, routing + network growth (legacy alias: 'relay')
   const VALID_MODES = ['full', 'contributor', 'secure', 'lightweight', 'compute', 'relay'];
@@ -412,7 +412,7 @@ async function main() {
   markStable(dataDir);
 
   // Agent system, pipeline, and scheduler only run in 'full' and 'contributor' modes.
-  // 'secure' and 'lightweight' modes skip these (no PandoCode engine on cloud instances).
+  // 'secure' and 'lightweight' modes skip these (no PandoTeams engine on cloud instances).
   let schedulerEnabled = false;
   if (nodeMode === 'full' || nodeMode === 'contributor') {
     // Enable Phase 16 pipeline if --pipeline flag was passed (must precede scheduler start)
@@ -430,7 +430,7 @@ async function main() {
       const claudeDetected = detectClaudeCode();
       if (claudeDetected) {
         schedulerEnabled = true;
-        console.log('[scheduler] Auto-detected PandoCode engine — scheduler enabled. Use --no-scheduler to disable.');
+        console.log('[scheduler] Auto-detected PandoTeams engine — scheduler enabled. Use --no-scheduler to disable.');
       }
     } else if (explicitScheduler) {
       console.log('[cli] Auto-starting scheduler (--scheduler flag)...');

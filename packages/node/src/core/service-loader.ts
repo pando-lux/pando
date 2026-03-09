@@ -11,7 +11,7 @@ import type { PandoService, ServiceContext } from '@pando/shared';
 
 /** Packages to attempt loading as services (order matters for dependency resolution) */
 const SERVICE_PACKAGES: string[] = [
-  '@pando-code/core',
+  '@pando-teams/core',
   // future: '@pando/exchange', '@pando/storage', etc.
 ];
 

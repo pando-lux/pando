@@ -22,23 +22,23 @@ a todo app and the Pando network itself. The only differences:
 The team architecture must work in ALL of them.
 
 ```
-MODE 1: Standalone PandoCode (offline, no pando-node)
-  - User runs PandoCode CLI on their laptop
-  - Local SQLite (.pando-code.db) for everything
+MODE 1: Standalone PandoTeams (offline, no pando-node)
+  - User runs PandoTeams CLI on their laptop
+  - Local SQLite (.pando-teams.db) for everything
   - Board, agents, sessions, memory — all local
   - No P2P, no sync, no teams, no network
   - This ALREADY WORKS and must NOT break
 
-MODE 2: PandoCode inside pando-node (networked)
-  - PandoCode runs as usual (local SQLite for board/sessions)
+MODE 2: PandoTeams inside pando-node (networked)
+  - PandoTeams runs as usual (local SQLite for board/sessions)
   - pando-node ADDS: team registry (routing), governance, upgrade, deploy
   - Team registry synced via GossipSub (lightweight metadata only)
   - Board stays LOCAL to managing node (not synced via P2P)
   - Board accessed remotely via P2P request-reply on demand
   - Board backed up to git repo for durability across handoffs
 
-MODE 3: pando-node WITHOUT PandoCode (EC2 secure, lightweight nodes)
-  - No local PandoCode, no agents, no team execution
+MODE 3: pando-node WITHOUT PandoTeams (EC2 secure, lightweight nodes)
+  - No local PandoTeams, no agents, no team execution
   - Receives team registry via P2P (knows who manages what)
   - Routes requests to the correct managing node
   - EC2 has MongoDB for credentials/marketplace (separate concern)
@@ -60,7 +60,7 @@ MODE 3: pando-node WITHOUT PandoCode (EC2 secure, lightweight nodes)
 │                     DATA SEPARATION                                 │
 ├─────────────────────────────┬───────────────────────────────────────┤
 │ LAYER 1: Team Registry      │ LAYER 2: Board + Agent State          │
-│ (~/.pando/teams/teams.db)   │ (~/.pando/teams/{teamId}/.pando-code.db)│
+│ (~/.pando/teams/teams.db)   │ (~/.pando/teams/{teamId}/.pando-teams.db)│
 │                             │                                       │
 │ WHAT: routing metadata      │ WHAT: application state               │
 │  - team id, name            │  - board tasks (title, status, progress)│
@@ -119,7 +119,7 @@ A team always corresponds to one or more projects, but team = operational, proje
 
 ### Team
 
-A group of PandoCode agents running on one node, managing one or more repos.
+A group of PandoTeams agents running on one node, managing one or more repos.
 
 ```
 TeamConfig {
@@ -138,7 +138,7 @@ TeamConfig {
 ```
 
 **What is NOT in the registry:** agent configs, system prompts, board tasks, messages.
-Those live locally on the managing node in PandoCode's SQLite.
+Those live locally on the managing node in PandoTeams's SQLite.
 
 ### Team Size is Dynamic
 
@@ -147,7 +147,7 @@ Those live locally on the managing node in PandoCode's SQLite.
 - **pando-infra:** lead + observer + QA (3 agents, lead can add more)
 - A team can manage multiple repos — lead's prompt lists them all
 
-The lead agent decides team composition. Users can also configure via PandoCode UI.
+The lead agent decides team composition. Users can also configure via PandoTeams UI.
 pando-node doesn't care about team internals — it only knows the team exists and who runs it.
 
 ### Governance: One Flow, One Gate
@@ -187,7 +187,7 @@ branch at the moment of deploying a code change. Everything else is shared.
 1. User → gateway → any pando node
 2. Doorman classifies: "build" intent
 3. Node calls findBestBuilder():
-   - Checks capability registry for PandoCode-capable peers (shareCompute + compute_cpu)
+   - Checks capability registry for PandoTeams-capable peers (shareCompute + compute_cpu)
    - Prefers self if capable, else picks best remote peer
 4. Builder node (self or remote):
    a. Creates project in ProjectStore (business metadata)
@@ -195,7 +195,7 @@ branch at the moment of deploying a code change. Everything else is shared.
       { id: "team-xxx", repos: [], agentCount: 1, managingNode: self,
         governanceRequired: false }
    c. Broadcasts team_config_update via GossipSub → all nodes learn routing
-   d. Spawns PandoCode engine for the lead agent
+   d. Spawns PandoTeams engine for the lead agent
    e. Lead receives the build request, creates code, triggers deploy
 5. Team stays active for future updates (lead handles subsequent requests)
 ```
@@ -211,7 +211,7 @@ branch at the moment of deploying a code change. Everything else is shared.
    b. YES → P2P request-reply to managing node with the user message
    c. NO → claim the team (see Section 5.6 Handoff)
 4. Managing node receives request:
-   a. Add task to local board (PandoCode's SQLite)
+   a. Add task to local board (PandoTeams's SQLite)
    b. Lead reads board on next tick (or triggered immediately)
    c. Lead spawns builder if needed
    d. Builder makes changes, commits, pushes
@@ -243,7 +243,7 @@ branch at the moment of deploying a code change. Everything else is shared.
 ### 5.4 Team Bootstrap (First Run)
 
 ```
-Node starts with PandoCode available:
+Node starts with PandoTeams available:
 
   1. Initialize TeamRegistry (teams.db)
   2. Sync from peers (GossipSub catch-up)
@@ -267,9 +267,9 @@ Node starts with PandoCode available:
        Do nothing — someone else runs it
 
   4. For each team where managingNode == self:
-     a. Create PandoCode workspace: ~/.pando/teams/{teamId}/
+     a. Create PandoTeams workspace: ~/.pando/teams/{teamId}/
      b. If repo has .pando/team-state.json → read it, seed local board
-     c. Create PandoCode engines per agent config (stored locally, not in registry)
+     c. Create PandoTeams engines per agent config (stored locally, not in registry)
      d. Register pando_* tools on each engine
      e. Register scheduler ticks per agent's tickIntervalMs
      f. Start heartbeat (update registry + broadcast every tick)
@@ -281,7 +281,7 @@ Node starts with PandoCode available:
 Team lead decides it needs more agents (e.g., backlog > 10 tasks):
 
 1. Lead calls spawn_agent({ role: "builder", task: "..." })
-   → PandoCode handles this natively (sub-agent in same workspace)
+   → PandoTeams handles this natively (sub-agent in same workspace)
    → This is a TEMPORARY builder — lives for one task, then dies
 
 2. If lead wants a PERMANENT team member:
@@ -310,9 +310,9 @@ DETECTION (three paths, any can trigger):
     2. Checks registry: managingNode = A
     3. Checks P2P peers: A not connected
     4. Checks lastHeartbeat: stale (> 20 minutes)
-    5. This node has PandoCode → claim the team
+    5. This node has PandoTeams → claim the team
 
-  Path B — Periodic orphan scan (every 5 min on PandoCode nodes):
+  Path B — Periodic orphan scan (every 5 min on PandoTeams nodes):
     1. Scan registry: find teams where lastHeartbeat > 20min stale
     2. Verify managingNode not in P2P peer list
     3. Claim first orphaned team found
@@ -321,7 +321,7 @@ DETECTION (three paths, any can trigger):
     1. Node B detects Node A disconnected
     2. Queries registry: was A managing any teams?
     3. Wait 5 minutes (node might reconnect)
-    4. If still offline and B has PandoCode → claim them
+    4. If still offline and B has PandoTeams → claim them
 
 CLAIMING:
   1. Atomic update in local registry: managingNode = self, claimedAt = now
@@ -344,7 +344,7 @@ BOARD RECOVERY (three sources, in priority order):
      → Acceptable fallback — board is a convenience, git is truth
 
 SESSION CONTINUITY:
-  - PandoCode sessions (Claude Code --resume) are per-node, NOT transferred
+  - PandoTeams sessions (Claude Code --resume) are per-node, NOT transferred
   - New node starts fresh session — board + repo state give full context
   - This is acceptable: board IS the persistent memory, sessions are ephemeral
 ```
@@ -357,7 +357,7 @@ Gateway user wants to see the board for a project:
 1. Gateway → any pando node: GET /v1/teams/:teamId/board
 2. Node checks registry: managingNode = <peerId>
 3. Is managingNode == self?
-   YES → read local PandoCode SQLite, return board tasks
+   YES → read local PandoTeams SQLite, return board tasks
    NO → P2P request-reply to managing node:
         { action: "team_board", teamId: "pando-infra" }
         → Managing node reads its local board, responds with tasks
@@ -366,10 +366,10 @@ Gateway user wants to see the board for a project:
    → Gateway shows "team transferring..." status
 ```
 
-### 5.8 Standalone PandoCode (no pando-node)
+### 5.8 Standalone PandoTeams (no pando-node)
 
 ```
-Nothing changes. PandoCode works exactly as it does today:
+Nothing changes. PandoTeams works exactly as it does today:
   - Local SQLite for board, sessions, agents, memory
   - No P2P, no team sync, no teams.db
   - User manages their project locally
@@ -387,12 +387,12 @@ If user later connects to pando-node:
 
 ## 6. Scope Boundary
 
-### pando-code (brain) — NO CHANGES NEEDED
+### pando-teams (brain) — NO CHANGES NEEDED
 
 ```
 What it does:
   - Agent lifecycle: spawn, kill, configure
-  - Board: task CRUD in local SQLite (.pando-code.db)
+  - Board: task CRUD in local SQLite (.pando-teams.db)
   - Messaging: send_message, check_agents (local, cross-engine if shared DB)
   - Sessions + memory: per-agent persistence
   - Tools: spawn_agent, check_agents, send_message, manage_tasks
@@ -402,7 +402,7 @@ What it does NOT know about:
   - GossipSub, team sync, handoff
   - MongoDB, governance, upgrades
 
-PandoCode is a standalone product. pando-node adds network capabilities on top.
+PandoTeams is a standalone product. pando-node adds network capabilities on top.
 ```
 
 ### pando-node (body) — Changes
@@ -420,7 +420,7 @@ NEW file: core/team-registry.ts
 CHANGES to: core/engine-adapter.ts
   - Generic startTeam(teamId) replaces startCouncilAgents()
   - Team agent configs stored locally (not in registry)
-  - Board write happens in PandoCode's native SQLite (no interceptor needed)
+  - Board write happens in PandoTeams's native SQLite (no interceptor needed)
   - Periodic .pando/team-state.json backup to git (on task completion)
   - Per-agent tick registration based on config
   - Heartbeat: update team-registry on every tick
@@ -470,7 +470,7 @@ CREATE INDEX idx_config_status ON team_config(status);
 CREATE INDEX idx_config_managing ON team_config(managing_node);
 ```
 
-**No board tables. No message tables.** Board and messages live in PandoCode's
+**No board tables. No message tables.** Board and messages live in PandoTeams's
 local SQLite on the managing node. This is the key architectural decision
 that prevents P2P data flooding at scale.
 
@@ -556,7 +556,7 @@ DELETE /v1/teams/:teamId              — Stop team, mark orphaned
 
 All board endpoints follow the same pattern:
 1. Check registry: is managing node == self?
-2. YES → operate on local PandoCode SQLite
+2. YES → operate on local PandoTeams SQLite
 3. NO → P2P request-reply to managing node
 
 ---
@@ -599,7 +599,7 @@ a lightweight state file to the repo:
 
 ## 11. Seed Configs
 
-### pando-infra (auto-created on first PandoCode node)
+### pando-infra (auto-created on first PandoTeams node)
 
 ```javascript
 // Registry entry (synced to all nodes)
@@ -697,7 +697,7 @@ core/engine-adapter.ts:
           stopTeam(teamId)
           triggerTeam(teamId)
           sendToTeamAgent(teamId, agentId, message)
-          getTeamBoard(teamId) — reads local PandoCode SQLite
+          getTeamBoard(teamId) — reads local PandoTeams SQLite
           addTeamBoardTask(teamId, title, description)
           backupTeamState(teamId) — writes .pando/team-state.json
   KEEP:   getBoardTasks(), insertBoardTask(), getBoardSnapshot()
@@ -782,14 +782,14 @@ core/council-prompts.ts — prompts move to seed config in engine-adapter.ts
 - Full autonomous loop: request → team processes → fix → governance → upgrade
 - Node death → handoff → team resumes with board from git
 - Second request → board shows history
-- Standalone PandoCode regression test
+- Standalone PandoTeams regression test
 
 ---
 
 ## 14. Edge Cases + Gotchas
 
 ### Race condition on claiming
-Two PandoCode nodes both detect an orphaned team and try to claim it.
+Two PandoTeams nodes both detect an orphaned team and try to claim it.
 Resolution: compare `claimedAt` timestamps in the broadcast. Latest wins.
 Loser receives the broadcast, backs off, shuts down its copy.
 
@@ -804,10 +804,10 @@ Builder was mid-fix when node died. Task is "in_progress" in team-state.json.
 Resolution: new lead sees in_progress tasks with no recent updates.
 Checks repo (commit history shows partial work). Re-spawns builder.
 
-### Team with no PandoCode nodes available
-All PandoCode nodes go down. Team is "orphaned" everywhere.
-Requests return: "No PandoCode nodes available — try later."
-When a PandoCode node comes back, orphan scan claims the team.
+### Team with no PandoTeams nodes available
+All PandoTeams nodes go down. Team is "orphaned" everywhere.
+Requests return: "No PandoTeams nodes available — try later."
+When a PandoTeams node comes back, orphan scan claims the team.
 
 ### Board access when managing node is temporarily offline
 P2P request-reply times out after 10s.
@@ -824,13 +824,13 @@ Two commits from different agents could conflict on this file.
 Resolution: .pando/team-state.json is always OVERWRITTEN (not merged).
 Latest commit wins. The file is a snapshot, not append-only.
 
-### Standalone PandoCode regression
-Must not break. PandoCode has zero knowledge of teams.
+### Standalone PandoTeams regression
+Must not break. PandoTeams has zero knowledge of teams.
 pando-node only ADDS the team layer when present.
-If EngineAdapter is not started, PandoCode works normally.
+If EngineAdapter is not started, PandoTeams works normally.
 
 ### detectClaudeCode() still needed
-Even without council flags, we need to know if PandoCode is available
+Even without council flags, we need to know if PandoTeams is available
 to determine if this node CAN run teams. detectClaudeCode() stays
 but is used for team capability, not council-specific logic.
 
@@ -845,7 +845,7 @@ but is used for team capability, not council-specific logic.
 | /v1/council/* endpoints | /v1/teams/:teamId/* endpoints |
 | council-prompts.ts | Prompts in seed config (engine-adapter.ts) |
 | enableCouncil CLI flag | Auto-bootstrap from team registry |
-| Council-only board in shared SQLite | Per-team board in PandoCode's local SQLite |
+| Council-only board in shared SQLite | Per-team board in PandoTeams's local SQLite |
 | Board tasks synced via P2P (old plan) | Board stays local, git backup for durability |
 | No cross-node routing | P2P request-reply for remote board access |
 | No handoff on node death | Orphan detection + auto-claim + board recovery |
@@ -891,7 +891,7 @@ RULE 2: Config update must come from managing_node OR be a valid claim
     if team.last_heartbeat is stale (> 20 min) → ACCEPT (valid claim)
     else → REJECT (hostile takeover attempt)
 
-RULE 3: New team creation from any PandoCode-capable node → ACCEPT
+RULE 3: New team creation from any PandoTeams-capable node → ACCEPT
   (rate limited by Lux cost, see 16.3)
 
 RULE 4: All messages are Ed25519 signed (existing network.publishToTopic)
@@ -955,7 +955,7 @@ Board access:
 LLM compute (the REAL bottleneck):
   One node with 10 teams × 3 agents × 1 tick/15 min = 120 LLM calls/hour
   This is expensive and slow — natural load balancing across nodes
-  findBestBuilder() already distributes to least-loaded PandoCode nodes
+  findBestBuilder() already distributes to least-loaded PandoTeams nodes
   Lux economy caps daily compute (500 Lux ≈ 50 tasks)
 ```
 
@@ -993,7 +993,7 @@ Lines 1055-1078: ensureCouncilStarted()                            → DELETE
 
 KEEP (refactor to generic):
   Lines 547-549: addBoardTask()         → becomes addTeamBoardTask(teamId, ...)
-  Lines 678-693: getBoardTasks()        → stays generic (reads any PandoCode SQLite)
+  Lines 678-693: getBoardTasks()        → stays generic (reads any PandoTeams SQLite)
   Lines 696-738: insertBoardTask()      → stays generic
   Lines 781-812: getBoardSnapshot()     → stays generic
   Lines 745-775: ensureProjectTick()    → merged into startTeam() tick registration
@@ -1006,8 +1006,8 @@ Lines 444-457:  GET  /council/status           → REPLACED by GET  /v1/teams/:i
 Lines 459-515:  POST /council/trigger/:agent   → REPLACED by POST /v1/teams/:id/trigger
 Lines 520-524:  GET  /council/board            → REPLACED by GET  /v1/teams/:id/board
 Lines 527-562:  POST /council/request          → REPLACED by POST /v1/teams/:id/request
-Lines 567-572:  GET  /council/inbox/:agentId   → DELETE (inbox is local to PandoCode)
-Lines 575-587:  POST /council/message          → DELETE (messaging is local to PandoCode)
+Lines 567-572:  GET  /council/inbox/:agentId   → DELETE (inbox is local to PandoTeams)
+Lines 575-587:  POST /council/message          → DELETE (messaging is local to PandoTeams)
 Lines 590-601:  POST /council/tasks            → REPLACED by POST /v1/teams/:id/board
 Lines 604-614:  PATCH /council/tasks/:taskId   → REPLACED by PATCH /v1/teams/:id/board/:taskId
 ```
@@ -1072,7 +1072,7 @@ all 3 nodes upgrade. Second request proves persistent session.
 - 3-node network: Windows (local) + EC2-1 (54.82.241.132) + EC2-2 (34.201.82.126)
 - All 3 nodes connected (2+ peers each)
 - Public gateway: https://gateway-one-mu.vercel.app
-- Windows node has PandoCode available (claude CLI on PATH)
+- Windows node has PandoTeams available (claude CLI on PATH)
 - Council/team is NOT running (simulating fresh Electron install)
 
 **Phase 1: Verify Baseline**
@@ -1087,7 +1087,7 @@ all 3 nodes upgrade. Second request proves persistent session.
 ```
 1. POST /v1/council/request:
    { "message": "Add a comment to cli.ts: // Team E2E test marker — {timestamp}" }
-2. Node detects: council not running, PandoCode IS available
+2. Node detects: council not running, PandoTeams IS available
 3. ensureCouncilStarted() triggers → council agents spawn
 4. Task appears on board: GET /v1/council/board shows the task
 5. Council lead activates, reads board
@@ -1152,7 +1152,7 @@ Agent builds, deploys. User requests an update. Same team handles it.
 ```
 1. POST gateway chat: "Build me a simple landing page for a coffee shop"
 2. Doorman classifies: intent "build", tier 1
-3. findBestBuilder() → picks PandoCode-capable node (Windows)
+3. findBestBuilder() → picks PandoTeams-capable node (Windows)
 4. Project created in ProjectStore
 5. Team created in registry (1 agent, governanceRequired: false)
 6. Agent builds the page, creates GitHub repo
@@ -1169,10 +1169,10 @@ Agent builds, deploys. User requests an update. Same team handles it.
 5. Verify: dark mode toggle visible on deployed page
 ```
 
-### Test C: Node Death + Handoff (Future — requires 2 PandoCode nodes)
+### Test C: Node Death + Handoff (Future — requires 2 PandoTeams nodes)
 
-**What:** PandoCode node managing a team goes offline. Another PandoCode node
+**What:** PandoTeams node managing a team goes offline. Another PandoTeams node
 detects orphaned team, claims it, resumes from board + git state.
 
-(This test requires 2 PandoCode-capable nodes. Currently only Windows has
-PandoCode. Defer until second PandoCode node is available.)
+(This test requires 2 PandoTeams-capable nodes. Currently only Windows has
+PandoTeams. Defer until second PandoTeams node is available.)

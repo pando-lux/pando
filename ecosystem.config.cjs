@@ -6,7 +6,7 @@
  *
  * Architecture:
  *   pando-node    — The core P2P node (one process with --scheduler --monitor flags)
- *   pando-gateway — Next.js web UI (connects to node via HTTP)
+ *   pando-hub    — Next.js web UI (connects to node via HTTP)
  *
  * Exit codes:
  *   0  = Clean shutdown (PM2 stops the process)
@@ -16,13 +16,13 @@
  * Environment variables (override defaults):
  *   PANDO_P2P_PORT    — P2P listen port (default: 4001)
  *   PANDO_API_PORT    — HTTP API port (default: 4100)
- *   PANDO_GATEWAY_PORT — Gateway web UI port (default: 3222)
+ *   PANDO_GATEWAY_PORT — Hub web UI port (default: 3222)
  *   PANDO_NODE_FLAGS  — Additional CLI flags (e.g. "--pipeline")
  *
  * Usage:
  *   pm2 start ecosystem.config.cjs
  *   pm2 start ecosystem.config.cjs --only pando-node
- *   pm2 start ecosystem.config.cjs --only pando-gateway
+ *   pm2 start ecosystem.config.cjs --only pando-hub
  *   PANDO_API_PORT=4000 pm2 start ecosystem.config.cjs
  */
 
@@ -76,7 +76,7 @@ module.exports = {
       env: {
         NODE_ENV: 'production',
         FORCE_COLOR: '0',         // Disable ANSI colors in PM2 logs (FileLogger strips them anyway)
-        GATEWAY_PUBLIC_URL: 'https://gateway-one-mu.vercel.app',
+        HUB_PUBLIC_URL: 'https://gateway-one-mu.vercel.app',
       },
 
       // --- Resource limits ---
@@ -90,14 +90,14 @@ module.exports = {
     },
 
     // ----------------------------------------------------------------
-    // pando-gateway — Next.js web UI
+    // pando-hub — Next.js web UI
     // ----------------------------------------------------------------
     {
-      name: 'pando-gateway',
+      name: 'pando-hub',
       script: 'node_modules/.bin/next',
       args: `start --port ${gatewayPort}`,
       interpreter: 'none',        // next is already a Node script, don't double-invoke
-      cwd: path.join(__dirname, 'packages', 'gateway'),
+      cwd: path.join(__dirname, 'packages', 'hub'),
 
       // --- Restart behavior ---
       autorestart: true,
@@ -109,8 +109,8 @@ module.exports = {
 
       // --- Logging ---
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
-      error_file: path.join(pandoLogDir, 'pm2-gateway-error.log'),
-      out_file: path.join(pandoLogDir, 'pm2-gateway-out.log'),
+      error_file: path.join(pandoLogDir, 'pm2-hub-error.log'),
+      out_file: path.join(pandoLogDir, 'pm2-hub-out.log'),
       merge_logs: true,
       max_size: '10M',
 

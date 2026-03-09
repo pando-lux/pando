@@ -767,7 +767,7 @@ Restart=always
 RestartSec=5
 LimitNOFILE=65535
 Environment=HOME=/home/pando
-Environment=GATEWAY_PUBLIC_URL=https://gateway-one-mu.vercel.app
+Environment=HUB_PUBLIC_URL=https://gateway-one-mu.vercel.app
 ${process.env.CREDENTIAL_MASTER_KEY ? `Environment=CREDENTIAL_MASTER_KEY=${process.env.CREDENTIAL_MASTER_KEY}` : '# CREDENTIAL_MASTER_KEY not set on admin node'}
 # Compute instances access MongoDB via CredentialStore (CREDENTIAL_MASTER_KEY), not PANDO_STORAGE_URL
 

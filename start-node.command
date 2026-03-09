@@ -10,7 +10,7 @@
 export PATH="$HOME/.local/bin:/usr/local/bin:/opt/homebrew/bin:$PATH"
 
 # Set gateway URL for deployed apps (URL injection at deploy time)
-export GATEWAY_PUBLIC_URL="${GATEWAY_PUBLIC_URL:-https://gateway-one-mu.vercel.app}"
+export HUB_PUBLIC_URL="${HUB_PUBLIC_URL:-https://gateway-one-mu.vercel.app}"
 
 cd "$(dirname "$0")"
 

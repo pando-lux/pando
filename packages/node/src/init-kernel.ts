@@ -50,7 +50,7 @@ export async function initKernel(node: any): Promise<void> {
     // Phase 96: Init LocalCapabilityStore before capability detection
     node.localCapStore = new LocalCapabilityStore(node.config.dataDir || undefined);
 
-    // Contributor mode: auto-enable shareCompute (contributes PandoCode AI compute)
+    // Contributor mode: auto-enable shareCompute (contributes PandoTeams AI compute)
     if (node.config.nodeMode === 'contributor') {
       node.localCapStore.setShareCompute(true);
     }
@@ -435,7 +435,7 @@ export async function initKernel(node: any): Promise<void> {
       if (!message) return { error: 'message required' };
 
       // Generate project ID locally — skip MongoDB to avoid circular P2P proxy calls.
-      // When EC2 (no AI capability) forwards to Windows (has PandoCode) via chat_proxy,
+      // When EC2 (no AI capability) forwards to Windows (has PandoTeams) via chat_proxy,
       // calling projectStore.createProject() would P2P-proxy back to EC2 → timeout.
       // The orchestrator only needs a projectId string; full MongoDB record is not required.
       const projectId = randomUUID();

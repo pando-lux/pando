@@ -12,7 +12,7 @@
 
 import { test, expect, type Page } from 'playwright/test';
 
-const GATEWAY_URL = process.env.GATEWAY_URL || 'https://gateway-one-mu.vercel.app';
+const HUB_URL = process.env.HUB_URL || 'https://gateway-one-mu.vercel.app';
 const TIMEOUT = 30_000;
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -36,7 +36,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 1. Landing Page ─────────────────────────────────────────────────────────
 
   test('1. Landing page loads with network status', async ({ page }) => {
-    await page.goto(GATEWAY_URL, { timeout: TIMEOUT });
+    await page.goto(HUB_URL, { timeout: TIMEOUT });
     await waitForPageReady(page);
     const text = await getVisibleText(page);
 
@@ -56,7 +56,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 2. Network Page — Peers, Teams, Capabilities ───────────────────────────
 
   test('2. Network page shows peers and teams', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/network`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/network`, { timeout: TIMEOUT });
     await waitForPageReady(page);
     const text = await getVisibleText(page);
 
@@ -89,7 +89,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 3. Council Page — Board, Agents, Status ────────────────────────────────
 
   test('3. Council page shows board and agents', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/council`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/council`, { timeout: TIMEOUT });
     await waitForPageReady(page);
     const text = await getVisibleText(page);
 
@@ -129,7 +129,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 4. Dashboard — Unified operational overview ─────────────────────────────
 
   test('4. Dashboard shows health and activity', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/dashboard`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/dashboard`, { timeout: TIMEOUT });
     await waitForPageReady(page);
     const text = await getVisibleText(page);
 
@@ -156,7 +156,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 5. Projects Page — Project listing ──────────────────────────────────────
 
   test('5. Projects page loads and shows project interface', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/projects`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/projects`, { timeout: TIMEOUT });
     await waitForPageReady(page);
     const text = await getVisibleText(page);
 
@@ -187,7 +187,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 6. Agents Page — Agent hierarchy tree ───────────────────────────────────
 
   test('6. Agents page shows agent hierarchy', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/agents`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/agents`, { timeout: TIMEOUT });
     await waitForPageReady(page);
     const text = await getVisibleText(page);
 
@@ -218,7 +218,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 7. Explore/Governance — Proposals visible ──────────────────────────────
 
   test('7. Governance page shows proposals', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/governance`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/governance`, { timeout: TIMEOUT });
     await waitForPageReady(page);
     const text = await getVisibleText(page);
 
@@ -243,7 +243,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 8. Monitor — Health & Alerts ────────────────────────────────────────────
 
   test('8. Monitor page shows health metrics', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/monitor`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/monitor`, { timeout: TIMEOUT });
     await waitForPageReady(page);
     const text = await getVisibleText(page);
 
@@ -262,7 +262,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 9. Explore Hub — Navigation cards ───────────────────────────────────────
 
   test('9. Explore page shows navigation cards', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/explore`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/explore`, { timeout: TIMEOUT });
     await waitForPageReady(page);
     const text = await getVisibleText(page);
 
@@ -281,7 +281,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 10. Wallet — Lux balance ────────────────────────────────────────────────
 
   test('10. Wallet page shows Lux information', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/wallet`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/wallet`, { timeout: TIMEOUT });
     await waitForPageReady(page);
     const text = await getVisibleText(page);
 
@@ -299,7 +299,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 11. Council interaction — submit report ─────────────────────────────────
 
   test('11. Council: submit a test report via UI', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/council`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/council`, { timeout: TIMEOUT });
     await waitForPageReady(page);
 
     // Find textarea for report submission
@@ -346,7 +346,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 12. Network page — team expansion ───────────────────────────────────────
 
   test('12. Network: expand team to see agents and board', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/network`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/network`, { timeout: TIMEOUT });
     await waitForPageReady(page);
 
     // Look for pando-infra team
@@ -390,7 +390,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 13. Explore/Economy — Lux supply data ──────────────────────────────────
 
   test('13. Economy page shows Lux supply', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/explore/economy`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/explore/economy`, { timeout: TIMEOUT });
     await waitForPageReady(page);
     const text = await getVisibleText(page);
 
@@ -407,7 +407,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 14. Apps page — deployed apps visible ──────────────────────────────────
 
   test('14. Apps page shows deployed applications', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/apps`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/apps`, { timeout: TIMEOUT });
     await waitForPageReady(page);
     const text = await getVisibleText(page);
 
@@ -424,7 +424,7 @@ test.describe('Gateway Web UI — Live Tests', () => {
   // ── 15. Testing page — E2E dashboard ────────────────────────────────────────
 
   test('15. Testing page shows test dashboard', async ({ page }) => {
-    await page.goto(`${GATEWAY_URL}/testing`, { timeout: TIMEOUT });
+    await page.goto(`${HUB_URL}/testing`, { timeout: TIMEOUT });
     await waitForPageReady(page);
     const text = await getVisibleText(page);
 

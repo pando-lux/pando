@@ -317,7 +317,7 @@
 ### Bug Found & Fixed
 
 #### 31. Memory Leak: Zombie Engine Processes (CRITICAL)
-- **Root cause**: `stopTeamAgent()` removed agents from the list/DB but never terminated the PandoCode engine process. Each E2E test run leaked ~1-2 engines, accumulating to 13 zombie engines and 95% memory at 10min uptime.
+- **Root cause**: `stopTeamAgent()` removed agents from the list/DB but never terminated the PandoTeams engine process. Each E2E test run leaked ~1-2 engines, accumulating to 13 zombie engines and 95% memory at 10min uptime.
 - **Also**: App DELETE endpoint didn't clean up project engines either.
 - **Fix**: Added `engine.shutdown()` + pool Map cleanup in `stopTeamAgent()`. Added `destroyEngine()` method to EngineAdapter. App DELETE now calls `destroyEngine()`.
 - **Impact**: Memory now stable at 225MB (4 engines) vs 238MB+ climbing (13 engines)
@@ -374,7 +374,7 @@
 24. `827ec880` — Fix persistMessage race condition with per-thread write queue
 
 ### Pending
-- [ ] PandoCode web UI testing (UI not running currently — port 4873 down)
+- [ ] PandoTeams web UI testing (UI not running currently — port 4873 down)
 - [ ] Phase 6.2+: Cross-node team migration (orphan → claim → resume)
 - [ ] Phase 8: Gateway integration
 - [ ] P2P: Fix unsigned message acceptance (protocol design change)
@@ -426,7 +426,7 @@
 - Cross-node double-spend is a P2P consensus issue, not a code bug
 
 #### Doorman Classification (Working Correctly)
-- "simple" tier returned for build requests when no PandoCode engine available = correct graceful degradation
+- "simple" tier returned for build requests when no PandoTeams engine available = correct graceful degradation
 - Pipeline 4 E2E test already handles this (relaxed assertion from previous session)
 
 #### Untracked setInterval Timers (Acceptable)
@@ -436,7 +436,7 @@
 
 #### deploy-manager.ts Shell Commands (Defense-in-Depth)
 - `git()` helper passes string to `execSync(`git ${cmd}`)` — shell injection via AI-generated PatchSet data
-- Not directly user-exploitable (inputs come from PandoCode AI, not HTTP API)
+- Not directly user-exploitable (inputs come from PandoTeams AI, not HTTP API)
 - Would need AI model compromise to exploit — accepted risk for now
 
 ### Phase 8: Gateway Team Integration
@@ -553,7 +553,7 @@
 33. `69ca98ca` — deploy-manager shell injection + Infinity bypasses
 
 ### Pending
-- [ ] PandoCode web UI testing (UI not running currently — port 4873 down)
+- [ ] PandoTeams web UI testing (UI not running currently — port 4873 down)
 - [ ] Phase 6.2+: Cross-node team migration (orphan → claim → resume)
 - [ ] Phase 8: Gateway integration
 - [ ] P2P: Fix unsigned message acceptance (protocol design change)

@@ -9,8 +9,8 @@
 ## Prerequisites
 
 - pando-node running on localhost:4000 (with supervisor)
-- PandoCode server running on localhost:4873
-- PandoCode dashboard on localhost:5173
+- PandoTeams server running on localhost:4873
+- PandoTeams dashboard on localhost:5173
 - At least 1 EC2 peer connected
 - Council agents enabled (`--council` flag or config)
 
@@ -247,7 +247,7 @@ download the latest code from GitHub, build, and upgrade — using the same
 project management pipeline (pando_workspace) that already handles git repos.
 
 **Architecture:**
-- The installed app ships with a bundled pando-node + pando-code
+- The installed app ships with a bundled pando-node + pando-teams
 - On first run: clones both repos to `~/.pando/repos/node` and `~/.pando/repos/code`
 - pando_workspace({ repo: "pando-lux/node" }) → returns the local clone path
 - Upgrade protocol: git pull → build → safe restart
@@ -284,7 +284,7 @@ handles a second request.
 - 3-node network: Windows (local) + EC2-1 (54.82.241.132) + EC2-2 (34.201.82.126)
 - All nodes connected (2+ peers each)
 - Public gateway: https://gateway-one-mu.vercel.app
-- Windows node has PandoCode available (@pando-code/core installed)
+- Windows node has PandoTeams available (@pando-teams/core installed)
 - Council is NOT running (simulating Electron/installer mode — no `--council` flag)
 
 ### Phase A: Setup — Council Offline
@@ -302,7 +302,7 @@ handles a second request.
 **Steps:**
 1. Submit a request via gateway (or direct API):
    `POST /v1/council/request` with `{ "message": "Add a comment to cli.ts that says: // Council E2E test marker — {timestamp}" }`
-2. Node receives request. Council is not running. But PandoCode IS available.
+2. Node receives request. Council is not running. But PandoTeams IS available.
 3. Node auto-spawns council to handle the queued request.
 4. Verify: `GET /v1/council/board` shows the task as `pending`
 5. Council activates, reads board, sees the task.
@@ -413,7 +413,7 @@ Same team handles it. No governance needed (direct deploy).
 **Steps:**
 1. POST gateway chat: "Build me a simple landing page for a coffee shop"
 2. Doorman classifies: intent "build", tier 1 (static)
-3. `findBestBuilder()` picks PandoCode-capable node
+3. `findBestBuilder()` picks PandoTeams-capable node
 4. Project created in ProjectStore + team created in TeamRegistry
 5. Team agent builds the page, creates GitHub repo
 6. Deploy pipeline: push to GitHub → EC2 clones → S3 upload
@@ -447,10 +447,10 @@ Same team handles it. No governance needed (direct deploy).
 
 ## Scenario 14: Node Death + Team Handoff
 
-> **Depends on:** 2 PandoCode-capable nodes on the network.
-> Status: PLANNED (deferred — only Windows has PandoCode currently)
+> **Depends on:** 2 PandoTeams-capable nodes on the network.
+> Status: PLANNED (deferred — only Windows has PandoTeams currently)
 
-**What:** Node managing a team goes offline. Another PandoCode node detects
+**What:** Node managing a team goes offline. Another PandoTeams node detects
 the orphaned team, claims it, recovers board from git, resumes processing.
 
 ### Phase A: Setup
@@ -487,8 +487,8 @@ implements it if valid, and deploys. Human role = advisor, not operator.
 or what's broken. The team handles everything.
 
 ### Scenario F2: Cross-Repo Fixes
-Team detects a bug in pando-code (not pando-node). Spawns a builder
-targeting the pando-code repo. Fix goes through pando-code governance.
+Team detects a bug in pando-teams (not pando-node). Spawns a builder
+targeting the pando-teams repo. Fix goes through pando-teams governance.
 Both repos upgrade independently.
 
 ### Scenario F3: Rollback on Build Failure

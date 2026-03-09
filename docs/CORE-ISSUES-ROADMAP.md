@@ -10,7 +10,7 @@
 
 - `supervisor.ts` has a basic system tray with: status polling, Open Gateway, View API, Restart, Stop
 - Hardcoded to pando-node only — no awareness of services/plugins
-- PandoCode web UI (server + Vite) requires separate manual startup
+- PandoTeams web UI (server + Vite) requires separate manual startup
 - No service visibility in the tray menu
 
 ### Target State
@@ -21,7 +21,7 @@ One (P) tray icon that:
 3. Discovers all installed services via ServiceLoader and shows them in the menu
 4. Each service gets a submenu: status indicator, "Open UI" link, start/stop toggle
 5. Services auto-start when the node starts (ServiceLoader already does this)
-6. PandoCode web UI starts automatically when @pando-code/core is loaded as a service
+6. PandoTeams web UI starts automatically when @pando-teams/core is loaded as a service
 
 ### Tasks
 
@@ -35,7 +35,7 @@ One (P) tray icon that:
 | 1.6 | Dynamic tray menu rebuild | `update-menu` action rebuilds the entire menu on each poll cycle — services appear/disappear automatically. | DONE |
 | 1.7 | Open Gateway local fallback | Checks `localhost:3000` first, falls back to Vercel URL if local gateway isn't running. | DONE |
 | 1.8 | PandoService uiUrl field | Services can declare `uiUrl` on the service object. Exposed via `/v1/services` and used by tray. | DONE |
-| 1.9 | PandoCode auto-starts web server | When @pando-code/core starts as a service, it should also start its HTTP server + web UI automatically. | TODO (pando-code side) |
+| 1.9 | PandoTeams auto-starts web server | When @pando-teams/core starts as a service, it should also start its HTTP server + web UI automatically. | TODO (pando-teams side) |
 
 ### Architecture
 
@@ -44,7 +44,7 @@ One (P) tray icon that:
  │
  ├── Pando Node  (always running)
  │    └── ServiceLoader
- │         ├── @pando-code/core  → Web UI on :5176, API on :4873
+ │         ├── @pando-teams/core  → Web UI on :5176, API on :4873
  │         ├── @pando/exchange   → (future)
  │         └── ...
  │

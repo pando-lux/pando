@@ -33,7 +33,7 @@ You are the CEO. You have FULL technical authority over all 3 codebases.
 A single E2E test run using Playwright (HEADED MODE — visible browser) that:
 
 1. **All 3 systems are integrated** — @pando/identity + @pando/code + @pando/node working together
-2. **Node uses PandoCode engines** (NOT `claude -p` subprocess) for agent orchestration
+2. **Node uses PandoTeams engines** (NOT `claude -p` subprocess) for agent orchestration
 3. **Identity flows through the system** — Ed25519 keypairs, certificates, signed actions
 4. **Tests EVERY feature** through the real public gateway + API
 5. **Completes with ZERO failures** — no bug fixes allowed during the winning run
@@ -53,12 +53,12 @@ DO NOT STOP THIS LOOP UNTIL STEP 2 IS REACHED.
 
 # THE FULL INTEGRATION (What Needs to Happen)
 
-@pando/node uses PandoCode engine instances for all AI operations.
-ClaudeBackend has been REMOVED. PandoCode is the ONLY AI backend.
+@pando/node uses PandoTeams engine instances for all AI operations.
+ClaudeBackend has been REMOVED. PandoTeams is the ONLY AI backend.
 
 ```
 DONE:
-  Node → creates PandoCode engine instance → engine runs with:
+  Node → creates PandoTeams engine instance → engine runs with:
     - @pando/identity AgentProfile injected (structural typing)
     - Lux BudgetProvider registered (tracks cost in Lux)
     - Custom Pando tools registered (deploy, governance, ledger, etc.)
@@ -77,7 +77,7 @@ DONE:
        v
 @pando/code (standalone AI engine, zero @pando/* deps)
        |
-       | provides: PandoCode engine class, tools, memory, learning
+       | provides: PandoTeams engine class, tools, memory, learning
        | accepts: identity via structural typing (AgentProfile → AgentIdentity)
        | accepts: budget via BudgetProvider interface (USD → Lux)
        | accepts: custom tools via tool registry
@@ -85,7 +85,7 @@ DONE:
        v
 @pando/node (the orchestrator)
        |
-       | creates: PandoCode engine instances (one per orchestrator)
+       | creates: PandoTeams engine instances (one per orchestrator)
        | injects: identity from @pando/identity
        | injects: LuxBudgetProvider from @pando/ledger
        | registers: custom tools (deploy, governance, ledger, directive, etc.)
@@ -115,7 +115,7 @@ DONE:
 ```
 Windows (this machine)          EC2-1 / EC2-2
   - Non-secure node               - Secure proxy nodes
-  - PandoCode engines             - MongoDB (trusted)
+  - PandoTeams engines             - MongoDB (trusted)
   - Dev/test workstation           - P2P storage providers
        |                                |
        +---- TCP+Noise P2P -----+------+
@@ -145,10 +145,10 @@ Windows (this machine)          EC2-1 / EC2-2
 
 ## What's Done
 - **204 E2E tests passing** (15 clean runs: 44→70→71→71→71→71→75→75→122→141→175→187→195→201→204)
-- **@pando/code integrated**: PandoCodeBackend is the ONLY AI backend (ClaudeBackend + OllamaBackend deleted)
-- **PandoCode engine creates successfully**: 20+ tools connected, LuxBudgetProvider injected, custom Pando tools registered
+- **@pando/code integrated**: PandoTeamsBackend is the ONLY AI backend (ClaudeBackend + OllamaBackend deleted)
+- **PandoTeams engine creates successfully**: 20+ tools connected, LuxBudgetProvider injected, custom Pando tools registered
 - **API key wiring**: `configurePandoEngine()` queries ResourceRegistry for contributed AI keys, sets env vars before engine creation
-- **NodeCapability.PANDO_CODE**: Added to shared types, detected at startup, verified in E2E
+- **NodeCapability.PANDO_TEAMS**: Added to shared types, detected at startup, verified in E2E
 - **Security documentation hardened**: CLAUDE.md, NODE-BIBLE, PANDO-BIBLE all have explicit NEVER/ALWAYS credential rules
 - **All gateway pages verified**: 34/34 pages load without errors via headed Playwright
 - **Resource marketplace**: `broadcastPrices()` fully implemented — GossipSub publishing with 60s cooldown
@@ -163,13 +163,13 @@ Windows (this machine)          EC2-1 / EC2-2
 ## Resolved (Previously Known Problems)
 All former "Known Problems" are resolved:
 1. ~~ECONNREFUSED during tests~~: `fetchWithRetry` is standard integration test resilience, not a hack. Auto-upgrade pipeline is disabled during tests (`pipelineEnabled: false`).
-2. ~~@pando-code/core dist staleness~~: Normal TypeScript monorepo workflow. Rebuild after changes — expected behavior.
+2. ~~@pando-teams/core dist staleness~~: Normal TypeScript monorepo workflow. Rebuild after changes — expected behavior.
 3. ~~Security violation~~: FIXED. NEVER/ALWAYS rules in all bibles + CLAUDE.md.
-4. ~~PandoCode needs ANTHROPIC_API_KEY~~: RESOLVED. `configurePandoEngine()` wires keys from ResourceRegistry contributed resources. Env vars take priority.
+4. ~~PandoTeams needs ANTHROPIC_API_KEY~~: RESOLVED. `configurePandoEngine()` wires keys from ResourceRegistry contributed resources. Env vars take priority.
 5. ~~configurePandoEngine() never called~~: ACTUALLY CALLED at index.ts:3350-3368.
 6. ~~Resource marketplace broadcastPrices() stub~~: FULLY IMPLEMENTED with GossipSub + 60s cooldown.
 7. ~~API documentation gap~~: 141 E2E tests cover 80+ API routes + all 34 gateway pages. Bibles document the architecture, not individual endpoints.
-8. ~~@pando-code/cli build broken~~: FIXED.
+8. ~~@pando-teams/cli build broken~~: FIXED.
 
 ---
 
@@ -196,17 +196,17 @@ The 4 bibles + this roadmap are the ONLY docs. Everything else goes to archive.
 
 # PHASE 1: INTEGRATION — Wire @pando/code into @pando/node
 
-This is the BIG phase. Replace `claude -p` subprocess with PandoCode engines.
+This is the BIG phase. Replace `claude -p` subprocess with PandoTeams engines.
 
 ## 1.1 — Add @pando/code as dependency
-- [x] Added `@pando-code/core` via file: reference to root and node package.json
+- [x] Added `@pando-teams/core` via file: reference to root and node package.json
 - [x] npm install links to ../code/packages/core
-- [x] Import PandoCode class verified working
+- [x] Import PandoTeams class verified working
 
 ## 1.2 — Create Engine Bridge (`core/engine-bridge.ts`)
-The bridge creates PandoCode engine instances configured for Pando.
+The bridge creates PandoTeams engine instances configured for Pando.
 - [x] Created `engine-bridge.ts` in core/ with LuxBudgetProvider + createPandoTools
-- [x] Created `ai-backend-pandocode.ts` — PandoCodeBackend implements AIBackend
+- [x] Created `ai-backend-pandocode.ts` — PandoTeamsBackend implements AIBackend
 - [x] LuxBudgetProvider converts token usage to Lux (100 Lux per $1)
 - [x] Custom Pando tools registered via node's HTTP API:
   - `pando_status` — node status
@@ -221,43 +221,43 @@ The bridge creates PandoCode engine instances configured for Pando.
 - [x] Build passes
 
 ## 1.3 — Replace worker-pool.ts
-- [x] PandoCodeBackend registered as ONLY backend in AIBackendRegistry (ClaudeBackend removed)
-- [x] Worker-pool automatically uses PandoCode engine via getBest('code-execution')
+- [x] PandoTeamsBackend registered as ONLY backend in AIBackendRegistry (ClaudeBackend removed)
+- [x] Worker-pool automatically uses PandoTeams engine via getBest('code-execution')
 - [x] Workers run as engine sessions, not CLI subprocesses
 - [x] Reports flow back via same AIResult interface
-- [x] ClaudeBackend REMOVED — PandoCode is sole backend
+- [x] ClaudeBackend REMOVED — PandoTeams is sole backend
 - [x] Build passes
 
-## 1.4 — Replace AI backend with PandoCode
-- [x] PandoCodeBackend wraps PandoCode engine.send()
-- [x] Orchestrator tick loop automatically uses PandoCode via aiRegistry.getBest()
-- [x] Session persistence via PandoCode's built-in SQLite session DB
+## 1.4 — Replace AI backend with PandoTeams
+- [x] PandoTeamsBackend wraps PandoTeams engine.send()
+- [x] Orchestrator tick loop automatically uses PandoTeams via aiRegistry.getBest()
+- [x] Session persistence via PandoTeams's built-in SQLite session DB
 - [x] Progress events forwarded to orchestrator's onProgress callbacks
 - [x] Build passes
 
 ## 1.5 — Identity integration
 - [x] Node's Ed25519 keypair used for peer identity (libp2p)
-- [x] PandoCode's AgentIdentity has optional publicKey/certificate fields
+- [x] PandoTeams's AgentIdentity has optional publicKey/certificate fields
 - [ ] DEFERRED: Agent-level Ed25519 keypairs (requires identity package cert flow)
 - [ ] DEFERRED: Signed actions via @pando/identity primitives
 - [x] Build passes
 
 ## 1.6 — Budget integration
 - [x] LuxBudgetProvider created in engine-bridge.ts (100 Lux per $1 USD)
-- [x] Implements @pando-code/core's BudgetProvider interface structurally
-- [x] Injected into PandoCodeBackend via configurePandoEngine()
+- [x] Implements @pando-teams/core's BudgetProvider interface structurally
+- [x] Injected into PandoTeamsBackend via configurePandoEngine()
 - [x] Applied to all engine instances via setBudgetProvider()
 - [x] Build passes
 
 ## 1.7 — Verify integration
 - [x] Monorepo builds clean (npm run build zero errors)
-- [x] PandoCodeBackend registered as PRIMARY in AIBackendRegistry
-- [x] Node starts and PandoCode engine creates successfully (verified: PandoCode.create() works, 20+ tools connected)
+- [x] PandoTeamsBackend registered as PRIMARY in AIBackendRegistry
+- [x] Node starts and PandoTeams engine creates successfully (verified: PandoTeams.create() works, 20+ tools connected)
 - [x] setBudgetProvider works (Lux budget injection verified)
 - [x] Custom tool registration works (engine.tools.register + engine.tools.has verified)
-- [x] pando-code detected as NodeCapability at startup
-- [x] Orchestrator tick uses PandoCode (ClaudeBackend removed, sole backend is PandoCode)
-- [ ] DEFERRED: Worker spawn uses PandoCode engine (same — needs live AI call)
+- [x] pando-teams detected as NodeCapability at startup
+- [x] Orchestrator tick uses PandoTeams (ClaudeBackend removed, sole backend is PandoTeams)
+- [ ] DEFERRED: Worker spawn uses PandoTeams engine (same — needs live AI call)
 
 ---
 
@@ -270,8 +270,8 @@ DEFERRED — too risky to refactor while E2E suite is passing. The god object wo
 - [ ] Extract `platform/init.ts` — orchestrator, content, resources, capabilities
 
 ## 2.2 — Clean up legacy agent code
-- [x] PandoCodeBackend is PRIMARY (registered first, selected by getBest())
-- [x] ClaudeBackend REMOVED — PandoCode is the only AI backend
+- [x] PandoTeamsBackend is PRIMARY (registered first, selected by getBest())
+- [x] ClaudeBackend REMOVED — PandoTeams is the only AI backend
 - [x] Worker-pool.ts uses AIBackendRegistry.getBest() — no direct subprocess spawning
 
 ## 2.3 — Verify gateway pages match API
@@ -280,7 +280,7 @@ DEFERRED — too risky to refactor while E2E suite is passing. The god object wo
 - [x] Gateway API proxy routes work (/api/status, /api/peers, /api/agents/tree)
 
 ## 2.4 — Type consistency
-- [x] NodeCapability.PANDO_CODE added to @pando/shared
+- [x] NodeCapability.PANDO_TEAMS added to @pando/shared
 - [ ] DEFERRED: Remaining type cleanup
 
 ---
@@ -302,7 +302,7 @@ DEFERRED — too risky to refactor while E2E suite is passing. The god object wo
 - [x] Start with MongoDB and master key from start-service.bat
 - [x] `GET /v1/status` returns valid JSON
 - [x] Node connects to EC2 peers (2 peers verified)
-- [x] PandoCode detected as capability (pando-code in capabilities array)
+- [x] PandoTeams detected as capability (pando-teams in capabilities array)
 - [x] Node stays running 60+ seconds (verified stable)
 
 ## 3.5 — Verify public gateway
@@ -415,7 +415,7 @@ DO NOT skip tests. DO NOT comment out failing tests. Fix the code.
 | 4 | Governance proposals | not array | API returns {proposals:[]} | Check data.proposals | Fixed |
 | 5 | Gateway /api/capabilities | 404 | Route doesn't exist | Use /api/agents/tree | Fixed |
 | 6 | API tests mid-suite | ECONNREFUSED | Node restart during test | fetchWithRetry wrapper | Fixed |
-| 7 | PandoCode setBudgetProvider | undefined | @pando-code/core dist stale | Rebuild dist | Fixed |
+| 7 | PandoTeams setBudgetProvider | undefined | @pando-teams/core dist stale | Rebuild dist | Fixed |
 | 8 | Build: this.node.peerId | TS2339 | No this.node property | Use this.identity.peerId | Fixed |
 
 ---
@@ -434,15 +434,15 @@ DO NOT skip tests. DO NOT comment out failing tests. Fix the code.
 |---------|------|-------|--------|--------|--------|
 | 1 (v1) | 2026-03-06 | 44 | 44 | 0 | PASS — 29.0s |
 | 2 (v2) | 2026-03-06 | 70 | 70 | 0 | PASS — 36.9s (added 4.9-4.11 core tests) |
-| 3 (v3) | 2026-03-06 | 71 | 71 | 0 | PASS — 50.2s (added PandoCode capability detection test) |
-| 4 (v4) | 2026-03-06 | 71 | 71 | 0 | PASS — 48.1s (ClaudeBackend removed, PandoCode sole engine, marketplace broadcasting, bible updates) |
+| 3 (v3) | 2026-03-06 | 71 | 71 | 0 | PASS — 50.2s (added PandoTeams capability detection test) |
+| 4 (v4) | 2026-03-06 | 71 | 71 | 0 | PASS — 48.1s (ClaudeBackend removed, PandoTeams sole engine, marketplace broadcasting, bible updates) |
 | 5 (v5) | 2026-03-06 | 71 | 71 | 0 | PASS — 32.7s (API key wiring from ResourceRegistry, comment cleanup, full rebuild) |
-| 6 (v6) | 2026-03-06 | 71 | 71 | 0 | PASS — 33.9s (prompt strings updated: Claude Code → PandoCode) |
+| 6 (v6) | 2026-03-06 | 71 | 71 | 0 | PASS — 33.9s (prompt strings updated: Claude Code → PandoTeams) |
 | 7 (v7) | 2026-03-06 | 75 | 75 | 0 | PASS — 33.6s (added 4.12 Resource & Marketplace tests) |
 | 8 (v8) | 2026-03-06 | 75 | 75 | 0 | PASS — 32.7s (post-session-recovery verification) |
 | 9 (v9) | 2026-03-06 | 122 | 122 | 0 | PASS — 34.7s (added 4.13-4.23: chat, scenarios, context, health, network, tasks, auth, ledger, security, templates, council) |
 | 10 (v10) | 2026-03-06 | 141 | 141 | 0 | PASS — 57.1s (added 4.24: all 19 remaining gateway pages — full coverage) |
-| 11 (v11) | 2026-03-06 | 175 | 175 | 0 | PASS — 44.5s (added 5.1-5.7: functional tests — task lifecycle, auth, chat, governance, content, PandoCode engine) |
+| 11 (v11) | 2026-03-06 | 175 | 175 | 0 | PASS — 44.5s (added 5.1-5.7: functional tests — task lifecycle, auth, chat, governance, content, PandoTeams engine) |
 | 12 (v12) | 2026-03-06 | 187 | 187 | 0 | PASS — 46.1s (Phase 8.1-8.2: agent identity creation, certificate verification, Pando Login, JWT auth) |
 | 13 (v13) | 2026-03-06 | 195 | 195 | 0 | PASS — 48.6s (Phase 8.3-8.4: Lux economy, signed actions, full trust chain verification) |
 | 14 (v14) | 2026-03-06 | 201 | 201 | 0 | PASS — 46.7s (Phase 8.5: agent lifecycle — chat, threads, JWT refresh, tamper detection) |
@@ -450,13 +450,13 @@ DO NOT skip tests. DO NOT comment out failing tests. Fix the code.
 
 ---
 
-# PHASE 7: CLEAN ARCHITECTURE — PandoCode as Sole Engine
+# PHASE 7: CLEAN ARCHITECTURE — PandoTeams as Sole Engine
 
 ## 7.1 — Remove legacy ClaudeBackend
 - [x] Delete `ai-backend-claude.ts` (subprocess spawner)
 - [x] Delete `ai-backend-ollama.ts` (stub)
 - [x] Remove all ClaudeBackend registrations from index.ts
-- [x] PandoCodeBackend is the ONLY registered backend
+- [x] PandoTeamsBackend is the ONLY registered backend
 - [x] Build passes
 
 ## 4.13-4.23 — Extended API Coverage (47 tests)
@@ -475,30 +475,30 @@ DO NOT skip tests. DO NOT comment out failing tests. Fix the code.
 
 ---
 
-## 7.2 — Claude Code as contributed resource via PandoCode
-Claude Code is a PROVIDER that PandoCode manages, not a separate backend.
+## 7.2 — Claude Code as contributed resource via PandoTeams
+Claude Code is a PROVIDER that PandoTeams manages, not a separate backend.
 
 Architecture:
 ```
 /contribute claude-code
   → Node detects Claude Code binary + auth (capability-detector.ts)
   → Node advertises compute_cpu=true to network (CapabilityProfile)
-  → AI work arrives → PandoCode engine handles it
-  → PandoCode uses Anthropic provider internally (ANTHROPIC_API_KEY)
-  → PandoCode manages sessions, costs, tools, memory — single source of truth
+  → AI work arrives → PandoTeams engine handles it
+  → PandoTeams uses Anthropic provider internally (ANTHROPIC_API_KEY)
+  → PandoTeams manages sessions, costs, tools, memory — single source of truth
 ```
 
 Tasks:
-- [x] PandoCode engine gets API keys from ResourceRegistry (contributed resources) — falls back to env vars
+- [x] PandoTeams engine gets API keys from ResourceRegistry (contributed resources) — falls back to env vars
 - [x] configurePandoEngine() queries findResources('ai_api_key'), decrypts, sets env vars before engine creation
 - [x] Local env vars take priority over contributed resources (no override)
-- [x] Capability detector already works: detects pando-code (npm package) + claude-code (binary+auth). API keys from resources set before engine creation.
-- [x] Update all "Claude Code worker" comments and prompts to "PandoCode worker"
-- [ ] E2E test: verify contributed compute resource triggers PandoCode engine
+- [x] Capability detector already works: detects pando-teams (npm package) + claude-code (binary+auth). API keys from resources set before engine creation.
+- [x] Update all "Claude Code worker" comments and prompts to "PandoTeams worker"
+- [ ] E2E test: verify contributed compute resource triggers PandoTeams engine
 
 ## 7.3 — Rebuild and verify
 - [x] Full monorepo build (npm run build) — zero errors
-- [x] Start node, verify PandoCode is active (2 peers connected)
+- [x] Start node, verify PandoTeams is active (2 peers connected)
 - [x] Run E2E suite — 71/71 pass (48.1s)
 - [x] Clean run #4 recorded
 
@@ -584,7 +584,7 @@ Agent (e2e-tester, created via createAgent())
 5. **Headed Playwright** — browser visible (headless: false)
 6. **Public gateway** — tests against Vercel, not localhost
 7. **Real P2P** — Windows connects to EC2 nodes
-8. **PandoCode engines** — not claude -p subprocess (the whole point)
+8. **PandoTeams engines** — not claude -p subprocess (the whole point)
 9. **4 bibles only** — no other documentation maintained
 10. **CEO authority** — any technical decision, any code change
 11. **Team agents** — launch as many parallel agents as needed

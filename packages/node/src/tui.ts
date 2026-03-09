@@ -228,12 +228,12 @@ class PandoTUI {
       this.node.enablePipeline();
     }
 
-    // Auto-start scheduler if --scheduler flag was passed or PandoCode engine was auto-detected
+    // Auto-start scheduler if --scheduler flag was passed or PandoTeams engine was auto-detected
     if (autoScheduler) {
       if (args.includes('--scheduler')) {
         this.log(`${c.dim}Auto-starting scheduler (--scheduler flag)...${c.reset}`);
       } else {
-        this.log(`${c.dim}[scheduler] Auto-detected PandoCode engine — scheduler enabled. Use --no-scheduler to disable.${c.reset}`);
+        this.log(`${c.dim}[scheduler] Auto-detected PandoTeams engine — scheduler enabled. Use --no-scheduler to disable.${c.reset}`);
       }
       this.node.startScheduler();
     }
@@ -1269,7 +1269,7 @@ class PandoTUI {
     if (!scheduler) {
       this.log('');
       this.log(`${c.bold}Scheduler${c.reset}: ${c.red}off${c.reset}`);
-      this.log(`  ${c.dim}Scheduler auto-enables when PandoCode engine is available. Use ${c.cyan}--scheduler${c.dim} to force-enable.${c.reset}`);
+      this.log(`  ${c.dim}Scheduler auto-enables when PandoTeams engine is available. Use ${c.cyan}--scheduler${c.dim} to force-enable.${c.reset}`);
       this.log('');
       return;
     }
@@ -1306,7 +1306,7 @@ class PandoTUI {
 
     const scheduler = this.node.getScheduler();
     if (!scheduler) {
-      this.log(`${c.red}Scheduler not running. PandoCode engine not detected — start with --scheduler to force-enable.${c.reset}`);
+      this.log(`${c.red}Scheduler not running. PandoTeams engine not detected — start with --scheduler to force-enable.${c.reset}`);
       return;
     }
 
@@ -1374,7 +1374,7 @@ class PandoTUI {
     if (!monitor) {
       this.log('');
       this.log(`${c.bold}Health Monitor${c.reset}: ${c.red}off${c.reset}`);
-      this.log(`  ${c.dim}Auto-enables with scheduler (PandoCode detection) or use ${c.cyan}--monitor${c.dim} flag.${c.reset}`);
+      this.log(`  ${c.dim}Auto-enables with scheduler (PandoTeams detection) or use ${c.cyan}--monitor${c.dim} flag.${c.reset}`);
       this.log('');
       return;
     }
@@ -1505,7 +1505,7 @@ class PandoTUI {
       if (!localCapStore.has('claude-code')) {
         this.log('');
         this.log(`${c.red}Claude Code CLI is not detected on this node.${c.reset}`);
-        this.log(`${c.dim}Install Claude Code CLI (for contributed compute), or use PandoCode engine directly.${c.reset}`);
+        this.log(`${c.dim}Install Claude Code CLI (for contributed compute), or use PandoTeams engine directly.${c.reset}`);
         this.log('');
         return;
       }
@@ -1671,7 +1671,7 @@ class PandoTUI {
       this.node.rebuildCapabilityProfile?.();
       this.log('');
       this.log(`${c.green}✓ Claude Code compute is no longer shared with the network.${c.reset}`);
-      this.log(`${c.dim}Your node will still use PandoCode engine for its own tasks.${c.reset}`);
+      this.log(`${c.dim}Your node will still use PandoTeams engine for its own tasks.${c.reset}`);
       this.log(`${c.dim}Peers will stop routing tasks to you within 15 minutes (TTL).${c.reset}`);
       this.log('');
       return;

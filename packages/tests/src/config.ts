@@ -97,12 +97,12 @@ export function initProject(rootDir: string, config?: Partial<StoredConfig>): St
 
 /**
  * Replace {{VAR}} placeholders in a template string using config values.
- * Supported variables: {{PROJECT}}, {{GATEWAY_URL}}, {{API_URL}}, {{AUTH_TOKEN}}
+ * Supported variables: {{PROJECT}}, {{HUB_URL}}, {{API_URL}}, {{AUTH_TOKEN}}
  */
 export function resolveVariables(template: string, config: ProjectConfig): string {
   return template
     .replace(/\{\{PROJECT\}\}/g, config.project)
-    .replace(/\{\{GATEWAY_URL\}\}/g, config.gatewayUrl)
+    .replace(/\{\{HUB_URL\}\}/g, config.gatewayUrl)
     .replace(/\{\{API_URL\}\}/g, config.apiUrl)
     .replace(/\{\{AUTH_TOKEN\}\}/g, config.authToken ?? '')
     .replace(/\{\{ROOT_DIR\}\}/g, config.rootDir);

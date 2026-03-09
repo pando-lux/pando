@@ -61,7 +61,7 @@ Tasks are ordered by difficulty. Start easy to build confidence, then increase c
 |---|------|-------------|--------|
 | 1.1 | Add header comment to team-registry.ts | Add `// TeamRegistry — SQLite + P2P gossip sync for team state. See BIBLE.md Section 4.2.` at top of `packages/node/src/core/team-registry.ts` | |
 | 1.2 | Fix duplicate step label in upgrade-protocol.ts | There are two "Step 6b" labels — the build step at line ~333 should be "Step 7" since Steps 6a/6b/6c are the npm link logic. Fix in `packages/node/src/core/upgrade-protocol.ts` | |
-| 1.3 | Add header comment to capability-detector.ts | Add `// CapabilityDetector — detects node capabilities (docker, python, gpu, playwright, pando-code).` at top of `packages/node/src/core/capability-detector.ts` | |
+| 1.3 | Add header comment to capability-detector.ts | Add `// CapabilityDetector — detects node capabilities (docker, python, gpu, playwright, pando-teams).` at top of `packages/node/src/core/capability-detector.ts` | |
 
 ### Tier 2: Code Cleanup (multi-file, medium risk)
 
@@ -96,8 +96,8 @@ These require human action or access to other repos. Not for the council.
 |---|------|-----------|
 | 5.1 | Rotate AWS credentials (Phase 0.2) | Requires AWS IAM console access |
 | 5.2 | Scrub AKIA from git history (Phase 0.4) | Requires `git filter-repo` — destructive, needs human oversight |
-| 5.3 | Make pando-code repo public (Phase 2) | Requires pando-code repo access + GitHub settings |
-| 5.4 | Add createService() to pando-code (Phase 2.4) | Requires pando-code repo changes |
+| 5.3 | Make pando-teams repo public (Phase 2) | Requires pando-teams repo access + GitHub settings |
+| 5.4 | Add createService() to pando-teams (Phase 2.4) | Requires pando-teams repo changes |
 | 5.5 | EC2 SSH security group update | Requires AWS console or CLI with admin profile |
 | 5.6 | Vercel gateway env vars | Requires Vercel dashboard access |
 

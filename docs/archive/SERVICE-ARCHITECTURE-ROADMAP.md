@@ -1,10 +1,10 @@
 # Service Architecture Roadmap
 
-> The plan to make Pando a proper modular platform where pando-code is a standalone product AND a network service, nodes are lightweight by default, and future services plug in cleanly.
+> The plan to make Pando a proper modular platform where pando-teams is a standalone product AND a network service, nodes are lightweight by default, and future services plug in cleanly.
 
 ## The Problem
 
-1. `pando-code` is a **private repo** but it's core network infrastructure — nodes can't self-heal
+1. `pando-teams` is a **private repo** but it's core network infrastructure — nodes can't self-heal
 2. It's glued in with a **broken symlink** that `npm install` destroys every upgrade
 3. **Every node installs everything** — no way to run lightweight
 4. No formal **service interface** — future services (exchange, storage) have no pattern to follow
@@ -13,11 +13,11 @@
 ## The Vision
 
 ```
-pando-code  = standalone product (build AI apps, no network needed)
+pando-teams  = standalone product (build AI apps, no network needed)
             = network service (plug into pando-node for P2P, governance, Lux)
 
 pando-node  = lightweight by default (P2P, ledger, identity, governance)
-            = loads services on demand (@pando-code/core, future: @pando/exchange, etc.)
+            = loads services on demand (@pando-teams/core, future: @pando/exchange, etc.)
 ```
 
 **Two repos. Two products. One network.**
@@ -27,18 +27,18 @@ pando-node  = lightweight by default (P2P, ledger, identity, governance)
 ### Repo Structure
 
 ```
-github.com/pando-lux/pando-code   (PUBLIC — standalone AI engine)
-├── packages/core/                  # @pando-code/core — npm published
+github.com/pando-lux/pando-teams   (PUBLIC — standalone AI engine)
+├── packages/core/                  # @pando-teams/core — npm published
 ├── packages/cli/                   # Standalone CLI
 ├── .env.example                    # Placeholder keys
-└── README.md                       # "Build AI apps with PandoCode"
+└── README.md                       # "Build AI apps with PandoTeams"
 
 github.com/pando-lux/pando         (PUBLIC — the network)
 ├── packages/shared/                # @pando/shared
 ├── packages/identity/              # @pando/identity
 ├── packages/ledger/                # @pando/ledger
 ├── packages/node/                  # @pando/node (the composer)
-├── packages/gateway/               # @pando/gateway
+├── packages/gateway/               # @pando/hub
 ├── packages/tests/                 # @pando/tests
 └── README.md                       # "Run a Pando network node"
 ```
@@ -52,11 +52,11 @@ github.com/pando-lux/pando         (PUBLIC — the network)
     +-- @pando/ledger       (SQLite economy)
     +-- @pando/node         (P2P, governance, API)
     |       |
-    |       +-- @pando-code/core    (OPTIONAL — AI engine, npm package)
+    |       +-- @pando-teams/core    (OPTIONAL — AI engine, npm package)
     |       +-- @pando/exchange     (OPTIONAL — future DEX)
     |       +-- @pando/storage      (OPTIONAL — future storage)
     |
-    +-- @pando-code/core    (standalone — no @pando/* deps except shared)
+    +-- @pando-teams/core    (standalone — no @pando/* deps except shared)
 ```
 
 ### Service Interface
@@ -64,7 +64,7 @@ github.com/pando-lux/pando         (PUBLIC — the network)
 ```typescript
 // @pando/shared — the contract all services implement
 interface PandoService {
-  readonly id: string;                    // 'pando-code', 'pando-exchange'
+  readonly id: string;                    // 'pando-teams', 'pando-exchange'
   readonly version: string;
   readonly capabilities: string[];        // what this service provides to the network
 
@@ -83,16 +83,16 @@ interface ServiceContext {
 }
 ```
 
-### How pando-code Implements It
+### How pando-teams Implements It
 
 ```typescript
-// @pando-code/core — exports both standalone and service interfaces
-export { PandoCode, EnginePool, Board, Scheduler };  // standalone API
+// @pando-teams/core — exports both standalone and service interfaces
+export { PandoTeams, EnginePool, Board, Scheduler };  // standalone API
 
 // Service adapter (only used when loaded by pando-node)
 export function createService(): PandoService {
   return {
-    id: 'pando-code',
+    id: 'pando-teams',
     version: '0.1.0',
     capabilities: ['ai-engine', 'agents', 'board', 'scheduler'],
     async start(ctx) { /* init EnginePool with node context */ },
@@ -107,7 +107,7 @@ export function createService(): PandoService {
 ```typescript
 // @pando/node startup — service discovery
 const SERVICE_PACKAGES = [
-  '@pando-code/core',      // AI engine
+  '@pando-teams/core',      // AI engine
   // future: '@pando/exchange', '@pando/storage', etc.
 ];
 
@@ -135,8 +135,8 @@ for (const pkg of SERVICE_PACKAGES) {
 npm install                          # default — no services
 node packages/node/dist/cli.js
 
-# AI node (adds PandoCode):
-npm install @pando-code/core         # adds AI capability
+# AI node (adds PandoTeams):
+npm install @pando-teams/core         # adds AI capability
 node packages/node/dist/cli.js       # auto-detects and loads
 
 # Future: DEX node:
@@ -174,30 +174,30 @@ node packages/node/dist/cli.js
 | 1.2 | Create `ServiceLoader` in `@pando/node` — discovers and loads installed services | DONE |
 | 1.3 | Refactor `engine-adapter.ts` to implement `PandoService` interface | DONE (createEngineService() wrapper) |
 | 1.4 | Move engine-adapter HTTP routes to be registered via `ServiceContext.registerRoutes()` | DEFERRED (future — routes stay in core-api.ts during transition) |
-| 1.5 | Node startup calls `ServiceLoader.loadAll()` instead of hardcoded `startEngine()` | PARTIAL (ServiceLoader initialized, loadAll() deferred until pando-code ships createService()) |
+| 1.5 | Node startup calls `ServiceLoader.loadAll()` instead of hardcoded `startEngine()` | PARTIAL (ServiceLoader initialized, loadAll() deferred until pando-teams ships createService()) |
 | 1.6 | Verify: node runs fine with no services installed (light mode) | DONE (build passes, nodeMode guards in place) |
-| 1.7 | Verify: node runs fine with @pando-code/core installed (full mode) | DONE (build passes, existing engine flow preserved) |
+| 1.7 | Verify: node runs fine with @pando-teams/core installed (full mode) | DONE (build passes, existing engine flow preserved) |
 
-**Done when:** `npm uninstall @pando-code/core && node cli.js` runs a working light node. `npm install @pando-code/core && node cli.js` runs a full node with AI.
+**Done when:** `npm uninstall @pando-teams/core && node cli.js` runs a working light node. `npm install @pando-teams/core && node cli.js` runs a full node with AI.
 
-### Phase 2: Make pando-code Public
+### Phase 2: Make pando-teams Public
 
 **Priority: HIGH. Unblocks all nodes.**
 
 | # | Task | Status |
 |---|------|--------|
-| 2.1 | Audit pando-code repo for secrets (agent already did this — .env is gitignored, code is clean) | TODO |
-| 2.2 | Add .env.example to pando-code with placeholder keys | TODO |
+| 2.1 | Audit pando-teams repo for secrets (agent already did this — .env is gitignored, code is clean) | TODO |
+| 2.2 | Add .env.example to pando-teams with placeholder keys | TODO |
 | 2.3 | Add README.md for standalone usage | TODO |
-| 2.4 | Add `createService()` export to @pando-code/core for pando-node integration | TODO |
-| 2.5 | Publish @pando-code/core to npm (or use git-based install: `npm install github:pando-lux/pando-code`) | TODO |
+| 2.4 | Add `createService()` export to @pando-teams/core for pando-node integration | TODO |
+| 2.5 | Publish @pando-teams/core to npm (or use git-based install: `npm install github:pando-lux/pando-teams`) | TODO |
 | 2.6 | Change GitHub repo visibility: private → public | TODO |
-| 2.7 | Update pando-node to install @pando-code/core from npm/git instead of local symlink | TODO |
-| 2.8 | Test: fresh clone of pando-node + `npm install @pando-code/core` → full node works | TODO |
+| 2.7 | Update pando-node to install @pando-teams/core from npm/git instead of local symlink | TODO |
+| 2.8 | Test: fresh clone of pando-node + `npm install @pando-teams/core` → full node works | TODO |
 
-**Done when:** A new user can `git clone pando && npm install && npm install @pando-code/core && node cli.js` and have a working full node.
+**Done when:** A new user can `git clone pando && npm install && npm install @pando-teams/core && node cli.js` and have a working full node.
 
-### Phase 3: Clean Rename (@pando-code/core references)
+### Phase 3: Clean Rename (@pando-teams/core references)
 
 **Priority: MEDIUM. Consistency.**
 
@@ -205,8 +205,8 @@ This is the big mechanical rename. All 100+ references across the codebase.
 
 | # | Task | Status |
 |---|------|--------|
-| 3.1 | Update all `import('@pando-code/core')` calls in engine-adapter.ts (4 locations) | TODO |
-| 3.2 | Update `pando-code.d.ts` type stub | TODO |
+| 3.1 | Update all `import('@pando-teams/core')` calls in engine-adapter.ts (4 locations) | TODO |
+| 3.2 | Update `pando-teams.d.ts` type stub | TODO |
 | 3.3 | Update capability-detector.ts package check | TODO |
 | 3.4 | Update upgrade-protocol.ts backup/restore paths | TODO |
 | 3.5 | Update index.ts infrastructure app registration | TODO |
@@ -217,11 +217,11 @@ This is the big mechanical rename. All 100+ references across the codebase.
 | 3.10 | Update all archive docs (optional — these are historical) | SKIP |
 | 3.11 | Update gateway dropdown options | TODO |
 | 3.12 | Update playwright.config.ts project list | TODO |
-| 3.13 | Update .gitignore patterns (`.pando-code.db` stays — it's the app's DB name) | TODO |
+| 3.13 | Update .gitignore patterns (`.pando-teams.db` stays — it's the app's DB name) | TODO |
 
-**Note:** `.pando-code.db` filename stays unchanged — that's PandoCode's internal database name, not a package reference.
+**Note:** `.pando-teams.db` filename stays unchanged — that's PandoTeams's internal database name, not a package reference.
 
-**Done when:** `grep -r "pando-code" packages/node/src/ --include="*.ts"` only returns the `.pando-code.db` filename references and the `PANDO_CODE` capability enum (which is the network identifier).
+**Done when:** `grep -r "pando-teams" packages/node/src/ --include="*.ts"` only returns the `.pando-teams.db` filename references and the `PANDO_TEAMS` capability enum (which is the network identifier).
 
 ### Phase 4: Legacy Cleanup
 
@@ -236,7 +236,7 @@ This is the big mechanical rename. All 100+ references across the codebase.
 | 4.5 | Remove `workspaceBaseDir` from scheduler config | REVISED — still used by getTaskLogs(). Keep. |
 | 4.6 | Update comments: remove Lightsail references, update to reflect current infra | DONE (cli.ts cleaned, BIBLE.md history trimmed) |
 | 4.7 | Delete the symlink backup/restore hack from upgrade-protocol.ts | DONE — replaced with npm link detection + re-link after npm install. Clean approach. |
-| 4.8 | Remove `@pando-code/core` from all package.json and package-lock.json | DONE (d084f15) |
+| 4.8 | Remove `@pando-teams/core` from all package.json and package-lock.json | DONE (d084f15) |
 
 **Revised assessment:** PM2 is actively used (Tier 2 app hosting), not dead code. Council routes blocked on gateway migration. Symlink hack is bridge code for Phase 2.
 
@@ -262,9 +262,9 @@ This is the big mechanical rename. All 100+ references across the codebase.
 
 | # | Task | Status |
 |---|------|--------|
-| 6.1 | Fresh clone test: `git clone pando && npm install && node cli.js` → light node works | VERIFIED — EC2 nodes run healthy without @pando-code/core |
-| 6.2 | Service install test: `npm install @pando-code/core` → AI capability activates | VERIFIED — Windows node: npm link → engine starts → team agents run |
-| 6.3 | Service uninstall test: `npm uninstall @pando-code/core` → node gracefully degrades | VERIFIED — EC2/Mac: no engine, healthy relay/P2P. /services shows correct state |
+| 6.1 | Fresh clone test: `git clone pando && npm install && node cli.js` → light node works | VERIFIED — EC2 nodes run healthy without @pando-teams/core |
+| 6.2 | Service install test: `npm install @pando-teams/core` → AI capability activates | VERIFIED — Windows node: npm link → engine starts → team agents run |
+| 6.3 | Service uninstall test: `npm uninstall @pando-teams/core` → node gracefully degrades | VERIFIED — EC2/Mac: no engine, healthy relay/P2P. /services shows correct state |
 | 6.4 | Upgrade test: commit-and-propose → all 4 nodes upgrade → services survive | PASS — 4 deploys (8896593, 00ef17df, 9a507ccb, 7f2b0a1a) all propagated to all nodes |
 | 6.5 | Failover test: kill managing node → another node claims → services restart | TESTED PRIOR SESSION — orphan detection + claim + agent restart works |
 | 6.6 | Multi-service test: (future) install two services → both load | TODO (no second service exists yet) |
@@ -275,10 +275,10 @@ This is the big mechanical rename. All 100+ references across the codebase.
 
 ## What We're NOT Doing
 
-- **Not merging repos.** pando-code stays separate — it's a standalone product.
-- **Not publishing to npm registry (yet).** Git-based install (`github:pando-lux/pando-code`) works for now. npm publish when we have more users.
+- **Not merging repos.** pando-teams stays separate — it's a standalone product.
+- **Not publishing to npm registry (yet).** Git-based install (`github:pando-lux/pando-teams`) works for now. npm publish when we have more users.
 - **Not changing the P2P protocol.** Service loading is local-only. P2P layer unchanged.
-- **Not renaming `.pando-code.db`.** That's PandoCode's internal database — changing it would break existing installations.
+- **Not renaming `.pando-teams.db`.** That's PandoTeams's internal database — changing it would break existing installations.
 - **Not building a service marketplace (yet).** That's Phase 4 in the main roadmap. This roadmap is about making the foundation right.
 
 ---
@@ -298,7 +298,7 @@ Phase 0 must be first (security). Phase 1 before Phase 2 (need interface before 
 ## Success Criteria
 
 1. **Light node:** `git clone && npm install && node cli.js` — works, P2P connects, earns relay fees
-2. **Full node:** `npm install @pando-code/core` — AI agents activate, teams run, board works
-3. **Standalone PandoCode:** `git clone pando-code && npm install && npx pando-code` — works without network
+2. **Full node:** `npm install @pando-teams/core` — AI agents activate, teams run, board works
+3. **Standalone PandoTeams:** `git clone pando-teams && npm install && npx pando-teams` — works without network
 4. **No symlinks, no hacks, no backup/restore** — standard npm dependency management
 5. **Any future service follows the same pattern** — implement PandoService, publish to npm, install on node

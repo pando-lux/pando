@@ -259,7 +259,7 @@ function refreshTray(): void {
   }
 
   // Service line
-  const svc = lastState.services[0]; // primary service (pando-code)
+  const svc = lastState.services[0]; // primary service (pando-teams)
   const hasSvc = nodeReady && !!svc;
   let svcText = '';
   if (hasSvc) {

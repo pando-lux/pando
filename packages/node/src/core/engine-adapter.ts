@@ -1,17 +1,17 @@
 /**
- * Engine Adapter — THE nervous system between pando-node (body) and pando-code (brain).
+ * Engine Adapter — THE nervous system between pando-node (body) and pando-teams (brain).
  *
- * This is the ONLY file in pando-node that imports @pando-code/core.
+ * This is the ONLY file in pando-node that imports @pando-teams/core.
  * Everything else in pando-node is pure infrastructure.
  *
  * Responsibilities:
- *   - Manages EnginePool (Map<id, PandoCode>) with lifecycle hooks
+ *   - Manages EnginePool (Map<id, PandoTeams>) with lifecycle hooks
  *   - Registers Pando tools on each engine (deploy, governance, transfer, etc.)
  *   - Injects Lux budget provider
  *   - Routes messages to the right engine (system vs project)
  *   - Provides governance AI review hook
  *   - Runs Scheduler for periodic autonomous behavior
- *   - Starts teams (startTeam) using PandoCode's native agent/board system
+ *   - Starts teams (startTeam) using PandoTeams's native agent/board system
  *   - Injects contributed AI API keys from ResourceRegistry
  */
 
@@ -26,18 +26,18 @@ import type { StreamEvent, PandoService, ServiceContext } from '@pando/shared';
 // Two Laws Content Filter — imported from shared constants (defense-in-depth at storage level)
 import { HARM_PATTERNS, SHUTDOWN_PATTERNS } from '../constants.js';
 
-// ─── Dynamic imports (pando-code is ESM, loaded at runtime) ─────────────
+// ─── Dynamic imports (pando-teams is ESM, loaded at runtime) ─────────────
 
 let _EnginePool: any = null;
 let _Scheduler: any = null;
 let _loaded = false;
 let _loadPromise: Promise<void> | null = null;
 
-async function loadPandoCode(): Promise<void> {
+async function loadPandoTeams(): Promise<void> {
   if (_loaded) return;
   if (_loadPromise) return _loadPromise;
   _loadPromise = (async () => {
-    const mod = await import('@pando-code/core');
+    const mod = await import('@pando-teams/core');
     _EnginePool = mod.EnginePool;
     _Scheduler = mod.Scheduler;
     _loaded = true;
@@ -540,7 +540,7 @@ RULES:
 - Include SPECIFIC details (peer count, peer IDs, error details).
 - Do NOT loop or recheck. One pass: status → peers → analyze → report → done.
 - You are READ-ONLY. Never modify code or files.
-- You do NOT have PandoCode tools. Use bash (curl) for API calls and bash for commands.`;
+- You do NOT have PandoTeams tools. Use bash (curl) for API calls and bash for commands.`;
 }
 
 function makeQAPrompt(ctx: PromptContext): string {
@@ -570,7 +570,7 @@ RULES:
 - Run REAL commands, not just API checks.
 - Include SPECIFIC output (error messages, test names, line numbers).
 - Do NOT loop or recheck. One pass through all steps.
-- You do NOT have PandoCode tools. Use bash (curl) for API calls.`;
+- You do NOT have PandoTeams tools. Use bash (curl) for API calls.`;
 }
 
 function makeLeadPrompt(ctx: PromptContext): string {
@@ -604,7 +604,7 @@ Your INBOX and BOARD STATE are injected below this message — no tool call need
 The upgrade protocol auto-deploys to ALL nodes:
   git fetch → verify hash → build → safe restart (exit 75) → supervisor respawns
 
-## HTTP API (use curl for ALL operations — you do NOT have PandoCode tools, only bash/read/write/edit)
+## HTTP API (use curl for ALL operations — you do NOT have PandoTeams tools, only bash/read/write/edit)
 COMMIT & DEPLOY: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/infra/commit-and-propose${authHeader} -H "Content-Type: application/json" -d '{"message":"fix: description","taskId":"<taskId>"}'
 UPDATE TASK: curl -s -X PATCH http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/board/<taskId>${authHeader} -H "Content-Type: application/json" -d '{"status":"done","progress":"<notes>"}'
 CREATE TASK: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/board${authHeader} -H "Content-Type: application/json" -d '{"title":"<title>","description":"<desc>"}'
@@ -644,7 +644,7 @@ You can spawn sub-agents when you need help:
 - Test verification: spawn a tester agent
 - Stop agents when their work is done
 
-## HTTP API (use curl for ALL operations — you do NOT have PandoCode tools, only bash/read/write/edit)
+## HTTP API (use curl for ALL operations — you do NOT have PandoTeams tools, only bash/read/write/edit)
 UPDATE TASK: curl -s -X PATCH http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/board/<taskId> -H "Content-Type: application/json" -d '{"status":"done","progress":"<notes>"}'
 CREATE TASK: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/board -H "Content-Type: application/json" -d '{"title":"<title>","description":"<desc>"}'
 SEND MESSAGE: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId}/message -H "Content-Type: application/json" -d '{"from":"lead","to":"<agentId>","message":"<text>"}'
@@ -714,14 +714,14 @@ export class EngineAdapter {
   private watchdogRestarts = new Map<string, { count: number; firstRestartAt: number }>();
   private stoppedEngines = new Set<string>();  // engines intentionally stopped — don't restart
 
-  /** Whether the adapter is ready (pando-code loaded + pool started). */
+  /** Whether the adapter is ready (pando-teams loaded + pool started). */
   get available(): boolean { return this.started; }
 
   /** Network linking: always linked when adapter is started (node IS the network). */
   get linked(): boolean { return this.started; }
 
   /**
-   * Start the adapter: load pando-code, create pool, boot system engine.
+   * Start the adapter: load pando-teams, create pool, boot system engine.
    */
   async start(config: AdapterConfig): Promise<void> {
     // Validate dataDir: must be a non-empty absolute path. Fall back to default if invalid.
@@ -734,8 +734,8 @@ export class EngineAdapter {
     }
     this.config = config;
 
-    // Load pando-code dynamically
-    await loadPandoCode();
+    // Load pando-teams dynamically
+    await loadPandoTeams();
 
     // Cache better-sqlite3 for board operations (ESM-safe)
     try {
@@ -752,18 +752,18 @@ export class EngineAdapter {
     this.luxProvider = createLuxBudgetProvider(config.luxPerUsd);
 
     // Create engine pool with lifecycle hooks
-    // Do NOT override defaultModel — let PandoCode use its own configured provider/model.
+    // Do NOT override defaultModel — let PandoTeams use its own configured provider/model.
     // Contributors choose their own provider (Gemini, OpenAI, Anthropic, Ollama).
     this.pool = new _EnginePool({
-      /** defaultModel: Override PandoCode's default model selection. Only set when
+      /** defaultModel: Override PandoTeams's default model selection. Only set when
        *  the node operator explicitly specifies a model via CLI/config. When omitted,
-       *  PandoCode uses its own configured provider/model from ~/.pando-code/config. */
+       *  PandoTeams uses its own configured provider/model from ~/.pando-teams/config. */
       ...(config.model ? { defaultModel: config.model } : {}),
       defaultRole: 'lead',
       maxEngines: 20,
       idleTTLMs: 30 * 60 * 1000,
-      // skipKnowledgeSync: Disables PandoCode's internal knowledge base sync on engine creation.
-      // Pando nodes manage their own data sync via P2P — PandoCode's KB sync would be redundant.
+      // skipKnowledgeSync: Disables PandoTeams's internal knowledge base sync on engine creation.
+      // Pando nodes manage their own data sync via P2P — PandoTeams's KB sync would be redundant.
       skipKnowledgeSync: true,
       onAfterCreate: async (id: string, engine: any) => {
         // Inject Lux budget
@@ -987,7 +987,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   }
 
   /**
-   * H-2 + H-3: Normalize a raw PandoCode engine event into a typed StreamEvent
+   * H-2 + H-3: Normalize a raw PandoTeams engine event into a typed StreamEvent
    * with protocol version. Use this when forwarding events to API consumers
    * who need a stable, versioned contract.
    */
@@ -1348,19 +1348,19 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     return taskId;
   }
 
-  /** Resolve the .pando-code.db path for a project. */
+  /** Resolve the .pando-teams.db path for a project. */
   private resolveProjectDbPath(projectId: string): string | null {
     if (!this.config) return null;
     try {
       const baseDir = this.config.dataDir || pathJoin(homedir(), '.pando');
-      const dbPath = pathJoin(baseDir, 'projects', projectId, '.pando-code.db');
+      const dbPath = pathJoin(baseDir, 'projects', projectId, '.pando-teams.db');
       return existsSync(dbPath) ? dbPath : null;
     } catch {
       return null;
     }
   }
 
-  /** Read board tasks from any PandoCode SQLite DB. */
+  /** Read board tasks from any PandoTeams SQLite DB. */
   private getBoardTasks(dbPath: string | null, includeDone = false): any[] {
     if (!dbPath || !this.Database) return [];
     try {
@@ -1380,7 +1380,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     }
   }
 
-  /** Insert a board task into any PandoCode SQLite DB. Dedup by exact title match. */
+  /** Insert a board task into any PandoTeams SQLite DB. Dedup by exact title match. */
   private insertBoardTask(dbPath: string | null, title: string, description?: string): string | null {
     if (!dbPath || !this.Database) return null;
 
@@ -1676,7 +1676,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
     // Re-register tools with correct agent IDs
     const { createCheckAgentsTool, createSendMessageTool, createManageTasksTool } =
-      await import('@pando-code/core');
+      await import('@pando-teams/core');
 
     if (engine?.db) {
       engine.tools.unregister('check_agents');
@@ -1699,7 +1699,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   // ─── Team Management ──────────────────────────────────────────────────
 
   /**
-   * Start a team — creates PandoCode engines for each agent, registers tools,
+   * Start a team — creates PandoTeams engines for each agent, registers tools,
    * sets up scheduler ticks, and inserts agent profiles for cross-engine messaging.
    *
    * Generic: works for pando-infra (3 agents) or user project teams (1 agent).
@@ -1721,7 +1721,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     // Team workspace + shared DB
     const teamDir = join(baseDir, 'teams', teamId);
     mkdirSync(teamDir, { recursive: true });
-    const teamDbPath = join(teamDir, '.pando-code.db');
+    const teamDbPath = join(teamDir, '.pando-teams.db');
 
     // Resolve repo root for lead agents that need codebase access
     const thisDir = dirname(fileURLToPath(import.meta.url));
@@ -1741,9 +1741,9 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       }
     }
 
-    // Import PandoCode tool creators for re-registration with correct agent IDs
+    // Import PandoTeams tool creators for re-registration with correct agent IDs
     const { createCheckAgentsTool, createSendMessageTool, createManageTasksTool } =
-      await import('@pando-code/core');
+      await import('@pando-teams/core');
 
     const intervals: any[] = [];
 
@@ -1754,7 +1754,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     if (this.Database) {
       try {
         const db = new this.Database(teamDbPath);
-        // Ensure state table exists (schema must match PandoCode's state table)
+        // Ensure state table exists (schema must match PandoTeams's state table)
         db.prepare(`CREATE TABLE IF NOT EXISTS state (
           key TEXT PRIMARY KEY,
           value TEXT,
@@ -2049,7 +2049,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
     // Re-register tools with correct agent ID
     const { createCheckAgentsTool, createSendMessageTool, createManageTasksTool } =
-      await import('@pando-code/core');
+      await import('@pando-teams/core');
 
     if (engine?.db) {
       engine.tools.unregister('check_agents');
@@ -2216,7 +2216,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     return [...this.activeTeams.keys()];
   }
 
-  /** Get aggregate cost for a team from its PandoCode DB. */
+  /** Get aggregate cost for a team from its PandoTeams DB. */
   getTeamCost(teamId: string): { totalTokens: number; totalCostUsd: number; totalCostLux: number; byAgent: Record<string, number> } {
     const teamData = this.activeTeams.get(teamId);
     if (!teamData?.dbPath || !this.Database) return { totalTokens: 0, totalCostUsd: 0, totalCostLux: 0, byAgent: {} };
@@ -2230,7 +2230,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         db.close();
         return { totalTokens: 0, totalCostUsd: 0, totalCostLux: 0, byAgent: {} };
       }
-      // Discover columns dynamically — schema may vary across PandoCode versions
+      // Discover columns dynamically — schema may vary across PandoTeams versions
       const cols = db.prepare(`PRAGMA table_info(budget_usage)`).all() as { name: string }[];
       const colNames = new Set(cols.map(c => c.name));
       const hasInputTokens = colNames.has('input_tokens');
@@ -2245,7 +2245,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       const costExpr = hasEstimatedCostUsd ? 'SUM(b.estimated_cost_usd)' : '0';
 
       // Per-agent attribution: join budget_usage with sessions table.
-      // PandoCode session titles follow the format "teamId: agentRole",
+      // PandoTeams session titles follow the format "teamId: agentRole",
       // which lets us extract the agent name from the session title.
       const hasSessionsTable = db.prepare(
         `SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'`
@@ -2279,7 +2279,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         totalTokens += row.tokens || 0;
         totalCostUsd += row.cost || 0;
       }
-      // PandoCode records costs via our Lux budget provider, so estimated_cost_usd
+      // PandoTeams records costs via our Lux budget provider, so estimated_cost_usd
       // actually contains Lux values. Convert back to USD for the USD field.
       const totalCostLux = totalCostUsd;  // DB value is in Lux (from our budget provider)
       return { totalTokens, totalCostUsd: totalCostLux / LUX_PER_USD, totalCostLux, byAgent };
@@ -2331,7 +2331,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
   /**
    * Get recent messages from a team agent's sessions.
-   * Queries the team's .pando-code.db for messages belonging to sessions
+   * Queries the team's .pando-teams.db for messages belonging to sessions
    * whose title contains the agentId (e.g. "pando-infra: lead").
    */
   getTeamAgentMessages(teamId: string, agentId: string, limit = 20): { role: string; content: string; createdAt: string }[] {
@@ -2390,7 +2390,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   // ─── Internal ─────────────────────────────────────────────────────────
 
   /**
-   * Ensure AI API keys are available for PandoCode.
+   * Ensure AI API keys are available for PandoTeams.
    *
    * Priority: local env vars first (contributor's own keys), then contributed
    * resources via CredentialStore (EC2 nodes with MongoDB). Keys never travel
@@ -2403,13 +2403,13 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       'gemini':    'GOOGLE_GENERATIVE_AI_API_KEY',
     };
 
-    // 1. Load PandoCode's .env if it exists (contributor's configured keys)
+    // 1. Load PandoTeams's .env if it exists (contributor's configured keys)
     try {
       const { readFileSync, existsSync } = await import('fs');
       const { resolve, dirname } = await import('path');
       const { createRequire } = await import('module');
       const require = createRequire(import.meta.url);
-      const corePkg = require.resolve('@pando-code/core/package.json');
+      const corePkg = require.resolve('@pando-teams/core/package.json');
       const pandoCodeRoot = resolve(dirname(corePkg), '..', '..');
       const envPath = resolve(pandoCodeRoot, '.env');
       if (existsSync(envPath)) {
@@ -2425,9 +2425,9 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
             process.env[key] = val;
           }
         }
-        console.log(`[EngineAdapter] Loaded PandoCode .env from ${pandoCodeRoot}`);
+        console.log(`[EngineAdapter] Loaded PandoTeams .env from ${pandoCodeRoot}`);
       }
-    } catch { /* ok — no .env file or @pando-code/core not installed */ }
+    } catch { /* ok — no .env file or @pando-teams/core not installed */ }
 
     // 2. Check what's already in local env (contributor's own keys)
     const available: string[] = [];
@@ -2461,7 +2461,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     // 4. Warn if no keys available at all
     const finalAvailable = Object.entries(PROVIDER_ENV_MAP).filter(([_, v]) => process.env[v]);
     if (finalAvailable.length === 0) {
-      console.warn('[EngineAdapter] No AI API keys found. PandoCode will use its own configured provider. Set GOOGLE_GENERATIVE_AI_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY if needed.');
+      console.warn('[EngineAdapter] No AI API keys found. PandoTeams will use its own configured provider. Set GOOGLE_GENERATIVE_AI_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY if needed.');
     }
   }
 
@@ -2473,12 +2473,12 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
 /**
  * Create a PandoService that wraps EngineAdapter.
- * Called by ServiceLoader when @pando-code/core is installed,
+ * Called by ServiceLoader when @pando-teams/core is installed,
  * or directly by init-platform.ts during the transition period.
  */
 export function createEngineService(adapter: EngineAdapter): PandoService {
   return {
-    id: 'pando-code',
+    id: 'pando-teams',
     version: '0.2.0',
     capabilities: ['ai-engine', 'agents', 'board', 'scheduler', 'governance-review'],
 

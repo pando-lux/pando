@@ -9,7 +9,7 @@ REM Ensure logs directory exists
 if not exist "%USERPROFILE%\.pando\logs" mkdir "%USERPROFILE%\.pando\logs"
 
 set RESTART_LOG=%USERPROFILE%\.pando\logs\restart.log
-set GATEWAY_PUBLIC_URL=https://gateway-one-mu.vercel.app
+set HUB_PUBLIC_URL=https://gateway-one-mu.vercel.app
 set CREDENTIAL_MASTER_KEY=9e54185ea279ccedec088582ac4968d27870cbc8c437f102126edaceec378624
 set PANDO_STORAGE_URL=mongodb+srv://node_admin:EzHvHx8d3UZByYaM@cluster0.ydcixos.mongodb.net/pando
 

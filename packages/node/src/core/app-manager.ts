@@ -514,7 +514,7 @@ export class AppManager {
 
     const bucket = s3Config.bucket || 'pando-deployments';
     const envVars: Record<string, string> = app.env_json ? JSON.parse(app.env_json) : {};
-    const gatewayUrl = envVars.PANDO_GATEWAY_URL || process.env.GATEWAY_PUBLIC_URL || '';
+    const gatewayUrl = envVars.PANDO_HUB_URL || process.env.HUB_PUBLIC_URL || '';
     const projectApiKey = envVars.PANDO_PROJECT_API_KEY || '';
 
     let uploadCount = 0;
@@ -545,7 +545,7 @@ export class AppManager {
             if (ext === '.html' && gatewayUrl) {
               let html = content.toString('utf-8');
               const vars = [
-                `window.PANDO_GATEWAY_URL="${gatewayUrl}"`,
+                `window.PANDO_HUB_URL="${gatewayUrl}"`,
                 `window.PANDO_PROJECT_ID="${app.id}"`,
               ];
               if (projectApiKey) vars.push(`window.PANDO_PROJECT_API_KEY="${projectApiKey}"`);
@@ -905,7 +905,7 @@ export class AppManager {
 
     const bucket = s3Config.bucket || 'pando-deployments';
     const envVars: Record<string, string> = app.env_json ? JSON.parse(app.env_json) : {};
-    const gatewayUrl = envVars.PANDO_GATEWAY_URL || process.env.GATEWAY_PUBLIC_URL || '';
+    const gatewayUrl = envVars.PANDO_HUB_URL || process.env.HUB_PUBLIC_URL || '';
     const projectApiKey = envVars.PANDO_PROJECT_API_KEY || '';
 
     let uploadCount = 0;
@@ -931,7 +931,7 @@ export class AppManager {
             if (ext === '.html' && gatewayUrl) {
               let html = content.toString('utf-8');
               const vars = [
-                `window.PANDO_GATEWAY_URL="${gatewayUrl}"`,
+                `window.PANDO_HUB_URL="${gatewayUrl}"`,
                 `window.PANDO_PROJECT_ID="${app.id}"`,
               ];
               if (projectApiKey) vars.push(`window.PANDO_PROJECT_API_KEY="${projectApiKey}"`);

@@ -48,13 +48,13 @@ export async function registerPlatformRoutes(
     }
   }
 
-  /** Check if local PandoCode engine is available (provider-agnostic). */
+  /** Check if local PandoTeams engine is available (provider-agnostic). */
   function hasEngine(): boolean {
     return !!(node.getEngineAdapter()?.available);
   }
 
   /**
-   * Unified build routing — find the best PandoCode peer (including self).
+   * Unified build routing — find the best PandoTeams peer (including self).
    * Returns { peerId, isLocal } or null if no builders available.
    */
   function findBestBuilder(): { peerId: string; isLocal: boolean } | null {
@@ -68,7 +68,7 @@ export async function registerPlatformRoutes(
       p.capabilities.compute_cpu === true
     );
 
-    // Check if self is a candidate (has local PandoCode engine)
+    // Check if self is a candidate (has local PandoTeams engine)
     const selfHasEngine = hasEngine();
     if (selfHasEngine && selfPeerId) {
       // Self is the best candidate — no P2P overhead
@@ -98,7 +98,7 @@ export async function registerPlatformRoutes(
   }
 
     // NOTE: pando-node owns /v1/chat/message (user-facing chat via gateway).
-    // @pando-code/core owns /v1/chat (engine-level direct chat). Do not merge these routes.
+    // @pando-teams/core owns /v1/chat (engine-level direct chat). Do not merge these routes.
     fastify.post('/chat/message', async (request: any, reply: any) => {
       const peerId = await deps.verifyUserJwt(request);
       if (!peerId) { reply.status(401).send({ error: 'Unauthorized' }); return; }
@@ -131,10 +131,10 @@ export async function registerPlatformRoutes(
           await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' });
         }
 
-        // Unified routing — find best PandoCode peer (including self)
+        // Unified routing — find best PandoTeams peer (including self)
         const builder = findBestBuilder();
         if (!builder) {
-          const noBuilderReply = 'No PandoCode-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.';
+          const noBuilderReply = 'No PandoTeams-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.';
           if (threadStore && threadId) {
             await threadStore.addMessage(threadId, { role: 'assistant', content: noBuilderReply, timestamp: Date.now(), tier: 'simple' });
           }
@@ -142,7 +142,7 @@ export async function registerPlatformRoutes(
         }
 
         if (builder.isLocal) {
-          // Local PandoCode — async engine call
+          // Local PandoTeams — async engine call
           (async () => {
             try {
               const result = await sendToEngine(trimmed, projectId);
@@ -184,19 +184,19 @@ export async function registerPlatformRoutes(
           return { status: 'ok', threadId, projectId, reply: 'AI engine is processing — check the thread for updates.', tier: 'complex', routedTo: builder.peerId };
         }
 
-        // Remote PandoCode peer — route via P2P
+        // Remote PandoTeams peer — route via P2P
         const p2pResult = await node.routeChatProxyP2P?.(trimmed, threadId);
         if (p2pResult) {
-          return { status: 'queued', threadId, reply: 'Routed to PandoCode peer. Building — check thread for updates.', tier: 'complex', routedTo: p2pResult.executedBy };
+          return { status: 'queued', threadId, reply: 'Routed to PandoTeams peer. Building — check thread for updates.', tier: 'complex', routedTo: p2pResult.executedBy };
         }
-        return { status: 'ok', threadId, reply: 'PandoCode peer did not respond. Try again.', tier: 'simple' };
+        return { status: 'ok', threadId, reply: 'PandoTeams peer did not respond. Try again.', tier: 'simple' };
       }
 
       // No projectId — doorman handles first contact (pass user peerId for balance queries)
       const classification = await deps.doormanClassify(trimmed, peerId);
 
       if (classification.intent === 'simple' || classification.intent === 'question') {
-        // Doorman answers directly — no PandoCode engine needed
+        // Doorman answers directly — no PandoTeams engine needed
         const doormanReply = classification.response || 'I can help you build apps or answer questions. Try "build me a todo app"!';
         if (threadStore) {
           threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
@@ -227,16 +227,16 @@ export async function registerPlatformRoutes(
         return { status: 'ok', threadId, reply, tier: 'simple' };
       }
 
-      // Intent is 'build' — unified routing: always create project, find best PandoCode peer
+      // Intent is 'build' — unified routing: always create project, find best PandoTeams peer
       const builder = findBestBuilder();
       if (!builder) {
         threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
         if (threadStore) {
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
           await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' });
-          await threadStore.addMessage(threadId, { role: 'assistant', content: 'No PandoCode-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.', timestamp: Date.now(), tier: 'simple' });
+          await threadStore.addMessage(threadId, { role: 'assistant', content: 'No PandoTeams-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.', timestamp: Date.now(), tier: 'simple' });
         }
-        return { status: 'ok', threadId, reply: 'No PandoCode-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.', tier: 'simple' };
+        return { status: 'ok', threadId, reply: 'No PandoTeams-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.', tier: 'simple' };
       }
 
       // Always create project first (this node is the router)
@@ -289,7 +289,7 @@ export async function registerPlatformRoutes(
 
       // Route to best builder
       if (builder.isLocal && newProjectId) {
-        // Local PandoCode — async engine call (don't block HTTP response)
+        // Local PandoTeams — async engine call (don't block HTTP response)
         (async () => {
           try {
             const result = await sendToEngine(trimmed, newProjectId);
@@ -330,7 +330,7 @@ export async function registerPlatformRoutes(
           }
         })();
       } else if (!builder.isLocal) {
-        // Remote PandoCode peer — route via P2P
+        // Remote PandoTeams peer — route via P2P
         node.routeChatProxyP2P?.(trimmed, threadId, String(classification.tier || 1)).catch((err: Error) => {
           console.error('[router] P2P routing failed:', err.message);
           if (threadStore && threadId) {
@@ -537,14 +537,14 @@ export async function registerPlatformRoutes(
       // If thread has a projectId, route directly to project manager (no doorman).
       // If no projectId, use doorman to classify intent.
       if (threadMeta?.projectId) {
-        // Existing project thread — unified routing to best PandoCode peer
+        // Existing project thread — unified routing to best PandoTeams peer
         const builder = findBestBuilder();
         if (!builder) {
-          await threadStore.addMessage(id, { role: 'assistant', content: 'No PandoCode-capable nodes available.', timestamp: Date.now(), tier: 'simple' });
-          return { status: 'ok', threadId: id, reply: 'No PandoCode-capable nodes available.', tier: 'simple' };
+          await threadStore.addMessage(id, { role: 'assistant', content: 'No PandoTeams-capable nodes available.', timestamp: Date.now(), tier: 'simple' });
+          return { status: 'ok', threadId: id, reply: 'No PandoTeams-capable nodes available.', tier: 'simple' };
         }
         if (builder.isLocal) {
-          // Local PandoCode — async engine
+          // Local PandoTeams — async engine
           (async () => {
             try {
               const engineResult = await sendToEngine(plaintextForProcessing, threadMeta.projectId!);
@@ -568,7 +568,7 @@ export async function registerPlatformRoutes(
         node.routeChatProxyP2P?.(plaintextForProcessing, id).catch(() => {
           threadStore.addMessage(id, { role: 'assistant', content: 'P2P routing failed.', timestamp: Date.now(), tier: 'simple' });
         });
-        return { status: 'queued', threadId: id, reply: 'Routed to PandoCode peer — check thread for updates.', tier: 'complex', routedTo: builder.peerId };
+        return { status: 'queued', threadId: id, reply: 'Routed to PandoTeams peer — check thread for updates.', tier: 'complex', routedTo: builder.peerId };
       }
 
       // No projectId — use doorman
@@ -613,11 +613,11 @@ export async function registerPlatformRoutes(
         return { status: 'ok', threadId: id, reply: doormanReply, tier: 'simple' };
       }
 
-      // Build request — unified routing: create project, find best PandoCode peer
+      // Build request — unified routing: create project, find best PandoTeams peer
       const builder = findBestBuilder();
       if (!builder) {
-        await threadStore.addMessage(id, { role: 'assistant', content: 'No PandoCode-capable nodes available on the network.', timestamp: Date.now(), tier: 'simple' });
-        return { status: 'ok', threadId: id, reply: 'No PandoCode-capable nodes available on the network.', tier: 'simple' };
+        await threadStore.addMessage(id, { role: 'assistant', content: 'No PandoTeams-capable nodes available on the network.', timestamp: Date.now(), tier: 'simple' });
+        return { status: 'ok', threadId: id, reply: 'No PandoTeams-capable nodes available on the network.', tier: 'simple' };
       }
 
       // Always create project first (this node is the router)
@@ -663,7 +663,7 @@ export async function registerPlatformRoutes(
 
       const targetProjectId = newProjectId || threadMeta?.projectId;
       if (builder.isLocal && targetProjectId) {
-        // Local PandoCode — async engine (don't block HTTP response)
+        // Local PandoTeams — async engine (don't block HTTP response)
         (async () => {
           try {
             const result = await sendToEngine(plaintextForProcessing, targetProjectId);
@@ -681,7 +681,7 @@ export async function registerPlatformRoutes(
           }
         })();
       } else if (!builder.isLocal) {
-        // Remote PandoCode peer — route via P2P
+        // Remote PandoTeams peer — route via P2P
         node.routeChatProxyP2P?.(plaintextForProcessing, id, String(classification.tier || 1)).catch((err: Error) => {
           console.error('[router] P2P routing failed:', err.message);
           threadStore.addMessage(id, { role: 'assistant', content: 'P2P routing failed. Try again.', timestamp: Date.now(), tier: 'simple' });
@@ -693,7 +693,7 @@ export async function registerPlatformRoutes(
 
     // ── Engine API ──────────────────────────────────────────────────────────
 
-    // GET /engines — list active PandoCode engines
+    // GET /engines — list active PandoTeams engines
     fastify.get('/engines', async () => {
       const adapter = node.getEngineAdapter();
       if (!adapter?.available) return { engines: [] };
@@ -1411,7 +1411,7 @@ export async function registerPlatformRoutes(
       try {
         // Auto-inject project credentials as env vars for the deployed app
         const envVars: Record<string, string> = { ...(body.envVars || {}) };
-        const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
+        const gatewayUrl = process.env.HUB_PUBLIC_URL || process.env.HUB_URL || '';
         if (gatewayUrl && !envVars.RESOURCE_PROXY_URL) {
           envVars.RESOURCE_PROXY_URL = `${gatewayUrl}/api/resource-proxy/db`;
         }
@@ -1426,7 +1426,7 @@ export async function registerPlatformRoutes(
           } catch {}
         }
         if (gatewayUrl) {
-          envVars.GATEWAY_URL = gatewayUrl;
+          envVars.HUB_URL = gatewayUrl;
         }
 
         const result = await manager.deployApp(id, body.projectId, body.repoUrl, envVars);
@@ -3349,7 +3349,7 @@ export async function registerPlatformRoutes(
         }
 
         // Check 5: Gateway URL configured
-        const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
+        const gatewayUrl = process.env.HUB_PUBLIC_URL || process.env.HUB_URL || '';
         const gatewayReachable = gatewayUrl.length > 0;
 
         // Check 6: Resource Proxy available (gateway URL set = proxy available)
@@ -3362,7 +3362,7 @@ export async function registerPlatformRoutes(
         if (!apiKeyExists) missing.push('No API key — POST /projects/:id/api-key or use preflight auto-fix');
         if (!mongodbAssigned) missing.push('No MongoDB resource assigned');
         if (!githubAssigned) missing.push('No GitHub resource assigned');
-        if (!gatewayReachable) missing.push('GATEWAY_PUBLIC_URL not set on node');
+        if (!gatewayReachable) missing.push('HUB_PUBLIC_URL not set on node');
         if (!resourceProxyAvailable) missing.push('Resource Proxy unavailable (no gateway URL)');
 
         return { ready, checks, missing, autoFixed };
@@ -3626,7 +3626,7 @@ export async function registerPlatformRoutes(
       }
 
       // Check 2: Gateway URL injected
-      const gatewayInjected = htmlContent.includes('PANDO_GATEWAY_URL');
+      const gatewayInjected = htmlContent.includes('PANDO_HUB_URL');
 
       // Check 3: API key injected
       const apiKeyInjected = htmlContent.includes('PANDO_PROJECT_API_KEY');
@@ -3634,7 +3634,7 @@ export async function registerPlatformRoutes(
       // Check 4: Resource Proxy responds (test with count on __preflight_test collection)
       let resourceProxyWorks = false;
       if (project.apiKey) {
-        const gatewayUrl = process.env.GATEWAY_PUBLIC_URL || process.env.GATEWAY_URL || '';
+        const gatewayUrl = process.env.HUB_PUBLIC_URL || process.env.HUB_URL || '';
         if (gatewayUrl) {
           try {
             const proxyResp = await fetch(`${gatewayUrl}/api/resource-proxy/db`, {
@@ -3654,7 +3654,7 @@ export async function registerPlatformRoutes(
       // Gateway/API key injection only expected for Tier 1 static sites (HTML served from S3)
       // Tier 2 server apps handle their own responses — injection checks don't apply
       if (projectTier === 1) {
-        if (!gatewayInjected && urlResponds) errors.push('PANDO_GATEWAY_URL not found in HTML');
+        if (!gatewayInjected && urlResponds) errors.push('PANDO_HUB_URL not found in HTML');
         if (!apiKeyInjected && urlResponds) errors.push('PANDO_PROJECT_API_KEY not found in HTML');
       }
 
@@ -3772,8 +3772,8 @@ export async function registerPlatformRoutes(
       const nodePublicUrl = process.env.PANDO_PUBLIC_URL
         || (ips.length > 0 ? `http://${ips[0]!.ip}:${node.getApiPort() || 4000}` : null);
 
-      const gatewayPublicUrl = process.env.GATEWAY_PUBLIC_URL
-        || process.env.GATEWAY_URL
+      const gatewayPublicUrl = process.env.HUB_PUBLIC_URL
+        || process.env.HUB_URL
         || null;
 
       return {
@@ -3800,7 +3800,7 @@ export async function registerPlatformRoutes(
         },
         apiKeys: deps.getAvailableApiKeys(),
         gateway: {
-          url: process.env.GATEWAY_URL || 'http://127.0.0.1:3222',
+          url: process.env.HUB_URL || 'http://127.0.0.1:3222',
           note: 'Web UI directory. Apps have their own URLs after deployment.',
         },
         network: {

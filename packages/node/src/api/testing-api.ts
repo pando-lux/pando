@@ -405,7 +405,7 @@ export function registerTestingRoutes(
       const req = createRequire(import.meta.url);
       const { resolvePlaybookVariables } = req('@pando/tests');
       const resolved = resolvePlaybookVariables(playbook, {
-        GATEWAY_URL: opts.gatewayUrl,
+        HUB_URL: opts.gatewayUrl,
         API_URL: opts.apiUrl,
       });
 

@@ -48,9 +48,9 @@ export function detectCapabilities(manualOverrides?: string[]): DetectionResult 
     caps.push(NodeCapability.CLAUDE_CODE);
   }
 
-  // PandoCode engine (@pando-code/core)
-  if (detectPandoCode()) {
-    caps.push(NodeCapability.PANDO_CODE);
+  // PandoTeams engine (@pando-teams/core)
+  if (detectPandoTeams()) {
+    caps.push(NodeCapability.PANDO_TEAMS);
   }
 
   // Docker
@@ -114,9 +114,9 @@ export function hasClaudeCodeAuth(): boolean {
   return false;
 }
 
-function detectPandoCode(): boolean {
+function detectPandoTeams(): boolean {
   try {
-    const pkgPath = join(process.cwd(), 'node_modules', '@pando-code', 'core', 'package.json');
+    const pkgPath = join(process.cwd(), 'node_modules', '@pando-teams', 'core', 'package.json');
     return existsSync(pkgPath);
   } catch {
     return false;

@@ -55,11 +55,11 @@ export const STREAM_EVENT_VERSION = 1;
 /**
  * H-2 + H-3: Typed stream event emitted by EngineAdapter.
  *
- * PandoCode engines yield raw events with string `type` fields (e.g. 'stream:chunk',
+ * PandoTeams engines yield raw events with string `type` fields (e.g. 'stream:chunk',
  * 'tool:start', 'tool:result', 'error'). This interface normalizes them with a version
  * field for forward compatibility.
  *
- * Event type vocabulary mapping (PandoCode -> Pando):
+ * Event type vocabulary mapping (PandoTeams -> Pando):
  *   'stream:chunk'  -> text content fragment (for SSE streaming)
  *   'tool:start'    -> agent tool invocation began
  *   'tool:result'   -> agent tool invocation completed
@@ -70,7 +70,7 @@ export const STREAM_EVENT_VERSION = 1;
  * P2P messaging uses MessageType enum via publishToTopic/onMessage.
  */
 export interface StreamEvent {
-  /** Event type from PandoCode engine */
+  /** Event type from PandoTeams engine */
   type: 'stream:chunk' | 'tool:start' | 'tool:result' | 'error' | 'result' | string;
   /** Protocol version for forward compatibility */
   version: number;
@@ -464,7 +464,7 @@ export interface ReviewerCandidacy {
 /** Capabilities a node can have for task execution. */
 export enum NodeCapability {
   CLAUDE_CODE = 'claude-code',
-  PANDO_CODE = 'pando-code',
+  PANDO_TEAMS = 'pando-teams',
   DOCKER = 'docker',
   PYTHON = 'python',
   NODE = 'node',
@@ -1786,7 +1786,7 @@ export interface ProjectRegistryRecord {
 // Phase 64: Node specialization modes
 // Node specialization modes:
 // 'full' = everything (default, double-click launcher, desktop dev)
-// 'contributor' = full + shareCompute (contributes PandoCode AI compute, earns Lux)
+// 'contributor' = full + shareCompute (contributes PandoTeams AI compute, earns Lux)
 // 'secure' = EC2 nodes with MongoDB, credential storage, deploy target (alias: 'compute')
 // 'lightweight' = P2P only, network routing + growth (alias: 'relay')
 // Legacy aliases kept for backward compat: 'compute' → 'secure', 'relay' → 'lightweight'
@@ -1877,7 +1877,7 @@ export const DEFAULT_AGENT_CAPABILITIES: AgentCapabilityDeclaration = {
  * Install the npm package → service auto-loads. Uninstall → skipped.
  */
 export interface PandoService {
-  /** Unique service identifier (e.g. 'pando-code', 'pando-exchange') */
+  /** Unique service identifier (e.g. 'pando-teams', 'pando-exchange') */
   readonly id: string;
   /** Semver version string */
   readonly version: string;
