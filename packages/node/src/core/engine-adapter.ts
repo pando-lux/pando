@@ -716,6 +716,7 @@ export class EngineAdapter {
   private watchdogTimer: ReturnType<typeof setInterval> | null = null;
   private watchdogRestarts = new Map<string, { count: number; firstRestartAt: number }>();
   private stoppedEngines = new Set<string>();  // engines intentionally stopped — don't restart
+  private teamKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
 
   /** Whether the adapter is ready (pando-teams loaded + pool started). */
   get available(): boolean { return this.started; }
@@ -779,6 +780,20 @@ export class EngineAdapter {
       },
     });
     this.pool.start();
+
+    // Keep active team engines alive in the pool — prevent idle eviction between ticks
+    this.teamKeepAliveTimer = setInterval(() => {
+      if (!this.pool) return;
+      for (const [teamId, teamData] of this.activeTeams) {
+        for (const agent of teamData.agents) {
+          const engineId = `${teamId}:${agent.id}`;
+          if (this.pool.has(engineId)) {
+            // Touch lastUsed to prevent idle eviction
+            (this.pool as any).lastUsed?.set(engineId, Date.now());
+          }
+        }
+      }
+    }, 5 * 60_000); // every 5 minutes
 
     // Boot system engine
     await this.pool.getOrCreate('system', {
@@ -1528,6 +1543,10 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   /** Shutdown everything gracefully. */
   async shutdown(): Promise<void> {
     this.stopWatchdog();
+    if (this.teamKeepAliveTimer) {
+      clearInterval(this.teamKeepAliveTimer);
+      this.teamKeepAliveTimer = null;
+    }
     for (const [teamId, teamData] of this.activeTeams) {
       for (const interval of teamData.intervals) clearInterval(interval);
     }
@@ -1556,7 +1575,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   private startWatchdog(): void {
     if (this.watchdogTimer) return;
 
-    const WATCHDOG_INTERVAL_MS = 60_000;    // check every 60 seconds
+    const WATCHDOG_INTERVAL_MS = 30_000;    // check every 30 seconds (BIBLE target)
     const CIRCUIT_BREAKER_MAX = 3;          // max restarts per engine per hour
     const CIRCUIT_BREAKER_WINDOW_MS = 60 * 60_000; // 1 hour
 
@@ -1623,7 +1642,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       (this.watchdogTimer as any).unref();
     }
 
-    console.log('[EngineAdapter] Watchdog started (60s interval, circuit breaker: 3/hour).');
+    console.log('[EngineAdapter] Watchdog started (30s interval, circuit breaker: 3/hour).');
   }
 
   /** Stop the engine watchdog. */
@@ -1960,6 +1979,20 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
               if (isFatal || consecutiveFailures >= 3) {
                 console.error(`[${label}] CRITICAL: Engine appears dead (${consecutiveFailures} consecutive failures): ${err.message}`);
                 console.error(`[${label}] CRITICAL: Agent "${agent.id}" — watchdog will attempt auto-restart.`);
+                // Trigger immediate watchdog check instead of waiting for next interval
+                try {
+                  const engineId = `${teamId}:${agent.id}`;
+                  if (this.pool && !this.pool.has(engineId)) {
+                    console.log(`[${label}] Immediate restart triggered by tick failure`);
+                    const teamData = this.activeTeams.get(teamId);
+                    if (teamData) {
+                      await this.restartTeamEngine(teamId, agent, teamData);
+                      consecutiveFailures = 0; // reset on successful restart
+                    }
+                  }
+                } catch (restartErr: any) {
+                  console.error(`[${label}] Immediate restart failed: ${restartErr.message}`);
+                }
               } else {
                 console.warn(`[${label}] Tick error (${consecutiveFailures}/3): ${err.message}`);
               }
