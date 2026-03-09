@@ -7,7 +7,7 @@
  *   - Security validation (dangerous patterns, immutable kernel, protocol changes)
  *   - Version pinning
  *   - Safe restart (wait for active workers)
- *   - Catch-up timer for missed upgrades
+ *   - Catch-up timer for missed upgrades (governance-based + git-fetch fallback)
  *   - P2P broadcast of upgrade notifications
  *
  * The actual git/build/deploy work is done by GitOps.
