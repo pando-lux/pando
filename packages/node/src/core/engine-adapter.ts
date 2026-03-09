@@ -1373,6 +1373,10 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     if (!this.pool || !this.config) return;
     if (this.activeTeams.has(teamId)) return; // already running
 
+    // Reserve slot immediately to prevent concurrent startTeam races (TOCTOU)
+    this.activeTeams.set(teamId, { dbPath: '', agents: [], intervals: [] });
+
+    try {
     const { join, resolve, dirname } = await import('node:path');
     const { mkdirSync } = await import('node:fs');
     const { fileURLToPath } = await import('node:url');
@@ -1609,6 +1613,12 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
     this.activeTeams.set(teamId, { dbPath: teamDbPath, agents, intervals });
     console.log(`[EngineAdapter] Team "${teamId}" started with ${agents.length} agent(s).`);
+    } catch (err: any) {
+      // Release reservation on failure so team can be retried
+      this.activeTeams.delete(teamId);
+      console.error(`[EngineAdapter] CRITICAL: Failed to start team "${teamId}": ${err.message}`);
+      throw err;
+    }
   }
 
   /**
