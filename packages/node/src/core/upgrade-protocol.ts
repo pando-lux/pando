@@ -78,6 +78,7 @@ export interface UpgradeProtocolDeps {
   messagesPendingFn?: () => boolean;
 }
 
+/** Upgrade delivery: Direct P2P (primary) → GossipSub (bonus) → Catchup timer (safety net) */
 export class UpgradeProtocol {
   private governance: GovernanceSync;
   private guardrails: Guardrails;
