@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-10 (Hub: encryption routing fixed to 'primary', Apps page wired to AppManager, Agents page wired to team registry. All 26 hub pages showing real data. Self-evolution loop COMPLETE — 5/5 internal team commits). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-10 (Phase D validated: user project teams produce working apps via 5-phase workflow, chat_progress streaming gives real-time build visibility, workspace continuity confirmed. All hub API routes use primary routing. Marketplace fixed (307 projects). Internal team 6/6 success rate). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -441,14 +441,16 @@ api/       HTTP API (kernel-api, core-api, platform-api, testing-api, server, mi
 **Stack:** Next.js 16 + Tailwind
 **Status:** DONE (26 pages — simplified from 36, 10 internal/operator pages removed)
 
-Reads from @pando/node HTTP API via NodePool. Chat API routes use `'primary'` routing (single node identity required for E2E encryption). Other routes use failover.
+Reads from @pando/node HTTP API via NodePool. **ALL API routes use `'primary'` routing** (single node identity required for E2E encryption and consistent data). No route should use random node selection.
 **Public deployment:** https://gateway-one-mu.vercel.app
 **Required env var:** `PANDO_NODES=http://localhost:4000` (or comma-separated node URLs). Without this, hub falls back to EC2 fallback seeds which may cause encryption identity mismatches.
 
 **Pages (26):** `/` (landing), `/chat`, `/search`, `/projects`, `/apps`, `/wallet`, `/network`, `/governance`, `/agents`, `/marketplace`, `/explore` (+6 sub-pages: activity, economy, governance, health→redirect, how-it-works, network), `/dev`, `/login`, `/register`, `/services`, `/testing`, `/node-setup`, `/resources` (+guide)
 **Removed (Phase 3 simplification):** strategy, council, dashboard, monitor, scheduler, capacity, content, explore/strategy, explore/tasks
 
-**Data sources:** Apps page reads from AppManager (`/v1/apps`), Agents page aggregates from team registry (`/v1/teams` + `/v1/teams/:id/agents`), Network page reads from `/v1/status` + `/v1/peers` + `/v1/reputation/peers` + `/v1/capabilities/network`.
+**Data sources:** Apps page reads from AppManager (`/v1/apps`), Agents page aggregates from team registry (`/v1/teams` + `/v1/teams/:id/agents`), Network page reads from `/v1/status` + `/v1/peers` + `/v1/reputation/peers` + `/v1/capabilities/network`, Marketplace reads from `/v1/marketplace`.
+
+**Real-time streaming:** Hub subscribes to SSE at `/api/events` (proxy to node's `/v1/events`). During builds, the node emits `chat_progress` events per stream chunk from `sendToTeamAgent()`. Hub accumulates these as an activity log shown inline in chat. Final result arrives via `chat_message` event. This gives users real-time visibility into agent build progress.
 
 ---
 
@@ -1326,6 +1328,8 @@ CREATE TABLE team_config (
 
 **No board tables. No message tables.** Board and messages live in PandoTeams's local SQLite on the managing node. This is the key architectural decision that prevents P2P data flooding at scale.
 
+**Duplicate handling:** `createTeam()` checks for existing team before INSERT. If a team with the same ID exists (e.g., synced via P2P before local creation), it updates the existing record instead of throwing a UNIQUE constraint error. This is critical for user project teams where the team may already be synced from the network before the local node registers it.
+
 **GossipSub sync:** Topic `pando/teams`. Mirrors LedgerSync pattern — subscribeTopic on startup, requestSync on peer connect (5s + 30s retry), dedup by processed IDs. Three message types: `team_config_update`, `team_sync_request`, `team_sync_response`.
 
 **Heartbeat:** Piggybacks on team tick. Every agent tick updates `last_heartbeat` in local DB and publishes `team_config_update`. Batched per node (one message per node per 15min listing all teams), NOT per-team.
@@ -1401,7 +1405,19 @@ Validation:
    d. Spawns PandoTeams engine for lead agent
    e. Lead builds the app, triggers deploy
 5. Team stays active for future updates
+6. Follow-up messages in the same thread route back to the same team/lead (workspace continuity)
 ```
+
+**Universal Lead Prompt (Phase D):** User project leads use `makeUniversalLeadPrompt()` (engine-adapter.ts) which defines a 5-phase workflow:
+1. **Understand** — Analyze the request, identify requirements
+2. **Plan** — For complex projects, create board subtasks (`pando_board_update`)
+3. **Build** — Write code, create files in `~/.pando/projects/{projectId}/`
+4. **Verify** — Test the build, check for errors
+5. **Deliver** — Report results with feature list, file paths, usage instructions
+
+For simple tasks (single-file HTML apps), the lead may collapse phases 2 and 4. For complex multi-service projects (e.g., Express API + React frontend), all 5 phases execute including board subtask creation.
+
+**Real-time streaming:** During build, each stream chunk from the engine emits a `chat_progress` SSE event via `deps.pushEvent()`. The hub accumulates these and shows "Agent working..." with live progress text. The final result arrives as a `chat_message` event with full markdown rendering and an expandable "Activity (N steps)" log.
 
 **Pando infrastructure — bug report:**
 ```

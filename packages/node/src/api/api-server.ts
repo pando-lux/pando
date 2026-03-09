@@ -686,13 +686,20 @@ export class ApiServer {
   }> {
     const lower = message.toLowerCase().replace(/[?!.,]/g, '').trim();
 
+    // ── Informational / resolved message detection ──────────────────────
+    // Past-tense or status-update messages should NOT trigger report or build intent.
+    const resolvedPattern = /\b(has been|have been|was|were|been|already|now|no longer|resolved|fixed|working now|sorted|addressed|handled|dealt with|taken care of)\b/i;
+    const isInformational = resolvedPattern.test(message);
+
     // ── Report fast-path: bug reports, feature requests, network issues ──
     // These go to the pando-infra team or a specific project's board as tasks.
+    // Skip if the message is informational (e.g. "The node issue has been resolved").
     const reportPatterns = /\b(report|bug|broken|not working|crashes?|error|issue|problem|fix|slow|down|outage|regression|investigate)\b/i;
     const networkPatterns = /\b(network|node|peer|p2p|latency|connectivity|health)\b/i;
     const featurePatterns = /\b(suggest|feature|request|idea|add|could you|wish|would be nice|improvement)\b/i;
-    if ((reportPatterns.test(message) && networkPatterns.test(message)) ||
-        (featurePatterns.test(message) && networkPatterns.test(message))) {
+    if (!isInformational &&
+        ((reportPatterns.test(message) && networkPatterns.test(message)) ||
+         (featurePatterns.test(message) && networkPatterns.test(message)))) {
       return { intent: 'report', description: message.slice(0, 200), targetProject: 'pando-infra' };
     }
 
@@ -745,9 +752,9 @@ export class ApiServer {
                 content: `You are the doorman for Pando, an AI-powered network that builds software projects.
 Classify the user's message into ONE of these categories and respond with ONLY valid JSON:
 
-1. "question" — general question, small talk, greeting, asking about Pando. You answer it directly.
-2. "build" — user wants to BUILD something new (app, website, tool, game, etc). Extract a short description.
-3. "report" — user is reporting a bug, requesting a feature, or flagging a problem with the network or an existing app. NOT building something new — reporting/suggesting about something that exists.
+1. "question" — general question, small talk, greeting, asking about Pando, status updates, informational messages (e.g. "the issue has been resolved", "encryption is working now"). You answer it directly.
+2. "build" — user is EXPLICITLY requesting something NEW to be built (app, website, tool, game, etc). They must be asking you to create/build/make something. Informational messages about existing work are NOT build requests.
+3. "report" — user is ACTIVELY reporting a current bug, requesting a feature, or flagging a problem. Past-tense statements like "the bug was fixed" or "the error is gone" are NOT reports — those are informational (classify as "question").
 
 JSON format:
 For questions: {"intent":"question","response":"<your friendly answer, 1-3 sentences>"}
@@ -829,17 +836,15 @@ Be friendly and helpful. Keep answers short.`
     }
 
     // Report fallback: bug/issue/broken + optional context → report to pando-infra
+    // Skip if the message is informational/resolved (e.g. "The error has been resolved")
     const reportFallback = /\b(bug|broken|not working|crashes?|error|outage|regression|report)\b/i;
-    if (reportFallback.test(message)) {
+    if (!isInformational && reportFallback.test(message)) {
       return { intent: 'report', description: message.slice(0, 200), targetProject: 'pando-infra' };
     }
 
-    // Default: treat as a build request if it contains action words, otherwise question
-    const actionKeywords = /\b(add|fix|improve|change|update|upgrade|modify|remove|delete|refactor)\b/i;
-    if (actionKeywords.test(message)) {
-      return { intent: 'build', description: message.slice(0, 200), tier: 1 };
-    }
-
+    // Default: treat as a question. Action words like "fix", "update", "improve" appear
+    // in informational messages (e.g. "The issue has been fixed") and should NOT trigger
+    // build intent. Real build requests are caught by imperativeBuild and buildKeywords above.
     return { intent: 'question', response: `I'm Pando, an AI network that builds software. I can help you build apps, check your balance, or answer questions. Try "build me a todo app" to get started!` };
   }
 
