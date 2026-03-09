@@ -14,7 +14,7 @@
  *   6. getDeployStatus() — report current deployment state
  */
 
-import { execSync } from 'node:child_process';
+import { execSync, execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, writeFileSync, cpSync, rmSync } from 'node:fs';
 import { join, basename } from 'node:path';
 import type { PatchSet } from '@pando/shared';
@@ -101,9 +101,9 @@ export class DeployManager {
       for (const change of patchSet.changes) {
         const fullPath = join(this.repoDir, change.filePath);
         if (change.operation === 'delete' && !existsSync(fullPath)) {
-          this.git(`rm --cached -- "${change.filePath}"`);
+          this.git(['rm', '--cached', '--', change.filePath]);
         } else {
-          this.git(`add -- "${change.filePath}"`);
+          this.git(['add', '--', change.filePath]);
         }
       }
 
@@ -111,10 +111,10 @@ export class DeployManager {
       const commitMsg = `[pipeline] ${patchSet.description}\n\nPatchSet: ${patchSet.id}\nFiles: ${filePaths.length}`;
 
       // Create the commit
-      this.git(`commit -m "${commitMsg.replace(/"/g, '\\"')}"`);
+      this.git(['commit', '-m', commitMsg]);
 
       // Retrieve the commit hash
-      const commitHash = this.git('rev-parse HEAD').trim();
+      const commitHash = this.git(['rev-parse', 'HEAD']).trim();
 
       this.lastCommitHash = commitHash;
       this.lastCommitMessage = patchSet.description;
@@ -211,18 +211,18 @@ export class DeployManager {
 
     try {
       // Verify the commit exists and is the current HEAD
-      const currentHead = this.git('rev-parse HEAD').trim();
+      const currentHead = this.git(['rev-parse', 'HEAD']).trim();
       if (currentHead !== targetHash) {
         // The HEAD has moved — use revert instead of reset to be safe
-        this.git(`revert --no-edit ${targetHash}`);
+        this.git(['revert', '--no-edit', targetHash]);
       } else {
         // HEAD matches — safe to reset
-        this.git('reset --soft HEAD~1');
-        this.git('reset HEAD .');
-        this.git('checkout -- .');
+        this.git(['reset', '--soft', 'HEAD~1']);
+        this.git(['reset', 'HEAD', '.']);
+        this.git(['checkout', '--', '.']);
       }
 
-      const newHead = this.git('rev-parse HEAD').trim();
+      const newHead = this.git(['rev-parse', 'HEAD']).trim();
 
       this.lastCommitHash = null;
       this.lastCommitMessage = null;
@@ -378,7 +378,7 @@ export class DeployManager {
    */
   pushToRemote(remote = 'origin', branch = 'master'): CommitResult {
     try {
-      const output = this.git(`push ${remote} ${branch}`);
+      const output = this.git(['push', remote, branch]);
       return {
         success: true,
         commitHash: this.lastCommitHash,
@@ -403,8 +403,8 @@ export class DeployManager {
    * Execute a git command in the repository directory.
    * Returns stdout as a string.
    */
-  private git(args: string): string {
-    return execSync(`git ${args}`, {
+  private git(args: string[]): string {
+    return execFileSync('git', args, {
       cwd: this.repoDir,
       timeout: 30_000,
       stdio: 'pipe',

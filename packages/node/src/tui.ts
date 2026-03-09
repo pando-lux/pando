@@ -1070,7 +1070,7 @@ class PandoTUI {
 
     const [to, amountStr] = args;
     const amount = parseFloat(amountStr);
-    if (isNaN(amount) || amount <= 0) {
+    if (isNaN(amount) || !isFinite(amount) || amount <= 0) {
       this.log(`${c.red}Invalid amount: ${amountStr}${c.reset}`);
       return;
     }

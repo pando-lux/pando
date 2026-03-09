@@ -879,7 +879,7 @@ export async function registerPlatformRoutes(
 
       if (budgetParam) {
         const budget = parseFloat(budgetParam);
-        if (!isNaN(budget) && budget > 0) {
+        if (!isNaN(budget) && isFinite(budget) && budget > 0) {
           return {
             matches: marketplace.matchBudget(budget, requirements),
           };
@@ -2450,6 +2450,9 @@ export async function registerPlatformRoutes(
 
       // For sales, create an escrow hold if PaymentGate is available
       let escrowHoldId = '';
+      if (body.salePrice !== undefined && (typeof body.salePrice !== 'number' || !isFinite(body.salePrice) || body.salePrice < 0)) {
+        return reply.code(400).send({ error: 'salePrice must be a non-negative finite number' });
+      }
       if (transferType === 'sale' && body.salePrice && body.salePrice > 0) {
         const paymentGate = node.getPaymentGate();
         if (paymentGate) {

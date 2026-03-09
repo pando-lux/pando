@@ -12,7 +12,6 @@
 import { toString as uint8ArrayToString } from 'uint8arrays';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
-import { execSync } from 'node:child_process';
 import { readFileSync, writeFileSync, mkdirSync, existsSync } from 'node:fs';
 import { signTransaction } from '@pando/shared';
 import type { RouteHelpers } from './middleware/auth.js';
