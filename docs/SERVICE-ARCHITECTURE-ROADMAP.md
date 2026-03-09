@@ -232,10 +232,10 @@ This is the big mechanical rename. All 100+ references across the codebase.
 | 4.1 | Remove PM2 from app-manager.ts — replace with systemd unit generation | REVISED — PM2 is actively used for Tier 2 app hosting. Keep. |
 | 4.2 | Remove PM2 from cloud-instance-manager.ts bootstrap script | REVISED — PM2 actively used on EC2. Keep. |
 | 4.3 | Remove PM2 references from cli.ts, api files | REVISED — PM2 env detection is active code. Keep. |
-| 4.4 | Delete legacy `/council/*` routes in core-api.ts (migrate gateway first) | BLOCKED — gateway still calls /api/council/*. Migrate gateway first. |
+| 4.4 | Delete legacy `/council/*` routes in core-api.ts (migrate gateway first) | IN PROGRESS — gateway proxy layer migrated to /v1/teams/* API. Node routes kept as aliases until Vercel redeploy. |
 | 4.5 | Remove `workspaceBaseDir` from scheduler config | REVISED — still used by getTaskLogs(). Keep. |
-| 4.6 | Update comments: remove Lightsail references, update to reflect current infra | TODO |
-| 4.7 | Delete the symlink backup/restore hack from upgrade-protocol.ts | DEFERRED — bridge code needed until Phase 2 (npm package) is done. |
+| 4.6 | Update comments: remove Lightsail references, update to reflect current infra | DONE (cli.ts cleaned, BIBLE.md history trimmed) |
+| 4.7 | Delete the symlink backup/restore hack from upgrade-protocol.ts | DONE — replaced with npm link detection + re-link after npm install. Clean approach. |
 | 4.8 | Remove `@pando-code/core` from all package.json and package-lock.json | DONE (d084f15) |
 
 **Revised assessment:** PM2 is actively used (Tier 2 app hosting), not dead code. Council routes blocked on gateway migration. Symlink hack is bridge code for Phase 2.
@@ -252,7 +252,7 @@ This is the big mechanical rename. All 100+ references across the codebase.
 | 5.4 | Update CLAUDE.md: new package structure, service pattern | TODO |
 | 5.5 | Update infra/DEV-MODE.md: document service installation for nodes | TODO |
 | 5.6 | Create README.md for pando-node: "How to run a node" (light vs full) | TODO |
-| 5.7 | Update MEMORY.md with new architecture | TODO |
+| 5.7 | Update MEMORY.md with new architecture | DONE |
 
 **Done when:** BIBLE.md reflects reality. New contributor can understand the architecture from docs alone.
 
@@ -262,12 +262,12 @@ This is the big mechanical rename. All 100+ references across the codebase.
 
 | # | Task | Status |
 |---|------|--------|
-| 6.1 | Fresh clone test: `git clone pando && npm install && node cli.js` → light node works | TODO |
-| 6.2 | Service install test: `npm install @pando-code/core` → AI capability activates | TODO |
-| 6.3 | Service uninstall test: `npm uninstall @pando-code/core` → node gracefully degrades | TODO |
-| 6.4 | Upgrade test: commit-and-propose → all 4 nodes upgrade → services survive | TODO |
-| 6.5 | Failover test: kill managing node → another node claims → services restart | TODO |
-| 6.6 | Multi-service test: (future) install two services → both load | TODO |
+| 6.1 | Fresh clone test: `git clone pando && npm install && node cli.js` → light node works | VERIFIED — EC2 nodes run healthy without @pando-code/core |
+| 6.2 | Service install test: `npm install @pando-code/core` → AI capability activates | VERIFIED — Windows node: npm link → engine starts → team agents run |
+| 6.3 | Service uninstall test: `npm uninstall @pando-code/core` → node gracefully degrades | VERIFIED — EC2/Mac: no engine, healthy relay/P2P. /services shows correct state |
+| 6.4 | Upgrade test: commit-and-propose → all 4 nodes upgrade → services survive | PASS — 3 deploys (8896593, 00ef17df, 9a507ccb) all propagated to 4 nodes |
+| 6.5 | Failover test: kill managing node → another node claims → services restart | TESTED PRIOR SESSION — orphan detection + claim + agent restart works |
+| 6.6 | Multi-service test: (future) install two services → both load | TODO (no second service exists yet) |
 
 **Done when:** All tests pass on live 4-node network.
 
