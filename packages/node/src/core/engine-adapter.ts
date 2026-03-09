@@ -734,6 +734,16 @@ SEND MESSAGE: curl -s -X POST http://127.0.0.1:${port}/v1/teams/${tid}/message${
 SPAWN AGENT: curl -s -X POST http://127.0.0.1:${port}/v1/teams/${tid}/agents/spawn${authHeader} -H "Content-Type: application/json" -d '{"template":"worker","task":"description"}'
 STOP AGENT: curl -s -X DELETE http://127.0.0.1:${port}/v1/teams/${tid}/agents/<agentId>${authHeader}
 
+## Observability
+- Start each task by saying: "Processing: [task title]" so activity logs show progress.
+- After builds: "Build: [pass/fail]. Files: [list]. Lines: [N]."
+- After completion: "Delivered: [summary of what was built and where]."
+
+## Error Recovery
+- If npm run build fails: read the error, fix it, retry. Don't give up.
+- If a spawned agent fails: read its output, fix the issue yourself, or respawn with better instructions.
+- If the workspace is missing files: check ~/.pando/projects/${tid}/ and recreate if needed.
+
 ## Rules
 - Act, don't narrate. Build things, don't describe what you'd build.
 - The user wants WORKING output, not plans. Plans are a means to an end.
