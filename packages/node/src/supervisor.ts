@@ -121,7 +121,7 @@ function spawnTeams(): ChildProcess | null {
     shell: true,
     env: {
       ...process.env,
-      PANDO_NODE_URL: process.env.PANDO_NODE_URL || `http://localhost:${apiPort}`,
+      PANDO_NODE_URL: process.env.PANDO_NODE_URL || `http://127.0.0.1:${apiPort}`,
       PANDO_NODE_PATH: process.env.PANDO_NODE_PATH || resolve(__dirname, '..', '..', '..'),
       PANDO_API_TOKEN: process.env.PANDO_API_TOKEN || readTokenFile(),
     },

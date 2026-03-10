@@ -515,9 +515,11 @@ User F: "add dark mode please!!!!"  → DEDUPLICATED (same as User B)
 **Implementation status:**
 - ✅ **User teams auto-start** — commit `ba701a3`. Chat endpoint auto-creates team with lead-universal prompt on first message. Verified working.
 - ✅ **Board task PATCH endpoint** — commit `ba701a3`. Teams can mark tasks done/update progress.
-- ✅ **Doorman → node-doorman team** — classification moved from hardcoded regex in Node's api-server.ts to `node-doorman` team on Teams Server. Prompt-based classification via `makeNodeLeadPrompt()` in prompts.ts. Hub chat routes to `/teams/node-doorman/chat`, falls back to local doorman if Teams Server is unreachable. Hub client-side tier detection removed. **All 5 intents validated end-to-end (9-20s): question, status, build, bug report, feedback.** Commits: f68dfb7, 45f50d5 (code), f354196e, 040d879f (node).
+- ✅ **Doorman → node-doorman team** — classification moved from hardcoded regex in Node's api-server.ts to `node-doorman` team on Teams Server. Prompt-based classification via `makeNodeLeadPrompt()` in prompts.ts. Hub chat routes to `/teams/node-doorman/chat`, falls back to local doorman if Teams Server is unreachable. Hub client-side tier detection removed. Commits: f68dfb7, 45f50d5 (code), f354196e, 040d879f (node).
+- ✅ **Lightweight engine (gpt-4o-mini)** — node-doorman uses `gpt-4o-mini` via OpenAI API instead of Claude Code CLI. Response times: question 3.9s, status 9.8s (with tool call), feedback 6.4s. `provider.ts:createModel()` now uses `inferProvider(modelId)` for model→provider routing. Pando tools (`pando_status`, `pando_create_board_task`, `pando_create_project`) provide API access without bash/curl.
 - ✅ **Node-doorman boots at startup** — commit `45f50d5`. Boots alongside pando-infra in Teams Server index.ts. No cold-start on first request.
 - ✅ **120s timeout** — commit `040d879f`. AbortSignal.timeout increased from 60s to 120s for node-doorman route.
+- ✅ **Supervisor passes PANDO_API_TOKEN** — commit `7b3e7909`. Reads `~/.pando/api-token` and passes to Teams Server env.
 - ❌ **No multi-user queue** — current chat is 1:1 (one user, one team lead). No dedup, no rate limit.
 - ❌ **No cross-linking** — Hub creates project but doesn't link to Teams Web UI workspace.
 - ✅ **Board tasks work** — existing board system handles the queue concept (pending → active → done).
