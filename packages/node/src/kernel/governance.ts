@@ -15,9 +15,10 @@ import { GitOps } from '../core/git-ops.js';
 import type Database from 'better-sqlite3';
 import type { PandoNetwork } from './network.js';
 import type { PandoMessage, GovernanceProposal, GovernanceComment, GovernanceVote, GovernanceDecision, VoteChoice, AgentHello, AgentCapabilities, Transaction, ActivityRecord, ModelAttestation, NodeIdentity, WeightedVoteResult, ReviewerCandidacy, ProposalCategory, ProposalReview, ReviewRecommendation, ReviewSummary, UpgradePayload } from '@pando/shared';
-import { MessageType, WorkType } from '@pando/shared';
+import { MessageType, WorkType, verifySignature } from '@pando/shared';
 import { debug } from '../logger.js';
 import { privateKeyFromProtobuf } from '@libp2p/crypto/keys';
+import { peerIdFromString } from '@libp2p/peer-id';
 import { toString as uint8ArrayToString } from 'uint8arrays';
 /** Minimal interfaces — avoids importing core/platform from kernel */
 interface ReputationGovernanceLike {
@@ -591,7 +592,7 @@ export class GovernanceSync {
         this.handleComment(message);
         break;
       case MessageType.GOVERNANCE_VOTE:
-        this.handleVote(message);
+        this.handleVote(message).catch(e => console.warn(`[governance] handleVote error: ${(e as Error).message?.slice(0, 100)}`));
         break;
       case MessageType.GOVERNANCE_DECISION:
         this.handleDecision(message);
@@ -704,9 +705,39 @@ export class GovernanceSync {
     this.onCommentCallback?.(comment);
   }
 
-  private handleVote(message: PandoMessage): void {
+  private async handleVote(message: PandoMessage): Promise<void> {
     const vote = message.payload as GovernanceVote;
     if (!vote?.proposalId || !vote.voter) return;
+
+    // Gap #120: Verify vote signature to prevent spoofing via P2P.
+    // The message.from must match vote.voter (prevent impersonation).
+    if (message.from !== vote.voter) {
+      console.warn(`[governance] REJECTED vote: message.from (${message.from?.slice(0, 16)}) !== vote.voter (${vote.voter.slice(0, 16)})`);
+      return;
+    }
+    // Reject unsigned votes from remote peers
+    if (vote.voter !== this.localPeerId) {
+      if (!message.signature) {
+        console.warn(`[governance] REJECTED unsigned vote from ${vote.voter.slice(0, 16)}...`);
+        return;
+      }
+      // Verify Ed25519 signature against voter's public key (extracted from peerId)
+      try {
+        const peerIdObj = peerIdFromString(vote.voter);
+        if (!peerIdObj.publicKey?.raw) {
+          console.warn(`[governance] REJECTED vote: cannot extract public key from peerId ${vote.voter.slice(0, 16)}...`);
+          return;
+        }
+        const valid = await verifySignature(message, message.signature, peerIdObj.publicKey.raw);
+        if (!valid) {
+          console.warn(`[governance] REJECTED vote: invalid signature from ${vote.voter.slice(0, 16)}...`);
+          return;
+        }
+      } catch (err: any) {
+        console.warn(`[governance] REJECTED vote: signature verification error — ${err.message?.slice(0, 80)}`);
+        return;
+      }
+    }
 
     const key = `vote:${vote.proposalId}:${vote.voter}`;
     if (this.processedIds.has(key)) return;

@@ -10,9 +10,17 @@
 
 import { toString as uint8ArrayToString, fromString as uint8ArrayFromString } from 'uint8arrays';
 import { publicKeyFromProtobuf } from '@libp2p/crypto/keys';
-import { randomBytes } from 'node:crypto';
+import { randomBytes, timingSafeEqual } from 'node:crypto';
 import type { RouteHelpers } from './middleware/auth.js';
 import { violatesTwoLaws } from './api-server.js';
+
+/** Timing-safe Bearer token comparison (prevents timing attacks). */
+function verifyBearerToken(authHeader: string, expectedToken: string): boolean {
+  if (!authHeader.startsWith('Bearer ')) return false;
+  const token = authHeader.slice(7);
+  if (token.length !== expectedToken.length) return false;
+  return timingSafeEqual(Buffer.from(token), Buffer.from(expectedToken));
+}
 
 export async function registerPlatformRoutes(
   fastify: any,
@@ -1364,8 +1372,12 @@ export async function registerPlatformRoutes(
       };
     });
 
-    // POST /resource-proxy/meter — record usage event for Lux billing
+    // POST /resource-proxy/meter — record usage event for Lux billing (Gap #114: requires auth)
     fastify.post('/resource-proxy/meter', async (request: any, reply: any) => {
+      const authHeader = request.headers?.authorization || '';
+      if (!verifyBearerToken(authHeader, deps.apiToken)) {
+        return reply.code(401).send({ error: 'Authentication required' });
+      }
       const body = request.body as {
         projectId?: string;
         resourceId?: string;
@@ -1796,8 +1808,12 @@ export async function registerPlatformRoutes(
       return hold;
     });
 
-    // GET /payment/history — Payment history (optional peerId filter)
-    fastify.get('/payment/history', async (request: any) => {
+    // GET /payment/history — Payment history (optional peerId filter) (Gap #115: requires auth)
+    fastify.get('/payment/history', async (request: any, reply: any) => {
+      const authHeader = request.headers?.authorization || '';
+      if (!verifyBearerToken(authHeader, deps.apiToken)) {
+        return reply.code(401).send({ error: 'Authentication required' });
+      }
       const gate = node.getPaymentGate();
       if (!gate) return { history: [] };
       const peerId = (request.query as any)?.peerId;
@@ -2258,7 +2274,7 @@ export async function registerPlatformRoutes(
       let ownerId = await deps.verifyUserJwt(request);
       if (!ownerId) {
         const authHeader = request.headers?.authorization || '';
-        const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+        const hasBearerToken = verifyBearerToken(authHeader, deps.apiToken);
         if (hasBearerToken) {
           ownerId = node.getIdentity()?.peerId || '';
         }
@@ -3187,7 +3203,7 @@ export async function registerPlatformRoutes(
       const userId = await deps.verifyUserJwt(request);
       const nodeId = node.getIdentity()?.peerId;
       const authHeader = request.headers?.authorization || '';
-      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+      const hasBearerToken = verifyBearerToken(authHeader, deps.apiToken);
       const isNodeAdmin = !userId && hasBearerToken && project.ownerId === nodeId;
 
       if (userId) {
@@ -3301,7 +3317,7 @@ export async function registerPlatformRoutes(
       const nodeId = node.getIdentity()?.peerId;
       // If Bearer auth passed the onRequest hook and no user token, this is a node-level request
       const authHeader = request.headers?.authorization || '';
-      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+      const hasBearerToken = verifyBearerToken(authHeader, deps.apiToken);
       const isNodeAdmin = !userId && hasBearerToken && project.ownerId === nodeId;
 
       if (userId) {
@@ -3384,7 +3400,7 @@ export async function registerPlatformRoutes(
         // Auth: user session OR node Bearer token
         let userId = await deps.verifyUserJwt(request);
         const authHeader = request.headers?.authorization || '';
-        const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+        const hasBearerToken = verifyBearerToken(authHeader, deps.apiToken);
         if (!userId && !hasBearerToken) {
           return reply.code(401).send({ error: 'Authentication required' });
         }
@@ -3485,7 +3501,7 @@ export async function registerPlatformRoutes(
       if (!ps) return reply.code(503).send({ error: 'Project store not available' });
 
       const authHeader = request.headers?.authorization || '';
-      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+      const hasBearerToken = verifyBearerToken(authHeader, deps.apiToken);
       const userId = await deps.verifyUserJwt(request);
       if (!userId && !hasBearerToken) return reply.code(401).send({ error: 'Authentication required' });
 
@@ -3577,7 +3593,7 @@ export async function registerPlatformRoutes(
       if (!ps) return reply.code(503).send({ error: 'Project store not available' });
 
       const authHeader = request.headers?.authorization || '';
-      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+      const hasBearerToken = verifyBearerToken(authHeader, deps.apiToken);
       const userId = await deps.verifyUserJwt(request);
       if (!userId && !hasBearerToken) return reply.code(401).send({ error: 'Authentication required' });
 
@@ -3693,7 +3709,7 @@ export async function registerPlatformRoutes(
       // Auth: user session OR node Bearer token
       const userId = await deps.verifyUserJwt(request);
       const authHeader = request.headers?.authorization || '';
-      const hasBearerToken = authHeader.startsWith('Bearer ') && authHeader.slice(7) === deps.apiToken;
+      const hasBearerToken = verifyBearerToken(authHeader, deps.apiToken);
       if (!userId && !hasBearerToken) {
         return reply.code(401).send({ error: 'Authentication required' });
       }
