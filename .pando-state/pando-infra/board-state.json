@@ -1,14 +1,22 @@
 {
-  "savedAt": "2026-03-10T00:08:07.010Z",
+  "savedAt": "2026-03-10T00:18:05.826Z",
   "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
   "tasks": [
+    {
+      "id": "task-277254b7-d32b-4718-8c0b-6e32a4699573",
+      "title": "[BUG:low] Observer prompt references stale API paths (404)",
+      "description": "In engine-adapter.ts makeObserverPrompt() (~line 540-580), the STEP 1 curl commands reference /v1/pando/status and /v1/pando/peers which return 404. The correct endpoints are /v1/status and /v1/peers. Observer currently adapts by finding alternatives, but the prompt should be updated with correct paths.",
+      "status": "pending",
+      "created_at": "2026-03-10 00:08:10",
+      "progress": ""
+    },
     {
       "id": "task-938f17e7-3682-43c7-be6c-205ed11c1a80",
       "title": "[BUG:medium] Non-lead agents cannot read inbox messages via sendToTeamAgent",
       "description": "In engine-adapter.ts, sendToTeamAgent() only reads inbox for agents with role===lead (line ~2456). Non-lead agents (observer, qa, explorer) never see messages sent to them via the msg:AGENTID:* state entries. Fix: add inbox reading for non-lead agents in sendToTeamAgent(), similar to the lead path but using their own agentId.",
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-10 00:08:07",
-      "progress": ""
+      "progress": "Committed 421e72fd89be1eaba08c323c274569fb422f8a47, proposal f58e1eda6286a680b518ab76e2ae6c081c40f4212a497ab30c2bf9c5597dfb4e — push pending governance approval"
     },
     {
       "id": "9f8aef4a-e148-4cb4-90cb-f878c6407411",
