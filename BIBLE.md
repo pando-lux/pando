@@ -2041,14 +2041,14 @@ aws ec2 terminate-instances --instance-ids <id>
 ### 8.2 How to Build and Run
 
 ```bash
-# Build all packages (shared → ledger → identity → node → gateway → mcp-server)
+# Build all packages (shared → ledger → identity → node → hub → mcp-server)
 npm run build
 
 # Start a node
 node packages/node/dist/cli.js --port 4001
 
-# Start gateway
-cd packages/gateway && PANDO_NODE_URL=http://localhost:4000 npx next dev --port 3222
+# Start hub (web UI)
+cd packages/hub && PANDO_NODES=http://localhost:4000 npx next dev --port 3003
 
 # Run E2E tests (headed Playwright against public gateway)
 npx playwright test
