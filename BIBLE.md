@@ -303,7 +303,7 @@ Once these 5 are built, anyone (including Jai) interacts with Pando the same way
 
 ### 1.7 The Right Architecture — Teams Is The App, Node Is Thin
 
-**CRITICAL: The current architecture violates the vision.** The engine adapter (engine-adapter.ts, 2800 lines) grew into a second brain that reimplements what Teams already does: sessions, agents, board tasks, chat routing, team management. This created parallel systems with no bridges. This section defines the CORRECT architecture.
+**Architecture migration COMPLETE (2026-03-10).** The engine adapter was gutted from 2800 → 636 lines. Team management, agent lifecycle, prompt templates, watchdog, and board operations were deleted from Node. Teams Server now owns all team operations. Node API team routes proxy to Teams Server.
 
 **The Principle:** Node = lightweight body (P2P, economy, governance, identity). Teams = the brain (ALL intelligence, ALL teams, ALL agents, ALL chat). The engine adapter should be a thin relay (~300 lines), not a second brain.
 
@@ -378,7 +378,7 @@ THE RIGHT ARCHITECTURE:
 
 **What stays in Node:** P2P, Lux, governance, identity, storage — pure infrastructure APIs.
 **What moves to Teams:** Team CRUD, agent scheduling, board tasks, chat routing, doorman, engine pool.
-**What gets gutted:** engine-adapter.ts goes from 2800 → ~300 lines (just Pando tool wrappers that call Node APIs).
+**What was gutted:** engine-adapter.ts went from 2800 → 636 lines. Kept: Pando tool wrappers, project board/ticks, P2P board sync, governance review, API key injection.
 
 **Connected vs Offline — Same Engine, Same Architecture:**
 
@@ -408,13 +408,10 @@ Teams Web UI (port 5173) talks to Teams Server (port 4873) ONLY. Never to Node (
 - The old `fetchFromNode()` pattern (Web UI → Node:4000 directly) must be removed.
 - Hub also talks to Teams Server for chat/teams, not Node.
 
-**Migration path (3 steps):**
+**Migration path (3 steps — ALL DONE):**
 1. ~~Teams server becomes authority for teams~~ **DONE** (commit `ad39292`, TeamManager + pando-tools + team API + pando-infra boot)
-2. Move doorman and chat routing to Teams + point Web UI at Teams Server instead of Node ← **NEXT**
-   - Web UI: replace `fetchFromNode()` calls with `fetchJSON()` to Teams Server `/v1/teams/*`
-   - Hub: forward chat to Teams Server, not Node's engine-adapter
-   - Move doorman classification from `api-server.ts` to Teams Server
-3. Gut engine-adapter (remove EnginePool, tick scheduling, board management — keep tool wrappers)
+2. ~~Point Web UI at Teams Server~~ **DONE** (commit `0690cc1`, removed `fetchFromNode()`, "Network Teams" → "Teams")
+3. ~~Gut engine-adapter~~ **DONE** (commit `1e392a7b`, 2774 → 636 lines, all team routes proxy to Teams Server via `proxyToTeams()`, security fix `4ab63d3e` strips apiKey from public responses)
 
 **This structure works for ALL projects:** pando-infra is just another team in Teams with different rules (autonomous). User projects are teams with conservative rules. Same engine, same UI, same data, same orchestration. No parallel pipelines. Offline or connected — same architecture.
 
@@ -469,7 +466,7 @@ shared < ledger < node
   Pure infrastructure. P2P networking. Identity. Economy. Governance. Storage. HTTP API.
   Has ZERO intelligence of its own. No orchestrator. No agent database. No message bus.
 
-engine-adapter.ts = THE NERVOUS SYSTEM (~2,561 lines)
+engine-adapter.ts = THE NERVOUS SYSTEM (~636 lines, gutted 2026-03-10)
   The ONE file that connects brain to body.
   Creates engine instances. Registers Pando tools. Routes messages. Injects Lux budget.
   Starts teams (startTeam) using PandoTeams's native agent/board system.
@@ -2224,7 +2221,7 @@ No encryption, no MongoDB, no CredentialStore needed. The keys are in PandoTeams
 
 ## 6. THE ENGINE ADAPTER (detailed spec)
 
-The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-teams/core. Currently ~2,561 lines. It only exists on **PandoTeams contributor nodes** and **full dev nodes**.
+The engine adapter is `core/engine-adapter.ts`. It is the ONLY file in pando-node that imports @pando-teams/core. Currently ~636 lines (gutted from 2,774 in the BIBLE 1.7 migration). Team management, prompts, watchdog, and agent lifecycle were moved to Teams Server. It only exists on **PandoTeams contributor nodes** and **full dev nodes**.
 
 **Key principle:** PandoTeams uses its OWN configured provider and model. The engine-adapter does NOT override the model. Contributors choose their provider (default: Google/gemini-2.5-flash).
 
