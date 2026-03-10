@@ -771,6 +771,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const message = typeof body.message === 'string' ? body.message.trim() : '';
       const taskId = typeof body.taskId === 'string' ? body.taskId.trim() : '';
       const teamId = typeof body.teamId === 'string' ? body.teamId.trim() : 'pando-infra';
+      const requestedRepoPath = typeof body.repoPath === 'string' ? body.repoPath.trim() : '';
 
       if (!message) return reply.code(400).send({ error: 'message required (commit message)' });
       if (message.length > 1000) return reply.code(400).send({ error: 'message too long (max 1000 chars)' });
@@ -783,7 +784,22 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const teamConfig = teamRegistry?.getTeam(teamId);
       const governanceRequired = teamConfig?.governanceRequired ?? false;
 
-      const repoDir = process.cwd();
+      // Resolve repo directory: use repoPath if provided (for cross-repo teams like pando-teams-infra)
+      // Security: only allow repoPath for known internal teams, and validate it's a real git repo
+      let repoDir = process.cwd();
+      if (requestedRepoPath) {
+        const allowedTeams = ['pando-teams-infra'];
+        if (!allowedTeams.includes(teamId)) {
+          return reply.code(403).send({ error: 'repoPath is only allowed for internal infra teams' });
+        }
+        const { resolve } = await import('node:path');
+        const { existsSync } = await import('node:fs');
+        const resolved = resolve(requestedRepoPath);
+        if (!existsSync(resolve(resolved, '.git'))) {
+          return reply.code(400).send({ error: 'repoPath must be a valid git repository' });
+        }
+        repoDir = resolved;
+      }
       const git = new GitOps(repoDir);
       const steps: string[] = [];
 
@@ -798,9 +814,10 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         }
         steps.push('changes-detected');
 
-        // Step 3: Build check (npm run build must pass)
+        // Step 3: Build check — use npm run build for node repo, npx tsc --noEmit for other repos
+        const buildCmd = requestedRepoPath ? 'npx tsc --noEmit' : 'npm run build';
         try {
-          execSync('npm run build', { cwd: repoDir, timeout: 180_000, stdio: 'pipe', encoding: 'utf-8' });
+          execSync(buildCmd, { cwd: repoDir, timeout: 180_000, stdio: 'pipe', encoding: 'utf-8' });
           steps.push('build-passed');
         } catch (buildErr: any) {
           // Unstage on build failure so agent can fix
