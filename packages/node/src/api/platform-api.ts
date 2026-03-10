@@ -218,7 +218,34 @@ export async function registerPlatformRoutes(
         return { status: 'ok', threadId, reply: 'PandoTeams peer did not respond. Try again.', tier: 'simple' };
       }
 
-      // No projectId — doorman handles first contact (pass user peerId for balance queries)
+      // No projectId — BIBLE 1.8: Route to node-doorman team on Teams Server.
+      // Falls back to local doormanClassify if Teams Server is unreachable.
+      try {
+        const doormanResp = await fetch(`${TEAMS_SERVER_URL}/v1/teams/node-doorman/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agentId: 'lead', message: trimmed }),
+          signal: AbortSignal.timeout(60000),
+        });
+        if (doormanResp.ok) {
+          const doormanResult = await doormanResp.json() as any;
+          const doormanReply = doormanResult?.reply || doormanResult?.response || '';
+          if (doormanReply) {
+            if (threadStore) {
+              threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
+              threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
+              await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' });
+              await threadStore.addMessage(threadId, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' });
+            }
+            return { status: 'ok', threadId, reply: doormanReply, tier: 'simple' };
+          }
+        }
+      } catch {
+        // Teams Server unreachable — fall through to local doorman
+        console.log('[chat] node-doorman unreachable, falling back to local doorman');
+      }
+
+      // Fallback: local doorman classification (DEPRECATED — kept for resilience)
       const classification = await deps.doormanClassify(trimmed, peerId);
 
       if (classification.intent === 'simple' || classification.intent === 'question') {

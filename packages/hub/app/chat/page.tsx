@@ -497,21 +497,10 @@ function ChatPage() {
       // Phase 41.5: Encrypt message if we have a thread key.
       // Also encrypt the thread key for the current node (per-request delivery).
       const body: Record<string, unknown> = {};
-      if (agentMode !== "auto") {
+      // BIBLE 1.8: All routing is server-side via node-doorman team.
+      // Client only sends explicit tier override when user manually selects a mode.
+      if (agentMode && agentMode !== "auto") {
         body.tier = agentMode;
-      } else {
-        // Auto mode: detect build/creation intent client-side before encryption.
-        // Without this, encrypted messages reach the doorman as ciphertext, which
-        // fails keyword matching and incorrectly falls back to Quick/simple mode.
-        const isBuildRequest = /\b(build|create|make|develop|implement|generate|write|design)\b.*\b(app|application|website|site|tool|game|page|project|platform|service|api|server|board|dashboard|blog|shop|store|portfolio|chat|bot|program|script|component|form|interface)\b/i.test(msg);
-        const isTransactional = /\b(balance|status|transfer|send|peers?|node|wallet|lux|uptime)\b/i.test(msg);
-        const isExplanatoryQuestion = !isTransactional && /\b(what is|what are|how does|how do|how is|how are|explain|tell me about|describe|why does|why do|what does|what do)\b/i.test(msg);
-        if (isBuildRequest) {
-          body.tier = "complex";
-        } else if (isExplanatoryQuestion) {
-          body.tier = "medium";
-        }
-        // else: leave tier unset → backend doorman handles status/balance/simple queries
       }
 
       const threadKey = threadId ? cryptoMod.getThreadKey(threadId) : null;

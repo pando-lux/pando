@@ -515,7 +515,7 @@ User F: "add dark mode please!!!!"  → DEDUPLICATED (same as User B)
 **Implementation status:**
 - ✅ **User teams auto-start** — commit `ba701a3`. Chat endpoint auto-creates team with lead-universal prompt on first message. Verified working.
 - ✅ **Board task PATCH endpoint** — commit `ba701a3`. Teams can mark tasks done/update progress.
-- ❌ **Doorman still separate** — classification logic in Node's api-server.ts (200+ lines). Should move to Teams Server as the node team's lead prompt.
+- ✅ **Doorman → node-doorman team** — classification moved from hardcoded regex in Node's api-server.ts to `node-doorman` team on Teams Server. Prompt-based classification via `makeNodeLeadPrompt()` in prompts.ts. Hub chat routes to `/teams/node-doorman/chat`, falls back to local doorman if Teams Server is unreachable. Hub client-side tier detection removed.
 - ❌ **No multi-user queue** — current chat is 1:1 (one user, one team lead). No dedup, no rate limit.
 - ❌ **No cross-linking** — Hub creates project but doesn't link to Teams Web UI workspace.
 - ✅ **Board tasks work** — existing board system handles the queue concept (pending → active → done).
@@ -1373,7 +1373,7 @@ Layer 3: Diff content scan (dangerous patterns) DETERMINISTIC
   Warning patterns (logged, non-blocking): .privateKey access,
     process.env[] dynamic access, dynamic require(),
     fetch() in kernel files, writeFileSync() in kernel files
-Layer 4: Build verification (npm run build)    DETERMINISTIC — blocks if build fails
+Layer 4: Build verification (npm run build)    DETERMINISTIC — rejects if build fails (async, non-blocking since commit 34f26d2e)
   |
   v
 Layer 5: AI REVIEW (ADVISORY ONLY — does NOT block)
@@ -2707,7 +2707,16 @@ The codebase has multiple restart mechanisms, each serving a distinct purpose:
 | **Authenticated billing endpoint** | `POST /resource-proxy/meter` now requires Bearer token auth |
 | **Authenticated payment history** | `GET /payment/history` now requires Bearer token auth |
 
-**Known remaining gaps (documented, assigned to dev):** App deployment lacks sandboxing (design limitation for multi-tenant), Teams Server path traversal in `/assets/*`, governance comment spoofing (no signature on comments), emission attestation signatures not verified.
+**Phase 2c security hardening (commits `5d5b21cb`, `5638be6f`, `34f26d2e`, 2026-03-10):** Comment spoofing, emission integrity, perf.
+
+| Feature | Details |
+|---|---|
+| **Governance comment signature verification** | `handleComment()` now verifies Ed25519 signatures on remote comments, rejects unsigned, validates `message.from === comment.from` (commit `5d5b21cb`) |
+| **Supervisor graceful shutdown** | `gracefulShutdown()` handles SIGINT + SIGTERM, kills child processes, 3s grace period (commit `5d5b21cb`) |
+| **Emission attestation signature verification** | `handleRemoteAttestation()` now verifies Ed25519 signatures. Unsigned attestations rejected. Canonical message reconstructed for verification (commit `5638be6f`) |
+| **Async governance build verification** | `validateUpgradeProposal()` Layer 4 build check uses async `execFile` instead of blocking `execFileSync`. Event loop no longer blocked for 27+ seconds during builds (commit `34f26d2e`) |
+
+**Known remaining gaps (documented):** App deployment lacks sandboxing (design limitation for multi-tenant), Teams Server path traversal in `/assets/*` (fixed in pando-teams repo, commit 99af10f).
 
 ### Credential Storage Uses resourceId, NOT peerId
 

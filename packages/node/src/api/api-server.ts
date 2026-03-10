@@ -672,6 +672,9 @@ export class ApiServer {
    * Phase 68.3: Doorman — classifies user intent via OpenAI gpt-4o-mini.
    * Returns structured classification: { intent, response?, tier, projectAction? }
    *
+   * DEPRECATED: Classification moved to node-doorman team on Teams Server (BIBLE 1.8).
+   * Kept as fallback when Teams Server is unreachable.
+   *
    * Intent types:
    * - 'simple' — status/balance/peers/help queries → doorman answers directly
    * - 'question' — general questions → doorman answers via AI ($0.001)
@@ -867,9 +870,8 @@ Be friendly and helpful. Keep answers short.`
   }
 
   /**
-   * Multi-turn Smart chat — sends full conversation history to OpenAI.
-   * Used when the client selects "Smart" tier (medium) for general conversation.
-   * Falls back to a canned response if no AI key is available.
+   * DEPRECATED: Multi-turn chat moved to node-doorman team on Teams Server (BIBLE 1.8).
+   * Kept as fallback when Teams Server is unreachable.
    */
   private async doormanChat(message: string, history: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<string> {
     // Priority: 1) local OPENAI_API_KEY, 2) CredentialStore (EC2), 3) P2P proxy to EC2 peer
