@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-10 (SELF-EVOLUTION LOOP VALIDATED: observer detected 2 bugs → created board tasks → internal lead fixed both → committed → watchdog auto-restarted with new code. Section 1.1 is live. All agents use sendToTeamAgent() with inbox+board injection. Internal team 11/11 success rate. All 25 hub pages working). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-10 (UNIFICATION DIRECTIVE added: Section 3.2.8.1. PandoTeams = engine layer only, Hub = single portal. Internal team stopped pending unification. All 25 hub pages working. Self-evolution loop validated. 44 gaps found and fixed). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -300,6 +300,92 @@ User types message in Hub Chat
 
 Once these 5 are built, anyone (including Jai) interacts with Pando the same way: through the hub, as a user. No special access, no external agents, no terminal sessions.
 
+### 1.7 The Right Architecture — Teams Is The App, Node Is Thin
+
+**CRITICAL: The current architecture violates the vision.** The engine adapter (engine-adapter.ts, 2800 lines) grew into a second brain that reimplements what Teams already does: sessions, agents, board tasks, chat routing, team management. This created parallel systems with no bridges. This section defines the CORRECT architecture.
+
+**The Principle:** Node = lightweight body (P2P, economy, governance, identity). Teams = the brain (ALL intelligence, ALL teams, ALL agents, ALL chat). The engine adapter should be a thin relay (~300 lines), not a second brain.
+
+```
+THE RIGHT ARCHITECTURE:
+
+┌─────────────────────────────┐
+│ HUB (port 3003)             │  Lightweight portal.
+│ Dashboard, marketplace,     │  Forwards chat to Teams.
+│ governance, wallet.          │  No brain, no routing logic.
+└─────────────┬───────────────┘
+              │ HTTP/SSE
+              ▼
+┌─────────────────────────────┐
+│ TEAMS SERVER (port 4873)    │  THE APP. Everything lives here.
+│                             │
+│ • ALL teams (pando-infra    │
+│   + user projects)          │
+│ • ALL agents + orchestration│
+│ • ALL chat (doorman, SSE)   │
+│ • ALL board tasks (rich     │
+│   schema: deps, agents,     │
+│   tiers, test status)       │
+│ • ALL sessions + memory     │
+│ • Classification/routing    │
+│ • Agent lifecycle mgmt      │
+│ • Proper tick scheduling    │
+│   (not raw setInterval)     │
+│                             │
+│ Calls Node API when needed: │
+│ • P2P broadcast/relay       │
+│ • Lux transfers/balance     │
+│ • Governance propose/vote   │
+│ • Identity signing          │
+│ • Storage backend           │
+└─────────────┬───────────────┘
+              │ HTTP (thin infrastructure calls)
+              ▼
+┌─────────────────────────────┐
+│ NODE (port 4000)            │  THIN. Infrastructure only.
+│                             │
+│ • P2P networking (libp2p)   │
+│ • Lux economy (ledger)      │
+│ • Governance (proposals)    │
+│ • Identity (Ed25519 keys)   │
+│ • Storage backend           │
+│                             │
+│ NO teams. NO agents.        │
+│ NO engine adapter brain.    │
+│ NO chat routing.            │
+│ NO board tasks.             │
+│ Engine adapter = ~300 lines │
+│ (just Pando tool wrappers)  │
+└─────────────────────────────┘
+
+┌─────────────────────────────┐
+│ TEAMS WEB UI (port 5173)    │  Talks to Teams Server ONLY.
+│ Shows ALL teams, ALL agents.│
+│ pando-infra (read-only) +   │
+│ user projects (interactive).│
+└─────────────────────────────┘
+```
+
+**What this fixes:**
+- ONE chat system (Teams). No parallel ThreadStore vs session-local.
+- ONE board schema (Teams' rich schema). No incompatible schemas.
+- ONE agent orchestrator (Teams). No bolted-on setInterval ticks.
+- Teams Web UI sees everything (pando-infra, user projects) — no bridges needed.
+- Internal team can modify Teams code directly (it lives there).
+- Node restarts don't kill agents (Teams manages its own lifecycle).
+- Proper resource management (Teams already has session/engine lifecycle).
+
+**What stays in Node:** P2P, Lux, governance, identity, storage — pure infrastructure APIs.
+**What moves to Teams:** Team CRUD, agent scheduling, board tasks, chat routing, doorman, engine pool.
+**What gets gutted:** engine-adapter.ts goes from 2800 → ~300 lines (just Pando tool wrappers that call Node APIs).
+
+**Migration path (3 steps):**
+1. Teams server becomes authority for teams (move team CRUD, pando-infra starts in Teams)
+2. Move doorman and chat routing to Teams (classification, ThreadStore integration)
+3. Gut engine-adapter (remove EnginePool, tick scheduling, board management — keep tool wrappers)
+
+**This structure works for ALL projects:** pando-infra is just another team in Teams with different rules (autonomous). User projects are teams with conservative rules. Same system, same UI, same data, same orchestration. No parallel pipelines.
+
 ---
 
 ## 2. THE PACKAGES
@@ -489,6 +575,24 @@ PandoTeams has a **full persistent agent system**. Do NOT build a parallel one i
 - Dual budget: `UsdBudgetProvider` (standalone) vs `LuxBudgetProvider` (injected by node).
 - Custom tools registered at runtime via `engine.tools.register()`.
 - **pando-node's ONLY job:** register pando_* tools + inject Lux budget + set system prompts via agentOverride. Everything else (agents, board, memory, communication, model selection) is PandoTeams's responsibility.
+
+#### 3.2.8.1 UNIFICATION DIRECTIVE (2026-03-10, from founder)
+
+**PandoTeams is the ENGINE LAYER. Hub is the SINGLE PORTAL. No parallel systems.**
+
+Current state (being fixed): PandoTeams has its own web UI (port 5173), its own sessions, its own board, its own agents view. The Node has its own teams (TeamRegistry), its own board (engine-adapter SQLite), its own activity logs. These are bridged by the EngineAdapter but present as two disconnected experiences to users.
+
+**Target state:**
+1. **PandoTeams** = engine only. Processes AI work. No user-facing web UI needed.
+2. **Node** = single orchestrator. ALL teams (internal like pando-infra AND user project teams) go through TeamRegistry + EngineAdapter.
+3. **Hub** = single portal. Shows everything: teams, sessions, activity, chat, board tasks, agents — regardless of whether the data originates from PandoTeams engine or Node registry.
+4. **Teams Web UI** = development/debug tool only, NOT the user-facing portal.
+
+**Rules for all agents:**
+- Every new feature routes through the Node's team system, NOT through PandoTeams standalone APIs.
+- The Hub must be able to show ALL team data (sessions, agents, board, activity) via Node API.
+- No new parallel data stores. One source of truth per concept.
+- Always update THIS BIBLE after significant changes. Always clean up legacy code.
 
 #### 3.2.9 Claude Code CLI as Agent Runtime (IMPLEMENTED + VERIFIED)
 
