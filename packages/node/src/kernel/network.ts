@@ -647,7 +647,7 @@ export class PandoNetwork {
     }
 
     const stream = await connections[0].newStream(PANDO_PROTOCOL);
-    const encoded = uint8ArrayFromString(JSON.stringify(message));
+    const encoded = uint8ArrayFromString(JSON.stringify(message), 'utf8');
 
     await pipe(
       [encoded],
@@ -693,7 +693,7 @@ export class PandoNetwork {
     const listener = (evt: any) => {
       if (evt.detail.topic !== topic) return;
       try {
-        const decoded = uint8ArrayToString(evt.detail.data);
+        const decoded = uint8ArrayToString(evt.detail.data, 'utf8');
         const message: PandoMessage = JSON.parse(decoded);
         // v2.2: Log forward-compat warning for future protocol versions.
         // Old nodes (version=0/undefined) are still processed — backward compat.
@@ -727,7 +727,7 @@ export class PandoNetwork {
     const sig = await signMessage(message, this.identity.privateKey);
     message.signature = sig;
 
-    const encoded = uint8ArrayFromString(JSON.stringify(message));
+    const encoded = uint8ArrayFromString(JSON.stringify(message), 'utf8');
     await pubsub.publish(topic, encoded);
   }
 
@@ -1066,7 +1066,7 @@ export class PandoNetwork {
         (source) => lp.decode(source),
         async (source) => {
           for await (const msg of source) {
-            const decoded = uint8ArrayToString(msg.subarray());
+            const decoded = uint8ArrayToString(msg.subarray(), 'utf8');
             const message: PandoMessage = JSON.parse(decoded);
             const fromPeer = connection.remotePeer.toString();
 
