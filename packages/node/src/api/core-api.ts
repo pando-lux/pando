@@ -899,7 +899,6 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
 
     // ── Chat API (Phase 27: AgentManager) ──────────────────────────────────
 
-    // POST /chat/message — Phase 68.3: Doorman-routed chat
-    // Doorman classifies intent → simple (instant) / question (AI answer) / build (create project + manager)
+    // POST /chat/message — routed to Teams Server node-doorman (BIBLE 1.8)
 
 }

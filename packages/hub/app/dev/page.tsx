@@ -15,7 +15,7 @@ interface Endpoint {
 }
 
 /* -- Data -------------------------------------------------- */
-const EC2_NODE = process.env.PANDO_NODE_URL || "http://44.196.69.210:4000";
+const EC2_NODE = process.env.NEXT_PUBLIC_BOOTSTRAP_NODE || process.env.PANDO_NODE_URL || "http://44.196.69.210:4000";
 
 const endpoints: Endpoint[] = [
   {
@@ -105,7 +105,7 @@ const codeExamples = [
   {
     label: "Node status",
     lang: "bash",
-    code: `curl http://44.196.69.210:4000/v1/status \\
+    code: `curl ${EC2_NODE}/v1/status \\
   -H "Authorization: Bearer <api-token>"`,
   },
   {
@@ -289,7 +289,7 @@ export default function DevPage() {
             code={`git clone https://github.com/pando-lux/pando.git && cd pando
 npm install && npm run build
 node packages/node/dist/cli.js --port 4001 \\
-  --bootstrap /ip4/44.196.69.210/tcp/4001/p2p/12D3KooWJL2UxKRw2te6DNPsLa9KjRmB5SkML6Kd5wsndA8vJysN`}
+  --bootstrap <bootstrap-multiaddr>`}
           />
           <p className="text-xs text-neutral-400">
             Your API token is at <code className="font-mono text-xs">~/.pando/api-token</code>. Default API port: 4000.

@@ -63,7 +63,8 @@ class NodePool {
     // Bootstrap seed nodes: env var > hardcoded public nodes > localhost
     // Phase 99: Only seed with trusted compute nodes that have stable public IPs.
     // Discovery via /network/capabilities will find the rest.
-    const FALLBACK_SEEDS = [
+    const bootstrapEnv = process.env.PANDO_BOOTSTRAP_NODES?.split(',').map(s => s.trim()).filter(Boolean);
+    const FALLBACK_SEEDS = bootstrapEnv?.length ? bootstrapEnv : [
       'http://44.196.69.210:4000',   // EC2-1 (pando-compute-1)
       'http://3.226.89.40:4000',     // EC2-2 (pando-compute-2)
     ];

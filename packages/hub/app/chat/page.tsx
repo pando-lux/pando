@@ -695,7 +695,7 @@ function ChatPage() {
                   Teams Sessions
                 </h3>
                 <a
-                  href="http://localhost:5173"
+                  href={process.env.NEXT_PUBLIC_TEAMS_WEB_URL || "http://localhost:5173"}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="text-[10px] text-amber-500 hover:text-amber-400 transition"
@@ -712,7 +712,7 @@ function ChatPage() {
                   teamsSessions.map((session: any) => (
                     <a
                       key={session.id}
-                      href={`http://localhost:5173/#/default/sessions/${session.id}`}
+                      href={`${process.env.NEXT_PUBLIC_TEAMS_WEB_URL || "http://localhost:5173"}/#/default/sessions/${session.id}`}
                       target="_blank"
                       rel="noopener noreferrer"
                       className="block w-full text-left px-3 py-2 rounded-lg text-sm transition hover:bg-neutral-100 dark:hover:bg-neutral-900 border border-transparent"

@@ -6,11 +6,14 @@ import { getNodeConnection } from "@/lib/node-connection";
  * The raw /v1/onboard returns private IPs (EC2 internal), so we replace with public addresses.
  */
 
-// Public bootstrap peers (EC2-1 + EC2-2)
-const PUBLIC_BOOTSTRAPS = [
+// Public bootstrap peers — configurable via PANDO_BOOTSTRAP_NODES env var
+const DEFAULT_BOOTSTRAPS = [
   "/ip4/44.196.69.210/tcp/4001/p2p/12D3KooWJL2UxKRw2te6DNPsLa9KjRmB5SkML6Kd5wsndA8vJysN",
   "/ip4/3.226.89.40/tcp/4001/p2p/12D3KooWLMnoeqedX6uTWoBbq2ZfRyYKpDtttdtp6uNfm3PeJ33d",
 ];
+const PUBLIC_BOOTSTRAPS = process.env.PANDO_BOOTSTRAP_NODES
+  ? process.env.PANDO_BOOTSTRAP_NODES.split(',').map(s => s.trim()).filter(Boolean)
+  : DEFAULT_BOOTSTRAPS;
 
 export async function GET() {
   try {

@@ -90,7 +90,8 @@ export default function NodeSetupPage() {
     fetchData();
   }, [fetchData]);
 
-  const bootstrap = data?.bootstrapAddrs?.[0] || "/ip4/44.196.69.210/tcp/4001/p2p/12D3KooWJL2UxKRw2te6DNPsLa9KjRmB5SkML6Kd5wsndA8vJysN";
+  const defaultBootstrap = process.env.NEXT_PUBLIC_BOOTSTRAP_NODE || "/ip4/44.196.69.210/tcp/4001/p2p/12D3KooWJL2UxKRw2te6DNPsLa9KjRmB5SkML6Kd5wsndA8vJysN";
+  const bootstrap = data?.bootstrapAddrs?.[0] || defaultBootstrap;
   const startCmd = data?.startCommand || `node packages/node/dist/cli.js --port 4001 --bootstrap ${bootstrap}`;
 
   return (

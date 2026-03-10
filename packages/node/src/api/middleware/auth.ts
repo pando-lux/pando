@@ -25,14 +25,6 @@ export interface RouteHelpers {
   checkSSELimit(ip: string): boolean;
   /** #85: Track SSE connection open/close per IP. */
   trackSSEConnection(ip: string, delta: 1 | -1): void;
-  doormanClassify(message: string, userPeerId?: string): Promise<{
-    intent: 'simple' | 'question' | 'build' | 'report' | 'feedback';
-    response?: string;
-    tier?: number;
-    description?: string;
-    targetProject?: string;
-  }>;
-  doormanChat(message: string, history: Array<{ role: 'user' | 'assistant'; content: string }>): Promise<string>;
   decryptIncomingMessage(ciphertext: string, nonce: string, threadMeta: any, encryptedThreadKey?: string): Promise<string>;
   encryptOutgoingMessage(plaintext: string, threadMeta: any, encryptedThreadKey?: string): Promise<{ ciphertext: string; nonce: string }>;
 }

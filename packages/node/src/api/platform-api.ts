@@ -145,7 +145,7 @@ export async function registerPlatformRoutes(
       // Resolve user identity so threads are owned by the authenticated user
       const chatUserId = peerId || undefined;
 
-      // If projectId is provided, skip doorman — route directly to project engine
+      // If projectId is provided, route directly to project engine
       if (projectId && typeof projectId === 'string') {
         if (threadStore) {
           threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
@@ -219,7 +219,6 @@ export async function registerPlatformRoutes(
       }
 
       // No projectId — BIBLE 1.8: Route to node-doorman team on Teams Server.
-      // Falls back to local doormanClassify if Teams Server is unreachable.
       try {
         const doormanResp = await fetch(`${TEAMS_SERVER_URL}/v1/teams/node-doorman/chat`, {
           method: 'POST',
@@ -241,202 +240,27 @@ export async function registerPlatformRoutes(
           }
         }
       } catch {
-        // Teams Server unreachable — fall through to local doorman
-        console.log('[chat] node-doorman unreachable, falling back to local doorman');
-      }
-
-      // Fallback: local doorman classification (DEPRECATED — kept for resilience)
-      const classification = await deps.doormanClassify(trimmed, peerId);
-
-      if (classification.intent === 'simple' || classification.intent === 'question') {
-        // Doorman answers directly — no PandoTeams engine needed
-        const doormanReply = classification.response || 'I can help you build apps or answer questions. Try "build me a todo app"!';
+        // Teams Server unreachable — return unavailable message
+        console.log('[chat] node-doorman unreachable');
+        const unavailableReply = 'AI service is temporarily unavailable. Please try again shortly.';
         if (threadStore) {
           threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
           threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
           await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' });
-          await threadStore.addMessage(threadId, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' });
+          await threadStore.addMessage(threadId, { role: 'assistant', content: unavailableReply, timestamp: Date.now(), tier: 'simple' });
         }
-        return { status: 'ok', threadId, reply: doormanReply, tier: 'simple' };
+        return { status: 'ok', threadId, reply: unavailableReply, tier: 'simple' };
       }
 
-      if (classification.intent === 'report') {
-        // User is reporting a bug or requesting a feature — route to Teams Server board
-        const targetTeam = classification.targetProject || 'pando-infra';
-        const severity = /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(trimmed) ? 'BUG' : 'FEATURE';
-        const taskTitle = `[${severity}:user] ${(classification.description || trimmed).slice(0, 120)}`;
-        const boardResult = await proxyToTeams(`/teams/${targetTeam}/board`, { method: 'POST', body: { title: taskTitle, description: trimmed.slice(0, 500) } });
-        const taskId = boardResult?.id;
-        const reply = taskId
-          ? `Thanks for the report! I've added it to the team's board. Task: ${taskId}`
-          : `Thanks for the report. The team will review it on the next tick.`;
-        threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
-        if (threadStore) {
-          threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
-          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' });
-          await threadStore.addMessage(threadId, { role: 'assistant', content: reply, timestamp: Date.now(), tier: 'simple' });
-        }
-        return { status: 'ok', threadId, reply, tier: 'simple' };
-      }
-
-      if (classification.intent === 'feedback') {
-        // User is suggesting an improvement or feature — proxy to Teams Server board
-        const targetTeam = classification.targetProject || 'pando-infra';
-        const taskTitle = `[FEATURE:user] ${(classification.description || trimmed).slice(0, 120)}`;
-        const boardResult = await proxyToTeams(`/teams/${targetTeam}/board`, { method: 'POST', body: { title: taskTitle, description: trimmed.slice(0, 500) } });
-        const taskId = boardResult?.id;
-        const reply = taskId
-          ? `Thanks for the suggestion! I've added it to the team's board for review. Task: ${taskId}`
-          : `Thanks for the feedback! The team will review your suggestion on the next tick.`;
-        threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
-        if (threadStore) {
-          threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
-          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' });
-          await threadStore.addMessage(threadId, { role: 'assistant', content: reply, timestamp: Date.now(), tier: 'simple' });
-        }
-        return { status: 'ok', threadId, reply, tier: 'simple' };
-      }
-
-      // Intent is 'build' — unified routing: always create project, find best PandoTeams peer
-      const builder = findBestBuilder();
-      if (!builder) {
-        threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
-        if (threadStore) {
-          threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
-          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' });
-          await threadStore.addMessage(threadId, { role: 'assistant', content: 'No PandoTeams-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.', timestamp: Date.now(), tier: 'simple' });
-        }
-        return { status: 'ok', threadId, reply: 'No PandoTeams-capable nodes available on the network. Run /contribute claude-code on a node to enable builds.', tier: 'simple' };
-      }
-
-      // Always create project first (this node is the router)
-      let newProjectId: string | undefined;
-      const projectStore = node.getProjectStore?.();
-      if (projectStore) {
-        try {
-          const projName = (classification.description || trimmed).slice(0, 60).replace(/[^a-zA-Z0-9 -]/g, '').trim() || 'New Project';
-          const deployTier = (classification.tier === 2) ? 2 : 1;
-          const project = await projectStore.createProject({
-            name: projName,
-            description: classification.description || trimmed,
-            ownerId: (await deps.verifyUserJwt(request)) || node.getIdentity()?.peerId || 'anonymous',
-            visibility: 'listed',
-            tier: deployTier,
-          });
-          newProjectId = project.id;
-
-          // Set workspace directory so engine + deploy pipeline know where files go
-          const { join: joinPath } = await import('node:path');
-          const { homedir: getHome } = await import('node:os');
-          const wsDir = joinPath(getHome(), '.pando', 'projects', newProjectId);
-          await projectStore.updateProject(newProjectId, { workspaceDir: wsDir });
-
-          // Register project as a team so it appears in /v1/teams and gets
-          // proper board-task injection, handoff, etc.
-          const teamRegistry = node.getTeamRegistry?.();
-          if (teamRegistry && newProjectId) {
-            try {
-              teamRegistry.createTeam({
-                id: newProjectId,
-                displayName: projName || 'User Project',
-                managingNode: node.getIdentity()?.peerId || '',
-                lastHeartbeat: Date.now(),
-                status: 'active',
-                repos: [],
-                agentCount: 1,
-                governanceRequired: false,
-                createdBy: node.getIdentity()?.peerId || '',
-                claimedAt: Date.now(),
-              });
-              console.log(`[router] Registered team for project ${newProjectId}`);
-            } catch (e: any) {
-              console.warn(`[router] Failed to register team for project ${newProjectId}: ${e?.message || e}`);
-            }
-          }
-
-          console.log(`[router] Created project ${newProjectId}: ${projName} (tier ${deployTier}, builder: ${builder.isLocal ? 'local' : builder.peerId})`);
-
-          // Run preflight (auto-generates API key, assigns MongoDB)
-          try {
-            const pfRes = await fetch(`http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/v1/projects/${newProjectId}/preflight`, {
-              method: 'POST',
-              headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
-              signal: AbortSignal.timeout(10000),
-            });
-            if (pfRes.ok) console.log(`[router] Preflight passed for project ${newProjectId}`);
-          } catch (pfErr: any) {
-            console.log(`[router] Preflight failed: ${pfErr.message} — continuing`);
-          }
-        } catch (projErr: any) {
-          console.log(`[router] Project creation failed: ${projErr.message}`);
-        }
-      }
-
-      // Create thread linked to project
+      // Node-doorman returned OK but with empty reply — generic fallback
+      const fallbackReply = 'I can help you build apps, check your balance, or answer questions about Pando. Try "build me a todo app" to get started!';
       if (threadStore) {
         threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
-        threadStore.createThread(threadId, trimmed.slice(0, 50), 'project', '', chatUserId);
-        if (newProjectId) threadStore.updateThread(threadId, { projectId: newProjectId });
-        await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' });
+        threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
+        await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' });
+        await threadStore.addMessage(threadId, { role: 'assistant', content: fallbackReply, timestamp: Date.now(), tier: 'simple' });
       }
-
-      // Route to best builder
-      if (builder.isLocal && newProjectId) {
-        // Local PandoTeams — proxy to Teams Server (BIBLE 1.7)
-        (async () => {
-          try {
-            const chatResult = await proxyToTeams(`/teams/${newProjectId}/chat`, {
-              method: 'POST',
-              body: { agentId: 'lead', message: trimmed },
-            });
-            const engineReply = chatResult?.error
-              ? `Build failed: ${chatResult.error}`
-              : (chatResult?.reply || chatResult?.response || 'Building your project...');
-            if (threadStore && threadId) {
-              await threadStore.addMessage(threadId, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
-            }
-            deps.pushEvent('chat_message', { threadId, projectId: newProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
-            // Trigger app-manager update after build
-            const appMgr = node.getAppManager?.();
-            if (appMgr && newProjectId) {
-              try {
-                const deployResult = await appMgr.update(newProjectId);
-                if (deployResult.success) {
-                  const app = appMgr.get(newProjectId);
-                  const deployMsg = `App deployed successfully.${app?.deploy_url ? ` URL: ${app.deploy_url}` : ''}${app?.port ? ` Port: ${app.port}` : ''}`;
-                  if (threadStore && threadId) {
-                    await threadStore.addMessage(threadId, { role: 'assistant', content: deployMsg, timestamp: Date.now(), tier: 'complex' });
-                  }
-                  deps.pushEvent('app_deployed', { threadId, projectId: newProjectId, deployUrl: app?.deploy_url, port: app?.port, status: 'live' });
-                } else {
-                  const failMsg = `Deploy attempted: ${deployResult.error || 'pending remote deployment'}`;
-                  if (threadStore && threadId) {
-                    await threadStore.addMessage(threadId, { role: 'assistant', content: failMsg, timestamp: Date.now(), tier: 'complex' });
-                  }
-                  deps.pushEvent('app_deploy_status', { threadId, projectId: newProjectId, status: 'failed', error: deployResult.error });
-                }
-              } catch (e: any) {
-                console.warn('[app-manager] Auto-update failed:', e.message);
-              }
-            }
-          } catch (err) {
-            console.error('[router] Teams Server routing failed:', (err as Error).message);
-            if (threadStore && threadId) {
-              await threadStore.addMessage(threadId, { role: 'assistant', content: `Routing error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' });
-            }
-          }
-        })();
-      } else if (!builder.isLocal) {
-        // Remote PandoTeams peer — route via P2P
-        node.routeChatProxyP2P?.(trimmed, threadId, String(classification.tier || 1)).catch((err: Error) => {
-          console.error('[router] P2P routing failed:', err.message);
-          if (threadStore && threadId) {
-            threadStore.addMessage(threadId, { role: 'assistant', content: 'P2P routing failed. Try again.', timestamp: Date.now(), tier: 'simple' });
-          }
-        });
-      }
-
-      return { status: 'ok', threadId, projectId: newProjectId, reply: 'Project created. AI engine is building — check the thread for updates.', tier: 'complex', routedTo: builder.peerId };
+      return { status: 'ok', threadId, reply: fallbackReply, tier: 'simple' };
     });
 
     // GET /chat/history — return messages from the most recent thread for this user
@@ -584,7 +408,7 @@ export async function registerPlatformRoutes(
         return reply.code(404).send({ error: 'Thread not found' });
       }
 
-      const { message, tier, encrypted: isEncrypted, nonce, encryptedThreadKey } = request.body || {};
+      const { message, encrypted: isEncrypted, nonce, encryptedThreadKey } = request.body || {};
       if (!message || typeof message !== 'string') {
         return reply.code(400).send({ error: 'message is required' });
       }
@@ -626,14 +450,13 @@ export async function registerPlatformRoutes(
         role: 'user',
         content: trimmed,
         timestamp: Date.now(),
-        tier: tier as any,
+        tier: 'simple',
         encrypted: isEncrypted || false,
         nonce: isEncrypted ? nonce : undefined,
       });
 
-      // ── Phase 68.3: Doorman-routed thread messages ────────────────────────
-      // If thread has a projectId, route directly to project manager (no doorman).
-      // If no projectId, use doorman to classify intent.
+      // If thread has a projectId, route directly to project manager.
+      // If no projectId, route to Teams Server node-doorman (BIBLE 1.8).
       if (threadMeta?.projectId) {
         // Existing project thread — unified routing to best PandoTeams peer
         const builder = findBestBuilder();
@@ -673,153 +496,38 @@ export async function registerPlatformRoutes(
         return { status: 'queued', threadId: id, reply: 'Routed to PandoTeams peer — check thread for updates.', tier: 'complex', routedTo: builder.peerId };
       }
 
-      // No projectId — use doorman
-      // Smart tier (medium): use multi-turn chat with conversation history
-      if (tier === 'medium') {
-        const allMessages = await threadStore.getMessagesAsync(id);
-        const recentMessages = allMessages
-          .filter((m: any) => m.role === 'user' || m.role === 'assistant')
-          .filter((m: any) => !m.encrypted) // only use decrypted messages for context
-          .slice(0, -1) // exclude the message we just added (last item)
-          .slice(-20) // cap to last 20 for context window
-          .map((m: any) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
-        const smartReply = await deps.doormanChat(plaintextForProcessing, recentMessages);
-        if (isEncrypted && threadMeta?.encryptionKeys) {
-          try {
-            const encReply = await deps.encryptOutgoingMessage(smartReply, threadMeta, encryptedThreadKey);
-            await threadStore.addMessage(id, { role: 'assistant', content: encReply.ciphertext, timestamp: Date.now(), tier: 'medium', encrypted: true, nonce: encReply.nonce });
-            return { status: 'ok', threadId: id, reply: encReply.ciphertext, tier: 'medium', encrypted: true, nonce: encReply.nonce };
-          } catch (err: any) {
-            console.warn(`[api] Failed to encrypt smart reply: ${err.message}`);
-          }
-        }
-        await threadStore.addMessage(id, { role: 'assistant', content: smartReply, timestamp: Date.now(), tier: 'medium' });
-        return { status: 'ok', threadId: id, reply: smartReply, tier: 'medium' };
-      }
-
-      const classification = await deps.doormanClassify(plaintextForProcessing, threadUserPeerId || undefined);
-
-      if (classification.intent === 'simple' || classification.intent === 'question') {
-        const doormanReply = classification.response || 'Try "build me a todo app" to get started!';
-        // Handle encryption if needed
-        if (isEncrypted && threadMeta?.encryptionKeys) {
-          try {
-            const encReply = await deps.encryptOutgoingMessage(doormanReply, threadMeta, encryptedThreadKey);
-            await threadStore.addMessage(id, { role: 'assistant', content: encReply.ciphertext, timestamp: Date.now(), tier: 'simple', encrypted: true, nonce: encReply.nonce });
-            return { status: 'ok', threadId: id, reply: encReply.ciphertext, tier: 'simple', encrypted: true, nonce: encReply.nonce };
-          } catch (err: any) {
-            console.warn(`[api] Failed to encrypt doorman reply: ${err.message}`);
-          }
-        }
-        await threadStore.addMessage(id, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' });
-        return { status: 'ok', threadId: id, reply: doormanReply, tier: 'simple' };
-      }
-
-      if (classification.intent === 'report' || classification.intent === 'feedback') {
-        // User is reporting a bug or providing feedback — proxy to Teams Server board
-        const targetTeam = classification.targetProject || 'pando-infra';
-        const isBug = classification.intent === 'report' && /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(plaintextForProcessing);
-        const tag = isBug ? 'BUG' : 'FEATURE';
-        const taskTitle = `[${tag}:user] ${(classification.description || plaintextForProcessing).slice(0, 120)}`;
-        const boardResult = await proxyToTeams(`/teams/${targetTeam}/board`, { method: 'POST', body: { title: taskTitle, description: plaintextForProcessing.slice(0, 500) } });
-        const taskId = boardResult?.id;
-        const reply = classification.intent === 'report'
-          ? (taskId ? `Thanks for the report! I've added it to the team's board. Task: ${taskId}` : `Thanks for the report. The team will review it on the next tick.`)
-          : (taskId ? `Thanks for the suggestion! I've added it to the team's board for review. Task: ${taskId}` : `Thanks for the feedback! The team will review your suggestion on the next tick.`);
-        if (isEncrypted && threadMeta?.encryptionKeys) {
-          try {
-            const encReply = await deps.encryptOutgoingMessage(reply, threadMeta, encryptedThreadKey);
-            await threadStore.addMessage(id, { role: 'assistant', content: encReply.ciphertext, timestamp: Date.now(), tier: 'simple', encrypted: true, nonce: encReply.nonce });
-            return { status: 'ok', threadId: id, reply: encReply.ciphertext, tier: 'simple', encrypted: true, nonce: encReply.nonce };
-          } catch (err: any) {
-            console.warn(`[api] Failed to encrypt report/feedback reply: ${err.message}`);
-          }
-        }
-        await threadStore.addMessage(id, { role: 'assistant', content: reply, timestamp: Date.now(), tier: 'simple' });
-        return { status: 'ok', threadId: id, reply, tier: 'simple' };
-      }
-
-      // Build request — unified routing: create project, find best PandoTeams peer
-      const builder = findBestBuilder();
-      if (!builder) {
-        await threadStore.addMessage(id, { role: 'assistant', content: 'No PandoTeams-capable nodes available on the network.', timestamp: Date.now(), tier: 'simple' });
-        return { status: 'ok', threadId: id, reply: 'No PandoTeams-capable nodes available on the network.', tier: 'simple' };
-      }
-
-      // Always create project first (this node is the router)
-      let newProjectId: string | undefined;
-      const projectStore = node.getProjectStore?.();
-      if (projectStore) {
-        try {
-          const projName = (classification.description || plaintextForProcessing).slice(0, 60).replace(/[^a-zA-Z0-9 -]/g, '').trim() || 'New Project';
-          const deployTier = (classification.tier === 2) ? 2 : 1;
-          const project = await projectStore.createProject({
-            name: projName,
-            description: classification.description || plaintextForProcessing,
-            ownerId: (await deps.verifyUserJwt(request)) || node.getIdentity()?.peerId || 'anonymous',
-            visibility: 'listed',
-            tier: deployTier,
-          });
-          newProjectId = project.id;
-          threadStore.updateThread(id, { projectId: newProjectId });
-
-          // Set workspace directory so engine + deploy pipeline know where files go
-          const { join: joinPath } = await import('node:path');
-          const { homedir: getHome } = await import('node:os');
-          const wsDir = joinPath(getHome(), '.pando', 'projects', newProjectId);
-          await projectStore.updateProject(newProjectId, { workspaceDir: wsDir });
-
-          console.log(`[router] Created project ${newProjectId} for thread ${id} (tier ${deployTier}, builder: ${builder.isLocal ? 'local' : builder.peerId})`);
-
-          // Run preflight
-          try {
-            const pfRes = await fetch(`http://127.0.0.1:${(fastify.server.address() as any)?.port || 4000}/v1/projects/${newProjectId}/preflight`, {
-              method: 'POST',
-              headers: { 'Authorization': `Bearer ${deps.apiToken}`, 'Content-Type': 'application/json' },
-              signal: AbortSignal.timeout(10000),
-            });
-            if (pfRes.ok) console.log(`[router] Preflight passed for project ${newProjectId}`);
-          } catch (pfErr: any) {
-            console.log(`[router] Preflight failed: ${pfErr.message}`);
-          }
-        } catch (projErr: any) {
-          console.log(`[router] Project creation failed: ${projErr.message}`);
-        }
-      }
-
-      const targetProjectId = newProjectId || threadMeta?.projectId;
-      if (builder.isLocal && targetProjectId) {
-        // Local PandoTeams — proxy to Teams Server (BIBLE 1.7)
-        (async () => {
-          try {
-            const chatResult = await proxyToTeams(`/teams/${targetProjectId}/chat`, {
-              method: 'POST',
-              body: { agentId: 'lead', message: plaintextForProcessing },
-            });
-            const engineReply = chatResult?.error
-              ? `Build failed: ${chatResult.error}`
-              : (chatResult?.reply || chatResult?.response || 'Building your project...');
-            await threadStore.addMessage(id, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
-            deps.pushEvent('chat_message', { threadId: id, projectId: targetProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
-            // Trigger app-manager update after build
-            const appMgr = node.getAppManager?.();
-            if (appMgr && targetProjectId) {
-              appMgr.update(targetProjectId).catch((e: any) => console.warn('[app-manager] Auto-update failed:', e.message));
-            }
-          } catch (err) {
-            console.error('[router] Teams Server routing failed:', (err as Error).message);
-            await threadStore.addMessage(id, { role: 'assistant', content: `Routing error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' });
-          }
-        })();
-      } else if (!builder.isLocal) {
-        // Remote PandoTeams peer — route via P2P
-        node.routeChatProxyP2P?.(plaintextForProcessing, id, String(classification.tier || 1)).catch((err: Error) => {
-          console.error('[router] P2P routing failed:', err.message);
-          threadStore.addMessage(id, { role: 'assistant', content: 'P2P routing failed. Try again.', timestamp: Date.now(), tier: 'simple' });
+      // No projectId — route to Teams Server node-doorman (BIBLE 1.8)
+      try {
+        const doormanResp = await fetch(`${TEAMS_SERVER_URL}/v1/teams/node-doorman/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ agentId: 'lead', message: plaintextForProcessing }),
+          signal: AbortSignal.timeout(120000),
         });
+        if (doormanResp.ok) {
+          const doormanResult = await doormanResp.json() as any;
+          const doormanReply = doormanResult?.reply || doormanResult?.response || '';
+          if (doormanReply) {
+            if (isEncrypted && threadMeta?.encryptionKeys) {
+              try {
+                const encReply = await deps.encryptOutgoingMessage(doormanReply, threadMeta, encryptedThreadKey);
+                await threadStore.addMessage(id, { role: 'assistant', content: encReply.ciphertext, timestamp: Date.now(), tier: 'simple', encrypted: true, nonce: encReply.nonce });
+                return { status: 'ok', threadId: id, reply: encReply.ciphertext, tier: 'simple', encrypted: true, nonce: encReply.nonce };
+              } catch (err: any) {
+                console.warn(`[api] Failed to encrypt doorman reply: ${err.message}`);
+              }
+            }
+            await threadStore.addMessage(id, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' });
+            return { status: 'ok', threadId: id, reply: doormanReply, tier: 'simple' };
+          }
+        }
+      } catch {
+        console.log('[chat] node-doorman unreachable for thread message');
       }
 
-      return { status: 'ok', threadId: id, projectId: targetProjectId, reply: 'Project created. Building — check thread for updates.', tier: 'complex', routedTo: builder.peerId };
+      const unavailableReply = 'AI service is temporarily unavailable. Please try again shortly.';
+      await threadStore.addMessage(id, { role: 'assistant', content: unavailableReply, timestamp: Date.now(), tier: 'simple' });
+      return { status: 'ok', threadId: id, reply: unavailableReply, tier: 'simple' };
     });
 
     // ── Engine API ──────────────────────────────────────────────────────────

@@ -12,7 +12,8 @@ export async function GET() {
     }
     const sessions = await res.json();
     return NextResponse.json({ sessions });
-  } catch {
+  } catch (err: any) {
+    console.warn(`[teams/sessions] Failed to fetch from ${TEAMS_URL}: ${err?.message || err}`);
     return NextResponse.json({ sessions: [] });
   }
 }
