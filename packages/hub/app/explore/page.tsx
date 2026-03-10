@@ -172,6 +172,9 @@ export default function ExplorePage() {
               <a href="/search" className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50 transition text-sm text-neutral-700 dark:text-neutral-300 font-medium">
                 Search
               </a>
+              <a href="/services" className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50 transition text-sm text-neutral-700 dark:text-neutral-300 font-medium">
+                Services
+              </a>
               <a href="/wallet" className="flex items-center gap-2 px-3 py-2.5 rounded-lg border border-neutral-300 dark:border-neutral-700 hover:bg-neutral-200/50 dark:hover:bg-neutral-800/50 transition text-sm text-neutral-700 dark:text-neutral-300 font-medium">
                 Wallet
               </a>
