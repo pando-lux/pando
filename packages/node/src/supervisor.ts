@@ -106,12 +106,17 @@ function spawnTeams(): ChildProcess | null {
   }
   const serverEntry = join(TEAMS_PATH, 'packages', 'server', 'src', 'index.ts');
   console.log(`[supervisor ${ts()}] Spawning Teams (port ${TEAMS_PORT})`);
+  const apiPort = resolveApiPort();
   const proc = spawn('npx', ['tsx', serverEntry, '--port', String(TEAMS_PORT)], {
     cwd: TEAMS_PATH,
     stdio: 'inherit',
     windowsHide: true,
     shell: true,
-    env: { ...process.env },
+    env: {
+      ...process.env,
+      PANDO_NODE_URL: process.env.PANDO_NODE_URL || `http://localhost:${apiPort}`,
+      PANDO_NODE_PATH: process.env.PANDO_NODE_PATH || resolve(__dirname, '..', '..', '..'),
+    },
   });
   proc.on('exit', onTeamsExit);
   return proc;

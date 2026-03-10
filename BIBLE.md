@@ -180,7 +180,7 @@ STATUS: UNTESTED. Manager prompt supports this but spawning never triggered.
 4. Re-deploys updated app
 5. User sees updated URL
 ```
-STATUS: PARTIALLY WORKING (workspace continuity tested). Gap: 'project' intent routing may be broken.
+STATUS: PARTIALLY WORKING (workspace continuity tested). Gap: cross-thread follow-ups need explicit project selection.
 
 **Scenario 4: System Suggestion (user → pando-infra)**
 ```
@@ -208,7 +208,7 @@ STATUS: PROVEN for 2 EC2 nodes. Gap: EC2 nodes behind on recent commits.
 | # | Gap | Severity | What exists | What's missing |
 |---|-----|----------|-------------|----------------|
 | 1 | No external hosting | HIGH | Tier 1 local deploy works | S3/Vercel config for shareable URLs |
-| 2 | Cross-thread follow-up | MEDIUM | Same-thread follow-ups WORK (projectId in ThreadMeta, skips doorman) | New-chat follow-ups can't detect "which project?" — doorman has 'project' intent defined but never implemented (api-server.ts:680) |
+| 2 | Cross-thread follow-up | MEDIUM | Same-thread follow-ups WORK (projectId in ThreadMeta, skips doorman) | New-chat follow-ups can't detect "which project?" — dead 'project' intent removed, needs explicit project selection UX |
 | 3 | ~~Feedback intake pipeline~~ | ~~HIGH~~ | **IMPLEMENTED** — doorman returns `report`/`feedback` intents (api-server.ts:805-809), platform-api.ts:698-720 creates [BUG:user]/[FEATURE:user] board tasks on pando-infra. Verified working 2026-03-10. | Done |
 | 4 | Feedback status UI | MEDIUM | Board task lifecycle exists | Teams Web UI needs user-facing ticket view |
 | 4b | Approval layer | MEDIUM | Governance exists | No risk-based triage in manager prompt |

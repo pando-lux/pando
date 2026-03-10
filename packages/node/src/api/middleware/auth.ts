@@ -26,7 +26,7 @@ export interface RouteHelpers {
   /** #85: Track SSE connection open/close per IP. */
   trackSSEConnection(ip: string, delta: 1 | -1): void;
   doormanClassify(message: string, userPeerId?: string): Promise<{
-    intent: 'simple' | 'question' | 'build' | 'project' | 'report' | 'feedback';
+    intent: 'simple' | 'question' | 'build' | 'report' | 'feedback';
     response?: string;
     tier?: number;
     description?: string;

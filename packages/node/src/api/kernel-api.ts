@@ -923,10 +923,12 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
     fastify.post('/governance/propose', async (request: any, reply: any) => {
       const gov = node.getGovernance();
       if (!gov) return reply.code(503).send({ error: 'Governance not ready' });
-      // Dual-auth: accept user JWT or operator Bearer token
-      const userPeerId = await deps.verifyUserJwt(request);
-      const identity = node.getIdentity();
-      const proposerPeerId = userPeerId || identity?.peerId;
+      // Defense-in-depth: require authenticated caller
+      if (!request.actor || request.actor.type === 'anonymous') {
+        return reply.code(401).send({ error: 'Authentication required to propose', code: 'UNAUTHORIZED' });
+      }
+      // Proposer identity: users propose as themselves, operators/agents as the node
+      const proposerPeerId = request.actor.type === 'user' ? request.actor.id : node.getIdentity()?.peerId;
       // #29: Reject proposals from quarantined peers
       const secMonPropose = node.getSecurityMonitor();
       if (secMonPropose && proposerPeerId && secMonPropose.isQuarantined(proposerPeerId)) {
@@ -958,6 +960,10 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
     fastify.post('/governance/comment', async (request: any, reply: any) => {
       const gov = node.getGovernance();
       if (!gov) return reply.code(503).send({ error: 'Governance not ready' });
+      // Defense-in-depth: require authenticated caller
+      if (!request.actor || request.actor.type === 'anonymous') {
+        return reply.code(401).send({ error: 'Authentication required to comment', code: 'UNAUTHORIZED' });
+      }
       const { proposalId, content } = request.body || {};
       if (!proposalId || !content || typeof content !== 'string') return reply.code(400).send({ error: 'proposalId and content required' });
       if (content.length > 5000) return reply.code(400).send({ error: 'Comment too long (max 5000 chars)' });
@@ -975,10 +981,13 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
     fastify.post('/governance/vote', async (request: any, reply: any) => {
       const gov = node.getGovernance();
       if (!gov) return reply.code(503).send({ error: 'Governance not ready' });
-      // Dual-auth: accept user JWT or operator Bearer token
-      const userPeerId = await deps.verifyUserJwt(request);
-      const identity = node.getIdentity();
-      const voterPeerId = userPeerId || identity?.peerId;
+      // Defense-in-depth: require authenticated caller (global hook checks Bearer/P2P,
+      // but this guards against misconfiguration or API_AUTH_DISABLED)
+      if (!request.actor || request.actor.type === 'anonymous') {
+        return reply.code(401).send({ error: 'Authentication required to vote', code: 'UNAUTHORIZED' });
+      }
+      // Voter identity: users vote as themselves, operators/agents vote as the node
+      const voterPeerId = request.actor.type === 'user' ? request.actor.id : node.getIdentity()?.peerId;
       // #29: Reject votes from quarantined peers
       const secMonVote = node.getSecurityMonitor();
       if (secMonVote && voterPeerId && secMonVote.isQuarantined(voterPeerId)) {

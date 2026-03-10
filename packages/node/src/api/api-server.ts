@@ -675,10 +675,9 @@ export class ApiServer {
    * - 'simple' — status/balance/peers/help queries → doorman answers directly
    * - 'question' — general questions → doorman answers via AI ($0.001)
    * - 'build' — "build me X" → create project + spawn manager
-   * - 'project' — existing project message → route to project manager
    */
   private async doormanClassify(message: string, userPeerId?: string): Promise<{
-    intent: 'simple' | 'question' | 'build' | 'project' | 'report' | 'feedback';
+    intent: 'simple' | 'question' | 'build' | 'report' | 'feedback';
     response?: string;
     tier?: number;
     description?: string;
