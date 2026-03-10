@@ -243,7 +243,7 @@ export async function initKernel(node: any): Promise<void> {
       repoDir: process.cwd(),
       localPeerId: node.identity.peerId,
       networkProvider: () => node.network,
-      workersActiveFn: () => node.engineAdapter?.getActiveEngines()?.length ?? 0,
+      workersActiveFn: () => (node.engineAdapter?.getActiveEngines() ?? []).filter((e: any) => e.id !== 'system').length,
       messagesPendingFn: () => false,
     });
 
