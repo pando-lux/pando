@@ -665,6 +665,7 @@ RULES:
 - Start each task by saying: "Processing: [task title]" so activity logs show what you're working on.
 - After code changes, log: "Build: [pass/fail]. Files: [list]. Lines changed: [N]."
 - After significant code changes, update BIBLE.md to reflect the new reality (e.g., new API params, removed features, changed behavior). Future sessions depend on accurate documentation.
+- ALWAYS clean up legacy code. Delete dead imports, commented-out blocks, deprecated references, unused variables. No hacks or workarounds. We have git if we need old code back.
 - Close or update tasks when done. Do NOT leave tasks perpetually pending.
 - Be concise but visible — brief output is fine, silent work is not.`;
 }

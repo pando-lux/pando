@@ -32,22 +32,21 @@ export default function ExplorePage() {
   const [loaded, setLoaded] = useState(false);
 
   const fetchData = useCallback(async () => {
-    const [s, sc, as_, gov, apps] = await Promise.all([
-      fetch("/api/status").then(r => r.json()).catch(() => null),
-      fetch("/api/scheduler/status").then(r => r.json()).catch(() => null),
-      fetch("/api/activity/stats?window=24h").then(r => r.json()).catch(() => null),
-      fetch("/api/governance/proposals").then(r => r.json()).catch(() => null),
-      fetch("/api/apps").then(r => r.json()).catch(() => null),
-    ]);
-    if (s) setStatus(s);
-    if (sc) setScheduler(sc);
-    if (as_) setActivityStats(as_);
-    if (gov) {
-      const proposals = gov.proposals || gov || [];
-      const active = Array.isArray(proposals) ? proposals.filter((p: any) => p.status === "active").length : 0;
-      setProposalCount(active);
-    }
-    if (apps) setAppsCount(apps.total ?? 0);
+    // Fire each fetch independently so cards render progressively as each API responds
+    const promises = [
+      fetch("/api/status").then(r => r.json()).then(s => { if (s) setStatus(s); }).catch(() => {}),
+      fetch("/api/scheduler/status").then(r => r.json()).then(sc => { if (sc) setScheduler(sc); }).catch(() => {}),
+      fetch("/api/activity/stats?window=24h").then(r => r.json()).then(as_ => { if (as_) setActivityStats(as_); }).catch(() => {}),
+      fetch("/api/governance/proposals").then(r => r.json()).then(gov => {
+        if (gov) {
+          const proposals = gov.proposals || gov || [];
+          const active = Array.isArray(proposals) ? proposals.filter((p: any) => p.status === "active").length : 0;
+          setProposalCount(active);
+        }
+      }).catch(() => {}),
+      fetch("/api/apps").then(r => r.json()).then(apps => { if (apps) setAppsCount(apps.total ?? 0); }).catch(() => {}),
+    ];
+    await Promise.all(promises);
     setLoaded(true);
   }, []);
 

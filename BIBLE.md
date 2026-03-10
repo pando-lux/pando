@@ -828,7 +828,7 @@ Reads from @pando/node HTTP API via NodePool. **ALL API routes use `'primary'` r
 **Pages (25):** `/` (landing), `/chat`, `/search`, `/projects`, `/apps`, `/wallet`, `/network`, `/governance`, `/agents`, `/marketplace`, `/explore` (+5 sub-pages: activity, economy, governance, how-it-works, network), `/dev`, `/login`, `/register`, `/services`, `/testing`, `/node-setup`, `/resources` (+guide)
 **Removed (Phase 3 simplification):** strategy, council, dashboard, monitor, scheduler, capacity, content, explore/strategy, explore/tasks, explore/health
 
-**Data sources:** Apps page reads from AppManager (`/v1/apps`), Agents page aggregates from team registry (`/v1/teams` + `/v1/teams/:id/agents`), Network page reads from `/v1/status` + `/v1/peers` + `/v1/reputation/peers` + `/v1/capabilities/network`, Marketplace reads from `/v1/marketplace`.
+**Data sources:** Apps page reads from AppManager (`/v1/apps`), Agents page aggregates from team registry (`/v1/teams` + `/v1/teams/:id/agents`), Network page reads from `/v1/status` + `/v1/peers` + `/v1/reputation/peers` + `/v1/network/capabilities`, Marketplace reads from `/v1/marketplace`.
 
 **Real-time streaming:** Hub subscribes to SSE at `/api/events` (proxy to node's `/v1/events`). During builds, the node emits `chat_progress` events per stream chunk from `sendToTeamAgent()`. Hub accumulates these as an activity log shown inline in chat. Final result arrives via `chat_message` event. This gives users real-time visibility into agent build progress.
 

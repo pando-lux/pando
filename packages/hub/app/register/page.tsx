@@ -22,7 +22,7 @@ export default function RegisterPage() {
     if (!loading && isClaimed && !success) router.push("/");
   }, [loading, isClaimed, success, router]);
 
-  if (loading || isClaimed) {
+  if (loading || (isClaimed && !success)) {
     return (
       <div className="min-h-screen bg-white dark:bg-neutral-950">
         <NavBar />
