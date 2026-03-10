@@ -1396,7 +1396,17 @@ DECISION: APPROVE or REJECT
 
 **Layer 5 (AI review) only runs on PandoTeams contributor nodes** (they have an engine to review with). On lightweight/secure nodes without PandoTeams, Layer 5 is skipped (fail-open). Layers 1-4 and 6 are deterministic and run everywhere.
 
-**Auto-approve** when <=8 peers (dev mode). All logged to `governance_audit` table.
+**Quorum logic** (`getQuorum()` in governance.ts):
+- 1 peer (solo): 1 vote passes
+- 2-10 peers: max(2, ceil(peers × 0.5)) — 50% majority, minimum 2
+- 11-100 peers: 5 fixed
+- 101-1000 peers: 10 fixed
+- 1000+ peers: ceil(peers × 0.05) — 5%
+
+**Instant governance** when <10 total nodes: any single vote resolves (quorum=1). Speed over consensus during early growth.
+**Early resolution**: if all known nodes voted but count < computed quorum, quorum is lowered to total nodes.
+**governance_change** proposals require min(GOVERNANCE_CHANGE_MIN_VOTES=5, peerCount) votes.
+All logged to `governance_audit` table.
 
 ### 5.5 Distributed Compute — Four Node Types
 
@@ -1942,14 +1952,18 @@ Node starts with PandoTeams available:
 
   1. Initialize TeamRegistry (teams.db)
   2. Sync from peers (GossipSub catch-up)
-  3. Check: does team "pando-infra" exist in registry?
+  3. Wait 10s (TEAM_SYNC_WAIT_MS) — anti-split-brain delay.
+     Without this, two PandoTeams nodes starting simultaneously both
+     create pando-infra independently. The delay lets team_sync_response
+     arrive so we know if another node already manages the team.
+  4. Check: does team "pando-infra" exist in registry?
 
      NO (first node ever):
        Create with seed config:
          id: "pando-infra"
          displayName: "Pando Infrastructure"
          repos: ["pando-lux/node", "pando-lux/code"]
-         agentCount: 3
+         agentCount: 4
          governanceRequired: true
        Spawn team locally
 
@@ -1959,7 +1973,7 @@ Node starts with PandoTeams available:
      YES, and managingNode is online:
        Do nothing — someone else runs it
 
-  4. For each team where managingNode == self:
+  5. For each team where managingNode == self:
      a. Create PandoTeams workspace: ~/.pando/teams/{teamId}/
      b. If repo has .pando/team-state.json → read it, seed local board
      c. Create PandoTeams engines per agent config (stored locally, not in registry)
@@ -1968,14 +1982,15 @@ Node starts with PandoTeams available:
      f. Start heartbeat (update registry + broadcast every tick)
 ```
 
-**Seed config for pando-infra (3 agents):**
+**Seed config for pando-infra (4 agents):**
 ```
-Lead     — role: lead,     model: claude-code, tick: 15min,  ALL pando_* tools
-Observer — role: explorer, model: claude-code, tick: 60min,  read-only pando_* tools
-QA       — role: tester,   model: claude-code, tick: 120min, pando_status + pando_test_run
+Lead     — role: lead,     tick: 15min,  ALL pando_* tools
+Observer — role: explorer, tick: 60min,  read-only pando_* tools
+QA       — role: tester,   tick: 120min, pando_status + pando_test_run
+Explorer — role: tester,   tick: 180min, UI/UX exploration
 ```
 
-Agent configs are stored LOCALLY on the managing node (not in the P2P registry). The registry only knows `agentCount: 3`.
+Agent configs are stored LOCALLY on the managing node (not in the P2P registry). The registry only knows `agentCount: 4`.
 
 #### 5.10.8 Code Fixes via Workspaces
 

@@ -1947,7 +1947,25 @@ export class GovernanceSync {
       return { approved: false, reason, kernelDelay: false };
     }
 
-    // CHECK 3: AI review — advisory only (deterministic checks are the real gates)
+    // CHECK 3: Build verification (BIBLE 5.4 Layer 4) — reject if code doesn't compile
+    try {
+      const { execFileSync } = await import('node:child_process');
+      execFileSync('npm', ['run', 'build'], {
+        cwd: process.cwd(),
+        timeout: 120_000,
+        stdio: 'pipe',
+        windowsHide: true,
+      });
+      this.agentDb?.logGovernanceCheck(proposalId, 'build_verification', 'pass', undefined, changedFiles.length, totalLinesChanged);
+    } catch (err: any) {
+      const stderr = err.stderr?.toString?.()?.slice(0, 500) || err.message?.slice(0, 500) || 'Unknown build error';
+      const reason = `Build failed: ${stderr}`;
+      console.error(`[governance] Build verification FAILED for proposal ${proposalId}: ${stderr.slice(0, 200)}`);
+      this.agentDb?.logGovernanceCheck(proposalId, 'build_verification', 'fail', reason.slice(0, 500), changedFiles.length, totalLinesChanged);
+      return { approved: false, reason, kernelDelay: false };
+    }
+
+    // CHECK 4: AI review — advisory only (deterministic checks are the real gates)
     if (this.engineAdapter) {
       try {
         let diff = '';
@@ -1971,7 +1989,7 @@ export class GovernanceSync {
       }
     }
 
-    // CHECK 4: Kernel protection — delay if kernel files modified
+    // CHECK 5: Kernel protection — delay if kernel files modified
     const kernelFilesChanged = changedFiles.some(f => f.includes('kernel/'));
     if (kernelFilesChanged) {
       console.log('[governance] WARNING: Kernel file modified — applying 60s delay before approval');

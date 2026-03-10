@@ -707,8 +707,8 @@ export default function GovernancePage() {
                         </div>
                       )}
 
-                      {/* Vote buttons (active proposals) */}
-                      {detail.status === "active" && (
+                      {/* Vote buttons (active proposals with open deadline) */}
+                      {detail.status === "active" && (!detail.votingDeadline || detail.votingDeadline > Date.now()) && (
                         <div className="flex items-center gap-3">
                           <span className="text-xs text-neutral-500 font-medium mr-1">Vote:</span>
                           <button onClick={() => handleVote(p.id, "approve")} className="bg-green-500/15 hover:bg-green-500/25 text-green-600 dark:text-green-400 border border-green-500/25 rounded-lg px-3 py-1.5 text-xs font-medium transition">Approve</button>
@@ -716,6 +716,11 @@ export default function GovernancePage() {
                           <button onClick={() => handleVote(p.id, "abstain")} className="bg-neutral-500/15 hover:bg-neutral-500/25 text-neutral-600 dark:text-neutral-400 border border-neutral-500/25 rounded-lg px-3 py-1.5 text-xs font-medium transition">Abstain</button>
                           {voteMsg[p.id] && <span className="text-xs text-neutral-600 dark:text-neutral-400">{voteMsg[p.id]}</span>}
                         </div>
+                      )}
+
+                      {/* Voting ended notice */}
+                      {detail.status === "active" && detail.votingDeadline && detail.votingDeadline <= Date.now() && (
+                        <p className="text-xs text-neutral-500">Voting period has ended.</p>
                       )}
 
                       {/* Approved banner */}
