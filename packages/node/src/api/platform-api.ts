@@ -227,6 +227,24 @@ export async function registerPlatformRoutes(
         return { status: 'ok', threadId, reply, tier: 'simple' };
       }
 
+      if (classification.intent === 'feedback') {
+        // User is suggesting an improvement or feature — create a board task
+        const adapter = node.getEngineAdapter();
+        const targetTeam = classification.targetProject || 'pando-infra';
+        const taskTitle = `[FEATURE:user] ${(classification.description || trimmed).slice(0, 120)}`;
+        const taskId = adapter?.addTeamBoardTask(targetTeam, taskTitle, trimmed.slice(0, 500));
+        const reply = taskId
+          ? `Thanks for the suggestion! I've added it to the team's board for review. Task: ${taskId}`
+          : `Thanks for the feedback! The team will review your suggestion on the next tick.`;
+        threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
+        if (threadStore) {
+          threadStore.createThread(threadId, trimmed.slice(0, 50), 'conversation', '', chatUserId);
+          await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'simple' });
+          await threadStore.addMessage(threadId, { role: 'assistant', content: reply, timestamp: Date.now(), tier: 'simple' });
+        }
+        return { status: 'ok', threadId, reply, tier: 'simple' };
+      }
+
       // Intent is 'build' — unified routing: always create project, find best PandoTeams peer
       const builder = findBestBuilder();
       if (!builder) {
@@ -675,6 +693,30 @@ export async function registerPlatformRoutes(
         }
         await threadStore.addMessage(id, { role: 'assistant', content: doormanReply, timestamp: Date.now(), tier: 'simple' });
         return { status: 'ok', threadId: id, reply: doormanReply, tier: 'simple' };
+      }
+
+      if (classification.intent === 'report' || classification.intent === 'feedback') {
+        // User is reporting a bug or providing feedback in an existing thread
+        const adapter = node.getEngineAdapter();
+        const targetTeam = classification.targetProject || 'pando-infra';
+        const isBug = classification.intent === 'report' && /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(plaintextForProcessing);
+        const tag = isBug ? 'BUG' : 'FEATURE';
+        const taskTitle = `[${tag}:user] ${(classification.description || plaintextForProcessing).slice(0, 120)}`;
+        const taskId = adapter?.addTeamBoardTask(targetTeam, taskTitle, plaintextForProcessing.slice(0, 500));
+        const reply = classification.intent === 'report'
+          ? (taskId ? `Thanks for the report! I've added it to the team's board. Task: ${taskId}` : `Thanks for the report. The team will review it on the next tick.`)
+          : (taskId ? `Thanks for the suggestion! I've added it to the team's board for review. Task: ${taskId}` : `Thanks for the feedback! The team will review your suggestion on the next tick.`);
+        if (isEncrypted && threadMeta?.encryptionKeys) {
+          try {
+            const encReply = await deps.encryptOutgoingMessage(reply, threadMeta, encryptedThreadKey);
+            await threadStore.addMessage(id, { role: 'assistant', content: encReply.ciphertext, timestamp: Date.now(), tier: 'simple', encrypted: true, nonce: encReply.nonce });
+            return { status: 'ok', threadId: id, reply: encReply.ciphertext, tier: 'simple', encrypted: true, nonce: encReply.nonce };
+          } catch (err: any) {
+            console.warn(`[api] Failed to encrypt report/feedback reply: ${err.message}`);
+          }
+        }
+        await threadStore.addMessage(id, { role: 'assistant', content: reply, timestamp: Date.now(), tier: 'simple' });
+        return { status: 'ok', threadId: id, reply, tier: 'simple' };
       }
 
       // Build request — unified routing: create project, find best PandoTeams peer

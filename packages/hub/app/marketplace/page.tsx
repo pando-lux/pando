@@ -278,8 +278,6 @@ export default function MarketplacePage() {
     setPage(1);
   }, [search, statusFilter]);
 
-  const totalPages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
-
   /* -- Client-side filtering -------------------------------- */
 
   /* Base filtered = dedup + test filter + search (no status filter yet) */
@@ -327,6 +325,11 @@ export default function MarketplacePage() {
     if (statusFilter === "all") return baseFiltered;
     return baseFiltered.filter((p) => p.status === statusFilter);
   }, [baseFiltered, statusFilter]);
+
+  // When client-side search/filter is active, pagination reflects filtered results
+  const totalPages = search.trim()
+    ? Math.max(1, Math.ceil(filteredProjects.length / PAGE_SIZE))
+    : Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
 
   const featuredProjects = useMemo(
     () => filteredProjects.filter((p) => p.visibility === "featured"),

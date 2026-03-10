@@ -8,7 +8,7 @@ interface Peer { peerId: string; balance: number; connectedAt: number }
 interface Transaction { id: string; from: string; to: string; amount: number; type: string; timestamp: number; fee?: number }
 
 export default function WalletPage() {
-  const { user, loading: authLoading, token } = useAuth();
+  const { user, loading: authLoading, token, isClaimed } = useAuth();
   const [peers, setPeers] = useState<Peer[]>([]);
   const [txns, setTxns] = useState<Transaction[]>([]);
   const [recipient, setRecipient] = useState("");
@@ -115,6 +115,16 @@ export default function WalletPage() {
       <NavBar />
       <main className="max-w-5xl mx-auto p-6 space-y-6">
         <h1 className="text-2xl font-bold text-neutral-900 dark:text-neutral-100">Wallet</h1>
+
+        {!authLoading && !isClaimed && (
+          <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-8 text-center space-y-3">
+            <p className="text-neutral-600 dark:text-neutral-400">Sign in to view your balance, send Lux, and see your transaction history.</p>
+            <div className="flex items-center justify-center gap-3">
+              <a href="/login" className="px-4 py-2 bg-amber-500 text-white rounded-lg text-sm font-medium hover:bg-amber-600 transition-colors">Login</a>
+              <a href="/register" className="px-4 py-2 bg-neutral-200 dark:bg-neutral-800 text-neutral-700 dark:text-neutral-300 rounded-lg text-sm font-medium hover:bg-neutral-300 dark:hover:bg-neutral-700 transition-colors">Sign up</a>
+            </div>
+          </div>
+        )}
 
         {/* Balance */}
         <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-6 text-center">

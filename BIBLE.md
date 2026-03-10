@@ -67,6 +67,239 @@ Teams Web UI (workspace) = where work happens
   - This is THE interface for building and chatting
 ```
 
+### 1.3 The End State — When Nobody Is Needed
+
+The end state is: **no external agents, no ops, no lead, no dev.** Jai and any user become OBSERVERS of a system that improves itself.
+
+```
+How it works (end state):
+
+1. SUGGESTION INTAKE (see Section 1.6 for full UX spec)
+   - Anyone (Jai, users, other nodes) submits suggestions via:
+     - Hub chat ("I think the governance page should show vote history")
+     - Teams Web UI feedback queue (structured ticket, not direct chat)
+     - API (POST /v1/teams/pando-infra/board)
+   - Doorman classifies: bug report, feature request, build request, or feedback
+
+2. APPROVAL LAYER
+   - Not every suggestion should be acted on
+   - Manager evaluates: Is this feasible? Safe? Aligned with the vision?
+   - Low-risk (bug fix, docs): auto-approve → board task
+   - Medium-risk (new feature, refactor): queue for governance vote
+   - High-risk (architecture change, breaking): require human approval (Jai)
+   - Spam/bad suggestions: reject with explanation
+
+3. EXECUTION
+   - pando-infra lead picks up approved board tasks
+   - Analyzes → plans → writes code → tests → commits via governance
+   - Watchdog auto-deploys across all nodes
+   - Observer/QA verify the change worked
+
+4. USER PROJECT TEAMS (the actual product)
+   - User says "build me X" → doorman creates project + team
+   - Manager agent is the CEO of that team
+   - Manager plans, delegates, monitors — NOT a builder
+   - For simple projects: manager builds solo (faster)
+   - For complex projects: manager spawns builder/tester agents
+   - Manager asks user for approval on big changes
+   - Manager fixes bugs autonomously (no user approval needed)
+   - App auto-deploys → user gets shareable URL
+   - User can send follow-ups → routes to same manager
+```
+
+**Two Types of Teams, Two Behaviors:**
+
+| Aspect | pando-infra (system team) | User project teams |
+|--------|--------------------------|-------------------|
+| Purpose | Maintain & evolve the system | Build what users ask for |
+| Autonomy | High — fixes bugs without asking | Conservative — asks user for big changes |
+| Bug fixes | Autonomous | Autonomous |
+| New features | Proposes via governance | Asks user first |
+| Manager role | Ops-like (strategic, proactive) | CEO-like (plans, delegates, reports) |
+| Team scaling | Fixed (lead, observer, QA, explorer) | Dynamic (manager spawns agents as needed) |
+| Lifecycle | Permanent | Per-project (active → archived) |
+
+**Manager-as-CEO (user project teams):**
+
+The manager's PRIMARY role is team management and strategic planning — exactly what the ops agent does today for external agents. The manager should:
+- Analyze the request and assess complexity
+- For simple (<50 lines): build directly (speed > delegation overhead)
+- For medium (50-500 lines): create a plan with board subtasks, build sequentially
+- For complex (>500 lines): spawn builder agents, assign files/features, monitor progress
+- Select team templates based on project type (full-stack, API, data, mobile, devops)
+- Learn from past projects in the same workspace (patterns, preferences)
+- Report progress to the user at natural milestones
+- Ask for approval on architecture decisions, auto-fix bugs
+- Deploy and deliver without being asked
+
+**The Transition Path (current → end state):**
+
+```
+NOW:     External ops/lead/dev drive everything. Internal team is maintenance crew.
+NEXT:    External agents become observers. Internal team handles suggestions.
+THEN:    Users submit suggestions directly. No external agents needed.
+FINALLY: Multiple nodes, each with internal teams, coordinating via governance.
+```
+
+### 1.4 Test Scenarios — The Product Must Pass These
+
+These scenarios define "done." Each must work end-to-end from the hub.
+
+**Scenario 1: Simple App (hub → build → deploy → marketplace)**
+```
+1. User opens hub chat, types "Build me a todo app"
+2. Doorman classifies as build intent, tier 1 (static)
+3. Project created, team registered, manager spawned
+4. Manager builds solo (quick task, <50 lines threshold)
+5. Streaming progress visible in hub chat
+6. App auto-deploys → user gets live URL in chat
+7. App appears in marketplace with deployment data
+8. Total time: <2 minutes
+```
+STATUS: MOSTLY WORKING (tested Phase D). Gap: marketplace auto-listing untested from hub.
+
+**Scenario 2: Complex App (hub → plan → spawn agents → build → test → deploy)**
+```
+1. User types "Build me a restaurant website with menu, about, contact, and gallery pages"
+2. Doorman classifies as build, tier 1
+3. Manager analyzes: complex (>50 lines, multiple pages)
+4. Manager creates plan with board subtasks
+5. Manager spawns builder agent(s) for parallel work
+6. Progress streamed to user throughout
+7. Manager runs verification (npm build passes)
+8. Auto-deploy → live URL → marketplace
+```
+STATUS: UNTESTED. Manager prompt supports this but spawning never triggered.
+
+**Scenario 3: Follow-up Message (conversation continuity)**
+```
+1. After Scenario 1 or 2, user types "Add dark mode" in same chat
+2. Message routes to the SAME project manager
+3. Manager modifies existing code in same workspace
+4. Re-deploys updated app
+5. User sees updated URL
+```
+STATUS: PARTIALLY WORKING (workspace continuity tested). Gap: 'project' intent routing may be broken.
+
+**Scenario 4: System Suggestion (user → pando-infra)**
+```
+1. User types "The governance page should show vote counts"
+2. Doorman classifies as report/suggestion
+3. Board task created on pando-infra team
+4. Internal lead picks up on next tick
+5. Analyzes, writes fix, commits via governance
+6. Watchdog deploys
+7. User can verify the change in their browser
+```
+STATUS: PARTIALLY WORKING (board task → fix → deploy proven). Gap: no web-facing suggestion intake.
+
+**Scenario 5: Multi-node Deployment**
+```
+1. Fix committed on node A
+2. Governance approves
+3. All nodes pull the update
+4. Observer on each node verifies
+```
+STATUS: PROVEN for 2 EC2 nodes. Gap: EC2 nodes behind on recent commits.
+
+### 1.5 Known Gaps to End State
+
+| # | Gap | Severity | What exists | What's missing |
+|---|-----|----------|-------------|----------------|
+| 1 | No external hosting | HIGH | Tier 1 local deploy works | S3/Vercel config for shareable URLs |
+| 2 | Cross-thread follow-up | MEDIUM | Same-thread follow-ups WORK (projectId in ThreadMeta, skips doorman) | New-chat follow-ups can't detect "which project?" — doorman has 'project' intent defined but never implemented (api-server.ts:680) |
+| 3 | Feedback intake pipeline | HIGH | Board task API works, doorman classifies | Doorman needs FEEDBACK intent → board task route |
+| 4 | Feedback status UI | MEDIUM | Board task lifecycle exists | Teams Web UI needs user-facing ticket view |
+| 4b | Approval layer | MEDIUM | Governance exists | No risk-based triage in manager prompt |
+| 4c | System Council read-only view | MEDIUM | Teams Web UI shows pando-infra | Input should be hidden, activity feed only |
+| 5 | Agent spawning untested | MEDIUM | manage_team tool + templates exist | Never triggered by a real complex request |
+| 6 | Manager doesn't scale teams | MEDIUM | Prompt says to spawn builders | Decision logic untested |
+| 7 | No project dedup | LOW | Apps filter hides duplicates | Same prompt creates multiple projects |
+| 8 | EC2 nodes behind | LOW | Pull mechanism works | Need to sync to latest commits |
+| 9 | No team archival | LOW | Teams stay active forever | No cleanup for completed projects |
+| 10 | No cross-project learning | LOW | Each project starts fresh | Manager doesn't learn from past builds |
+
+### 1.6 User Interaction Model — How People Use Pando
+
+Everything enters through one place: **Hub Chat (doorman).** Doorman classifies and routes.
+
+```
+User types message in Hub Chat
+  │
+  ├── BUILD intent ("Build me a todo app")
+  │   → Creates project + team
+  │   → User redirected to Teams Web UI to watch/chat with their project manager
+  │   → Follow-ups in same thread route to same manager
+  │
+  ├── QUERY intent ("What is my balance?")
+  │   → Doorman answers instantly in hub (no team needed)
+  │
+  ├── FEEDBACK intent ("The search page is broken" / "I suggest adding X")
+  │   → Creates a feedback ticket on pando-infra board
+  │   → User sees ticket status: Submitted → Reviewing → Accepted → In Progress → Done
+  │   → Internal team manager triages (accept/reject/governance-vote)
+  │
+  └── TRANSACTIONAL ("Send 5 Lux to Alice")
+      → Doorman handles directly
+```
+
+**Teams Web UI — Three Views:**
+
+| View | Who sees it | Can message? | Purpose |
+|------|------------|-------------|---------|
+| My Projects | Any user | YES — iterate with project manager | Build apps, send follow-ups, watch progress |
+| System Council | Any user | NO — read-only activity feed | Observe pando-infra at work (transparency) |
+| Feedback Queue | Any user | Submit new + track existing | See status of suggestions/bug reports |
+
+**Why feedback is a BOARD, not a chat:**
+- Chat doesn't scale to hundreds of suggestions
+- Users need status tracking ("is my suggestion being worked on?")
+- Manager needs to batch, prioritize, deduplicate
+- Board tasks already have the right lifecycle (pending → active → done)
+- A feedback ticket IS a board task with a user-facing status view
+
+**Feedback Triage (pando-infra manager decides):**
+
+| Feedback type | Risk | Manager action |
+|---------------|------|---------------|
+| Bug report | Low | Auto-accept → board task → internal lead fixes |
+| Minor suggestion | Low | Accept → board task |
+| Feature request | Medium | Queue for governance vote |
+| Architecture change | High | Flag for human review |
+| Spam / nonsensical | None | Reject with explanation |
+| Duplicate | None | Merge with existing ticket |
+
+**At Scale (hundreds of requests):**
+- Queue with auto-prioritization (bugs > features > suggestions)
+- Rate limiting per user (configurable, e.g. 5/day)
+- Stale suggestions auto-expire (30 days)
+- Duplicate detection before creating tickets
+- Manager reviews batches, not one-at-a-time
+
+**UX Questions (proactively answered):**
+
+| Question | Answer |
+|----------|--------|
+| New user lands on hub? | Dashboard: "Build something" CTA, active projects, marketplace highlights |
+| Why trust AI-built apps? | Visible test results, "QA passed" badge, source code viewable |
+| Build fails? | Manager explains failure, suggests fixes, offers retry |
+| Modify deployed app? | Follow-up message → same manager → re-deploys (Scenario 3) |
+| Collaborate with others? | Invite collaborator → both can message project team |
+| Cost? | Building costs Lux. Simple: 1-5 Lux. Complex: 10-50 Lux. Earn by contributing nodes. |
+| App quality on marketplace? | QA review before listing. User ratings. Report mechanism. |
+| Roll back to previous version? | Deployment history with rollback button |
+| Delete my app? | User deletes from project settings → removes from marketplace + hosting |
+
+**What's Needed to Make External Agents (ops/lead/dev) Fully Redundant:**
+
+1. **Feedback intake pipeline** — doorman FEEDBACK intent → board task (code change)
+2. **User-facing feedback status UI** — Teams Web UI shows ticket lifecycle (UI change)
+3. **Approval layer in manager prompt** — risk-based triage logic (prompt change)
+4. **System Council read-only view** — Teams Web UI pando-infra tab, no input (UI change)
+5. **Follow-up routing** — existing thread messages reach same project manager (code fix)
+
+Once these 5 are built, anyone (including Jai) interacts with Pando the same way: through the hub, as a user. No special access, no external agents, no terminal sessions.
+
 ---
 
 ## 2. THE PACKAGES

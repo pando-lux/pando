@@ -98,8 +98,11 @@ export default function SearchPage() {
 
         {/* Error */}
         {error && (
-          <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4">
-            <p className="text-sm text-red-400">{error}</p>
+          <div className="bg-red-500/10 border border-red-500/20 rounded-xl p-4 space-y-2">
+            <p className="text-sm text-red-400">{error.replace(/via \/contribute\.?/gi, "").replace(/Contribute an API key/i, "Contribute an API key to enable search.")}</p>
+            {/resource|contribute|API key/i.test(error) && (
+              <a href="/resources" className="inline-block text-xs text-amber-500 hover:text-amber-400 transition-colors">Contribute resources →</a>
+            )}
           </div>
         )}
 

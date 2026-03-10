@@ -432,7 +432,7 @@ export default function GovernancePage() {
             <h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">Proposals</h2>
             {stats && (
               <span className="text-[10px] text-neutral-500 font-mono">
-                {stats.totalProposals} proposal{stats.totalProposals !== 1 ? "s" : ""}
+                {(search.trim() || statusFilter !== "all") ? filteredProposals.length : stats.totalProposals} proposal{((search.trim() || statusFilter !== "all") ? filteredProposals.length : stats.totalProposals) !== 1 ? "s" : ""}
               </span>
             )}
           </div>

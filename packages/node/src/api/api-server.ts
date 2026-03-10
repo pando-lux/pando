@@ -678,7 +678,7 @@ export class ApiServer {
    * - 'project' — existing project message → route to project manager
    */
   private async doormanClassify(message: string, userPeerId?: string): Promise<{
-    intent: 'simple' | 'question' | 'build' | 'project' | 'report';
+    intent: 'simple' | 'question' | 'build' | 'project' | 'report' | 'feedback';
     response?: string;
     tier?: number;
     description?: string;
@@ -701,6 +701,13 @@ export class ApiServer {
         ((reportPatterns.test(message) && networkPatterns.test(message)) ||
          (featurePatterns.test(message) && networkPatterns.test(message)))) {
       return { intent: 'report', description: message.slice(0, 200), targetProject: 'pando-infra' };
+    }
+
+    // ── Feedback fast-path: user suggestions, ideas, feature requests ──
+    // These become board tasks tagged [FEATURE:user] on pando-infra.
+    const feedbackPatterns = /\b(suggest(ion)?s?|idea|feedback|feature\s*request|would be nice|could you add|you should|it would be great|please add|how about|what if you|wish|improve|enhancement)\b/i;
+    if (!isInformational && feedbackPatterns.test(message)) {
+      return { intent: 'feedback', description: message.slice(0, 200), targetProject: 'pando-infra' };
     }
 
     // ── Deterministic fast-path (zero cost, instant) ──────────────────────
@@ -754,12 +761,14 @@ Classify the user's message into ONE of these categories and respond with ONLY v
 
 1. "question" — general question, small talk, greeting, asking about Pando, status updates, informational messages (e.g. "the issue has been resolved", "encryption is working now"). You answer it directly.
 2. "build" — user is EXPLICITLY requesting something NEW to be built (app, website, tool, game, etc). They must be asking you to create/build/make something. Informational messages about existing work are NOT build requests.
-3. "report" — user is ACTIVELY reporting a current bug, requesting a feature, or flagging a problem. Past-tense statements like "the bug was fixed" or "the error is gone" are NOT reports — those are informational (classify as "question").
+3. "report" — user is ACTIVELY reporting a current bug or flagging a problem that is currently happening. Past-tense statements like "the bug was fixed" or "the error is gone" are NOT reports — those are informational (classify as "question").
+4. "feedback" — user is making a suggestion, feature request, idea, or general improvement feedback. They're not reporting a bug (use "report") or asking to build something specific (use "build"). Examples: "you should add dark mode", "it would be nice if...", "I have a suggestion", "what if you added..."
 
 JSON format:
 For questions: {"intent":"question","response":"<your friendly answer, 1-3 sentences>"}
 For builds: {"intent":"build","description":"<what they want built, 1 sentence>","tier":<1 or 2>}
 For reports: {"intent":"report","description":"<what the issue/suggestion is, 1 sentence>","targetProject":"pando-infra"}
+For feedback: {"intent":"feedback","description":"<what the suggestion/idea is, 1 sentence>","targetProject":"pando-infra"}
 
 Tier rules:
 - Tier 1: Pure static apps (portfolio, landing page, simple form with no backend). HTML/CSS/JS only, no server.
@@ -795,6 +804,9 @@ Be friendly and helpful. Keep answers short.`
               }
               if (parsed.intent === 'report' && parsed.description) {
                 return { intent: 'report', description: parsed.description, targetProject: parsed.targetProject || 'pando-infra' };
+              }
+              if (parsed.intent === 'feedback' && parsed.description) {
+                return { intent: 'feedback', description: parsed.description, targetProject: parsed.targetProject || 'pando-infra' };
               }
               // AI returned valid JSON but with incomplete/unexpected fields — treat as question
               console.warn(`[doorman] AI returned unrecognized classification: ${JSON.stringify(parsed).slice(0, 200)}`);
@@ -840,6 +852,12 @@ Be friendly and helpful. Keep answers short.`
     const reportFallback = /\b(bug|broken|not working|crashes?|error|outage|regression|report)\b/i;
     if (!isInformational && reportFallback.test(message)) {
       return { intent: 'report', description: message.slice(0, 200), targetProject: 'pando-infra' };
+    }
+
+    // Feedback fallback: suggestions, ideas, feature requests → board task on pando-infra
+    const feedbackFallback = /\b(suggest(ion)?s?|idea|feedback|feature\s*request|would be nice|could you add|you should|it would be great|please add|how about|what if you|wish|improvement|enhancement)\b/i;
+    if (!isInformational && feedbackFallback.test(message)) {
+      return { intent: 'feedback', description: message.slice(0, 200), targetProject: 'pando-infra' };
     }
 
     // Default: treat as a question. Action words like "fix", "update", "improve" appear
