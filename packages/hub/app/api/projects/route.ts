@@ -10,7 +10,23 @@ export async function GET(req: Request) {
   try {
     const token = extractToken(req) || undefined;
     const node = getNodeConnection();
-    const projects = await node.getProjects(token);
+    if (token) {
+      // Fetch user's projects AND all public/listed projects, then merge
+      const [userProjects, allProjects] = await Promise.all([
+        node.getProjects(token),
+        node.getProjects(),
+      ]);
+      const seen = new Set<string>();
+      const merged: any[] = [];
+      for (const p of userProjects) {
+        if (p.id && !seen.has(p.id)) { seen.add(p.id); merged.push(p); }
+      }
+      for (const p of allProjects) {
+        if (p.id && !seen.has(p.id)) { seen.add(p.id); merged.push(p); }
+      }
+      return NextResponse.json({ projects: merged });
+    }
+    const projects = await node.getProjects();
     return NextResponse.json({ projects });
   } catch {
     return NextResponse.json({ projects: [] });

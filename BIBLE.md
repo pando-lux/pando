@@ -460,7 +460,7 @@ Reads from @pando/node HTTP API via NodePool. **ALL API routes use `'primary'` r
 
 | Component | File | Status | What it does |
 |---|---|---|---|
-| **PandoNetwork** | `kernel/network.ts` | DONE | libp2p: TCP, Noise, Yamux, GossipSub, Circuit Relay, KadDHT |
+| **PandoNetwork** | `kernel/network.ts` | DONE | libp2p: TCP, Noise, Yamux, GossipSub, Circuit Relay, KadDHT. **Important:** All `uint8ArrayFromString`/`uint8ArrayToString` calls must include explicit `'utf8'` encoding — without it, multi-byte UTF-8 chars (em-dashes, etc.) get corrupted during P2P broadcast. Fixed in commit `40423104`. |
 | **LedgerSync** | `kernel/sync.ts` | DONE | P2P ledger synchronization via GossipSub |
 | **Governance** | `kernel/governance.ts` | DONE | 6-layer security pipeline + AI review hook (see 5.4) |
 | **HealthMonitor** | `kernel/monitor.ts` | DONE | System health polling + alerts |
