@@ -566,6 +566,20 @@ function ChatPage() {
             isStreaming: true,
           }];
         });
+
+        // Safety timeout: if no SSE response arrives within 120s, show
+        // an error instead of leaving users in an infinite "Agent working..." state.
+        setTimeout(() => {
+          setMessages((prev) => {
+            const hasStreaming = prev.some((m) => m.isStreaming);
+            if (!hasStreaming) return prev; // Already resolved — nothing to do
+            return prev.map((m) =>
+              m.isStreaming
+                ? { ...m, content: "Your request may not have been processed. Try sending your message again.", isStreaming: false }
+                : m
+            );
+          });
+        }, 120_000);
       } else if (data.reply) {
         // Quick-tier or direct response — show inline
         // Phase 41: Decrypt the response if it's encrypted
