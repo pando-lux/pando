@@ -29,6 +29,31 @@ const TEAMS_PORT        = 4873;
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const ts = () => new Date().toISOString();
 
+/**
+ * Kill a child process and its entire process tree.
+ * On Windows, shell:true spawns cmd.exe wrappers — SIGINT only kills the shell,
+ * not grandchild processes. taskkill /F /T kills the entire tree.
+ */
+function killProcessTree(proc: ChildProcess): void {
+  if (!proc.pid) return;
+
+  if (process.platform === 'win32') {
+    try {
+      execSync(`taskkill /F /T /PID ${proc.pid}`, {
+        stdio: 'pipe', windowsHide: true, timeout: 10_000,
+      });
+      return;
+    } catch { /* process may already be dead — fall through */ }
+  }
+
+  // Unix: kill process group if possible, else direct signal
+  try {
+    process.kill(-proc.pid, 'SIGINT');
+  } catch {
+    try { proc.kill('SIGINT'); } catch { /* already dead */ }
+  }
+}
+
 // Resolve API port from CLI args or env, matching cli.ts logic
 function resolveApiPort(): number {
   const args = process.argv.slice(2);
@@ -106,6 +131,18 @@ function spawnNode(): ChildProcess {
   return proc;
 }
 
+function resolveTsxCli(teamsPath: string): string | null {
+  // Try to find tsx CLI entry point directly — avoids shell:true on Windows
+  const candidates = [
+    join(teamsPath, 'node_modules', 'tsx', 'dist', 'cli.mjs'),
+    join(teamsPath, 'node_modules', 'tsx', 'dist', 'cli.js'),
+  ];
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return null;
+}
+
 function spawnTeams(): ChildProcess | null {
   if (!TEAMS_PATH) {
     console.warn(`[supervisor ${ts()}] Cannot start Teams — path not found. Use --teams-path or set PANDO_TEAMS_PATH`);
@@ -114,18 +151,35 @@ function spawnTeams(): ChildProcess | null {
   const serverEntry = join(TEAMS_PATH, 'packages', 'server', 'src', 'index.ts');
   console.log(`[supervisor ${ts()}] Spawning Teams (port ${TEAMS_PORT})`);
   const apiPort = resolveApiPort();
-  const proc = spawn('npx', ['tsx', serverEntry, '--port', String(TEAMS_PORT)], {
-    cwd: TEAMS_PATH,
-    stdio: 'inherit',
-    windowsHide: true,
-    shell: true,
-    env: {
-      ...process.env,
-      PANDO_NODE_URL: process.env.PANDO_NODE_URL || `http://127.0.0.1:${apiPort}`,
-      PANDO_NODE_PATH: process.env.PANDO_NODE_PATH || resolve(__dirname, '..', '..', '..'),
-      PANDO_API_TOKEN: process.env.PANDO_API_TOKEN || readTokenFile(),
-    },
-  });
+  const teamsEnv = {
+    ...process.env,
+    PANDO_NODE_URL: process.env.PANDO_NODE_URL || `http://127.0.0.1:${apiPort}`,
+    PANDO_NODE_PATH: process.env.PANDO_NODE_PATH || resolve(__dirname, '..', '..', '..'),
+    PANDO_API_TOKEN: process.env.PANDO_API_TOKEN || readTokenFile(),
+  };
+
+  // Prefer direct tsx CLI resolution (no shell wrapper = no orphan problem)
+  const tsxCli = resolveTsxCli(TEAMS_PATH);
+  let proc: ChildProcess;
+  if (tsxCli) {
+    console.log(`[supervisor ${ts()}] Using direct tsx CLI: ${tsxCli}`);
+    proc = spawn(process.execPath, [tsxCli, serverEntry, '--port', String(TEAMS_PORT)], {
+      cwd: TEAMS_PATH,
+      stdio: 'inherit',
+      windowsHide: true,
+      env: teamsEnv,
+    });
+  } else {
+    // Fallback: npx tsx — needs shell on Windows, but killProcessTree handles cleanup
+    console.warn(`[supervisor ${ts()}] tsx CLI not found, falling back to npx tsx (shell:true)`);
+    proc = spawn('npx', ['tsx', serverEntry, '--port', String(TEAMS_PORT)], {
+      cwd: TEAMS_PATH,
+      stdio: 'inherit',
+      windowsHide: true,
+      shell: true,
+      env: teamsEnv,
+    });
+  }
   proc.on('exit', onTeamsExit);
 
   // Write .build-commit so the unified watchdog can detect future code changes
@@ -210,8 +264,8 @@ function onTeamsExit(code: number | null, signal: string | null): void {
 function gracefulShutdown(signal: string): void {
   stopping = true;
   console.log(`[supervisor ${ts()}] ${signal} received — shutting down.`);
-  if (child) child.kill('SIGINT');
-  if (teamsChild) teamsChild.kill('SIGINT');
+  if (child) killProcessTree(child);
+  if (teamsChild) killProcessTree(teamsChild);
   setTimeout(() => process.exit(0), 3_000);
 }
 
@@ -502,27 +556,27 @@ async function initTray(): Promise<void> {
         if (!child) { child = spawnNode(); refreshTray(); }
       }
       else if (seq === IDX.RESTART_NODE) {
-        if (child) child.kill('SIGINT');
+        if (child) killProcessTree(child);
       }
       else if (seq === IDX.STOP_NODE) {
         userStopped = true;
-        if (child) child.kill('SIGINT');
+        if (child) killProcessTree(child);
       }
       // Teams controls
       else if (seq === IDX.START_TEAMS) {
         if (!teamsChild) { teamsChild = spawnTeams(); refreshTray(); }
       }
       else if (seq === IDX.RESTART_TEAMS) {
-        if (teamsChild) teamsChild.kill('SIGINT');
+        if (teamsChild) killProcessTree(teamsChild);
       }
       else if (seq === IDX.STOP_TEAMS) {
         teamsUserStopped = true;
-        if (teamsChild) teamsChild.kill('SIGINT');
+        if (teamsChild) killProcessTree(teamsChild);
       }
       else if (seq === IDX.QUIT) {
         stopping = true;
-        if (child) child.kill('SIGINT');
-        if (teamsChild) teamsChild.kill('SIGINT');
+        if (child) killProcessTree(child);
+        if (teamsChild) killProcessTree(teamsChild);
         setTimeout(() => process.exit(0), 3_000);
       }
     } catch { /* ignore */ }
@@ -555,7 +609,7 @@ function buildAppRegistry(): AppEntry[] {
       watchDirs: ['packages/node/', 'packages/shared/', 'packages/mcp-server/'],
       mode: 'governed',
       getChild: () => child,
-      killChild: () => { if (child) child.kill('SIGINT'); },
+      killChild: () => { if (child) killProcessTree(child); },
     },
   ];
 
@@ -567,7 +621,7 @@ function buildAppRegistry(): AppEntry[] {
       watchDirs: ['packages/server/', 'packages/core/'],
       mode: 'governed',
       getChild: () => teamsChild,
-      killChild: () => { if (teamsChild) teamsChild.kill('SIGINT'); },
+      killChild: () => { if (teamsChild) killProcessTree(teamsChild); },
     });
   }
 
