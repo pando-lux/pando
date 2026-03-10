@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-10 (Section 1.7.1 added: "Where Does This Live?" architectural gate — mandatory pre-flight for all agents. Section 3.2.8.1: unification directive. Auth claim root cause found: guest accounts lost after restart, SQLite UPDATE on nonexistent row. 56 gaps found. Internal team stopped pending architecture migration). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-10 (Section 1.8 added: Unified Session Model — doorman IS the team lead, every conversation = team, multi-user queue model. Sections 1.2, 1.6 updated to match. P0 bug: user teams don't auto-start post-migration). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -54,17 +54,17 @@ External agents (lead/dev/ops in pando/lead, pando/dev, pando/ops) exist to:
 Hub (portal) = the front door
   - Lightweight. Clean. Not confusing.
   - Shows: dashboard, marketplace, governance, wallet
-  - For chat: routes to teams web UI
-  - Doorman classifies: simple question (Path A) or build request (Path B) or report/feedback (Path C)
-  - Path A: lightweight back-and-forth using contributed API key
-  - Path B: creates a team → user directed to teams web UI
-  - Path C: bug report or feature request → board task on pando-infra team
+  - Hub chat routes to the "node" team's lead (see Section 1.8)
+  - The lead (not a separate doorman) handles everything:
+    - Simple queries → answers directly
+    - Build requests → creates project team, hands off
+    - Feedback/bugs → board task on pando-infra
 
 Teams Web UI (workspace) = where work happens
-  - Every project gets a default team with a manager session
+  - Every project gets a default team with a manager (lead) session
   - Session names reflect the project: "hub-manager", "bakery-website-manager"
   - Users see their teams, sessions, agents, board tasks
-  - Even the doorman/hub itself gets a team
+  - The node team handles hub-level chat (the receptionist)
   - This is THE interface for building and chatting
 ```
 
@@ -222,26 +222,38 @@ STATUS: PROVEN for 2 EC2 nodes. Gap: EC2 nodes behind on recent commits.
 
 ### 1.6 User Interaction Model — How People Use Pando
 
-Everything enters through one place: **Hub Chat (doorman).** Doorman classifies and routes.
+Everything enters through team leads. The "node" team lead is the receptionist. See **Section 1.8** for the unified session model.
 
 ```
-User types message in Hub Chat
+User types message in Hub Chat → Node team lead responds
   │
   ├── BUILD intent ("Build me a todo app")
-  │   → Creates project + team
-  │   → User redirected to Teams Web UI to watch/chat with their project manager
-  │   → Follow-ups in same thread route to same manager
+  │   → Lead creates project + team in Teams Server
+  │   → User redirected to Teams Web UI to chat with their project's lead
+  │   → Follow-ups in same thread route to same project lead
   │
-  ├── QUERY intent ("What is my balance?")
-  │   → Doorman answers instantly in hub (no team needed)
+  ├── QUERY intent ("What is my balance?" / "How are you?")
+  │   → Lead answers instantly (no team creation, no work queue)
   │
   ├── FEEDBACK intent ("The search page is broken" / "I suggest adding X")
-  │   → Creates a feedback ticket on pando-infra board
+  │   → Lead creates a board task on pando-infra team
   │   → User sees ticket status: Submitted → Reviewing → Accepted → In Progress → Done
-  │   → Internal team manager triages (accept/reject/governance-vote)
+  │   → pando-infra lead triages (accept/reject/governance-vote)
   │
   └── TRANSACTIONAL ("Send 5 Lux to Alice")
-      → Doorman handles directly
+      → Lead handles directly
+
+User opens Project workspace → Project team lead responds
+  │
+  ├── INFO ("What does this app do?" / "Do I have an account?")
+  │   → Lead answers from project context (no work queue)
+  │
+  ├── WORK ("Add dark mode" / "Fix the login bug")
+  │   → Lead adds board task, responds "queued, position #N"
+  │   → Processes board tasks sequentially (or spawns agents)
+  │
+  └── STATUS ("What's the progress?")
+      → Lead reads board state, reports current status
 ```
 
 **Teams Web UI — Three Views:**
@@ -428,6 +440,87 @@ Teams Web UI (port 5173) talks to Teams Server (port 4873) ONLY. Never to Node (
 **Why this rule exists:** In early 2026, external agents independently built team management in BOTH Node (engine-adapter.ts) and Teams (core engine), creating 2800 lines of parallel systems with incompatible schemas. Nobody checked whether the other repo already had the feature. This rule prevents that from ever happening again.
 
 **Enforcement:** Lead agent validates dev's proposed approach BEFORE dev writes code. Dev includes the Section 1.7 citation in their INBOX response when proposing an approach. If dev skips this step, lead sends it back.
+
+### 1.8 Unified Session Model — Every Conversation Is a Team
+
+**Core principle: there is no separate "doorman." The doorman IS the team lead.**
+
+Every conversation in Pando belongs to a team. The team's lead agent acts as both the receptionist (answering questions) and the project manager (building things). There is no separate classification system — the lead naturally decides whether to answer directly or start building.
+
+```
+UNIFIED MODEL:
+
+Hub landing page chat → "node" team (the receptionist)
+  Lead handles: "what is pando?", "my balance?", "how are you?"
+  Lead detects build: "build me X" → creates project team, hands off
+  Lead detects feedback: "search is broken" → board task on pando-infra
+
+Project-specific chat → that project's team
+  Lead handles: "what does this app do?", "do I have an account?"
+  Lead detects work: "add dark mode" → plans + builds
+  Lead reports: "here's your update, deployed at <url>"
+
+pando-infra chat → system team
+  Lead handles: system maintenance, self-evolution
+  NOT user-facing (System Council is read-only view)
+```
+
+**Why this is better than a separate doorman:**
+- No classification step needed — the lead IS the context
+- Project leads know their project (can answer "what does this do?" without AI call)
+- One system, not two (doorman + team) with handoff friction
+- The lead already has board state, memory, tools — classification is natural
+- Scales: every team has the same interface (chat → lead → action)
+
+**Session Routing:**
+
+| User action | Routes to | Lead behavior |
+|------------|-----------|---------------|
+| Opens Hub chat | Node team lead | General Q&A, create projects, route feedback |
+| Opens project workspace | Project team lead | Project-specific Q&A, build, iterate |
+| Sends follow-up in thread | Same team lead | Continues conversation with context |
+| Visits System Council | Read-only view | No interaction (transparency only) |
+
+**Multi-User Concurrency — The Queue Model:**
+
+A project team may have many users talking to it simultaneously. 100 users might ask a popular project for updates. The lead can't process all at once.
+
+```
+INBOUND QUEUE:
+
+User A: "what does this do?"        → INSTANT (read-only, no work)
+User B: "add dark mode"             → QUEUED (requires work)
+User C: "what's the status?"        → INSTANT (read from board state)
+User D: "fix the login bug"         → QUEUED (requires work)
+User E: "add dark mode"             → DEDUPLICATED (same as User B)
+User F: "add dark mode please!!!!"  → DEDUPLICATED (same as User B)
+```
+
+**Lead's queue rules:**
+1. **Instant answers** — status, info, "what does this do?" → answer directly from context, no queue
+2. **Work requests** — build, fix, change → add to board as task, respond "queued, position #N"
+3. **Deduplication** — similar requests merge into one board task, all requesters notified
+4. **Priority** — bugs > features > suggestions. Critical bugs jump the queue.
+5. **One task at a time** — lead works board tasks sequentially (or spawns agents for parallel)
+6. **Progress updates** — all users following a task get notified when status changes
+7. **Rate limiting** — per-user limit (e.g., 5 requests/day) prevents spam
+
+**At scale (hundreds of users, dozens of projects):**
+- Each project team runs independently (isolated engines, isolated boards)
+- Node team handles routing only — lightweight, fast
+- Project teams scale horizontally across nodes (team handoff via P2P)
+- Board tasks are the universal work queue — same for pando-infra, same for user projects
+- Users track their requests via the board (not chat history)
+
+**Implementation status:**
+- ✅ **User teams auto-start** — commit `ba701a3`. Chat endpoint auto-creates team with lead-universal prompt on first message. Verified working.
+- ✅ **Board task PATCH endpoint** — commit `ba701a3`. Teams can mark tasks done/update progress.
+- ❌ **Doorman still separate** — classification logic in Node's api-server.ts (200+ lines). Should move to Teams Server as the node team's lead prompt.
+- ❌ **No multi-user queue** — current chat is 1:1 (one user, one team lead). No dedup, no rate limit.
+- ❌ **No cross-linking** — Hub creates project but doesn't link to Teams Web UI workspace.
+- ✅ **Board tasks work** — existing board system handles the queue concept (pending → active → done).
+- ✅ **Team architecture works** — TeamManager handles multi-team, multi-agent correctly.
+- ✅ **Prompt quality is good** — `makeUniversalLeadPrompt()` has 5-phase methodology.
 
 ---
 
@@ -1947,7 +2040,7 @@ BOARD RECOVERY (three sources, in priority order):
 
 #### 5.10.11 System Prompts and Engine Details
 
-Each agent gets a system prompt via `agentOverride` on `engine.send()`. Prompts are defined in seed configs (constants in engine-adapter.ts), NOT in a separate file.
+Each agent gets a system prompt via `agentOverride` on `engine.send()`. After Step 3 migration, prompts live in the Teams Server (`code/packages/server/src/prompts.ts`), resolved via `promptTemplate` field in agent config.
 
 **Frame behavior with agentOverride:** The override replaces only the stable layer (L0-2). All dynamic layers still flow: knowledge (L3 — memories), situation (L5b — team awareness, budget), goals (L5), conversation history. Board is NOT in the frame (PandoTeams Option B) — pando-node injects it in the tick message instead.
 
