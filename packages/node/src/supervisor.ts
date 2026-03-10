@@ -44,6 +44,13 @@ function resolveApiPort(): number {
   return 4000;
 }
 
+// Read API token from ~/.pando/api-token
+function readTokenFile(): string {
+  try {
+    return readFileSync(join(homedir(), '.pando', 'api-token'), 'utf-8').trim();
+  } catch { return ''; }
+}
+
 // Resolve pando-teams path from CLI args or auto-detect
 function resolveTeamsPath(): string | null {
   const args = process.argv.slice(2);
@@ -116,6 +123,7 @@ function spawnTeams(): ChildProcess | null {
       ...process.env,
       PANDO_NODE_URL: process.env.PANDO_NODE_URL || `http://localhost:${apiPort}`,
       PANDO_NODE_PATH: process.env.PANDO_NODE_PATH || resolve(__dirname, '..', '..', '..'),
+      PANDO_API_TOKEN: process.env.PANDO_API_TOKEN || readTokenFile(),
     },
   });
   proc.on('exit', onTeamsExit);

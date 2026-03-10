@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-10 (Section 1.8 added: Unified Session Model — doorman IS the team lead, every conversation = team, multi-user queue model. Sections 1.2, 1.6 updated to match. P0 bug: user teams don't auto-start post-migration). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-10 (Section 1.8: USM fully validated — all 5 intents working end-to-end via node-doorman team. Boot-at-startup, 120s timeout, auth fix applied. 10 internal team commits. Phase 2c security hardening documented). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -515,7 +515,9 @@ User F: "add dark mode please!!!!"  → DEDUPLICATED (same as User B)
 **Implementation status:**
 - ✅ **User teams auto-start** — commit `ba701a3`. Chat endpoint auto-creates team with lead-universal prompt on first message. Verified working.
 - ✅ **Board task PATCH endpoint** — commit `ba701a3`. Teams can mark tasks done/update progress.
-- ✅ **Doorman → node-doorman team** — classification moved from hardcoded regex in Node's api-server.ts to `node-doorman` team on Teams Server. Prompt-based classification via `makeNodeLeadPrompt()` in prompts.ts. Hub chat routes to `/teams/node-doorman/chat`, falls back to local doorman if Teams Server is unreachable. Hub client-side tier detection removed.
+- ✅ **Doorman → node-doorman team** — classification moved from hardcoded regex in Node's api-server.ts to `node-doorman` team on Teams Server. Prompt-based classification via `makeNodeLeadPrompt()` in prompts.ts. Hub chat routes to `/teams/node-doorman/chat`, falls back to local doorman if Teams Server is unreachable. Hub client-side tier detection removed. **All 5 intents validated end-to-end (9-20s): question, status, build, bug report, feedback.** Commits: f68dfb7, 45f50d5 (code), f354196e, 040d879f (node).
+- ✅ **Node-doorman boots at startup** — commit `45f50d5`. Boots alongside pando-infra in Teams Server index.ts. No cold-start on first request.
+- ✅ **120s timeout** — commit `040d879f`. AbortSignal.timeout increased from 60s to 120s for node-doorman route.
 - ❌ **No multi-user queue** — current chat is 1:1 (one user, one team lead). No dedup, no rate limit.
 - ❌ **No cross-linking** — Hub creates project but doesn't link to Teams Web UI workspace.
 - ✅ **Board tasks work** — existing board system handles the queue concept (pending → active → done).
