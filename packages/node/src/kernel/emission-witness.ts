@@ -107,6 +107,8 @@ export class EmissionWitness {
 
   // Anti-replay: track processed attestation keys to avoid double-counting
   private processedAttestations: Set<string> = new Set();
+  // Track locally proposed emissions (proposer is this node, recipient may differ)
+  private locallyProposed: Set<string> = new Set();
 
   // Stats
   private totalApproved = 0;
@@ -290,6 +292,7 @@ export class EmissionWitness {
     this.recordProposal(peerId);
 
     this.pending.set(proposal.id, proposal);
+    this.locallyProposed.add(proposal.id);
 
     // Broadcast to network
     await this.broadcastProposal(proposal);
@@ -497,6 +500,7 @@ export class EmissionWitness {
       proposal.status = 'rejected';
       this.totalRejected++;
       this.pending.delete(proposal.id);
+      this.locallyProposed.delete(proposal.id);
       this.history.push(proposal);
       if (this.history.length > MAX_HISTORY) {
         this.history.shift();
@@ -509,7 +513,8 @@ export class EmissionWitness {
     this.totalApproved++;
 
     // Only the proposing node actually mints the Lux
-    if (proposal.peerId === this.localPeerId && this.emitCallback) {
+    // Use locallyProposed set because proposal.peerId is the RECIPIENT (may differ from node peerId when a user is linked)
+    if (this.locallyProposed.has(proposal.id) && this.emitCallback) {
       try {
         const tx = this.emitCallback(proposal.peerId, proposal.workType, proposal.workProof);
         if (tx) {
@@ -529,6 +534,7 @@ export class EmissionWitness {
 
     // Move from pending to history
     this.pending.delete(proposal.id);
+    this.locallyProposed.delete(proposal.id);
     this.history.push(proposal);
     if (this.history.length > MAX_HISTORY) {
       this.history.shift();
@@ -663,6 +669,7 @@ export class EmissionWitness {
         proposal.status = 'expired';
         this.totalExpired++;
         this.pending.delete(id);
+        this.locallyProposed.delete(id);
         this.history.push(proposal);
         if (this.history.length > MAX_HISTORY) {
           this.history.shift();

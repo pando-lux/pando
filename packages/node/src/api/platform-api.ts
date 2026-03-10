@@ -218,7 +218,65 @@ export async function registerPlatformRoutes(
         return { status: 'ok', threadId, reply: 'PandoTeams peer did not respond. Try again.', tier: 'simple' };
       }
 
-      // No projectId — BIBLE 1.8: Route to node-doorman team on Teams Server.
+      // No projectId — detect build intent server-side (bypasses doorman hallucination).
+      // Build requests are handled deterministically; everything else goes to doorman.
+      const BUILD_VERBS = /\b(build|create|make|deploy|develop|code|write|generate)\b/i;
+      const APP_NOUNS = /\b(app|application|website|site|web|tool|dashboard|api|service|bot|game|page|calculator|todo|notes|counter|tracker|timer|clock|portfolio|blog|store|shop|chat|form|survey|quiz|poll|list|board|manager|widget|extension|plugin)\b/i;
+
+      if (BUILD_VERBS.test(trimmed) && APP_NOUNS.test(trimmed)) {
+        // Extract kebab-case project name from user message
+        const projectName = trimmed.toLowerCase()
+          .replace(/['']/g, '')
+          .replace(/\b(build|create|make|deploy|develop|code|write|generate|me|a|an|the|please|can|could|you|i|want|need|like|would|simple|basic|small|quick|just|for|with|that|this|some|my)\b/g, '')
+          .trim().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+          .slice(0, 50) || `project-${randomBytes(3).toString('hex')}`;
+
+        const ps = node.getProjectStore();
+        if (ps) {
+          try {
+            const ownerId = chatUserId || node.getIdentity()?.peerId || '';
+            const project = await ps.createProject({
+              id: projectName,
+              name: projectName,
+              description: trimmed,
+              ownerId,
+              type: 'private',
+              visibility: 'owner_only',
+            });
+
+            if (threadStore) {
+              threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
+              threadStore.createThread(threadId, trimmed.slice(0, 50), 'project', '', chatUserId);
+              threadStore.updateThread(threadId, { projectId: project.id });
+              await threadStore.addMessage(threadId, { role: 'user', content: trimmed, timestamp: Date.now(), tier: 'complex' });
+            }
+
+            // Route to Teams Server — auto-starts team with claude-code lead
+            try {
+              await fetch(`${TEAMS_SERVER_URL}/v1/teams/${projectName}/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ agentId: 'lead', message: `Build this project: ${trimmed}` }),
+                signal: AbortSignal.timeout(15000),
+              });
+            } catch {
+              console.warn(`[chat] Teams Server unreachable for build "${projectName}" — team may start later`);
+            }
+
+            const buildReply = `Project "${projectName}" created! A build team has been assigned and is starting work. Check the project page for progress.`;
+            if (threadStore && threadId) {
+              await threadStore.addMessage(threadId, { role: 'assistant', content: buildReply, timestamp: Date.now(), tier: 'complex' });
+            }
+            console.log(`[chat] Build intent detected — created project "${projectName}" and routed to Teams Server`);
+            return { status: 'ok', threadId, projectId: project.id, reply: buildReply, tier: 'complex' };
+          } catch (err: any) {
+            // Project creation failed (e.g., duplicate name) — fall through to doorman
+            console.warn(`[chat] Build intent detected but project creation failed: ${err.message}`);
+          }
+        }
+      }
+
+      // Non-build messages — route to doorman for Q&A, status, etc.
       try {
         const doormanResp = await fetch(`${TEAMS_SERVER_URL}/v1/teams/node-doorman/chat`, {
           method: 'POST',
@@ -240,7 +298,6 @@ export async function registerPlatformRoutes(
           }
         }
       } catch {
-        // Teams Server unreachable — return unavailable message
         console.log('[chat] node-doorman unreachable');
         const unavailableReply = 'AI service is temporarily unavailable. Please try again shortly.';
         if (threadStore) {
@@ -252,7 +309,7 @@ export async function registerPlatformRoutes(
         return { status: 'ok', threadId, reply: unavailableReply, tier: 'simple' };
       }
 
-      // Node-doorman returned OK but with empty reply — generic fallback
+      // Doorman returned OK but empty reply — generic fallback
       const fallbackReply = 'I can help you build apps, check your balance, or answer questions about Pando. Try "build me a todo app" to get started!';
       if (threadStore) {
         threadId = `chat-${Date.now()}-${randomBytes(4).toString('hex')}`;
@@ -496,7 +553,53 @@ export async function registerPlatformRoutes(
         return { status: 'queued', threadId: id, reply: 'Routed to PandoTeams peer — check thread for updates.', tier: 'complex', routedTo: builder.peerId };
       }
 
-      // No projectId — route to Teams Server node-doorman (BIBLE 1.8)
+      // No projectId — detect build intent server-side before doorman
+      const T_BUILD_VERBS = /\b(build|create|make|deploy|develop|code|write|generate)\b/i;
+      const T_APP_NOUNS = /\b(app|application|website|site|web|tool|dashboard|api|service|bot|game|page|calculator|todo|notes|counter|tracker|timer|clock|portfolio|blog|store|shop|chat|form|survey|quiz|poll|list|board|manager|widget|extension|plugin)\b/i;
+
+      if (T_BUILD_VERBS.test(plaintextForProcessing) && T_APP_NOUNS.test(plaintextForProcessing)) {
+        const tProjectName = plaintextForProcessing.toLowerCase()
+          .replace(/['']/g, '')
+          .replace(/\b(build|create|make|deploy|develop|code|write|generate|me|a|an|the|please|can|could|you|i|want|need|like|would|simple|basic|small|quick|just|for|with|that|this|some|my)\b/g, '')
+          .trim().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '')
+          .slice(0, 50) || `project-${randomBytes(3).toString('hex')}`;
+
+        const tPs = node.getProjectStore();
+        if (tPs) {
+          try {
+            const tOwnerId = threadUserPeerId || node.getIdentity()?.peerId || '';
+            const tProject = await tPs.createProject({
+              id: tProjectName,
+              name: tProjectName,
+              description: plaintextForProcessing,
+              ownerId: tOwnerId,
+              type: 'private',
+              visibility: 'owner_only',
+            });
+            threadStore.updateThread(id, { projectId: tProject.id });
+
+            try {
+              await fetch(`${TEAMS_SERVER_URL}/v1/teams/${tProjectName}/chat`, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ agentId: 'lead', message: `Build this project: ${plaintextForProcessing}` }),
+                signal: AbortSignal.timeout(15000),
+              });
+            } catch {
+              console.warn(`[chat] Teams Server unreachable for thread build "${tProjectName}"`);
+            }
+
+            const tBuildReply = `Project "${tProjectName}" created! A build team has been assigned and is starting work.`;
+            await threadStore.addMessage(id, { role: 'assistant', content: tBuildReply, timestamp: Date.now(), tier: 'complex' });
+            console.log(`[chat] Build intent in thread — created project "${tProjectName}"`);
+            return { status: 'ok', threadId: id, projectId: tProject.id, reply: tBuildReply, tier: 'complex' };
+          } catch (err: any) {
+            console.warn(`[chat] Thread build intent failed: ${err.message}`);
+          }
+        }
+      }
+
+      // Non-build — route to doorman for Q&A
       try {
         const doormanResp = await fetch(`${TEAMS_SERVER_URL}/v1/teams/node-doorman/chat`, {
           method: 'POST',
