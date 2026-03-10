@@ -1,14 +1,22 @@
 {
-  "savedAt": "2026-03-10T00:18:05.826Z",
+  "savedAt": "2026-03-10T02:35:53.497Z",
   "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
   "tasks": [
+    {
+      "id": "task-9b1259b4-5b9f-442e-8a69-a19514aa56b0",
+      "title": "[BUG:medium] UTF-8 encoding corruption in governance proposal P2P broadcast � em-dashes become U+FFFD",
+      "description": "407/500 governance proposals have corrupted em-dash characters (� becomes replacement char U+FFFD).\n\nRoot cause: packages/node/src/kernel/network.ts lines 650, 696, 730 use uint8ArrayFromString/uint8ArrayToString WITHOUT explicit utf8 encoding parameter. Multi-byte UTF-8 chars (like em-dash 0xe2 0x80 0x94) get corrupted during P2P GossipSub broadcast.\n\nFix: Add explicit encoding to all 3 locations:\n- Line 650: uint8ArrayFromString(JSON.stringify(message), \"utf8\")\n- Line 696: uint8ArrayToString(evt.detail.data, \"utf8\")\n- Line 730: uint8ArrayFromString(JSON.stringify(message), \"utf8\")\n\nAlso consider: PRAGMA encoding = \"UTF-8\" on SQLite DB init.\n\nExisting corrupted proposals would need a migration script to replace U+FFFD with em-dash.",
+      "status": "pending",
+      "created_at": "2026-03-10 02:35:53",
+      "progress": ""
+    },
     {
       "id": "task-277254b7-d32b-4718-8c0b-6e32a4699573",
       "title": "[BUG:low] Observer prompt references stale API paths (404)",
       "description": "In engine-adapter.ts makeObserverPrompt() (~line 540-580), the STEP 1 curl commands reference /v1/pando/status and /v1/pando/peers which return 404. The correct endpoints are /v1/status and /v1/peers. Observer currently adapts by finding alternatives, but the prompt should be updated with correct paths.",
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-10 00:08:10",
-      "progress": ""
+      "progress": "Fixed in same commit 421e72fd � observer prompt now uses curl with correct /v1/status and /v1/peers endpoints instead of nonexistent pando_status/pando_peers tool calls."
     },
     {
       "id": "task-938f17e7-3682-43c7-be6c-205ed11c1a80",
