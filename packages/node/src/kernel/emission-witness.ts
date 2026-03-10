@@ -82,7 +82,9 @@ const BOOTSTRAP_DAILY_CAP = 50;                        // max Lux/day auto-appro
 const DAY_MS = 24 * 60 * 60 * 1000;                   // milliseconds in a day
 
 // Work proof validation: must contain a valid task/work ID (hex string, 8+ chars)
+// OR be a recognized system proof (uptime epoch, etc.)
 const WORK_PROOF_ID_PATTERN = /[0-9a-f]{8,}/i;
+const SYSTEM_PROOF_PATTERN = /^uptime epoch \d+/;
 
 export const TOPIC_EMISSIONS = 'pando/emissions';
 
@@ -215,8 +217,8 @@ export class EmissionWitness {
     if (workProof.trim().length < 8) {
       return 'workProof too short (must be at least 8 characters)';
     }
-    if (!WORK_PROOF_ID_PATTERN.test(workProof)) {
-      return 'workProof must contain a valid task/work ID (hex string, 8+ chars)';
+    if (!WORK_PROOF_ID_PATTERN.test(workProof) && !SYSTEM_PROOF_PATTERN.test(workProof)) {
+      return 'workProof must contain a valid task/work ID (hex string, 8+ chars) or be a system proof';
     }
     return null; // valid
   }
