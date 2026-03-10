@@ -77,13 +77,22 @@ export class AccountStore {
    * Force-subtract balance without checking sufficiency.
    * Used for applying pre-validated remote transactions.
    * If the balance would go negative (out-of-order sync), clamp to 0
-   * and flag the account as in deficit via a warning log.
+   * and record the deficit for later reconciliation (Gap #106).
    */
   forceSubtractBalance(peerId: string, amount: number): void {
     const current = this.getBalance(peerId);
     let newBalance = roundLux(current - amount);
     if (newBalance < 0) {
-      console.warn(`[accounts] Balance deficit: ${peerId.slice(0, 16)} would go to ${newBalance} Lux — clamping to 0 (sync may reconcile later)`);
+      const deficit = Math.abs(newBalance);
+      console.warn(`[accounts] Balance deficit: ${peerId.slice(0, 16)} would go to ${newBalance} Lux — clamping to 0 (deficit=${deficit})`);
+      // Record deficit for reconciliation
+      try {
+        this.db.prepare(
+          `INSERT INTO network_stats (key, value, updated_at)
+           VALUES ('deficit:' || ?, ?, ?)
+           ON CONFLICT(key) DO UPDATE SET value = CAST(CAST(value AS REAL) + ? AS TEXT), updated_at = ?`
+        ).run(peerId, String(deficit), Date.now(), deficit, Date.now());
+      } catch { /* network_stats table may not have this key pattern — best effort */ }
       newBalance = 0;
     }
     this.db.prepare(

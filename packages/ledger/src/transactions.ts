@@ -124,12 +124,39 @@ export class TransactionStore {
 
   /**
    * Apply a pre-validated remote transaction.
-   * Credits the recipient without checking sender balance.
    * Used for GossipSub sync — the originating node already validated it.
+   *
+   * Security hardening (Gaps #104-107):
+   * - #105: Emissions checked against LUX_HARD_CAP
+   * - #107: Fee validated against RELAY_FEE_RATE ceiling
    */
   applyRemoteTransaction(tx: Transaction): void {
     // Skip if already recorded
     if (this.getTransaction(tx.id)) return;
+
+    // Gap #105: Remote emissions must respect hard cap
+    if (tx.type === TransactionType.EMISSION) {
+      const totalSupply = this.getTotalSupply();
+      if (totalSupply + tx.amount > LUX_HARD_CAP) {
+        const remaining = LUX_HARD_CAP - totalSupply;
+        if (remaining <= 0) {
+          console.warn(`[ledger] REJECTED remote emission: hard cap reached (supply=${totalSupply})`);
+          return;
+        }
+        console.warn(`[ledger] Remote emission clamped: ${tx.amount} → ${remaining} (hard cap)`);
+        tx.amount = remaining;
+      }
+    }
+
+    // Gap #107: Validate fee on remote transfers isn't inflated
+    if (tx.type === TransactionType.TRANSFER && tx.fee > 0) {
+      const MIN_RELAY_FEE = 0.000001;
+      const maxFee = Math.max(MIN_RELAY_FEE, tx.amount * RELAY_FEE_RATE * 1.5); // 50% tolerance for rounding
+      if (tx.fee > maxFee) {
+        console.warn(`[ledger] REJECTED remote transfer: fee ${tx.fee} exceeds max ${maxFee} for amount ${tx.amount}`);
+        return;
+      }
+    }
 
     const doApply = this.db.transaction(() => {
       try {

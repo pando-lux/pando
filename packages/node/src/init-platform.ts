@@ -857,9 +857,31 @@ Be friendly and helpful. Keep answers short.`
       if (message.type === MessageType.UPGRADE_NOTIFICATION) {
         const payload = message.payload as any;
         if (payload?.type === 'upgrade_available' && payload.commitHash) {
-          const { commitHash, description } = payload;
+          const { commitHash, description, governanceId } = payload;
           if (/^[0-9a-f]{6,40}$/i.test(commitHash) && node.upgradeProtocol) {
             if (!node.upgradeProtocol.hasApplied(commitHash) && !node.upgradeInProgress && !node.restartPending) {
+              // SECURITY: Verify governance approved this upgrade (same check as GossipSub path)
+              if (node.governance) {
+                if (!governanceId) {
+                  console.warn(`[upgrade] REJECTED direct P2P: missing governanceId — cannot verify approval`);
+                  return;
+                }
+                const govProposal = node.governance.getProposal(governanceId);
+                if (!govProposal) {
+                  console.warn(`[upgrade] REJECTED direct P2P: governance proposal ${governanceId.slice(0, 12)} not found`);
+                  return;
+                }
+                if (govProposal.status !== 'passed') {
+                  console.warn(`[upgrade] REJECTED direct P2P: proposal ${governanceId.slice(0, 12)} status is "${govProposal.status}", not "passed"`);
+                  return;
+                }
+                const expectedHash = govProposal.upgradePayload?.commitHash;
+                if (expectedHash && !commitHash.startsWith(expectedHash.slice(0, commitHash.length)) && !expectedHash.startsWith(commitHash.slice(0, expectedHash.length))) {
+                  console.warn(`[upgrade] REJECTED direct P2P: commitHash mismatch — payload=${commitHash.slice(0, 8)} vs governance=${expectedHash.slice(0, 8)}`);
+                  return;
+                }
+              }
+
               console.log(`[upgrade] Direct P2P: upgrade available (${commitHash.slice(0, 8)}): ${description || ''}`);
               node.upgradeInProgress = true;
               try {
