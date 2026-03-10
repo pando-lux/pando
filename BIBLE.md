@@ -42,7 +42,7 @@ External agents (lead/dev/ops in pando/lead, pando/dev, pando/ops) exist to:
 - Make themselves obsolete
 
 **Self-Evolution Loop Status (as of 2026-03-09):**
-- Steps 1-3 (monitor/QA/lead ticking): WORKING — lead ticks every ~10min, reports "System healthy" on empty boards
+- Steps 1-3 (monitor/QA/lead ticking): WORKING — lead ticks every ~15min, observer every ~60min, QA every ~120min, explorer every ~180min. Reports "System healthy" on empty boards
 - Step 4 (lead processes board task and spawns builder): WORKING — lead receives board tasks, processes them, and makes code changes (fixed by pando-teams commit b099106, timeout fix)
 - Step 5 (commit-and-propose): WORKING — tested end-to-end with BIBLE update
 - Steps 6-7 (governance → push → EC2 pull): WORKING — governance auto-approves, both EC2 nodes pull approved commits
@@ -439,14 +439,14 @@ api/       HTTP API (kernel-api, core-api, platform-api, testing-api, server, mi
 
 **Location:** `packages/hub/` in pando/node monorepo
 **Stack:** Next.js 16 + Tailwind
-**Status:** DONE (26 pages — simplified from 36, 10 internal/operator pages removed)
+**Status:** DONE (25 pages — simplified from 36, 11 internal/operator pages removed including /explore/health)
 
 Reads from @pando/node HTTP API via NodePool. **ALL API routes use `'primary'` routing** (single node identity required for E2E encryption and consistent data). No route should use random node selection.
 **Public deployment:** https://gateway-one-mu.vercel.app
 **Required env var:** `PANDO_NODES=http://localhost:4000` (or comma-separated node URLs). Without this, hub falls back to EC2 fallback seeds which may cause encryption identity mismatches.
 
-**Pages (26):** `/` (landing), `/chat`, `/search`, `/projects`, `/apps`, `/wallet`, `/network`, `/governance`, `/agents`, `/marketplace`, `/explore` (+6 sub-pages: activity, economy, governance, health→redirect, how-it-works, network), `/dev`, `/login`, `/register`, `/services`, `/testing`, `/node-setup`, `/resources` (+guide)
-**Removed (Phase 3 simplification):** strategy, council, dashboard, monitor, scheduler, capacity, content, explore/strategy, explore/tasks
+**Pages (25):** `/` (landing), `/chat`, `/search`, `/projects`, `/apps`, `/wallet`, `/network`, `/governance`, `/agents`, `/marketplace`, `/explore` (+5 sub-pages: activity, economy, governance, how-it-works, network), `/dev`, `/login`, `/register`, `/services`, `/testing`, `/node-setup`, `/resources` (+guide)
+**Removed (Phase 3 simplification):** strategy, council, dashboard, monitor, scheduler, capacity, content, explore/strategy, explore/tasks, explore/health
 
 **Data sources:** Apps page reads from AppManager (`/v1/apps`), Agents page aggregates from team registry (`/v1/teams` + `/v1/teams/:id/agents`), Network page reads from `/v1/status` + `/v1/peers` + `/v1/reputation/peers` + `/v1/capabilities/network`, Marketplace reads from `/v1/marketplace`.
 
@@ -1617,6 +1617,10 @@ POST /v1/teams/:teamId/request        — Submit user request (adds to board)
 PATCH /v1/teams/:teamId               — Update team config
 POST /v1/teams                        — Create a new team (costs 1 Lux)
 DELETE /v1/teams/:teamId              — Stop team, mark orphaned
+GET  /v1/teams/:teamId/agents        — List agents in team
+GET  /v1/teams/:teamId/cost          — Team cost breakdown (Lux + tokens)
+GET  /v1/teams/:teamId/activity      — Last 20 messages + tool calls (?full=true for untruncated)
+GET  /v1/teams/:teamId/agents/:agentId/messages — Agent message history (?limit=N)
 ```
 
 All board endpoints follow the same pattern:
@@ -1637,7 +1641,7 @@ The following legacy code has been removed:
 - `config.enableCouncil` flag — renamed to `config.enableTeams`
 - `--council` / `--no-council` CLI flags — removed
 
-#### 5.10.13 Failure Modes & Recovery
+#### 5.10.14 Failure Modes & Recovery
 
 | Failure | Recovery |
 |---|---|
