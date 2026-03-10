@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-10 (Auto-deploy pipeline COMPLETE: local static file serving for Tier 1 apps when no S3, workspace-only apps skip remote dispatch. Full product loop validated: chat → build → deploy → live URL. Doorman misclassification fixed (resolvedPattern). Search page uses correct API. Internal team 9/9 success rate). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-10 (SELF-EVOLUTION LOOP VALIDATED: observer detected 2 bugs → created board tasks → internal lead fixed both → committed → watchdog auto-restarted with new code. Section 1.1 is live. All agents use sendToTeamAgent() with inbox+board injection. Internal team 11/11 success rate. All 25 hub pages working). Maintainer: Claude Code (CEO agent).
 
 ---
 
