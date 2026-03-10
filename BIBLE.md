@@ -521,7 +521,7 @@ User F: "add dark mode please!!!!"  → DEDUPLICATED (same as User B)
 - ✅ **120s timeout** — commit `040d879f`. AbortSignal.timeout increased from 60s to 120s for node-doorman route.
 - ✅ **Supervisor passes PANDO_API_TOKEN** — commit `7b3e7909`. Reads `~/.pando/api-token` and passes to Teams Server env.
 - ❌ **No multi-user queue** — current chat is 1:1 (one user, one team lead). No dedup, no rate limit.
-- ❌ **No cross-linking** — Hub creates project but doesn't link to Teams Web UI workspace.
+- ✅ **Cross-linking** — Hub chat appends `[View project →](/projects/{projectId})` link after build responses. Both SSE streaming and quick-reply paths. Commit `094c51d` (code: session→projectId lookup endpoints), commit `4788f6eb` (node: Hub chat link rendering). Teams Server has `GET /v1/sessions?projectId=xxx` and `GET /v1/projects/:id/session` for project→workspace lookup.
 - ✅ **Board tasks work** — existing board system handles the queue concept (pending → active → done).
 - ✅ **Team architecture works** — TeamManager handles multi-team, multi-agent correctly.
 - ✅ **Prompt quality is good** — `makeUniversalLeadPrompt()` has 5-phase methodology.
