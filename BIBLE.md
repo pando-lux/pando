@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-10 (UNIFICATION DIRECTIVE added: Section 3.2.8.1. PandoTeams = engine layer only, Hub = single portal. Internal team stopped pending unification. All 25 hub pages working. Self-evolution loop validated. 44 gaps found and fixed). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-10 (Section 1.7.1 added: "Where Does This Live?" architectural gate — mandatory pre-flight for all agents. Section 3.2.8.1: unification directive. Auth claim root cause found: guest accounts lost after restart, SQLite UPDATE on nonexistent row. 56 gaps found. Internal team stopped pending architecture migration). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -379,12 +379,57 @@ THE RIGHT ARCHITECTURE:
 **What moves to Teams:** Team CRUD, agent scheduling, board tasks, chat routing, doorman, engine pool.
 **What gets gutted:** engine-adapter.ts goes from 2800 → ~300 lines (just Pando tool wrappers that call Node APIs).
 
+**Connected vs Offline — Same Engine, Same Architecture:**
+
+```
+OFFLINE (standalone, no Node):
+  Teams Server starts with one PandoTeams engine for your project.
+  No pando-tools. No pando-infra. Just local sessions, agents, board.
+  Use case: developer running pando-teams locally on their code.
+
+CONNECTED (linked to Pando network via PANDO_NODE_URL):
+  Teams Server starts the same engine PLUS:
+  - Registers pando-tools (thin HTTP wrappers → Node infrastructure API)
+  - Starts pando-infra team via TeamManager (4 agents with tick scheduling)
+  - User project teams also get pando-tools (deploy, governance, economy)
+  Use case: full Pando node with hub, network, self-evolution.
+```
+
+Both modes use the SAME PandoTeams engine, SAME board schema, SAME agent system.
+The only difference: connected mode has extra tools registered and pando-infra running.
+This is the correct design — one architecture that scales from offline to full network.
+
+**Teams Web UI Rule (NON-NEGOTIABLE):**
+Teams Web UI (port 5173) talks to Teams Server (port 4873) ONLY. Never to Node (port 4000) directly.
+- `api.teams()` → `GET localhost:4873/v1/teams` (TeamManager)
+- `api.board()` → `GET localhost:4873/v1/teams/:id/board` (TeamManager)
+- `api.activity()` → `GET localhost:4873/v1/teams/:id/activity` (TeamManager)
+- The old `fetchFromNode()` pattern (Web UI → Node:4000 directly) must be removed.
+- Hub also talks to Teams Server for chat/teams, not Node.
+
 **Migration path (3 steps):**
-1. Teams server becomes authority for teams (move team CRUD, pando-infra starts in Teams)
-2. Move doorman and chat routing to Teams (classification, ThreadStore integration)
+1. ~~Teams server becomes authority for teams~~ **DONE** (commit `ad39292`, TeamManager + pando-tools + team API + pando-infra boot)
+2. Move doorman and chat routing to Teams + point Web UI at Teams Server instead of Node ← **NEXT**
+   - Web UI: replace `fetchFromNode()` calls with `fetchJSON()` to Teams Server `/v1/teams/*`
+   - Hub: forward chat to Teams Server, not Node's engine-adapter
+   - Move doorman classification from `api-server.ts` to Teams Server
 3. Gut engine-adapter (remove EnginePool, tick scheduling, board management — keep tool wrappers)
 
-**This structure works for ALL projects:** pando-infra is just another team in Teams with different rules (autonomous). User projects are teams with conservative rules. Same system, same UI, same data, same orchestration. No parallel pipelines.
+**This structure works for ALL projects:** pando-infra is just another team in Teams with different rules (autonomous). User projects are teams with conservative rules. Same engine, same UI, same data, same orchestration. No parallel pipelines. Offline or connected — same architecture.
+
+### 1.7.1 The "Where Does This Live?" Gate (NON-NEGOTIABLE)
+
+**Every agent (lead, dev, ops, internal) MUST answer these questions before creating any new class, module, endpoint, or system:**
+
+1. **Does this already exist somewhere in the system?** Search both repos (node + teams) before building anything new.
+2. **According to Section 1.7, which component OWNS this functionality?** Quote the relevant line.
+3. **Am I building in the right repo?** If Section 1.7 says Teams owns it, don't build it in Node. Period.
+
+**If the answer to #1 is "yes" or #2 points to a different component — STOP. Write to lead's INBOX before writing any code.**
+
+**Why this rule exists:** In early 2026, external agents independently built team management in BOTH Node (engine-adapter.ts) and Teams (core engine), creating 2800 lines of parallel systems with incompatible schemas. Nobody checked whether the other repo already had the feature. This rule prevents that from ever happening again.
+
+**Enforcement:** Lead agent validates dev's proposed approach BEFORE dev writes code. Dev includes the Section 1.7 citation in their INBOX response when proposing an approach. If dev skips this step, lead sends it back.
 
 ---
 
@@ -578,21 +623,19 @@ PandoTeams has a **full persistent agent system**. Do NOT build a parallel one i
 
 #### 3.2.8.1 UNIFICATION DIRECTIVE (2026-03-10, from founder)
 
-**PandoTeams is the ENGINE LAYER. Hub is the SINGLE PORTAL. No parallel systems.**
+**See Section 1.7 for the full architecture.** Teams Server = THE APP. Node = THIN infrastructure. Hub = lightweight portal. Engine adapter gets gutted.
 
-Current state (being fixed): PandoTeams has its own web UI (port 5173), its own sessions, its own board, its own agents view. The Node has its own teams (TeamRegistry), its own board (engine-adapter SQLite), its own activity logs. These are bridged by the EngineAdapter but present as two disconnected experiences to users.
+**PandoTeams has two modes:**
+1. **Offline mode (standalone):** Runs without pando-node. Single-project AI coding tool. Uses USD budget, local models. No P2P, no Lux, no governance. This is how developers use it independently.
+2. **Online mode (connected to pando-node):** `PANDO_NODE_URL` env var is set. Teams Server manages ALL teams (pando-infra + user projects), ALL agents, ALL chat, ALL board tasks. Calls Node API for P2P, Lux, governance, identity. This is how network nodes run.
 
-**Target state:**
-1. **PandoTeams** = engine only. Processes AI work. No user-facing web UI needed.
-2. **Node** = single orchestrator. ALL teams (internal like pando-infra AND user project teams) go through TeamRegistry + EngineAdapter.
-3. **Hub** = single portal. Shows everything: teams, sessions, activity, chat, board tasks, agents — regardless of whether the data originates from PandoTeams engine or Node registry.
-4. **Teams Web UI** = development/debug tool only, NOT the user-facing portal.
+**Both modes must work.** Offline is the default developer experience. Online is the network experience. Same codebase, same UI — online just adds network features via Pando tool wrappers.
 
-**Rules for all agents:**
-- Every new feature routes through the Node's team system, NOT through PandoTeams standalone APIs.
-- The Hub must be able to show ALL team data (sessions, agents, board, activity) via Node API.
-- No new parallel data stores. One source of truth per concept.
-- Always update THIS BIBLE after significant changes. Always clean up legacy code.
+**Rules for ALL agents (NON-NEGOTIABLE):**
+1. **Always update the BIBLE** after significant changes. This is how future sessions and future agents understand the system. If you change architecture, update the BIBLE. If you delete code, update the BIBLE. The BIBLE must always match the code.
+2. **Always clean up legacy code.** No dead imports, no commented-out blocks, no deprecated references, no `_unused` vars, no re-exports of deleted things. We have git. Delete it.
+3. **No parallel systems.** One source of truth per concept. See Section 1.7.
+4. **Document for context loss.** Every agent loses context eventually. Write STATUS.md, INBOX.md, and BIBLE updates so the NEXT session can pick up instantly. Think: "If I lose all memory right now, what would I need to know?"
 
 #### 3.2.9 Claude Code CLI as Agent Runtime (IMPLEMENTED + VERIFIED)
 
