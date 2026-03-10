@@ -824,6 +824,8 @@ Each engine:
 - `POST /v1/chat/message { no projectId }` → Doorman classifies → Path A (question) or Path B (build) or report (board task on target project)
 - `POST /v1/council/request` → create board task on the council board (bug report, feature request)
 
+**Hub Auto mode (client-side tier routing):** The hub chat page (`packages/hub/app/chat/page.tsx`) has 4 tiers: Quick (keyword, free), Smart (AI, ~$0.001), Full (Claude Code, $0.50-5), Auto (adaptive). In Auto mode, messages are encrypted before sending, so the backend doorman receives ciphertext and cannot classify intent. The hub therefore does **client-side intent detection before encryption**: build/create intent → `tier=complex` (Full), explanatory questions (what is/how does/explain) → `tier=medium` (Smart), everything else → tier unset (backend handles status/balance/simple queries via keyword matching). Without this, all encrypted messages in Auto mode would default to Quick tier.
+
 **See Section 5.10 for the universal project pattern** — every project (including council) uses the same board-as-queue, scheduler tick, agent team architecture.
 
 ### 5.3 Standalone pando-teams vs Inside pando-node
