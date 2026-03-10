@@ -323,7 +323,7 @@ export class EmissionWitness {
       if (msg.kind === 'proposal' && msg.proposal) {
         this.handleRemoteProposal(msg.proposal, fromPeerId);
       } else if (msg.kind === 'attestation' && msg.attestation) {
-        this.handleRemoteAttestation(msg.attestation, fromPeerId);
+        this.handleRemoteAttestation(msg.attestation, fromPeerId).catch(e => console.warn(`[emission-witness] handleRemoteAttestation error: ${(e as Error).message?.slice(0, 100)}`));
       }
     } catch (err: any) {
       console.error(`[emission-witness] handleMessage error: ${err.message}`);
@@ -378,10 +378,42 @@ export class EmissionWitness {
   /**
    * When a remote witness attestation arrives, apply it to the proposal.
    */
-  private handleRemoteAttestation(attestation: WitnessAttestation, fromPeerId: string): void {
+  private async handleRemoteAttestation(attestation: WitnessAttestation, fromPeerId: string): Promise<void> {
     // Attestation peerId must match sender
     if (attestation.witnessPeerId !== fromPeerId) {
       console.log(`[emission-witness] Attestation peerId mismatch`);
+      return;
+    }
+
+    // Reject unsigned attestations from remote peers
+    if (!attestation.signature) {
+      console.warn(`[emission-witness] REJECTED unsigned attestation from ${fromPeerId.slice(0, 12)}...`);
+      return;
+    }
+
+    // Verify Ed25519 signature against witness's public key
+    try {
+      const { peerIdFromString } = await import('@libp2p/peer-id');
+      const { verifySignature } = await import('@pando/shared');
+      const peerIdObj = peerIdFromString(attestation.witnessPeerId);
+      if (!peerIdObj.publicKey?.raw) {
+        console.warn(`[emission-witness] REJECTED attestation: cannot extract public key from ${attestation.witnessPeerId.slice(0, 12)}...`);
+        return;
+      }
+      // Reconstruct canonical message used during signing
+      const canonicalMessage = {
+        type: 'attestation' as any,
+        from: attestation.witnessPeerId,
+        timestamp: attestation.timestamp,
+        payload: { proposalId: attestation.proposalId, approved: attestation.approved, witnessPeerId: attestation.witnessPeerId },
+      };
+      const valid = await verifySignature(canonicalMessage, attestation.signature, peerIdObj.publicKey.raw);
+      if (!valid) {
+        console.warn(`[emission-witness] REJECTED attestation: invalid signature from ${attestation.witnessPeerId.slice(0, 12)}...`);
+        return;
+      }
+    } catch (err: any) {
+      console.warn(`[emission-witness] REJECTED attestation: signature verification error — ${err.message?.slice(0, 80)}`);
       return;
     }
 
