@@ -566,8 +566,10 @@ function makeObserverPrompt(ctx: PromptContext): string {
 IMPORTANT: You MUST call tools. Do not just describe what you would do — actually call the tools.
 IMPORTANT: Complete in 5 tool calls or fewer. Do NOT loop or recheck.
 
-STEP 1: Call pando_status to get node health (peer count, uptime, health status).
-STEP 2: Call pando_peers to get connected peer details.
+STEP 1: Check node health:
+  bash: curl -s http://127.0.0.1:${ctx.apiPort}/v1/status
+STEP 2: Check connected peers:
+  bash: curl -s http://127.0.0.1:${ctx.apiPort}/v1/peers
 STEP 3: Analyze the results IN ONE PASS:
   - If peer count is 0: Create a board task AND send message to lead:
     manage_tasks({ action: "create", title: "[CRITICAL:health] No peers connected — node is isolated", description: "Peer count dropped to 0. Node cannot participate in network. Check libp2p, firewall, bootstrap peers." })
@@ -2451,9 +2453,9 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     const teamData = this.activeTeams.get(teamId);
     const agentDef = teamData?.agents.find(a => a.id === agentId);
 
-    // For lead agents: inject inbox + board state into the message
+    // Inject inbox + board state into the message for all agents
     let enrichedMessage = message;
-    if (agentDef?.role === 'lead' && teamData?.dbPath) {
+    if (teamData?.dbPath) {
       const inbox = this.getTeamInbox(teamId, agentId);
       const inboxText = inbox.length > 0
         ? `INBOX (${inbox.length} messages):\n${inbox.map(m => `  [${m.from}] ${m.message}`).join('\n')}`
