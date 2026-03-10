@@ -774,6 +774,30 @@ export async function initKernel(node: any): Promise<void> {
           if (upgradeProtocol.hasApplied(commitHash)) return;
           if (node.upgradeInProgress || node.restartPending) return;
 
+          // SECURITY: Verify governance actually approved this upgrade before applying.
+          // Without this check, a malicious node could broadcast upgrade_available for a
+          // rejected proposal and all peers would blindly apply it.
+          if (node.governance) {
+            if (!governanceId) {
+              console.warn(`[upgrade] REJECTED: upgrade_available missing governanceId — cannot verify approval`);
+              return;
+            }
+            const govProposal = node.governance.getProposal(governanceId);
+            if (!govProposal) {
+              console.warn(`[upgrade] REJECTED: governance proposal ${governanceId.slice(0, 12)} not found — may not have synced yet`);
+              return;
+            }
+            if (govProposal.status !== 'passed') {
+              console.warn(`[upgrade] REJECTED: governance proposal ${governanceId.slice(0, 12)} status is "${govProposal.status}", not "passed"`);
+              return;
+            }
+            const expectedHash = govProposal.upgradePayload?.commitHash;
+            if (expectedHash && !commitHash.startsWith(expectedHash.slice(0, commitHash.length)) && !expectedHash.startsWith(commitHash.slice(0, expectedHash.length))) {
+              console.warn(`[upgrade] REJECTED: commitHash mismatch — payload=${commitHash.slice(0, 8)} vs governance=${expectedHash.slice(0, 8)}`);
+              return;
+            }
+          }
+
           console.log(`[upgrade] Peer notified: new upgrade available (${commitHash.slice(0, 8)}): ${description}`);
           node.upgradeInProgress = true;
           try {
