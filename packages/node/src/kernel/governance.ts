@@ -2007,13 +2007,22 @@ export class GovernanceSync {
     }
 
     // CHECK 3: Build verification (BIBLE 5.4 Layer 4) — reject if code doesn't compile
+    // Uses async execFile to avoid blocking the event loop during builds
     try {
-      const { execFileSync } = await import('node:child_process');
-      execFileSync('npm', ['run', 'build'], {
-        cwd: process.cwd(),
-        timeout: 120_000,
-        stdio: 'pipe',
-        windowsHide: true,
+      const { execFile } = await import('node:child_process');
+      await new Promise<void>((resolve, reject) => {
+        execFile('npm', ['run', 'build'], {
+          cwd: process.cwd(),
+          timeout: 120_000,
+          windowsHide: true,
+        }, (error, _stdout, stderr) => {
+          if (error) {
+            (error as any).stderr = stderr;
+            reject(error);
+          } else {
+            resolve();
+          }
+        });
       });
       this.agentDb?.logGovernanceCheck(proposalId, 'build_verification', 'pass', undefined, changedFiles.length, totalLinesChanged);
     } catch (err: any) {
