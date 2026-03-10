@@ -208,14 +208,23 @@ export default function GovernancePage() {
         const p = d.proposal || d;
         const votesArr = Array.isArray(d.votes) ? d.votes : [];
         const commentsArr = Array.isArray(d.comments) ? d.comments : [];
+        // Use individual vote records if available, otherwise fall back to decision or proposal aggregates
+        const dec = d.decision;
+        const aggregatedVotes = votesArr.length > 0
+          ? {
+              approve: votesArr.filter((v: any) => v.choice === "approve").length,
+              reject: votesArr.filter((v: any) => v.choice === "reject").length,
+              abstain: votesArr.filter((v: any) => v.choice === "abstain").length,
+            }
+          : {
+              approve: p.votes?.approve ?? dec?.votesFor ?? 0,
+              reject: p.votes?.reject ?? dec?.votesAgainst ?? 0,
+              abstain: p.votes?.abstain ?? dec?.votesAbstain ?? 0,
+            };
         setDetail({
           ...p,
           votingDeadline: p.votingEndsAt || p.votingDeadline,
-          votes: {
-            approve: votesArr.filter((v: any) => v.choice === "approve").length,
-            reject: votesArr.filter((v: any) => v.choice === "reject").length,
-            abstain: votesArr.filter((v: any) => v.choice === "abstain").length,
-          },
+          votes: aggregatedVotes,
           comments: commentsArr.map((c: any) => ({
             content: c.content,
             author: c.from || c.author || "unknown",
