@@ -1,7 +1,15 @@
 {
-  "savedAt": "2026-03-10T02:51:32.344Z",
+  "savedAt": "2026-03-10T05:03:38.047Z",
   "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
   "tasks": [
+    {
+      "id": "task-d9873f51-d3d6-4d72-ac74-614f45936771",
+      "title": "Add FEEDBACK intent to doorman — user suggestions create pando-infra board tasks",
+      "description": "## What\nAdd FEEDBACK handling so user suggestions/bug reports in hub chat become board tasks on pando-infra.\n\n## Where\n- api-server.ts doormanClassify() lines 680-848\n- platform-api.ts POST /v1/chat/message handler\n\n## Current State\n- Intent types defined: simple, question, build, project, report\n- report intent exists but does NOT create board tasks\n\n## Changes Needed\n1. In doormanClassify(), improve report detection for:\n   - Bug reports: 'is broken', 'does not work', 'bug in', 'error on'\n   - Suggestions: 'I suggest', 'you should add', 'it would be nice'\n   - Requests: 'please fix', 'can you improve'\n2. In platform-api.ts report handler, when intent=report:\n   - Call addTeamBoardTask('pando-infra', summaryTitle, fullMessage)\n   - Respond: 'Thanks! Your feedback has been submitted.'\n\n## Acceptance Criteria\n- 'The search page shows wrong results' -> board task on pando-infra\n- 'Build me a todo app' -> still build intent (unchanged)\n- 'What is my balance' -> still simple/question (unchanged)\n- Board task includes original message text",
+      "status": "pending",
+      "created_at": "2026-03-10 05:03:38",
+      "progress": ""
+    },
     {
       "id": "task-9b1259b4-5b9f-442e-8a69-a19514aa56b0",
       "title": "[BUG:medium] UTF-8 encoding corruption in governance proposal P2P broadcast � em-dashes become U+FFFD",
