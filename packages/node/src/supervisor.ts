@@ -190,13 +190,16 @@ function onTeamsExit(code: number | null, signal: string | null): void {
   setTimeout(() => { teamsChild = spawnTeams(); refreshTray(); }, RESTART_DELAY_MS);
 }
 
-process.on('SIGINT', () => {
+function gracefulShutdown(signal: string): void {
   stopping = true;
-  console.log(`[supervisor ${ts()}] SIGINT received — shutting down.`);
+  console.log(`[supervisor ${ts()}] ${signal} received — shutting down.`);
   if (child) child.kill('SIGINT');
   if (teamsChild) teamsChild.kill('SIGINT');
   setTimeout(() => process.exit(0), 3_000);
-});
+}
+
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 // ─── HTTP helpers ─────────────────────────────────────────────────────────
 

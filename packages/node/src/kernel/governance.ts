@@ -589,7 +589,7 @@ export class GovernanceSync {
         this.handleProposal(message).catch(e => console.warn(`[governance] handleProposal error: ${(e as Error).message?.slice(0, 100)}`));
         break;
       case MessageType.GOVERNANCE_COMMENT:
-        this.handleComment(message);
+        this.handleComment(message).catch(e => console.warn(`[governance] handleComment error: ${(e as Error).message?.slice(0, 100)}`));
         break;
       case MessageType.GOVERNANCE_VOTE:
         this.handleVote(message).catch(e => console.warn(`[governance] handleVote error: ${(e as Error).message?.slice(0, 100)}`));
@@ -682,12 +682,40 @@ export class GovernanceSync {
     this.onProposalCallback?.(proposal);
   }
 
-  private handleComment(message: PandoMessage): void {
+  private async handleComment(message: PandoMessage): Promise<void> {
     const comment = message.payload as GovernanceComment;
     if (!comment?.id || !comment.proposalId) return;
 
     if (this.processedIds.has(`comment:${comment.id}`)) return;
     this.processedIds.add(`comment:${comment.id}`);
+
+    // Verify comment author matches message sender (prevent impersonation)
+    if (message.from !== comment.from) {
+      console.warn(`[governance] REJECTED comment: message.from (${message.from?.slice(0, 16)}) !== comment.from (${comment.from?.slice(0, 16)})`);
+      return;
+    }
+    // Reject unsigned comments from remote peers
+    if (comment.from !== this.localPeerId) {
+      if (!message.signature) {
+        console.warn(`[governance] REJECTED unsigned comment from ${comment.from.slice(0, 16)}...`);
+        return;
+      }
+      try {
+        const peerIdObj = peerIdFromString(comment.from);
+        if (!peerIdObj.publicKey?.raw) {
+          console.warn(`[governance] REJECTED comment: cannot extract public key from peerId ${comment.from.slice(0, 16)}...`);
+          return;
+        }
+        const valid = await verifySignature(message, message.signature, peerIdObj.publicKey.raw);
+        if (!valid) {
+          console.warn(`[governance] REJECTED comment: invalid signature from ${comment.from.slice(0, 16)}...`);
+          return;
+        }
+      } catch (err: any) {
+        console.warn(`[governance] REJECTED comment: signature verification error — ${err.message?.slice(0, 80)}`);
+        return;
+      }
+    }
 
     // Sanitize remote input
     comment.content = sanitizeText(comment.content || '');

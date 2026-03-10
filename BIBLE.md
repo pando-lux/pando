@@ -1368,8 +1368,11 @@ Proposal arrives (diff + description)
 Layer 1: Ed25519 signature check              DETERMINISTIC — blocks unsigned proposals
 Layer 2: Security file check                   DETERMINISTIC — blocks if security files
                                                 modified without "security"/"credential" in description
-Layer 3: Diff content scan (dangerous patterns) DETERMINISTIC — blocks eval(), new Function(),
-                                                dynamic require() in added lines
+Layer 3: Diff content scan (dangerous patterns) DETERMINISTIC
+  Blocking patterns: eval(), new Function()
+  Warning patterns (logged, non-blocking): .privateKey access,
+    process.env[] dynamic access, dynamic require(),
+    fetch() in kernel files, writeFileSync() in kernel files
 Layer 4: Build verification (npm run build)    DETERMINISTIC — blocks if build fails
   |
   v
@@ -1382,6 +1385,8 @@ Layer 5: AI REVIEW (ADVISORY ONLY — does NOT block)
   |
   v
 Layer 6: Kernel protection delay (60s for kernel/ changes)
+  → validateUpgradeProposal() returns { kernelDelay: true }
+  → Caller applies setTimeout(60000) before marking proposal approved
   |
   v
 DECISION: APPROVE or REJECT
@@ -2683,6 +2688,26 @@ The codebase has multiple restart mechanisms, each serving a distinct purpose:
 | **Two Laws on all agent-facing endpoints** | All trigger, spawn, message, request, and board endpoints check `violatesTwoLaws()` before passing text to AI agents |
 | **Board task CRUD validation** | `updateTeamBoardTask()` checks `result.changes > 0` — nonexistent tasks return 404, not 200 |
 | **repoUrl validation** | `cloneOrPull()` validates URL format before `execSync` to prevent shell injection via malicious repo URLs |
+
+**Phase 2 security hardening (commit `5fb9322b`, 2026-03-10):** Ledger remote transaction validation + P2P upgrade governance check.
+
+| Feature | Details |
+|---|---|
+| **Remote emission hard cap** | `applyRemoteTransaction()` now checks `LUX_HARD_CAP` before applying emissions — prevents malicious peers from minting past 10B supply |
+| **Remote fee validation** | Remote transfer fees validated against `RELAY_FEE_RATE * 1.5` ceiling — prevents fee inflation attacks |
+| **Deficit tracking** | `forceSubtractBalance()` now records deficit in `network_stats` table (`deficit:{peerId}`) for reconciliation instead of silently clamping |
+| **Direct P2P governance check** | `init-platform.ts` UPGRADE_NOTIFICATION handler now verifies governance proposal exists, status==='passed', commitHash matches — same check as GossipSub path |
+
+**Phase 2b security hardening (commit `dceae5f7`, 2026-03-10):** API auth + governance integrity.
+
+| Feature | Details |
+|---|---|
+| **Governance vote signature verification** | `handleVote()` now verifies Ed25519 signature on remote votes, rejects unsigned, validates `message.from === vote.voter` to prevent impersonation |
+| **Timing-safe token comparison** | `verifyBearerToken()` helper uses `crypto.timingSafeEqual` — replaces all `===` comparisons in platform-api.ts |
+| **Authenticated billing endpoint** | `POST /resource-proxy/meter` now requires Bearer token auth |
+| **Authenticated payment history** | `GET /payment/history` now requires Bearer token auth |
+
+**Known remaining gaps (documented, assigned to dev):** App deployment lacks sandboxing (design limitation for multi-tenant), Teams Server path traversal in `/assets/*`, governance comment spoofing (no signature on comments), emission attestation signatures not verified.
 
 ### Credential Storage Uses resourceId, NOT peerId
 
