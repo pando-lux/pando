@@ -504,7 +504,8 @@ function ChatPage() {
         // Without this, encrypted messages reach the doorman as ciphertext, which
         // fails keyword matching and incorrectly falls back to Quick/simple mode.
         const isBuildRequest = /\b(build|create|make|develop|implement|generate|write|design)\b.*\b(app|application|website|site|tool|game|page|project|platform|service|api|server|board|dashboard|blog|shop|store|portfolio|chat|bot|program|script|component|form|interface)\b/i.test(msg);
-        const isExplanatoryQuestion = /\b(what is|what are|how does|how do|how is|how are|explain|tell me about|describe|why does|why do|what does|what do)\b/i.test(msg);
+        const isTransactional = /\b(balance|status|transfer|send|peers?|node|wallet|lux|uptime)\b/i.test(msg);
+        const isExplanatoryQuestion = !isTransactional && /\b(what is|what are|how does|how do|how is|how are|explain|tell me about|describe|why does|why do|what does|what do)\b/i.test(msg);
         if (isBuildRequest) {
           body.tier = "complex";
         } else if (isExplanatoryQuestion) {
