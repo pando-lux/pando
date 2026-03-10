@@ -34,19 +34,12 @@ Internal pando-infra team (observer, QA, lead — running inside the node):
   10. Repeat forever
 ```
 
-External agents (lead/dev/ops in pando/lead, pando/dev, pando/ops) exist to:
-- Bootstrap the system when internal agents can't yet handle something
-- Fix bugs in the internal agent system itself
-- Add capabilities the internal agents need
-- Test that the internal loop actually works end-to-end
-- Make themselves obsolete
+External agents (lead/dev/ops) are DECOMMISSIONED (2026-03-10). They bootstrapped the system, proved the internal team works, and are no longer needed. Ops remains as a passive monitor + emergency fixer only.
 
-**Self-Evolution Loop Status (as of 2026-03-09):**
-- Steps 1-3 (monitor/QA/lead ticking): WORKING — lead ticks every ~15min, observer every ~60min, QA every ~120min, explorer every ~180min. Reports "System healthy" on empty boards
-- Step 4 (lead processes board task and spawns builder): WORKING — lead receives board tasks, processes them, and makes code changes (fixed by pando-teams commit b099106, timeout fix)
-- Step 5 (commit-and-propose): WORKING — tested end-to-end with BIBLE update
-- Steps 6-7 (governance → push → EC2 pull): WORKING — governance auto-approves, both EC2 nodes pull approved commits
-- Steps 8-10 (verify + BIBLE update): WORKING — lead updates BIBLE after completing tasks
+**Self-Evolution Loop Status (as of 2026-03-10):**
+- Steps 1-10: ALL WORKING. 14+ internal team commits. Observer upgraded to 10min ticks (primary monitor, replacing external lead). External lead/dev DECOMMISSIONED.
+- Tick intervals: lead 15min, observer 10min, QA 30min, explorer 60min.
+- Both repos self-evolving: pando-infra (node repo), pando-teams-infra (code repo via repoPath).
 
 ### 1.2 The Portal and Workspace
 
@@ -108,38 +101,40 @@ How it works (end state):
    - User can send follow-ups → routes to same manager
 ```
 
-**Two Types of Teams, Two Behaviors:**
+**ONE Pipeline, ONE Architecture — Config, Not Code:**
 
-| Aspect | pando-infra (system team) | User project teams |
-|--------|--------------------------|-------------------|
-| Purpose | Maintain & evolve the system | Build what users ask for |
-| Autonomy | High — fixes bugs without asking | Conservative — asks user for big changes |
-| Bug fixes | Autonomous | Autonomous |
-| New features | Proposes via governance | Asks user first |
-| Manager role | Ops-like (strategic, proactive) | CEO-like (plans, delegates, reports) |
-| Team scaling | Fixed (lead, observer, QA, explorer) | Dynamic (manager spawns agents as needed) |
-| Lifecycle | Permanent | Per-project (active → archived) |
+Every team — pando-infra, pando-teams-infra, user projects, community apps, exchanges — uses the SAME unified pipeline. The differences are CONFIG FLAGS, not different code paths.
 
-**Manager-as-CEO (user project teams):**
+| Config flag | pando-infra | User projects | Community apps |
+|------------|-------------|---------------|----------------|
+| `governanceRequired` | true | false | true (on secure nodes) |
+| `autonomy` | high | conservative | high |
+| `lifecycle` | permanent | per-project | permanent |
+| `teamGoal` | "Improve the Pando network" | "Build what user asked" | App-specific |
+| `tickIntervals` | lead 15m, observer 10m, QA 30m, explorer 60m | on-demand (user messages) | app-specific |
 
-The manager's PRIMARY role is team management and strategic planning — exactly what the ops agent does today for external agents. The manager should:
+Same FrameBuilder. Same goal stack (L5). Same board. Same tick loop. Same watchdog. Same supervisor.
+
+**Every lead (infra or project) is a Manager-as-CEO:**
+
+The manager's PRIMARY role is team management and strategic planning. The manager should:
 - Analyze the request and assess complexity
 - For simple (<50 lines): build directly (speed > delegation overhead)
 - For medium (50-500 lines): create a plan with board subtasks, build sequentially
 - For complex (>500 lines): spawn builder agents, assign files/features, monitor progress
-- Select team templates based on project type (full-stack, API, data, mobile, devops)
-- Learn from past projects in the same workspace (patterns, preferences)
-- Report progress to the user at natural milestones
-- Ask for approval on architecture decisions, auto-fix bugs
+- **When board is empty: pursue the team's GOAL** — scan for improvements, create tasks proactively
+- Learn from past sessions (memory store persists across ticks)
+- Report progress at natural milestones
 - Deploy and deliver without being asked
 
-**The Transition Path (current → end state):**
+**The Transition Path:**
 
 ```
-NOW:     External ops/lead/dev drive everything. Internal team is maintenance crew.
-NEXT:    External agents become observers. Internal team handles suggestions.
-THEN:    Users submit suggestions directly. No external agents needed.
-FINALLY: Multiple nodes, each with internal teams, coordinating via governance.
+DONE:    External agents bootstrapped the system. Internal teams proven (14+ commits).
+DONE:    External lead/dev DECOMMISSIONED (2026-03-10). Ops passive monitor only.
+NOW:     Internal teams are primary. Goal stack drives proactive improvement.
+NEXT:    Users submit suggestions. Internal teams handle everything. Ops decommissioned.
+FINALLY: Multiple nodes, each self-maintaining, coordinating via governance.
 ```
 
 ### 1.4 Test Scenarios — The Product Must Pass These
@@ -525,6 +520,131 @@ User F: "add dark mode please!!!!"  → DEDUPLICATED (same as User B)
 - ✅ **Board tasks work** — existing board system handles the queue concept (pending → active → done).
 - ✅ **Team architecture works** — TeamManager handles multi-team, multi-agent correctly.
 - ✅ **Prompt quality is good** — `makeUniversalLeadPrompt()` has 5-phase methodology.
+
+### 1.9 The Unified Pipeline — Everything Is The Same (NON-NEGOTIABLE)
+
+**Core principle: There is ONE pipeline for ALL teams. No special cases. No parallel code paths.**
+
+Every team in Pando — whether it maintains infrastructure, builds user apps, runs a community exchange, or does anything else — runs through the exact same system:
+
+```
+UNIFIED TEAM PIPELINE (same for ALL teams):
+
+┌──────────────────────────────────────────────────────────────────┐
+│                        SUPERVISOR                                │
+│  Manages ALL processes. Watches ALL repos. Restarts ALL apps.   │
+│                                                                  │
+│  App Registry: [                                                 │
+│    { name: "node",     repo: "../node", watch: ["packages/"],   │
+│      mode: "governed" },                                         │
+│    { name: "teams",    repo: "../code", watch: ["packages/"],   │
+│      mode: "governed" },                                         │
+│    { name: "exchange", repo: "../exchange", watch: ["src/"],    │
+│      mode: "governed" },                                         │
+│    { name: "user-app", repo: "~/.pando/apps/xyz", watch: ["*"],│
+│      mode: "direct" },                                           │
+│  ]                                                               │
+│                                                                  │
+│  Unified Watchdog (every 60s):                                   │
+│    for each app:                                                 │
+│      1. Compare .build-commit vs git HEAD                        │
+│      2. Check git diff for watched dirs                          │
+│      3. If governed: verify governance proposal passed           │
+│      4. If direct: just rebuild                                  │
+│      5. Rebuild → restart process                                │
+│                                                                  │
+│  Secure nodes (AWS): ALL apps use governed mode                  │
+│  Local nodes: node + teams only (governed or direct)             │
+└──────────────────────────────────────────────────────────────────┘
+
+┌──────────────────────────────────────────────────────────────────┐
+│                     TEAMS SERVER (port 4873)                     │
+│  Runs ALL teams through identical infrastructure:                │
+│                                                                  │
+│  TeamManager.startTeam(config) → for each agent:                │
+│    1. Create engine (EnginePool.getOrCreate)                     │
+│    2. Set agent's SYSTEM PROMPT (from promptTemplate)            │
+│    3. Schedule ticks (setInterval with tickIntervalMs)           │
+│    4. On each tick: FrameBuilder assembles 8 layers:             │
+│       L0-2: Stable (identity, role, project docs)                │
+│       L3:   Knowledge (memories, cross-refs)                     │
+│       L4:   Working Set (files touched)                          │
+│       L5:   GOAL STACK (team goal + subtasks + progress)         │
+│             ↑ PINNED, NEVER COMPACTED                            │
+│       L5b:  Situation (budget, errors, team awareness)           │
+│       L6:   Conversation (compactable)                           │
+│    5. Agent runs tools, produces output                          │
+│    6. Board tasks created/processed                              │
+│    7. Commits go through commit-and-propose (if governed)        │
+│                                                                  │
+│  Config differences (NOT code differences):                      │
+│    governanceRequired: true/false                                │
+│    teamGoal: "Improve the network" / "Build user's app" / etc   │
+│    autonomy: high / conservative                                 │
+│    tickIntervals: per-agent scheduling                           │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**1.9.1 The Goal Stack — Every Team Has Direction (L5)**
+
+The Goal Stack is Layer 5 of the FrameBuilder. It is:
+- **Pinned** — never compacted, never lost
+- **Per-team** — set from the team's `teamGoal` config
+- **Hierarchical** — main goal + subtask chain + progress
+- **Proactive** — when board is empty, the goal drives the agent to FIND work
+
+```
+GOAL STACK LIFECYCLE:
+
+Team starts → teamGoal injected as L5 main goal
+  │
+  ├── Board has tasks → agent processes them (subtasks of the main goal)
+  │
+  └── Board is EMPTY → agent pursues the main goal PROACTIVELY:
+      ├── pando-infra: scan for bugs, security gaps, performance issues
+      ├── user project: check if deployed app is healthy, ask user for feedback
+      └── community app: monitor app health, apply patches, optimize
+```
+
+**This means NO TEAM IS EVER "IDLE."** When the board is empty, the goal stack tells the agent what to pursue. The observer finds issues. The QA tests. The lead improves. They always have direction.
+
+**1.9.2 Self-Maintaining — Every App Restarts Itself**
+
+The supervisor (NOT the apps themselves) manages all restarts:
+- Watchdog runs in the supervisor, not inside each app (no self-referential watching)
+- Each app registers its repo, watched directories, and governance mode
+- When code changes are detected, supervisor rebuilds and restarts that specific app
+- Other apps continue running — no cascade restarts
+
+```
+RESTART FLOW (unified for all apps):
+
+1. Internal team commits code change (commit-and-propose)
+2. Governance auto-approves (if governed mode)
+3. Supervisor watchdog detects git HEAD changed
+4. Supervisor checks: did watched files change?
+5. YES + governed: verify governance proposal passed → rebuild → restart
+6. YES + direct: rebuild → restart (no governance check)
+7. NO: skip (non-code change like docs or board state)
+```
+
+**1.9.3 Secure vs Non-Secure Nodes**
+
+```
+LOCAL NODE (non-secure, user's dev machine):
+  Runs: node + teams (code)
+  Governance: optional (can be governed or direct)
+  Community apps: NO (not yet — security requirements not met)
+  Watchdog: watches both repos, restarts both processes
+
+AWS NODE (secure, production):
+  Runs: node + teams + community apps (exchange, etc)
+  Governance: REQUIRED for all infra apps
+  Community apps: YES (sandboxed, resource-limited)
+  Watchdog: watches all registered app repos, governed restarts only
+```
+
+Both use the SAME supervisor, SAME watchdog code, SAME restart pipeline. The only difference is the `mode` flag per app.
 
 ---
 
