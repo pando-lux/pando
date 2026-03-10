@@ -522,6 +522,136 @@ async function initTray(): Promise<void> {
   console.log('[supervisor] System tray initialized.');
 }
 
+// ─── App Registry & Unified Watchdog (BIBLE 1.9.2) ───────────────────────
+
+interface AppEntry {
+  name: string;
+  repoPath: string;
+  buildDir: string;              // where .build-commit lives
+  watchDirs: string[];           // only restart if changes touch these dirs
+  mode: 'governed' | 'direct';  // governed = verify proposal exists before restart
+  getChild: () => ChildProcess | null;
+  killChild: () => void;
+}
+
+const WATCHDOG_INTERVAL_MS = 60_000;
+const NODE_REPO = resolve(__dirname, '..', '..', '..');
+
+function buildAppRegistry(): AppEntry[] {
+  const apps: AppEntry[] = [
+    {
+      name: 'node',
+      repoPath: NODE_REPO,
+      buildDir: join(NODE_REPO, 'packages', 'node', 'dist'),
+      watchDirs: ['packages/node/', 'packages/shared/', 'packages/mcp-server/'],
+      mode: 'governed',
+      getChild: () => child,
+      killChild: () => { if (child) child.kill('SIGINT'); },
+    },
+  ];
+
+  if (TEAMS_PATH) {
+    apps.push({
+      name: 'teams',
+      repoPath: TEAMS_PATH,
+      buildDir: TEAMS_PATH,  // teams uses tsx — no dist, just detect git changes
+      watchDirs: ['packages/server/', 'packages/core/'],
+      mode: 'governed',
+      getChild: () => teamsChild,
+      killChild: () => { if (teamsChild) teamsChild.kill('SIGINT'); },
+    });
+  }
+
+  return apps;
+}
+
+function readBuildCommit(buildDir: string): string | null {
+  const paths = [
+    join(buildDir, '.build-commit'),
+    join(buildDir, '..', '..', '..', 'dist', '.build-commit'),  // fallback for monorepo root
+  ];
+  for (const p of paths) {
+    try {
+      const val = readFileSync(p, 'utf8').trim();
+      if (val) return val;
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+function getGitHead(repoPath: string): string | null {
+  try {
+    return execSync('git rev-parse HEAD', {
+      cwd: repoPath, timeout: 10_000, encoding: 'utf8', windowsHide: true,
+    }).trim();
+  } catch { return null; }
+}
+
+function getChangedFiles(repoPath: string, fromCommit: string, toCommit: string): string[] {
+  try {
+    const output = execSync(`git diff --name-only ${fromCommit}..${toCommit}`, {
+      cwd: repoPath, timeout: 10_000, encoding: 'utf8', windowsHide: true,
+    }).trim();
+    return output ? output.split('\n') : [];
+  } catch { return []; }
+}
+
+// Track per-app staleness so we don't spam logs
+const staleSince: Record<string, number | null> = {};
+
+function watchdogCheck(): void {
+  const apps = buildAppRegistry();
+
+  for (const app of apps) {
+    try {
+      const proc = app.getChild();
+      if (!proc) continue;  // app not running — nothing to restart
+
+      const builtCommit = readBuildCommit(app.buildDir);
+      const headCommit = getGitHead(app.repoPath);
+      if (!builtCommit || !headCommit) continue;
+
+      if (builtCommit === headCommit) {
+        staleSince[app.name] = null;
+        continue;  // build is fresh
+      }
+
+      // Check if changes actually touch watched dirs
+      const changed = getChangedFiles(app.repoPath, builtCommit, headCommit);
+      const hasRelevant = changed.some(f => app.watchDirs.some(d => f.startsWith(d)));
+      if (!hasRelevant) {
+        staleSince[app.name] = null;
+        continue;  // only data/docs changed — no restart needed
+      }
+
+      // Stale build detected
+      if (!staleSince[app.name]) staleSince[app.name] = Date.now();
+      const staleMs = Date.now() - (staleSince[app.name] ?? Date.now());
+
+      // For 'node': rebuild first then kill (supervisor auto-respawns)
+      if (app.name === 'node') {
+        console.log(`[watchdog] ${app.name}: stale build (built=${builtCommit.slice(0, 8)}, head=${headCommit.slice(0, 8)}, stale ${Math.round(staleMs / 1000)}s) — rebuilding and restarting`);
+        try {
+          execSync('npm run build', {
+            cwd: app.repoPath, timeout: 180_000, stdio: 'pipe', windowsHide: true,
+          });
+          console.log(`[watchdog] ${app.name}: rebuild complete — killing child for respawn`);
+        } catch (err: unknown) {
+          console.warn(`[watchdog] ${app.name}: rebuild failed — restarting anyway: ${(err as Error).message?.slice(0, 200)}`);
+        }
+      } else {
+        // Teams: no build step, just restart
+        console.log(`[watchdog] ${app.name}: code changed (built=${builtCommit.slice(0, 8)}, head=${headCommit.slice(0, 8)}) — restarting`);
+      }
+
+      staleSince[app.name] = null;
+      app.killChild();  // supervisor onChildExit / onTeamsExit will auto-respawn
+    } catch (err: unknown) {
+      console.warn(`[watchdog] ${app.name}: check failed — ${(err as Error).message?.slice(0, 100)}`);
+    }
+  }
+}
+
 // ─── Boot ─────────────────────────────────────────────────────────────────
 
 process.on('uncaughtException', (err: Error) => {
@@ -556,3 +686,8 @@ if (TEAMS_PATH) {
 } else {
   console.log('[supervisor] Teams not found — running Node only. Use --teams-path to enable.');
 }
+
+// Unified watchdog — checks all registered apps every 60s
+console.log(`[supervisor] Unified watchdog active (interval ${WATCHDOG_INTERVAL_MS / 1000}s)`);
+const watchdogTimer = setInterval(watchdogCheck, WATCHDOG_INTERVAL_MS);
+watchdogTimer.unref();
