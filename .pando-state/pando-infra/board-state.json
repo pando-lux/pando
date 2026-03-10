@@ -1,14 +1,14 @@
 {
-  "savedAt": "2026-03-10T02:35:53.497Z",
+  "savedAt": "2026-03-10T02:51:32.344Z",
   "nodeId": "12D3KooWFR7AkUvFTA8AmYW3rvbrzpKS3N7jPAw8wmqn3GbP6ov3",
   "tasks": [
     {
       "id": "task-9b1259b4-5b9f-442e-8a69-a19514aa56b0",
       "title": "[BUG:medium] UTF-8 encoding corruption in governance proposal P2P broadcast � em-dashes become U+FFFD",
       "description": "407/500 governance proposals have corrupted em-dash characters (� becomes replacement char U+FFFD).\n\nRoot cause: packages/node/src/kernel/network.ts lines 650, 696, 730 use uint8ArrayFromString/uint8ArrayToString WITHOUT explicit utf8 encoding parameter. Multi-byte UTF-8 chars (like em-dash 0xe2 0x80 0x94) get corrupted during P2P GossipSub broadcast.\n\nFix: Add explicit encoding to all 3 locations:\n- Line 650: uint8ArrayFromString(JSON.stringify(message), \"utf8\")\n- Line 696: uint8ArrayToString(evt.detail.data, \"utf8\")\n- Line 730: uint8ArrayFromString(JSON.stringify(message), \"utf8\")\n\nAlso consider: PRAGMA encoding = \"UTF-8\" on SQLite DB init.\n\nExisting corrupted proposals would need a migration script to replace U+FFFD with em-dash.",
-      "status": "pending",
+      "status": "done",
       "created_at": "2026-03-10 02:35:53",
-      "progress": ""
+      "progress": "Committed 4042310415961f9718cfe484a62db38846f8f07b, proposal 1f056321ba9b54ef469645fb9bd5db6b3501c24ce762aa940c928bf56d651861 — push pending governance approval"
     },
     {
       "id": "task-277254b7-d32b-4718-8c0b-6e32a4699573",
