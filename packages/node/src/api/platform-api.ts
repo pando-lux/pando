@@ -164,7 +164,10 @@ export async function registerPlatformRoutes(
               if (threadStore && threadId && result.response) {
                 await threadStore.addMessage(threadId, { role: 'assistant', content: result.response, timestamp: Date.now(), tier: 'complex' });
               }
-              deps.pushEvent('chat_message', { threadId, projectId, role: 'assistant', content: result.response || 'Build complete.', timestamp: Date.now(), tier: 'complex' });
+              const engineReply = result.error
+                ? `Build failed: ${result.error}`
+                : (result.response || 'Building your project...');
+              deps.pushEvent('chat_message', { threadId, projectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
               // Trigger app-manager update after build — push deploy result back to thread
               const appMgr = node.getAppManager?.();
               if (appMgr && projectId) {
@@ -351,7 +354,9 @@ export async function registerPlatformRoutes(
               method: 'POST',
               body: { agentId: 'lead', message: trimmed },
             });
-            const engineReply = chatResult?.reply || chatResult?.response || 'Build complete.';
+            const engineReply = chatResult?.error
+              ? `Build failed: ${chatResult.error}`
+              : (chatResult?.reply || chatResult?.response || 'Building your project...');
             if (threadStore && threadId) {
               await threadStore.addMessage(threadId, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
             }
@@ -609,7 +614,9 @@ export async function registerPlatformRoutes(
                 method: 'POST',
                 body: { agentId: 'lead', message: plaintextForProcessing },
               });
-              const engineReply = chatResult?.reply || chatResult?.response || 'Done.';
+              const engineReply = chatResult?.error
+                ? `Request failed: ${chatResult.error}`
+                : (chatResult?.reply || chatResult?.response || 'Done.');
               await threadStore.addMessage(id, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
               deps.pushEvent('chat_message', { threadId: id, projectId: threadMeta.projectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
               // Trigger app-manager update after build
@@ -754,7 +761,9 @@ export async function registerPlatformRoutes(
               method: 'POST',
               body: { agentId: 'lead', message: plaintextForProcessing },
             });
-            const engineReply = chatResult?.reply || chatResult?.response || 'Build complete.';
+            const engineReply = chatResult?.error
+              ? `Build failed: ${chatResult.error}`
+              : (chatResult?.reply || chatResult?.response || 'Building your project...');
             await threadStore.addMessage(id, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
             deps.pushEvent('chat_message', { threadId: id, projectId: targetProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
             // Trigger app-manager update after build

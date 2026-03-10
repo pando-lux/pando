@@ -102,6 +102,7 @@ const RATE_LIMITS: Record<string, { max: number; envVar: string; windowMs?: numb
   'POST /chat/threads/:id/message':  { max: 30, envVar: 'PANDO_RATE_CHAT_THREAD' },
   'POST /auth/guest':                { max: 5,  envVar: 'PANDO_RATE_AUTH_GUEST' },
   'POST /auth/login':                { max: 5,  envVar: 'PANDO_RATE_AUTH_LOGIN' },
+  'POST /auth/claim':                { max: 3,  envVar: 'PANDO_RATE_AUTH_CLAIM' },
   'POST /teams/:id/request':         { max: 3,  envVar: 'PANDO_RATE_REPORT', windowMs: 3600_000 },
   'POST /projects/:id/request':      { max: 5,  envVar: 'PANDO_RATE_PROJECT_REQUEST', windowMs: 3600_000 },
 };

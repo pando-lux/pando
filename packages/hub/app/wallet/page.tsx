@@ -126,7 +126,8 @@ export default function WalletPage() {
           </div>
         )}
 
-        {/* Balance */}
+        {/* Balance — only show for authenticated users */}
+        {(isClaimed || authLoading) && (
         <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-6 text-center">
           <p className="text-xs text-neutral-600 dark:text-neutral-500 mb-2">Your Balance</p>
           {authLoading && balance === null ? (
@@ -136,8 +137,10 @@ export default function WalletPage() {
           )}
           {balance === 0 && <p className="text-xs text-neutral-500 mt-2">Earn Lux by contributing compute, relaying data, or receiving transfers from peers.</p>}
         </div>
+        )}
 
-        {/* Send Lux */}
+        {/* Send Lux — only show for authenticated users */}
+        {isClaimed && (
         <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4 space-y-3">
           <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">Send Lux</h2>
           <form onSubmit={handleSend} className="space-y-3">
@@ -176,8 +179,10 @@ export default function WalletPage() {
             )}
           </form>
         </div>
+        )}
 
-        {/* Identity */}
+        {/* Identity — only show for authenticated users */}
+        {isClaimed && (
         <div className="bg-neutral-100 dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl p-4 space-y-3">
           <h2 className="text-lg font-semibold text-neutral-900 dark:text-neutral-100">Your Identity</h2>
           <div className="flex items-center gap-2">
@@ -195,8 +200,10 @@ export default function WalletPage() {
             </div>
           )}
         </div>
+        )}
 
-        {/* Transactions */}
+        {/* Transactions — only show for authenticated users */}
+        {isClaimed && (
         <div className="bg-white dark:bg-neutral-900/50 border border-neutral-300 dark:border-neutral-800 rounded-xl overflow-hidden">
           <div className="px-4 py-3 border-b border-neutral-300 dark:border-neutral-800"><h2 className="text-sm font-semibold text-neutral-700 dark:text-neutral-300">Recent Transactions</h2></div>
           {txns.length === 0 ? (
@@ -217,6 +224,7 @@ export default function WalletPage() {
             </div>
           )}
         </div>
+        )}
       </main>
     </div>
   );
