@@ -2170,6 +2170,12 @@ export async function registerPlatformRoutes(
 
     // ── Project Economy (Phase 31.1) ─────────────────────────────────────
 
+    // Strip apiKey from project objects — never expose secrets in public responses
+    function stripApiKey<T extends Record<string, any>>(project: T): Omit<T, 'apiKey'> {
+      const { apiKey, ...safe } = project;
+      return safe;
+    }
+
     // GET /projects — List user's projects (owned + collaborating)
     fastify.get('/projects', async (request: any, reply: any) => {
       const ps = node.getProjectStore();
@@ -2179,7 +2185,7 @@ export async function registerPlatformRoutes(
       if (userId) {
         const owned = await ps.getProjectsByOwnerAsync(userId);
         const collab = await ps.getProjectsByCollaboratorAsync(userId);
-        return { projects: [...owned, ...collab] };
+        return { projects: [...owned, ...collab].map(stripApiKey) };
       }
 
       // No valid user token — return listed/featured public projects
@@ -2190,7 +2196,7 @@ export async function registerPlatformRoutes(
         limit: Math.min(parseInt(query.limit) || 50, 200),
         offset: parseInt(query.offset) || 0,
       });
-      return { projects };
+      return { projects: projects.map(stripApiKey) };
     });
 
     // GET /projects/stats — Public project statistics
@@ -2228,7 +2234,9 @@ export async function registerPlatformRoutes(
       try {
         collaborators = await ps.getCollaboratorsAsync(id);
       } catch {}
-      return { project, collaborators };
+      // Only return apiKey to the project owner
+      const isOwner = userId && project.ownerId === userId;
+      return { project: isOwner ? project : stripApiKey(project), collaborators };
     });
 
     // POST /projects — Create a new project
@@ -2796,6 +2804,10 @@ export async function registerPlatformRoutes(
         }
       }
 
+      // Strip apiKey from public marketplace listings
+      if (result.projects) {
+        result.projects = result.projects.map(stripApiKey);
+      }
       return result;
     });
 
@@ -2827,7 +2839,7 @@ export async function registerPlatformRoutes(
         deployedAt: app.deployed_at,
       } : undefined;
 
-      return { project, collaborators, ratings: ratingsSummary, deployment };
+      return { project: stripApiKey(project), collaborators, ratings: ratingsSummary, deployment };
     });
 
     // POST /projects/:id/rate — Rate a project (user token required)
