@@ -1,7 +1,7 @@
 # THE PANDO BIBLE
 
 > Single source of truth for all Pando architecture. All other docs defer to this.
-> Last updated: 2026-03-10 (Section 1.8: USM fully validated — all 5 intents working end-to-end via node-doorman team. Boot-at-startup, 120s timeout, auth fix applied. 10 internal team commits. Phase 2c security hardening documented). Maintainer: Claude Code (CEO agent).
+> Last updated: 2026-03-10 (Deprecated doorman code fully deleted -846 lines, commit 24aeabc3. Hub URLs env-configurable. Cross-repo commit-and-propose. 12+ internal team commits. USM 1.8 near-complete — cross-linking and multi-user queue remaining). Maintainer: Claude Code (CEO agent).
 
 ---
 
@@ -515,7 +515,7 @@ User F: "add dark mode please!!!!"  → DEDUPLICATED (same as User B)
 **Implementation status:**
 - ✅ **User teams auto-start** — commit `ba701a3`. Chat endpoint auto-creates team with lead-universal prompt on first message. Verified working.
 - ✅ **Board task PATCH endpoint** — commit `ba701a3`. Teams can mark tasks done/update progress.
-- ✅ **Doorman → node-doorman team** — classification moved from hardcoded regex in Node's api-server.ts to `node-doorman` team on Teams Server. Prompt-based classification via `makeNodeLeadPrompt()` in prompts.ts. Hub chat routes to `/teams/node-doorman/chat`, falls back to local doorman if Teams Server is unreachable. Hub client-side tier detection removed. Commits: f68dfb7, 45f50d5 (code), f354196e, 040d879f (node).
+- ✅ **Doorman → node-doorman team** — classification moved from hardcoded regex in Node's api-server.ts to `node-doorman` team on Teams Server. Prompt-based classification via `makeNodeLeadPrompt()` in prompts.ts. Hub chat routes to `/teams/node-doorman/chat`, falls back to local doorman if Teams Server is unreachable. Hub client-side tier detection removed. **Deprecated doorman code fully deleted** (commit `24aeabc3`): -846 lines removed from api-server.ts, platform-api.ts, init-platform.ts, auth middleware. Zero doorman references remain in node codebase. Commits: f68dfb7, 45f50d5 (code), f354196e, 040d879f, 24aeabc3 (node).
 - ✅ **Lightweight engine (gpt-4o-mini)** — node-doorman uses `gpt-4o-mini` via OpenAI API instead of Claude Code CLI. Response times: question 3.9s, status 9.8s (with tool call), feedback 6.4s. `provider.ts:createModel()` now uses `inferProvider(modelId)` for model→provider routing. Pando tools (`pando_status`, `pando_create_board_task`, `pando_create_project`) provide API access without bash/curl.
 - ✅ **Node-doorman boots at startup** — commit `45f50d5`. Boots alongside pando-infra in Teams Server index.ts. No cold-start on first request.
 - ✅ **120s timeout** — commit `040d879f`. AbortSignal.timeout increased from 60s to 120s for node-doorman route.
@@ -1247,7 +1247,7 @@ Internal pando-infra lead processes the board task on next tick
 Response to user: "Bug report filed" / "Feedback recorded"
 ```
 
-**Implementation:** api-server.ts:805-809 (doorman classification), platform-api.ts:698-720 (board task creation). Verified working 2026-03-10 — user bug reports flow through doorman → board → internal team processes → fix deployed.
+**Implementation:** Node-doorman team on Teams Server (prompts.ts `makeNodeLeadPrompt()`) handles classification via prompt-based intents. Board task creation via `pando_create_board_task` tool. Old doorman code deleted (commit `24aeabc3`). Verified working 2026-03-10 — user bug reports flow through node-doorman → board → internal team processes → fix deployed.
 
 #### Pipeline 4: Full User Journey (end-to-end, PROVEN — commit e6fe16b1)
 
@@ -3021,7 +3021,7 @@ See also: `docs/HUMAN-LEVEL-TESTING.md` for end-to-end scenario tests.
 ### API
 | File | Purpose |
 |---|---|
-| `api/api-server.ts` | Fastify server setup, doorman classification (simple/question/build/report intents) |
+| `api/api-server.ts` | Fastify server setup, route registration (doorman code deleted — classification now in Teams Server node-doorman team) |
 | `api/kernel-api.ts` | Status, peers, tasks, governance, guardrails, monitoring, scheduler, reputation, admin, wallet, activity, search (~2,500 lines) |
 | `api/core-api.ts` | Upgrade, emissions, security, team routes (/v1/teams/* — board proxy, CRUD, trigger) (~710 lines) |
 | `api/platform-api.ts` | Projects, auth, chat, engines, content, marketplace, resources, testing, templates, per-project board/request, `findBestBuilder()` (~3,696 lines) |

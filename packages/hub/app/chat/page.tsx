@@ -206,6 +206,9 @@ function ChatPage() {
           // Capture activity log and attach to the final message (persists in history)
           // Prefer browser-collected activity (real-time), fall back to SSE-provided (server-persisted)
           const savedActivity = activityLogRef.current.length > 0 ? [...activityLogRef.current] : (msg.activityLog?.length > 0 ? msg.activityLog : undefined);
+          if (msg.projectId) {
+            msg.content += `\n\n[View project →](/projects/${msg.projectId})`;
+          }
           setActivityLog([]);
           activityLogRef.current = [];
           setMessages((prev) => {
@@ -573,6 +576,10 @@ function ChatPage() {
           } catch {
             replyContent = "[Encrypted response -- decryption failed]";
           }
+        }
+
+        if (data.projectId) {
+          replyContent += `\n\n[View project →](/projects/${data.projectId})`;
         }
 
         const assistantMsg: ChatMessage = {
