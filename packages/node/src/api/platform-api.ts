@@ -20,6 +20,21 @@ export async function registerPlatformRoutes(
 ): Promise<void> {
   const { node } = deps;
 
+  // ── Teams Server proxy (BIBLE 1.7) ─────────────────────────────────
+  const TEAMS_SERVER_URL = process.env.PANDO_TEAMS_URL || 'http://localhost:4873';
+  async function proxyToTeams(path: string, opts?: { method?: string; body?: any }): Promise<any> {
+    try {
+      const res = await fetch(`${TEAMS_SERVER_URL}/v1${path}`, {
+        method: opts?.method || 'GET',
+        headers: { 'Content-Type': 'application/json' },
+        ...(opts?.body ? { body: JSON.stringify(opts.body) } : {}),
+      });
+      return res.json();
+    } catch (err: any) {
+      return { error: 'Teams Server unavailable', details: err.message };
+    }
+  }
+
   /**
    * Send a message to the EngineAdapter for a project (or system engine if no projectId).
    * Collects the streamed response and returns it.
@@ -208,13 +223,12 @@ export async function registerPlatformRoutes(
       }
 
       if (classification.intent === 'report') {
-        // User is reporting a bug or requesting a feature — route to appropriate team
-        // (Two Laws already checked at top of handler)
-        const adapter = node.getEngineAdapter();
+        // User is reporting a bug or requesting a feature — route to Teams Server board
         const targetTeam = classification.targetProject || 'pando-infra';
         const severity = /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(trimmed) ? 'BUG' : 'FEATURE';
         const taskTitle = `[${severity}:user] ${(classification.description || trimmed).slice(0, 120)}`;
-        const taskId = adapter?.addTeamBoardTask(targetTeam, taskTitle, trimmed.slice(0, 500));
+        const boardResult = await proxyToTeams(`/teams/${targetTeam}/board`, { method: 'POST', body: { title: taskTitle, description: trimmed.slice(0, 500) } });
+        const taskId = boardResult?.id;
         const reply = taskId
           ? `Thanks for the report! I've added it to the team's board. Task: ${taskId}`
           : `Thanks for the report. The team will review it on the next tick.`;
@@ -228,11 +242,11 @@ export async function registerPlatformRoutes(
       }
 
       if (classification.intent === 'feedback') {
-        // User is suggesting an improvement or feature — create a board task
-        const adapter = node.getEngineAdapter();
+        // User is suggesting an improvement or feature — proxy to Teams Server board
         const targetTeam = classification.targetProject || 'pando-infra';
         const taskTitle = `[FEATURE:user] ${(classification.description || trimmed).slice(0, 120)}`;
-        const taskId = adapter?.addTeamBoardTask(targetTeam, taskTitle, trimmed.slice(0, 500));
+        const boardResult = await proxyToTeams(`/teams/${targetTeam}/board`, { method: 'POST', body: { title: taskTitle, description: trimmed.slice(0, 500) } });
+        const taskId = boardResult?.id;
         const reply = taskId
           ? `Thanks for the suggestion! I've added it to the team's board for review. Task: ${taskId}`
           : `Thanks for the feedback! The team will review your suggestion on the next tick.`;
@@ -330,36 +344,19 @@ export async function registerPlatformRoutes(
 
       // Route to best builder
       if (builder.isLocal && newProjectId) {
-        // Local PandoTeams — route through team registry (don't block HTTP response)
+        // Local PandoTeams — proxy to Teams Server (BIBLE 1.7)
         (async () => {
           try {
-            const adapter = node.getEngineAdapter();
-            // Start team if not already running
-            if (adapter && !adapter.isTeamActive?.(newProjectId)) {
-              const projLabel = (classification.description || trimmed).slice(0, 60).replace(/[^a-zA-Z0-9 -]/g, '').trim() || 'Project';
-              await adapter.startTeam(newProjectId, [{
-                id: 'lead',
-                role: 'lead',
-                displayName: `${projLabel} Lead`,
-                prompt: '',
-                promptTemplate: 'lead-universal',
-                model: 'claude-code',
-                tickIntervalMs: 15 * 60_000,
-              }]);
-            }
-            // Send message through team agent
-            const chunks: string[] = [];
-            if (adapter) {
-              for await (const event of adapter.sendToTeamAgent(newProjectId, 'lead', trimmed)) {
-                if (event.type === 'stream:chunk' && event.content) chunks.push(event.content);
-              }
-            }
-            const engineReply = chunks.join('') || 'Build complete.';
+            const chatResult = await proxyToTeams(`/teams/${newProjectId}/chat`, {
+              method: 'POST',
+              body: { agentId: 'lead', message: trimmed },
+            });
+            const engineReply = chatResult?.reply || chatResult?.response || 'Build complete.';
             if (threadStore && threadId) {
               await threadStore.addMessage(threadId, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
             }
             deps.pushEvent('chat_message', { threadId, projectId: newProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
-            // Trigger app-manager update after build — push deploy result back to thread
+            // Trigger app-manager update after build
             const appMgr = node.getAppManager?.();
             if (appMgr && newProjectId) {
               try {
@@ -371,7 +368,6 @@ export async function registerPlatformRoutes(
                     await threadStore.addMessage(threadId, { role: 'assistant', content: deployMsg, timestamp: Date.now(), tier: 'complex' });
                   }
                   deps.pushEvent('app_deployed', { threadId, projectId: newProjectId, deployUrl: app?.deploy_url, port: app?.port, status: 'live' });
-                  console.log(`[app-manager] Auto-deploy succeeded for ${newProjectId}`);
                 } else {
                   const failMsg = `Deploy attempted: ${deployResult.error || 'pending remote deployment'}`;
                   if (threadStore && threadId) {
@@ -384,9 +380,9 @@ export async function registerPlatformRoutes(
               }
             }
           } catch (err) {
-            console.error('[router] Local engine failed:', (err as Error).message);
+            console.error('[router] Teams Server routing failed:', (err as Error).message);
             if (threadStore && threadId) {
-              await threadStore.addMessage(threadId, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' });
+              await threadStore.addMessage(threadId, { role: 'assistant', content: `Routing error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' });
             }
           }
         })();
@@ -606,32 +602,14 @@ export async function registerPlatformRoutes(
           return { status: 'ok', threadId: id, reply: 'No PandoTeams-capable nodes available.', tier: 'simple' };
         }
         if (builder.isLocal) {
-          // Local PandoTeams — route through team agent (not raw engine)
+          // Local PandoTeams — proxy to Teams Server (BIBLE 1.7)
           (async () => {
             try {
-              const adapter = node.getEngineAdapter();
-              // Ensure team is active for this project
-              if (adapter && !adapter.isTeamActive?.(threadMeta.projectId!)) {
-                await adapter.startTeam(threadMeta.projectId!, [{
-                  id: 'lead',
-                  role: 'lead',
-                  displayName: 'Project Lead',
-                  prompt: '',
-                  promptTemplate: 'lead-universal',
-                  model: 'claude-code',
-                  tickIntervalMs: 15 * 60_000,
-                }]);
-              }
-              const chunks: string[] = [];
-              if (adapter) {
-                for await (const event of adapter.sendToTeamAgent(threadMeta.projectId!, 'lead', plaintextForProcessing)) {
-                  if (event.type === 'stream:chunk' && event.content) {
-                    chunks.push(event.content);
-                    deps.pushEvent('chat_progress', { threadId: id, projectId: threadMeta.projectId, content: event.content });
-                  }
-                }
-              }
-              const engineReply = chunks.join('') || 'Done.';
+              const chatResult = await proxyToTeams(`/teams/${threadMeta.projectId}/chat`, {
+                method: 'POST',
+                body: { agentId: 'lead', message: plaintextForProcessing },
+              });
+              const engineReply = chatResult?.reply || chatResult?.response || 'Done.';
               await threadStore.addMessage(id, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
               deps.pushEvent('chat_message', { threadId: id, projectId: threadMeta.projectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
               // Trigger app-manager update after build
@@ -640,8 +618,8 @@ export async function registerPlatformRoutes(
                 appMgr.update(threadMeta.projectId).catch((e: any) => console.warn('[app-manager] Auto-update failed:', e.message));
               }
             } catch (err) {
-              console.error('[router] Engine failed:', (err as Error).message);
-              await threadStore.addMessage(id, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' });
+              console.error('[router] Teams Server routing failed:', (err as Error).message);
+              await threadStore.addMessage(id, { role: 'assistant', content: `Routing error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' });
             }
           })();
           return { status: 'ok', threadId: id, reply: 'Processing — check thread for updates.', tier: 'complex', routedTo: builder.peerId };
@@ -696,13 +674,13 @@ export async function registerPlatformRoutes(
       }
 
       if (classification.intent === 'report' || classification.intent === 'feedback') {
-        // User is reporting a bug or providing feedback in an existing thread
-        const adapter = node.getEngineAdapter();
+        // User is reporting a bug or providing feedback — proxy to Teams Server board
         const targetTeam = classification.targetProject || 'pando-infra';
         const isBug = classification.intent === 'report' && /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(plaintextForProcessing);
         const tag = isBug ? 'BUG' : 'FEATURE';
         const taskTitle = `[${tag}:user] ${(classification.description || plaintextForProcessing).slice(0, 120)}`;
-        const taskId = adapter?.addTeamBoardTask(targetTeam, taskTitle, plaintextForProcessing.slice(0, 500));
+        const boardResult = await proxyToTeams(`/teams/${targetTeam}/board`, { method: 'POST', body: { title: taskTitle, description: plaintextForProcessing.slice(0, 500) } });
+        const taskId = boardResult?.id;
         const reply = classification.intent === 'report'
           ? (taskId ? `Thanks for the report! I've added it to the team's board. Task: ${taskId}` : `Thanks for the report. The team will review it on the next tick.`)
           : (taskId ? `Thanks for the suggestion! I've added it to the team's board for review. Task: ${taskId}` : `Thanks for the feedback! The team will review your suggestion on the next tick.`);
@@ -769,33 +747,14 @@ export async function registerPlatformRoutes(
 
       const targetProjectId = newProjectId || threadMeta?.projectId;
       if (builder.isLocal && targetProjectId) {
-        // Local PandoTeams — route through team agent (not raw engine)
+        // Local PandoTeams — proxy to Teams Server (BIBLE 1.7)
         (async () => {
           try {
-            const adapter = node.getEngineAdapter();
-            // Ensure team is active for this project
-            if (adapter && !adapter.isTeamActive?.(targetProjectId)) {
-              const projLabel = (classification.description || trimmed).slice(0, 60).replace(/[^a-zA-Z0-9 -]/g, '').trim() || 'Project';
-              await adapter.startTeam(targetProjectId, [{
-                id: 'lead',
-                role: 'lead',
-                displayName: `${projLabel} Lead`,
-                prompt: '',
-                promptTemplate: 'lead-universal',
-                model: 'claude-code',
-                tickIntervalMs: 15 * 60_000,
-              }]);
-            }
-            const chunks: string[] = [];
-            if (adapter) {
-              for await (const event of adapter.sendToTeamAgent(targetProjectId, 'lead', plaintextForProcessing)) {
-                if (event.type === 'stream:chunk' && event.content) {
-                  chunks.push(event.content);
-                  deps.pushEvent('chat_progress', { threadId: id, projectId: targetProjectId, content: event.content });
-                }
-              }
-            }
-            const engineReply = chunks.join('') || 'Build complete.';
+            const chatResult = await proxyToTeams(`/teams/${targetProjectId}/chat`, {
+              method: 'POST',
+              body: { agentId: 'lead', message: plaintextForProcessing },
+            });
+            const engineReply = chatResult?.reply || chatResult?.response || 'Build complete.';
             await threadStore.addMessage(id, { role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
             deps.pushEvent('chat_message', { threadId: id, projectId: targetProjectId, role: 'assistant', content: engineReply, timestamp: Date.now(), tier: 'complex' });
             // Trigger app-manager update after build
@@ -804,8 +763,8 @@ export async function registerPlatformRoutes(
               appMgr.update(targetProjectId).catch((e: any) => console.warn('[app-manager] Auto-update failed:', e.message));
             }
           } catch (err) {
-            console.error('[router] Local engine failed:', (err as Error).message);
-            await threadStore.addMessage(id, { role: 'assistant', content: `Engine error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' });
+            console.error('[router] Teams Server routing failed:', (err as Error).message);
+            await threadStore.addMessage(id, { role: 'assistant', content: `Routing error: ${(err as Error).message}`, timestamp: Date.now(), tier: 'complex' });
           }
         })();
       } else if (!builder.isLocal) {

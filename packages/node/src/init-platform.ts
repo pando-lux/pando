@@ -20,7 +20,7 @@ import { ApiServer } from './api/api-server.js';
 import { GitOps } from './core/git-ops.js';
 import { TeamRegistry } from './core/team-registry.js';
 import { ServiceLoader } from './core/service-loader.js';
-import { PANDO_INFRA_AGENTS } from './core/engine-adapter.js';
+
 import type { CredentialStore } from './core/credential-store.js';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -739,8 +739,7 @@ Be friendly and helpful. Keep answers short.`
         console.log(`[team-registry] Auto-claiming orphaned team: ${team.id}`);
         const claimed = teamRegistry.claimTeam(team.id);
         if (claimed) {
-          // Request board state from peers before starting team agents
-          // so restoreBoardState() in startTeam() can find the snapshot
+          // Request board state from peers for P2P sync
           console.log(`[board-sync] Requesting board state for claimed team: ${team.id}`);
           node.network.broadcast({
             type: MessageType.BOARD_STATE_REQUEST,
@@ -751,16 +750,8 @@ Be friendly and helpful. Keep answers short.`
             console.warn(`[board-sync] Failed to broadcast BOARD_STATE_REQUEST: ${err.message}`)
           );
 
-          // Delay team start slightly to allow board state responses to arrive
-          setTimeout(() => {
-            // For pando-infra, use seed agents. For others, use a single default agent.
-            const agents = team.id === 'pando-infra' ? PANDO_INFRA_AGENTS : [
-              { id: 'lead', role: 'lead', displayName: `${team.displayName} Lead`, prompt: '', promptTemplate: 'lead-universal', model: 'claude-code', tickIntervalMs: 15 * 60_000 },
-            ];
-            adapter.startTeam(team.id, agents).catch((err: any) =>
-              console.warn(`[team-registry] Failed to start claimed team ${team.id}: ${err.message}`)
-            );
-          }, 5_000); // 5 second delay for P2P board state responses
+          // Team agents are managed by Teams Server (BIBLE 1.7).
+          // Board state file was written by restoreBoardStateFromSnapshot — Teams Server reads it on boot.
         }
       };
 
@@ -783,7 +774,7 @@ Be friendly and helpful. Keep answers short.`
             lastHeartbeat: Date.now(),
             status: 'active',
             repos: ['pando-lux/node', 'pando-lux/code'],
-            agentCount: PANDO_INFRA_AGENTS.length,
+            agentCount: 4,
             governanceRequired: true,
             createdBy: node.identity.peerId,
             claimedAt: Date.now(),
@@ -801,13 +792,7 @@ Be friendly and helpful. Keep answers short.`
           console.log(`[team-registry] pando-infra managed by peer ${existing.managingNode.slice(0, 16)}... — not claiming.`);
         }
 
-        // If we manage pando-infra, start its agents
-        const infra = teamRegistry.getTeam('pando-infra');
-        if (infra && infra.managingNode === node.identity.peerId) {
-          adapter.startTeam('pando-infra', PANDO_INFRA_AGENTS).catch((err: any) =>
-            console.warn(`[team-registry] Failed to start pando-infra team: ${err.message}`)
-          );
-        }
+        // Team agents are started by Teams Server (BIBLE 1.7), not by Node.
 
         // Heartbeat for all teams we manage
         // #audit: Store ref so performStop() can clear it

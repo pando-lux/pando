@@ -9,8 +9,8 @@
  */
 
 // Engine Adapter — the ONE connection to @pando-teams/core
-export { EngineAdapter, PANDO_INFRA_AGENTS, BUILT_IN_TEMPLATES } from './engine-adapter.js';
-export type { AdapterConfig, ReviewResult, TeamAgentConfig, AgentTemplate } from './engine-adapter.js';
+export { EngineAdapter } from './engine-adapter.js';
+export type { AdapterConfig, ReviewResult } from './engine-adapter.js';
 
 // Team Registry — P2P-synced team routing metadata
 export { TeamRegistry } from './team-registry.js';

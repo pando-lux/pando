@@ -433,48 +433,54 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       return { appealed: true, entry };
     });
 
-    // ── Team API ──────────────────────────────────────────────────────────
+    // ── Team API (proxied to Teams Server — BIBLE 1.7) ────────────────────
+    // Team operations are managed by Teams Server. Node proxies requests.
+    const TEAMS_SERVER_URL = process.env.PANDO_TEAMS_URL || 'http://localhost:4873';
+    async function proxyToTeams(path: string, opts?: { method?: string; body?: any }): Promise<any> {
+      try {
+        const res = await fetch(`${TEAMS_SERVER_URL}/v1${path}`, {
+          method: opts?.method || 'GET',
+          headers: { 'Content-Type': 'application/json' },
+          ...(opts?.body ? { body: JSON.stringify(opts.body) } : {}),
+        });
+        return res.json();
+      } catch (err: any) {
+        return { error: 'Teams Server unavailable', details: err.message };
+      }
+    }
 
-    // GET /teams — List all teams from registry, enriched with active status
+    // GET /teams — List from registry + Teams Server
     fastify.get('/teams', async () => {
       const registry = node.getTeamRegistry();
-      const adapter = node.getEngineAdapter();
       if (!registry) return { teams: [] };
-      const teams = registry.listTeams().map((t: any) => ({
+      const registryTeams = registry.listTeams();
+      const teamsServerTeams = await proxyToTeams('/teams');
+      const activeIds = new Set(Array.isArray(teamsServerTeams) ? teamsServerTeams.map((t: any) => t.teamId) : []);
+      const teams = registryTeams.map((t: any) => ({
         ...t,
-        running: adapter?.isTeamActive(t.id) ?? false,
+        running: activeIds.has(t.id),
       }));
-      // Also include any active teams not in the registry (edge case: started without registration)
-      const activeIds = adapter?.getActiveTeamIds?.() ?? [];
-      for (const activeId of activeIds) {
-        if (!teams.some((t: any) => t.id === activeId)) {
-          teams.push({ id: activeId, running: true, displayName: activeId, status: 'active' });
-        }
-      }
       return { teams };
     });
 
-    // GET /teams/:teamId — Team config + status
+    // GET /teams/:teamId — Team config from registry
     fastify.get('/teams/:teamId', async (request: any, reply: any) => {
       const registry = node.getTeamRegistry();
       if (!registry) return reply.code(503).send({ error: 'Team registry not initialized' });
       const team = registry.getTeam(request.params.teamId);
       if (!team) return reply.code(404).send({ error: 'Team not found' });
-      const adapter = node.getEngineAdapter();
-      return { ...team, running: adapter?.isTeamActive(team.id) ?? false };
+      const teamsData = await proxyToTeams(`/teams/${request.params.teamId}`);
+      return { ...team, running: !teamsData?.error };
     });
 
-    // GET /teams/:teamId/board — Board tasks (local or stub for remote)
-    // Query params: ?include_done=true to also return completed tasks
-    fastify.get('/teams/:teamId/board', async (request: any, reply: any) => {
-      const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return { tasks: [] };
+    // GET /teams/:teamId/board — Proxy to Teams Server
+    fastify.get('/teams/:teamId/board', async (request: any) => {
       const teamId = request.params.teamId as string;
-      const includeDone = (request.query as any)?.include_done === 'true';
-      return { tasks: adapter.getTeamBoard(teamId, includeDone) };
+      const tasks = await proxyToTeams(`/teams/${teamId}/board`);
+      return { tasks: Array.isArray(tasks) ? tasks : [] };
     });
 
-    // POST /teams/:teamId/board — Add a task to team board
+    // POST /teams/:teamId/board — Proxy to Teams Server
     fastify.post('/teams/:teamId/board', async (request: any, reply: any) => {
       const teamId = request.params.teamId as string;
       const body = request.body as any;
@@ -484,129 +490,67 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       const description = typeof body?.description === 'string' ? body.description.slice(0, 2000) : undefined;
       const lawViolation = violatesTwoLaws(`${title} ${description || ''}`);
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
-      const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return reply.code(503).send({ error: 'PandoTeams not available' });
-      const taskId = adapter.addTeamBoardTask(teamId, title, description);
-      if (!taskId) return reply.code(500).send({ error: 'Failed to create task' });
-      return { status: 'created', taskId };
+      const result = await proxyToTeams(`/teams/${teamId}/board`, { method: 'POST', body: { title, description } });
+      return result?.error ? reply.code(500).send(result) : { status: 'created', taskId: result?.id };
     });
 
-    // PATCH /teams/:teamId/board/:taskId — Update a board task
+    // PATCH /teams/:teamId/board/:taskId — Proxy to Teams Server
     fastify.patch('/teams/:teamId/board/:taskId', async (request: any, reply: any) => {
       const { teamId, taskId } = request.params as any;
       const body = request.body as any;
       if (body?.status && !['pending', 'in_progress', 'in-progress', 'done'].includes(body.status)) {
         return reply.code(400).send({ error: 'Invalid status. Must be: pending, in_progress, or done' });
       }
-      if (body?.progress !== undefined && typeof body.progress !== 'string') {
-        return reply.code(400).send({ error: 'Progress must be a string' });
-      }
-      const adapter = node.getEngineAdapter();
-      if (!adapter?.available) return reply.code(503).send({ error: 'PandoTeams not available' });
-      const ok = adapter.updateTeamBoardTask(teamId, taskId, {
-        status: body?.status,
-        progress: typeof body?.progress === 'string' ? body.progress.slice(0, 1000) : undefined,
+      const result = await proxyToTeams(`/teams/${teamId}/board/${taskId}`, {
+        method: 'PATCH',
+        body: { status: body?.status, progress: body?.progress },
       });
-      return ok ? { status: 'updated' } : reply.code(404).send({ error: 'Task not found or no changes' });
+      return result?.error ? reply.code(404).send(result) : { status: 'updated' };
     });
 
-    // POST /teams/:teamId/trigger — Trigger team lead immediately
+    // POST /teams/:teamId/trigger — Proxy to Teams Server chat
     fastify.post('/teams/:teamId/trigger', async (request: any, reply: any) => {
       const teamId = request.params.teamId as string;
-      const adapter = node.getEngineAdapter();
-      if (!adapter?.available) {
-        return reply.code(503).send({ error: 'PandoTeams not available on this node' });
-      }
-      if (!adapter.isTeamActive(teamId)) {
-        return reply.code(404).send({ error: `Team "${teamId}" is not running on this node` });
-      }
-
       const message = (request.body as any)?.message || 'Check your inbox and review board tasks now.';
       if (typeof message !== 'string' || message.length > 5000) {
         return reply.code(400).send({ error: 'Message must be a string (max 5000 chars)' });
       }
-      const agentId = (request.body as any)?.agentId || 'lead';
-
-      // Two Laws check on trigger message
       const lawViolation = violatesTwoLaws(message);
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
-
-      // Lead uses claude-code (slow) — run in background
-      if (agentId === 'lead') {
-        adapter.triggerTeamAgentBackground(teamId, agentId, message);
-        return { team: teamId, agent: agentId, status: 'triggered', message: 'Running in background.' };
-      }
-
-      // Non-lead agents are fast — wait for completion
-      const toolCalls: any[] = [];
-      const textChunks: string[] = [];
-      try {
-        for await (const event of adapter.sendToTeamAgent(teamId, agentId, message)) {
-          if (event.type === 'tool:start') {
-            toolCalls.push({ tool: event.toolName, args: event.args });
-          } else if (event.type === 'tool:result') {
-            const out = event.result?.output || '';
-            const preview = out.length > 300 ? out.slice(0, 300) + '...' : out;
-            toolCalls.push({ tool: event.toolName, success: event.result?.success, output: preview });
-          } else if (event.type === 'stream:chunk' && event.content) {
-            textChunks.push(event.content);
-          }
-        }
-      } catch (err: any) {
-        console.error('[api] Team agent trigger failed:', err.message);
-        return reply.code(500).send({ error: 'Agent trigger failed' });
-      }
-
-      return { team: teamId, agent: agentId, toolCalls, response: textChunks.join('') };
+      const agentId = (request.body as any)?.agentId || 'lead';
+      const result = await proxyToTeams(`/teams/${teamId}/chat`, {
+        method: 'POST',
+        body: { agentId, message },
+      });
+      return { team: teamId, agent: agentId, status: 'triggered', response: result?.response };
     });
 
-    // POST /teams/:teamId/request — Submit user request (adds to board, may trigger lead)
+    // POST /teams/:teamId/request — Submit user request via Teams Server
     fastify.post('/teams/:teamId/request', async (request: any, reply: any) => {
       const teamId = request.params.teamId as string;
       const body = request.body as any;
       const message = body?.message?.trim();
-      if (!message || message.length < 5) {
-        return reply.code(400).send({ error: 'Message required (min 5 chars)' });
-      }
-      if (message.length > 500) {
-        return reply.code(400).send({ error: 'Message too long (max 500 chars)' });
-      }
+      if (!message || message.length < 5) return reply.code(400).send({ error: 'Message required (min 5 chars)' });
+      if (message.length > 500) return reply.code(400).send({ error: 'Message too long (max 500 chars)' });
       const lawViolation = violatesTwoLaws(message);
       if (lawViolation) return reply.code(403).send({ error: lawViolation });
-      const adapter = node.getEngineAdapter();
-      if (!adapter?.available) {
-        return reply.code(503).send({ error: 'PandoTeams not available on this node' });
-      }
       const severity = /\b(crash(es|ed|ing)?|critical|down|outage|broken|bug|error|fail(s|ed|ing)?)\b/i.test(message) ? 'BUG' : 'FEATURE';
       const taskTitle = `[${severity}:user] ${message.slice(0, 120)}`;
-      const taskId = adapter.addTeamBoardTask(teamId, taskTitle, message.slice(0, 500));
-      if (!taskId) {
-        return reply.code(500).send({ error: 'Could not create board task' });
-      }
-      // Auto-trigger lead to process the new task (background, non-blocking)
-      if (adapter.isTeamActive(teamId)) {
-        adapter.triggerTeamAgentBackground(teamId, 'lead', 'New user request on board. Check your inbox and review board tasks now.');
-      }
-      return { status: 'ok', taskId, message: `Report submitted to team "${teamId}". Lead triggered.` };
+      const result = await proxyToTeams(`/teams/${teamId}/board`, { method: 'POST', body: { title: taskTitle, description: message.slice(0, 500) } });
+      const taskId = result?.id || null;
+      // Trigger lead via Teams Server
+      proxyToTeams(`/teams/${teamId}/chat`, { method: 'POST', body: { agentId: 'lead', message: 'New user request on board. Check your inbox and review board tasks now.' } }).catch(() => {});
+      return { status: 'ok', taskId, message: `Report submitted to team "${teamId}".` };
     });
 
-    // POST /teams — Create a new team
+    // POST /teams — Create a new team (registry only)
     fastify.post('/teams', async (request: any, reply: any) => {
       const registry = node.getTeamRegistry();
       if (!registry) return reply.code(503).send({ error: 'Team registry not initialized' });
       const body = request.body as any;
-      if (!body?.id || !body?.displayName) {
-        return reply.code(400).send({ error: 'Required: id, displayName' });
-      }
-      if (typeof body.id !== 'string' || body.id.length > 100) {
-        return reply.code(400).send({ error: 'id must be a string (max 100 chars)' });
-      }
-      if (typeof body.displayName !== 'string' || body.displayName.length > 200) {
-        return reply.code(400).send({ error: 'displayName must be a string (max 200 chars)' });
-      }
-      if (body.description !== undefined && (typeof body.description !== 'string' || body.description.length > 2000)) {
-        return reply.code(400).send({ error: 'description must be a string (max 2000 chars)' });
-      }
+      if (!body?.id || !body?.displayName) return reply.code(400).send({ error: 'Required: id, displayName' });
+      if (typeof body.id !== 'string' || body.id.length > 100) return reply.code(400).send({ error: 'id must be a string (max 100 chars)' });
+      if (typeof body.displayName !== 'string' || body.displayName.length > 200) return reply.code(400).send({ error: 'displayName must be a string (max 200 chars)' });
       try {
         const team = registry.createTeam({
           id: body.id.trim(),
@@ -626,25 +570,20 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       }
     });
 
-    // PATCH /teams/:teamId — Update team config
+    // PATCH /teams/:teamId — Update team config (registry only)
     fastify.patch('/teams/:teamId', async (request: any, reply: any) => {
       const registry = node.getTeamRegistry();
       if (!registry) return reply.code(503).send({ error: 'Team registry not initialized' });
       const teamId = request.params.teamId as string;
       const team = registry.getTeam(teamId);
       if (!team) return reply.code(404).send({ error: 'Team not found' });
-      const body = request.body as any;
-      registry.updateTeam(teamId, body);
+      registry.updateTeam(teamId, request.body as any);
       return { status: 'updated' };
     });
 
-    // DELETE /teams/:teamId — Stop team, mark orphaned
-    fastify.delete('/teams/:teamId', async (request: any, reply: any) => {
+    // DELETE /teams/:teamId — Mark orphaned in registry
+    fastify.delete('/teams/:teamId', async (request: any) => {
       const teamId = request.params.teamId as string;
-      const adapter = node.getEngineAdapter();
-      if (adapter?.isTeamActive(teamId)) {
-        await adapter.stopTeam(teamId);
-      }
       const registry = node.getTeamRegistry();
       if (registry) {
         registry.updateTeam(teamId, { status: 'orphaned', managingNode: null });
@@ -652,256 +591,83 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       return { status: 'stopped' };
     });
 
-    // GET /teams/:teamId/agents — List agents with details
-    fastify.get('/teams/:teamId/agents', async (request: any, reply: any) => {
-      try {
-        const teamId = (request.params as any).teamId;
-        const adapter = node.getEngineAdapter();
-        const agents = adapter?.getTeamAgents?.(teamId) ?? [];
-        return { teamId, agents };
-      } catch (err: any) {
-        console.error('[api] List agents failed:', err.message);
-        return reply.status(500).send({ error: 'Failed to list agents' });
-      }
+    // GET /teams/:teamId/agents — Proxy to Teams Server
+    fastify.get('/teams/:teamId/agents', async (request: any) => {
+      const teamId = (request.params as any).teamId;
+      const team = await proxyToTeams(`/teams/${teamId}`);
+      return { teamId, agents: team?.agents || [] };
     });
 
-    // GET /teams/:teamId/agents/:agentId/messages — Agent conversation history
-    fastify.get('/teams/:teamId/agents/:agentId/messages', async (request: any, reply: any) => {
-      try {
-        const { teamId, agentId } = request.params as any;
-        const limit = Math.min(parseInt((request.query as any)?.limit || '20', 10) || 20, 100);
-        const adapter = node.getEngineAdapter();
-        if (!adapter?.available) return { messages: [] };
-        const messages = adapter.getTeamAgentMessages(teamId, agentId, limit);
-        return { messages };
-      } catch (err: any) {
-        console.error('[api] Get agent messages failed:', err.message);
-        return reply.status(500).send({ error: 'Failed to get agent messages' });
-      }
+    // GET /teams/:teamId/agents/:agentId/messages — Proxy to Teams Server activity
+    fastify.get('/teams/:teamId/agents/:agentId/messages', async (request: any) => {
+      const { teamId } = request.params as any;
+      const limit = Math.min(parseInt((request.query as any)?.limit || '20', 10) || 20, 100);
+      const activity = await proxyToTeams(`/teams/${teamId}/activity?limit=${limit}`);
+      return { messages: Array.isArray(activity) ? activity : [] };
     });
 
-    // POST /teams/:teamId/message — Send a message between agents in a team
+    // POST /teams/:teamId/message — Proxy to Teams Server chat
     fastify.post('/teams/:teamId/message', async (request: any, reply: any) => {
-      try {
-        const teamId = request.params.teamId as string;
-        const adapter = node.getEngineAdapter();
-        if (!adapter?.available) {
-          return reply.code(503).send({ error: 'PandoTeams not available on this node' });
-        }
-        if (!adapter.isTeamActive(teamId)) {
-          return reply.code(404).send({ error: `Team "${teamId}" is not running on this node` });
-        }
-        const body = request.body as any || {};
-        const { from, to, message } = body;
-        if (!from || !to || !message) {
-          return reply.code(400).send({ error: 'Required fields: from, to, message' });
-        }
-        if (typeof from !== 'string' || typeof to !== 'string') {
-          return reply.code(400).send({ error: 'from and to must be strings' });
-        }
-        if (typeof message !== 'string' || message.length < 1 || message.length > 2000) {
-          return reply.code(400).send({ error: 'Message must be 1-2000 chars' });
-        }
-        const lawViolation = violatesTwoLaws(message);
-        if (lawViolation) return reply.code(403).send({ error: lawViolation });
-        const ok = adapter.sendTeamMessage(teamId, from, to, message);
-        return ok ? { status: 'sent', from, to } : reply.code(500).send({ error: 'Failed to send message' });
-      } catch (err: any) {
-        console.error('[api] Team message send failed:', err.message);
-        return reply.code(500).send({ error: 'Failed to send message' });
-      }
+      const teamId = request.params.teamId as string;
+      const body = request.body as any || {};
+      const { from, to, message } = body;
+      if (!from || !to || !message) return reply.code(400).send({ error: 'Required fields: from, to, message' });
+      if (typeof message !== 'string' || message.length < 1 || message.length > 2000) return reply.code(400).send({ error: 'Message must be 1-2000 chars' });
+      const lawViolation = violatesTwoLaws(message);
+      if (lawViolation) return reply.code(403).send({ error: lawViolation });
+      const result = await proxyToTeams(`/teams/${teamId}/chat`, { method: 'POST', body: { agentId: to, message: `[from:${from}] ${message}` } });
+      return result?.error ? reply.code(500).send(result) : { status: 'sent', from, to };
     });
 
-    // POST /teams/:teamId/agents/spawn — Spawn a new agent on a team
-    fastify.post('/teams/:teamId/agents/spawn', async (request: any, reply: any) => {
-      try {
-        const teamId = request.params.teamId as string;
-        const adapter = node.getEngineAdapter();
-        if (!adapter?.available) {
-          return reply.code(503).send({ error: 'PandoTeams not available on this node' });
-        }
-        if (!adapter.isTeamActive(teamId)) {
-          return reply.code(404).send({ error: `Team "${teamId}" is not running on this node` });
-        }
-
-        const body = request.body as any || {};
-        const { template, task, customPrompt, agentId: requestedAgentId } = body;
-
-        // Validate template ID type
-        if (template !== undefined && typeof template !== 'string') {
-          return reply.code(400).send({ error: 'template must be a string' });
-        }
-
-        // Validate user-provided text against Two Laws
-        if (task) {
-          const lawViolation = violatesTwoLaws(task);
-          if (lawViolation) return reply.code(403).send({ error: lawViolation });
-        }
-        if (customPrompt) {
-          const lawViolation = violatesTwoLaws(customPrompt);
-          if (lawViolation) return reply.code(403).send({ error: lawViolation });
-        }
-
-        // Check agent limit (max 10)
-        const currentAgents = adapter.getTeamAgents(teamId);
-        if (currentAgents.length >= 10) {
-          return reply.code(400).send({ error: 'Team agent limit reached (10). Stop unused agents before spawning new ones.' });
-        }
-
-        // Resolve template and prompt
-        const allTemplates = adapter.getTemplates();
-        let prompt = '';
-        let role = 'worker';
-        let model = 'claude-code';
-        let displayName = 'Custom Agent';
-
-        if (template) {
-          const tpl = allTemplates.find((t: any) => t.id === template);
-          if (!tpl) {
-            return reply.code(400).send({ error: `Template "${template}" not found. Use GET /v1/templates to list available templates.` });
-          }
-          prompt = tpl.promptSkeleton;
-          role = tpl.role;
-          model = tpl.model;
-          displayName = tpl.displayName;
-          if (task) {
-            prompt += `\n\n## Your Current Task\n${task}`;
-          }
-        } else if (customPrompt) {
-          prompt = customPrompt;
-          if (task) {
-            prompt += `\n\n## Your Current Task\n${task}`;
-          }
-        } else {
-          return reply.code(400).send({ error: 'Provide either a template ID or customPrompt' });
-        }
-
-        const agentId = requestedAgentId || `${template || 'custom'}-${Date.now().toString(36)}`;
-
-        await adapter.spawnTeamAgent(teamId, {
-          id: agentId,
-          role,
-          displayName,
-          prompt,
-          model,
-          tickIntervalMs: 0,
-        });
-
-        return { status: 'spawned', agentId, role, displayName };
-      } catch (err: any) {
-        console.error('[api] Agent spawn failed:', err.message);
-        return reply.code(500).send({ error: 'Failed to spawn agent' });
-      }
+    // POST /teams/:teamId/agents/spawn — Not available (Teams Server manages agents)
+    fastify.post('/teams/:teamId/agents/spawn', async (_request: any, reply: any) => {
+      return reply.code(501).send({ error: 'Agent spawning is managed by Teams Server directly' });
     });
 
-    // DELETE /teams/:teamId/agents/:agentId — Stop and remove an agent
-    fastify.delete('/teams/:teamId/agents/:agentId', async (request: any, reply: any) => {
-      try {
-        const { teamId, agentId } = request.params as any;
-        const adapter = node.getEngineAdapter();
-        if (!adapter?.available) {
-          return reply.code(503).send({ error: 'PandoTeams not available on this node' });
-        }
-        if (!adapter.isTeamActive(teamId)) {
-          return reply.code(404).send({ error: `Team "${teamId}" is not running on this node` });
-        }
-
-        // Don't allow stopping the lead
-        if (agentId === 'lead') {
-          return reply.code(400).send({ error: 'Cannot stop the lead agent. Stop the entire team instead.' });
-        }
-
-        // Check that agent exists
-        const agents = adapter.getTeamAgents(teamId);
-        const agent = agents.find((a: any) => a.id === agentId);
-        if (!agent) {
-          return reply.code(404).send({ error: `Agent "${agentId}" not found in team "${teamId}"` });
-        }
-
-        await adapter.stopTeamAgent(teamId, agentId);
-        return { status: 'stopped', agentId };
-      } catch (err: any) {
-        console.error('[api] Agent stop failed:', err.message);
-        return reply.code(500).send({ error: 'Failed to stop agent' });
-      }
+    // DELETE /teams/:teamId/agents/:agentId — Not available (Teams Server manages agents)
+    fastify.delete('/teams/:teamId/agents/:agentId', async (_request: any, reply: any) => {
+      return reply.code(501).send({ error: 'Agent lifecycle is managed by Teams Server directly' });
     });
 
-    // POST /teams/:teamId/agents/:agentId/trigger — Trigger a specific agent manually
+    // POST /teams/:teamId/agents/:agentId/trigger — Proxy to Teams Server chat
     fastify.post('/teams/:teamId/agents/:agentId/trigger', async (request: any, reply: any) => {
-      try {
-        const { teamId, agentId } = request.params as any;
-        const adapter = node.getEngineAdapter();
-        if (!adapter?.isTeamActive(teamId)) {
-          return reply.status(404).send({ error: 'Team not running' });
-        }
-        const message = (request.body as any)?.message || 'Manual trigger: check your inbox and process board tasks.';
-        if (typeof message !== 'string' || message.length > 5000) {
-          return reply.code(400).send({ error: 'Message must be a string (max 5000 chars)' });
-        }
-        // Two Laws check on trigger message
-        const lawViolation = violatesTwoLaws(message);
-        if (lawViolation) return reply.code(403).send({ error: lawViolation });
-        // Run in background — return immediately
-        adapter.triggerTeamAgentBackground(teamId, agentId, message);
-        return { status: 'triggered', teamId, agentId };
-      } catch (err: any) {
-        console.error('[api] Agent trigger failed:', err.message);
-        return reply.status(500).send({ error: 'Agent trigger failed' });
-      }
+      const { teamId, agentId } = request.params as any;
+      const message = (request.body as any)?.message || 'Manual trigger: check your inbox and process board tasks.';
+      if (typeof message !== 'string' || message.length > 5000) return reply.code(400).send({ error: 'Message must be a string (max 5000 chars)' });
+      const lawViolation = violatesTwoLaws(message);
+      if (lawViolation) return reply.code(403).send({ error: lawViolation });
+      const result = await proxyToTeams(`/teams/${teamId}/chat`, { method: 'POST', body: { agentId, message } });
+      return { status: 'triggered', teamId, agentId, response: result?.response };
     });
 
-    // GET /teams/:teamId/cost — Team cost summary from PandoTeams budget_usage table
-    fastify.get('/teams/:teamId/cost', async (request: any, reply: any) => {
-      try {
-        const teamId = (request.params as any).teamId;
-        const adapter = node.getEngineAdapter();
-        const cost = adapter?.getTeamCost?.(teamId) ?? { totalTokens: 0, totalCostLux: 0, byAgent: {} };
-        return { teamId, ...cost };
-      } catch (err: any) {
-        console.error('[api] Team cost query failed:', err.message);
-        return reply.status(500).send({ error: 'Failed to get team cost' });
-      }
+    // GET /teams/:teamId/cost — Not available on Node (Teams Server manages this)
+    fastify.get('/teams/:teamId/cost', async (request: any) => {
+      return { teamId: (request.params as any).teamId, totalTokens: 0, totalCostUsd: 0, totalCostLux: 0, byAgent: {} };
     });
 
-    // GET /teams/:teamId/activity — Recent messages + tool_calls from PandoTeams DB
-    fastify.get('/teams/:teamId/activity', async (request: any, reply: any) => {
-      try {
-        const teamId = (request.params as any).teamId;
-        const limit = Math.min(Number((request.query as any)?.limit) || 20, 100);
-        const full = (request.query as any)?.full === 'true';
-        const adapter = node.getEngineAdapter();
-        const activity = adapter?.getTeamActivity?.(teamId, limit, full) ?? { messages: [], toolCalls: [] };
-        return { teamId, ...activity };
-      } catch (err: any) {
-        console.error('[api] Team activity query failed:', err.message);
-        return reply.status(500).send({ error: 'Failed to get team activity' });
-      }
+    // GET /teams/:teamId/activity — Proxy to Teams Server
+    fastify.get('/teams/:teamId/activity', async (request: any) => {
+      const teamId = (request.params as any).teamId;
+      const limit = Math.min(Number((request.query as any)?.limit) || 20, 100);
+      const activity = await proxyToTeams(`/teams/${teamId}/activity?limit=${limit}`);
+      return { teamId, messages: Array.isArray(activity) ? activity : [], toolCalls: [] };
     });
 
     // ── Agent Templates ──────────────────────────────────────────────────
-    fastify.get('/templates', async (_request: any, reply: any) => {
-      try {
-        const adapter = node.getEngineAdapter();
-        const templates = adapter?.getTemplates?.() ?? [];
-        return { templates };
-      } catch (err: any) {
-        console.error('[api] Templates list failed:', err.message);
-        return reply.code(500).send({ error: 'Failed to list templates' });
-      }
+    fastify.get('/templates', async () => {
+      return { templates: [] };
     });
 
-    // POST /templates — create custom template
+    // POST /templates — create custom template (file-based, kept on Node)
     fastify.post('/templates', async (request: any, reply: any) => {
       try {
         const body = request.body;
         if (!body?.id || !body?.role || !body?.promptSkeleton) {
           return reply.status(400).send({ error: 'Required: id, role, promptSkeleton' });
         }
-        // Validate ID is safe for filesystem
         if (!/^[a-zA-Z0-9_-]+$/.test(body.id)) {
           return reply.status(400).send({ error: 'Template ID must be alphanumeric with dashes/underscores' });
         }
-        // Don't allow overwriting built-in templates
         const builtIn = ['worker', 'builder', 'tester', 'observer', 'reviewer'];
         if (builtIn.includes(body.id)) {
           return reply.status(400).send({ error: 'Cannot overwrite built-in template' });
@@ -958,50 +724,31 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
     });
 
     // ── Team Task Progress ──────────────────────────────────────────────
-    fastify.get('/teams/:teamId/tasks', async (request: any, reply: any) => {
-      try {
-        const adapter = node.getEngineAdapter();
-        const tasks = adapter?.getTeamBoard(request.params.teamId) ?? [];
-        return { tasks };
-      } catch (err: any) {
-        console.error('[api] Team tasks list failed:', err.message);
-        return reply.code(500).send({ error: 'Failed to list team tasks' });
-      }
+    fastify.get('/teams/:teamId/tasks', async (request: any) => {
+      const tasks = await proxyToTeams(`/teams/${request.params.teamId}/board`);
+      return { tasks: Array.isArray(tasks) ? tasks : [] };
     });
 
     fastify.get('/teams/:teamId/tasks/:taskId', async (request: any, reply: any) => {
-      try {
-        const adapter = node.getEngineAdapter();
-        const tasks = adapter?.getTeamBoard(request.params.teamId) ?? [];
-        const task = tasks.find((t: any) => t.id === request.params.taskId);
-        if (!task) return reply.code(404).send({ error: 'Task not found' });
-        return task;
-      } catch (err: any) {
-        console.error('[api] Team task get failed:', err.message);
-        return reply.code(500).send({ error: 'Failed to get team task' });
-      }
+      const tasks = await proxyToTeams(`/teams/${request.params.teamId}/board`);
+      const task = Array.isArray(tasks) ? tasks.find((t: any) => t.id === request.params.taskId) : null;
+      if (!task) return reply.code(404).send({ error: 'Task not found' });
+      return task;
     });
 
     // ── Team Status ─────────────────────────────────────────────────────
-    fastify.get('/teams/:teamId/status', async (request: any, reply: any) => {
-      try {
-        const teamId = request.params.teamId as string;
-        const adapter = node.getEngineAdapter();
-        const isActive = adapter?.isTeamActive(teamId) ?? false;
-        const agents = adapter?.getTeamAgents?.(teamId) ?? [];
-        const tasks = adapter?.getTeamBoard(teamId) ?? [];
-        return {
-          teamId,
-          active: isActive,
-          agentCount: agents.length,
-          agents: agents.map((a: any) => ({ id: a.id, role: a.role, displayName: a.displayName, status: a.status })),
-          pendingTasks: tasks.length,
-          managingNode: node.getIdentity?.()?.peerId || 'unknown',
-        };
-      } catch (err: any) {
-        console.error('[api] Team status failed:', err.message);
-        return reply.code(500).send({ error: 'Failed to get team status' });
-      }
+    fastify.get('/teams/:teamId/status', async (request: any) => {
+      const teamId = request.params.teamId as string;
+      const team = await proxyToTeams(`/teams/${teamId}`);
+      const tasks = await proxyToTeams(`/teams/${teamId}/board`);
+      return {
+        teamId,
+        active: !team?.error,
+        agentCount: team?.agents?.length || 0,
+        agents: team?.agents || [],
+        pendingTasks: Array.isArray(tasks) ? tasks.length : 0,
+        managingNode: node.getIdentity?.()?.peerId || 'unknown',
+      };
     });
 
     // ── Atomic Commit + Propose (Self-Upgrade Pipeline) ─────────────────────
@@ -1124,17 +871,15 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         // Step 6: Update board task (if taskId provided)
         if (taskId) {
           try {
-            const adapter = node.getEngineAdapter();
-            if (adapter?.available) {
-              const progress = governanceRequired
-                ? `Committed ${commitHash}, proposal ${proposalId} — push pending governance approval`
-                : `Committed ${commitHash}, proposal ${proposalId || 'skipped'}`;
-              adapter.updateTeamBoardTask(teamId, taskId, {
-                status: 'done',
-                progress,
-              });
-              steps.push('task-completed');
-            }
+            const progress = governanceRequired
+              ? `Committed ${commitHash}, proposal ${proposalId} — push pending governance approval`
+              : `Committed ${commitHash}, proposal ${proposalId || 'skipped'}`;
+            // Update task via Teams Server proxy
+            await proxyToTeams(`/teams/${teamId}/board/${taskId}`, {
+              method: 'PATCH',
+              body: { status: 'done', progress },
+            }).catch(() => {});
+            steps.push('task-completed');
           } catch { /* non-fatal */ }
         }
 

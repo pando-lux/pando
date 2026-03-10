@@ -1,18 +1,22 @@
 /**
- * Engine Adapter — THE nervous system between pando-node (body) and pando-teams (brain).
+ * Engine Adapter — connection between pando-node and pando-teams.
  *
  * This is the ONLY file in pando-node that imports @pando-teams/core.
  * Everything else in pando-node is pure infrastructure.
  *
- * Responsibilities:
- *   - Manages EnginePool (Map<id, PandoTeams>) with lifecycle hooks
+ * Responsibilities (post-BIBLE 1.7 migration):
+ *   - Manages EnginePool for project engines
  *   - Registers Pando tools on each engine (deploy, governance, transfer, etc.)
  *   - Injects Lux budget provider
  *   - Routes messages to the right engine (system vs project)
  *   - Provides governance AI review hook
  *   - Runs Scheduler for periodic autonomous behavior
- *   - Starts teams (startTeam) using PandoTeams's native agent/board system
  *   - Injects contributed AI API keys from ResourceRegistry
+ *   - Board state P2P sync for team failover (file-based)
+ *
+ * Team management (startTeam, stopTeam, agent lifecycle, tick scheduling,
+ * prompt templates, watchdog) has been moved to Teams Server's TeamManager
+ * (BIBLE 1.7 Step 3).
  */
 
 import { join as pathJoin } from 'node:path';
@@ -20,7 +24,7 @@ import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync, rename
 import { homedir } from 'node:os';
 import { randomUUID } from 'node:crypto';
 import type { ResourceRegistry } from '../platform/resource-registry.js';
-import { STREAM_EVENT_VERSION, LUX_PER_USD, DAILY_EMISSION_CAP } from '@pando/shared';
+import { STREAM_EVENT_VERSION, LUX_PER_USD } from '@pando/shared';
 import type { StreamEvent, PandoService, ServiceContext } from '@pando/shared';
 
 // Two Laws Content Filter — imported from shared constants (defense-in-depth at storage level)
@@ -236,7 +240,6 @@ async function createPandoTools(apiPort: number, apiToken?: string, resourceRegi
         if (!SAFE_REF.test(repo)) return { success: false, output: 'Invalid repo name' };
 
         // 1. Check for known local repos first (no network needed).
-        //    Detect pando-node repo from package.json location (works on any OS).
         const { fileURLToPath } = await import('node:url');
         const thisDir = dirname(fileURLToPath(import.meta.url));
         const nodeRepoRoot = resolve(thisDir, '..', '..', '..', '..');
@@ -269,7 +272,6 @@ async function createPandoTools(apiPort: number, apiToken?: string, resourceRegi
             return { success: true, output: JSON.stringify({ path: workDir, status: 'updated', repo, branch }) };
           } else {
             // 3. Clone fresh from GitHub.
-            // Use contributed credential from ResourceRegistry instead of hardcoded git remote PAT
             let cloneUrl = repo.includes('/') ? `https://github.com/${repo}.git` : `https://github.com/pando-lux/${repo}.git`;
             if (resourceRegistry?.resolveGitCredential) {
               try {
@@ -289,495 +291,6 @@ async function createPandoTools(apiPort: number, apiToken?: string, resourceRegi
     },
   ];
 }
-
-/**
- * Create the manage_team tool for lead agents.
- * Allows leads to spawn, stop, and list sub-agents from templates.
- */
-async function createManageTeamTool(
-  adapter: EngineAdapter,
-  teamId: string,
-): Promise<any> {
-  const { z } = await import('zod');
-  return {
-    name: 'manage_team',
-    description: 'Manage your team: spawn agents from templates, list team members, stop agents.',
-    parameters: z.object({
-      action: z.enum(['spawn', 'list', 'stop', 'templates']).describe(
-        'Action: spawn (create agent), list (show team), stop (remove agent), templates (show available)'
-      ),
-      template: z.string().optional().describe('Template ID for spawn (e.g. "worker", "builder", "tester")'),
-      task: z.string().optional().describe('Task description for spawned agent (appended to template prompt)'),
-      customPrompt: z.string().optional().describe('Full custom prompt instead of template (for novel agents)'),
-      agentId: z.string().optional().describe('Agent ID for stop action, or custom ID for spawn'),
-    }),
-    execute: async (args: any) => {
-      const ok = (data: any) => ({ success: true, output: JSON.stringify(data, null, 2) });
-      const fail = (msg: string) => ({ success: false, output: msg });
-
-      switch (args.action) {
-        case 'templates': {
-          const allTemplates = adapter.getTemplates();
-          const templates = allTemplates.map(t => ({
-            id: t.id, displayName: t.displayName, description: t.description, role: t.role,
-          }));
-          return ok({ templates });
-        }
-
-        case 'list': {
-          const teamData = adapter.getTeamAgents(teamId);
-          return ok({ teamId, agents: teamData });
-        }
-
-        case 'spawn': {
-          const allTemplates = adapter.getTemplates();
-          const template = args.template ? allTemplates.find((t: AgentTemplate) => t.id === args.template) : null;
-          let prompt = '';
-          let role = 'worker';
-          let model = 'claude-code';
-
-          if (template) {
-            prompt = template.promptSkeleton;
-            role = template.role;
-            model = template.model;
-            if (args.task) {
-              prompt += `\n\n## Your Current Task\n${args.task}`;
-            }
-          } else if (args.customPrompt) {
-            prompt = args.customPrompt;
-            if (args.task) {
-              prompt += `\n\n## Your Current Task\n${args.task}`;
-            }
-          } else {
-            return fail('Provide either a template ID or customPrompt');
-          }
-
-          const agentId = args.agentId || `${args.template || 'custom'}-${Date.now().toString(36)}`;
-
-          // Check agent limit per team (max 10 agents to prevent runaway spawning)
-          const currentAgents = adapter.getTeamAgents(teamId);
-          if (currentAgents.length >= 10) {
-            return fail('Team agent limit reached (10). Stop unused agents before spawning new ones.');
-          }
-
-          try {
-            await adapter.spawnTeamAgent(teamId, {
-              id: agentId,
-              role,
-              displayName: template?.displayName || 'Custom Agent',
-              prompt,
-              model,
-              tickIntervalMs: template?.tickIntervalMs || 0,
-            });
-            return ok({ spawned: agentId, role, template: args.template || 'custom' });
-          } catch (err: any) {
-            return fail(`Failed to spawn agent: ${err.message}`);
-          }
-        }
-
-        case 'stop': {
-          if (!args.agentId) return fail('agentId required for stop action');
-          // Don't allow stopping the lead itself
-          if (args.agentId === 'lead') return fail('Cannot stop the lead agent');
-          try {
-            await adapter.stopTeamAgent(teamId, args.agentId);
-            return ok({ stopped: args.agentId });
-          } catch (err: any) {
-            return fail(`Failed to stop agent: ${err.message}`);
-          }
-        }
-
-        default:
-          return fail(`Unknown action: ${args.action}`);
-      }
-    },
-  };
-}
-
-// ─── Team Agent Config ──────────────────────────────────────────────────
-
-export interface TeamAgentConfig {
-  id: string;
-  role: string;
-  displayName: string;
-  prompt: string;
-  promptTemplate?: string;  // template ID — resolved at startTeam() time
-  model?: string;
-  tickIntervalMs?: number;
-}
-
-// ─── Prompt Parameterization ─────────────────────────────────────────────
-
-export interface PromptContext {
-  projectDir: string;   // resolved nodeRepoRoot
-  apiPort: number;      // from config
-  apiToken?: string;    // Bearer token for authenticated API calls (commit-and-propose)
-  teamId?: string;      // team being started (for universal templates)
-  repos?: string[];     // repos assigned to the team
-  model?: string;       // 'claude-code' | 'gemini-*' | 'gpt-*' etc — for model-specific prompts
-}
-
-// ─── Agent Templates ─────────────────────────────────────────────────────
-
-/** Agent template — a reusable blueprint for spawning agents. */
-export interface AgentTemplate {
-  id: string;
-  displayName: string;
-  description: string;
-  role: string;
-  promptSkeleton: string;
-  model: string;
-  tickIntervalMs: number;   // 0 = on-demand only (no periodic tick)
-}
-
-/** Built-in templates that ship with the code. */
-export const BUILT_IN_TEMPLATES: AgentTemplate[] = [
-  {
-    id: 'worker',
-    displayName: 'Worker',
-    description: 'Simple task executor. Does what the lead tells it.',
-    role: 'worker',
-    promptSkeleton: 'You are a worker agent. Execute the task given to you. Use bash, read, write, edit tools. When done, report results by printing a clear summary. Be brief. Act, don\'t narrate.',
-    model: 'claude-code',
-    tickIntervalMs: 0,
-  },
-  {
-    id: 'builder',
-    displayName: 'Builder',
-    description: 'Code writer with git access. Builds features, fixes bugs.',
-    role: 'builder',
-    promptSkeleton: 'You are a builder agent. You write code, fix bugs, and build features. Always: read before edit, npm run build after changes, git commit with descriptive message. When done, print a clear summary of what you changed.',
-    model: 'claude-code',
-    tickIntervalMs: 0,
-  },
-  {
-    id: 'tester',
-    displayName: 'Tester',
-    description: 'Runs tests and reports failures. Read-only codebase access.',
-    role: 'tester',
-    promptSkeleton: 'You are a tester agent. Run tests: npm run build, npx playwright test. Report failures to lead with specific error messages and file:line locations. Do NOT modify code.',
-    model: 'claude-code',
-    tickIntervalMs: 0,
-  },
-  {
-    id: 'observer',
-    displayName: 'Observer',
-    description: 'Monitors health. Reports anomalies. Read-only.',
-    role: 'explorer',
-    promptSkeleton: 'You are an observer agent. Monitor system health via curl to /v1/health and /v1/status. Report anomalies by printing findings. You are READ-ONLY. Never modify code or files.',
-    model: 'claude-code',
-    tickIntervalMs: 60 * 60_000,
-  },
-  {
-    id: 'reviewer',
-    displayName: 'Code Reviewer',
-    description: 'Reviews code changes for quality, security, and architecture.',
-    role: 'reviewer',
-    promptSkeleton: 'You are a code reviewer. Review diffs for: security vulnerabilities, architectural violations, code quality issues. Print a clear report of findings.',
-    model: 'claude-code',
-    tickIntervalMs: 0,
-  },
-];
-
-/**
- * Load custom agent templates from disk.
- * Files: ~/.pando/teams/templates/*.json
- * Each file is a single AgentTemplate JSON object.
- */
-function loadCustomTemplates(): AgentTemplate[] {
-  try {
-    const dir = pathJoin(homedir(), '.pando', 'teams', 'templates');
-
-    if (!existsSync(dir)) return [];
-
-    const files = readdirSync(dir).filter((f: string) => f.endsWith('.json'));
-    const templates: AgentTemplate[] = [];
-
-    for (const file of files) {
-      try {
-        const content = readFileSync(pathJoin(dir, file), 'utf-8');
-        const parsed = JSON.parse(content);
-        // Validate required fields
-        if (parsed.id && parsed.role && parsed.promptSkeleton) {
-          templates.push({
-            id: parsed.id,
-            displayName: parsed.displayName || parsed.id,
-            description: parsed.description || '',
-            role: parsed.role,
-            promptSkeleton: parsed.promptSkeleton,
-            model: parsed.model || 'claude-code',
-            tickIntervalMs: parsed.tickIntervalMs || 0,
-          });
-        }
-      } catch { /* skip invalid files */ }
-    }
-    return templates;
-  } catch {
-    return [];
-  }
-}
-
-// ─── Seed Configs (pando-infra team prompts — parameterized) ──────────
-
-function makeExplorerPrompt(ctx: PromptContext): string {
-  return `You are the Pando Explorer. You test live services like a real user — browsing pages, clicking buttons, filling forms, and reporting what's broken.
-
-You have Playwright MCP tools available. USE THEM. Do not just curl APIs — actually browse the web UIs.
-
-SERVICES TO TEST (pick 2-3 per tick, rotate):
-- Hub: http://localhost:3003 — home, /chat, /projects, /wallet, /governance, /agents
-- Teams Web UI: http://localhost:5173 — team list, sessions, chat panel
-- Node API: http://localhost:${ctx.apiPort}/v1/status, /v1/teams, /v1/health
-
-TESTING STEPS:
-1. Use mcp__plugin_playwright_playwright__browser_navigate to open a page
-2. Use mcp__plugin_playwright_playwright__browser_snapshot to read the page state
-3. Use mcp__plugin_playwright_playwright__browser_click or browser_fill_form to interact
-4. Use mcp__plugin_playwright_playwright__browser_snapshot again to see results
-5. Think: "Did this work? Does it make sense? What would a real user expect?"
-
-TEST LIKE A HUMAN:
-- Send a chat message in the hub — does it get a response? Does the response make sense?
-- Click on a team card — does it show team details or crash?
-- Navigate between pages — do links work? Any broken routes?
-- Check error states — what happens with bad input?
-- Look at the console for errors: mcp__plugin_playwright_playwright__browser_console_messages
-
-REPORTING:
-For each bug found, create a board task so the lead can fix it:
-  Use the manage_tasks tool with action "create", title "[BUG:severity] description", and a description with details.
-  Example: manage_tasks({ action: "create", title: "[BUG:critical] Chat page crashes on send", description: "Page: http://localhost:3003/chat — clicking Send button throws TypeError. Console: Cannot read property 'encrypt' of undefined." })
-
-Also send a message to the lead summarizing what you found:
-  curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"explorer","to":"lead","message":"[SEVERITY:ui] Page: <url> — <what broke>"}'
-
-If everything works on the pages you tested, say "All tested pages healthy: <list>" and STOP.
-
-RULES:
-- You are READ-ONLY. Never modify code or files.
-- Test 2-3 pages per tick. Don't try to test everything in one pass.
-- Be specific: include URLs, element text, error messages.
-- Close the browser when done: mcp__plugin_playwright_playwright__browser_close`;
-}
-
-function makeObserverPrompt(ctx: PromptContext): string {
-  return `You are the Pando Network Observer. You monitor network health and report problems to the lead.
-
-IMPORTANT: You MUST call tools. Do not just describe what you would do — actually call the tools.
-IMPORTANT: Complete in 5 tool calls or fewer. Do NOT loop or recheck.
-
-STEP 1: Check node health:
-  bash: curl -s http://127.0.0.1:${ctx.apiPort}/v1/status
-STEP 2: Check connected peers:
-  bash: curl -s http://127.0.0.1:${ctx.apiPort}/v1/peers
-STEP 3: Analyze the results IN ONE PASS:
-  - If peer count is 0: Create a board task AND send message to lead:
-    manage_tasks({ action: "create", title: "[CRITICAL:health] No peers connected — node is isolated", description: "Peer count dropped to 0. Node cannot participate in network. Check libp2p, firewall, bootstrap peers." })
-    curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"observer","to":"lead","message":"[CRITICAL:health] No peers connected. Board task created."}'
-  - If peer count is 1: send message to lead: "[WARNING:health] Only 1 peer connected. Expected 2+. Peer: ..."
-  - If health status is degraded: Create a board task with details and send message to lead.
-  - If peer count >= 2 AND health is good: say "All healthy. No issues to report." and STOP.
-
-For CRITICAL or WARNING issues, ALWAYS create a board task using manage_tasks so the lead can track and fix it.
-
-RULES:
-- 2+ peers is HEALTHY for the current network size.
-- Include SPECIFIC details (peer count, peer IDs, error details).
-- Do NOT loop or recheck. One pass: status → peers → analyze → report → done.
-- You are READ-ONLY. Never modify code or files.
-- You do NOT have PandoTeams tools. Use bash (curl) for API calls and bash for commands.`;
-}
-
-function makeQAPrompt(ctx: PromptContext): string {
-  return `You are the Pando QA Agent. You run real tests and report failures to the lead.
-
-IMPORTANT: You MUST call tools. Do not just describe what you would do — actually call the tools.
-IMPORTANT: Complete in 10 tool calls or fewer.
-
-STEP 1: Run the build to verify compilation:
-  bash: cd ${ctx.projectDir} && npm run build 2>&1 | tail -5
-  - If build fails: send_message (toAgentId: "lead", message: "[CRITICAL:build] Build failed: <error>")
-
-STEP 2: Check node health via API:
-  bash: curl -s http://localhost:${ctx.apiPort}/v1/health | head -20
-  - If unhealthy: include in report
-
-STEP 3: Run E2E tests (if build passed):
-  bash: cd ${ctx.projectDir} && npx playwright test --project pando-node tests/e2e/pando-node/pando-e2e.spec.ts 2>&1 | tail -30
-  - Note: Tests may take 2+ minutes. This is normal.
-
-STEP 4: Analyze ALL results and send ONE report:
-  - If all passed: say "All checks passed. Build OK. Tests OK." and STOP.
-  - If anything failed: Create a board task for each failure AND send a summary message to lead:
-    manage_tasks({ action: "create", title: "[BUG:severity] category — what failed", description: "Build output or test failure details. Include error messages and file paths." })
-    curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${ctx.teamId || 'pando-infra'}/message -H "Content-Type: application/json" -d '{"from":"qa","to":"lead","message":"[SEVERITY:category] What failed — details. Board task created."}'
-
-RULES:
-- Run REAL commands, not just API checks.
-- Include SPECIFIC output (error messages, test names, line numbers).
-- Do NOT loop or recheck. One pass through all steps.
-- You do NOT have PandoTeams tools. Use bash (curl) for API calls.`;
-}
-
-function makeLeadPrompt(ctx: PromptContext): string {
-  const token = ctx.apiToken || '';
-  const authHeader = token ? ` -H "Authorization: Bearer ${token}"` : '';
-  const tid = ctx.teamId || 'pando-infra';
-  return `You are the Pando Infrastructure Lead. You manage the network by processing your inbox and board queue.
-
-You run on Claude Code CLI. You have full bash, read, write, edit tools available.
-Your INBOX and BOARD STATE are injected below this message — no tool call needed to read them.
-
-## Processing Steps
-
-1. Read the INBOX section below. Messages come from Observer and QA agents.
-2. Read the BOARD STATE section below. Tasks tagged [BUG:user], [FEATURE:user] come from users.
-3. Process items by priority: CRITICAL > BUG:user > WARNING > FEATURE:user > INFO.
-4. For each actionable item:
-   - Monitoring issues: If it seems resolved or transient, mark task done. If real, investigate.
-   - Code fixes — use bash, read, edit tools directly:
-     1. Find the file, read it, understand the issue.
-     2. Edit the file to fix the bug.
-     3. COMMIT AND DEPLOY (one command — handles build, commit, push, governance, and task update):
-        curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/infra/commit-and-propose${authHeader} -H "Content-Type: application/json" -d '{"message":"fix: description","taskId":"<taskId>"}'
-        This single call does: git add → npm run build → git commit → git push → governance propose → mark task done.
-        If build fails, it returns the errors — fix them and try again.
-   - User requests: investigate, then update task progress via PATCH.
-   - False positives / stale (>24h): mark done with a note.
-5. If inbox empty AND no pending board tasks: say "System healthy. No open issues." and STOP.
-
-## After Governance Approval
-The upgrade protocol auto-deploys to ALL nodes:
-  git fetch → verify hash → build → safe restart (exit 75) → supervisor respawns
-
-## HTTP API (use curl for ALL operations — you do NOT have PandoTeams tools, only bash/read/write/edit)
-COMMIT & DEPLOY: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/infra/commit-and-propose${authHeader} -H "Content-Type: application/json" -d '{"message":"fix: description","taskId":"<taskId>"}'
-UPDATE TASK: curl -s -X PATCH http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/board/<taskId>${authHeader} -H "Content-Type: application/json" -d '{"status":"done","progress":"<notes>"}'
-CREATE TASK: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/board${authHeader} -H "Content-Type: application/json" -d '{"title":"<title>","description":"<desc>"}'
-SEND MESSAGE: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/message${authHeader} -H "Content-Type: application/json" -d '{"from":"lead","to":"<agentId>","message":"<text>"}'
-SPAWN AGENT: curl -s -X POST http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/agents/spawn${authHeader} -H "Content-Type: application/json" -d '{"template":"worker","task":"<description>"}'
-STOP AGENT: curl -s -X DELETE http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/agents/<agentId>${authHeader}
-LIST AGENTS: curl -s http://127.0.0.1:${ctx.apiPort}/v1/teams/${tid}/agents
-LIST TEMPLATES: curl -s http://127.0.0.1:${ctx.apiPort}/v1/templates
-
-RULES:
-- Every code change MUST go through COMMIT & DEPLOY (the /infra/commit-and-propose endpoint). Never git push manually.
-- Start each task by saying: "Processing: [task title]" so activity logs show what you're working on.
-- After code changes, log: "Build: [pass/fail]. Files: [list]. Lines changed: [N]."
-- After significant code changes, update BIBLE.md to reflect the new reality (e.g., new API params, removed features, changed behavior). Future sessions depend on accurate documentation.
-- ALWAYS clean up legacy code. Delete dead imports, commented-out blocks, deprecated references, unused variables. No hacks or workarounds. We have git if we need old code back.
-- Close or update tasks when done. Do NOT leave tasks perpetually pending.
-- Be concise but visible — brief output is fine, silent work is not.`;
-}
-
-function makeUniversalLeadPrompt(ctx: PromptContext & { teamId: string; repos?: string[] }): string {
-  const tid = ctx.teamId;
-  const port = ctx.apiPort;
-  const authHeader = ctx.apiToken ? ` -H "Authorization: Bearer ${ctx.apiToken}"` : '';
-  const repoList = ctx.repos?.length ? ctx.repos.map(r => `  - ${r}`).join('\n') : '  (workspace auto-created)';
-  return `You are the Project Manager for team "${tid}". You own this project end-to-end.
-
-You run on Claude Code CLI with full bash, read, write, edit tools.
-Your INBOX and BOARD STATE are injected below when available.
-
-## How You Work — The 5 Phases
-
-### Phase 1: UNDERSTAND
-When you receive a user request (via board task or direct message):
-1. Analyze what the user wants — features, constraints, technology preferences
-2. Ask yourself: is this a quick task (< 20 lines) or a real project?
-3. Quick tasks: do it yourself, skip to Phase 4
-4. Real projects: proceed to Phase 2
-
-### Phase 2: PLAN
-1. Break the request into concrete subtasks on the board:
-   CREATE TASK: curl -s -X POST http://127.0.0.1:${port}/v1/teams/${tid}/board${authHeader} -H "Content-Type: application/json" -d '{"title":"[subtask] description","description":"details"}'
-2. Each subtask should be specific: file to create/modify, what it should do, acceptance criteria
-3. Order matters: foundations first, features second, polish last
-
-### Phase 3: BUILD
-For each subtask, decide: do it yourself or spawn help?
-- **Yourself** (preferred for < 50 lines): read, edit, write files directly
-- **Spawn builder** (for large/parallel work):
-  SPAWN: curl -s -X POST http://127.0.0.1:${port}/v1/teams/${tid}/agents/spawn${authHeader} -H "Content-Type: application/json" -d '{"template":"worker","task":"description with file paths and acceptance criteria"}'
-- **Check agent status:**
-  LIST: curl -s http://127.0.0.1:${port}/v1/teams/${tid}/agents${authHeader}
-- **Stop agents when done:**
-  STOP: curl -s -X DELETE http://127.0.0.1:${port}/v1/teams/${tid}/agents/<agentId>${authHeader}
-
-### Phase 4: VERIFY
-Before marking anything done:
-1. Run the build: npm run build (MUST pass)
-2. Check the output actually works (read the built files, verify logic)
-3. For web projects: verify HTML/CSS/JS renders correctly (check file structure)
-4. For API projects: verify endpoints respond (curl test)
-5. If verification fails: fix it yourself or respawn a builder
-
-### Phase 5: DELIVER & DEPLOY
-1. Commit your work: git add . && git commit -m "feat: description"
-2. Deploy the app so the user can access it:
-   REGISTER: curl -s -X POST http://127.0.0.1:${port}/v1/apps${authHeader} -H "Content-Type: application/json" -d '{"id":"${tid}","name":"project name","workspace":"~/.pando/projects/${tid}"}'
-   DEPLOY: curl -s -X POST http://127.0.0.1:${port}/v1/apps/${tid}/deploy${authHeader}
-   The deploy response includes a \`url\` field — share it with the user so they can open the app.
-3. Update the task:
-   UPDATE: curl -s -X PATCH http://127.0.0.1:${port}/v1/teams/${tid}/board/<taskId>${authHeader} -H "Content-Type: application/json" -d '{"status":"done","progress":"summary of what was built"}'
-4. If the user sends a follow-up message: iterate — go back to Phase 1
-
-## Your Workspace
-${repoList}
-Project files go in ~/.pando/projects/${tid}/ (auto-created).
-
-## Team Scaling Guide
-| Complexity | Team size | Strategy |
-|-----------|-----------|----------|
-| Simple (landing page, script) | Just you | Do it directly |
-| Medium (full app, 5+ files) | You + 1 builder | Spawn builder for file creation, you review |
-| Complex (multi-service, API + UI) | You + 2-3 builders | Spawn builders for parallel tracks, coordinate via board |
-
-Stop agents as soon as their subtask is done — don't let them idle.
-
-## HTTP API Reference
-UPDATE TASK: curl -s -X PATCH http://127.0.0.1:${port}/v1/teams/${tid}/board/<taskId>${authHeader} -H "Content-Type: application/json" -d '{"status":"done","progress":"notes"}'
-CREATE TASK: curl -s -X POST http://127.0.0.1:${port}/v1/teams/${tid}/board${authHeader} -H "Content-Type: application/json" -d '{"title":"title","description":"desc"}'
-SEND MESSAGE: curl -s -X POST http://127.0.0.1:${port}/v1/teams/${tid}/message${authHeader} -H "Content-Type: application/json" -d '{"from":"lead","to":"agentId","message":"text"}'
-SPAWN AGENT: curl -s -X POST http://127.0.0.1:${port}/v1/teams/${tid}/agents/spawn${authHeader} -H "Content-Type: application/json" -d '{"template":"worker","task":"description"}'
-STOP AGENT: curl -s -X DELETE http://127.0.0.1:${port}/v1/teams/${tid}/agents/<agentId>${authHeader}
-
-## Observability
-- Start each task by saying: "Processing: [task title]" so activity logs show progress.
-- After builds: "Build: [pass/fail]. Files: [list]. Lines: [N]."
-- After completion: "Delivered: [summary of what was built and where]."
-
-## Error Recovery
-- If npm run build fails: read the error, fix it, retry. Don't give up.
-- If a spawned agent fails: read its output, fix the issue yourself, or respawn with better instructions.
-- If the workspace is missing files: check ~/.pando/projects/${tid}/ and recreate if needed.
-
-## Rules
-- Act, don't narrate. Build things, don't describe what you'd build.
-- The user wants WORKING output, not plans. Plans are a means to an end.
-- Every subtask you create must have clear acceptance criteria.
-- npm run build MUST pass before committing.
-- Close tasks when done — don't leave them hanging.
-- If a user request is unclear, build the most reasonable interpretation rather than asking.`;
-}
-
-/** Map of promptTemplate IDs to their generator functions. */
-const PROMPT_TEMPLATES: Record<string, (ctx: PromptContext) => string> = {
-  'observer-health': makeObserverPrompt,
-  'qa-tests': makeQAPrompt,
-  'lead-infra': makeLeadPrompt,
-  'lead-universal': makeUniversalLeadPrompt as (ctx: PromptContext) => string,
-  'explorer-ui': makeExplorerPrompt,
-};
-
-/** Seed config for pando-infra team (the network management team). */
-export const PANDO_INFRA_AGENTS: TeamAgentConfig[] = [
-  { id: 'lead',     role: 'lead',     displayName: 'Infrastructure Lead', prompt: '', promptTemplate: 'lead-infra',       model: 'claude-code', tickIntervalMs: 15 * 60_000 },
-  { id: 'observer', role: 'explorer', displayName: 'Network Observer',    prompt: '', promptTemplate: 'observer-health',   model: 'claude-code', tickIntervalMs: 60 * 60_000 },
-  { id: 'qa',       role: 'tester',   displayName: 'QA Agent',            prompt: '', promptTemplate: 'qa-tests',          model: 'claude-code', tickIntervalMs: 120 * 60_000 },
-  { id: 'explorer', role: 'tester',   displayName: 'UI Explorer',         prompt: '', promptTemplate: 'explorer-ui',       model: 'claude-code', tickIntervalMs: 180 * 60_000 },
-];
 
 // ─── Engine Adapter ─────────────────────────────────────────────────────
 
@@ -810,15 +323,7 @@ export class EngineAdapter {
   private started = false;
   private Database: any = null;  // better-sqlite3 constructor (cached at startup)
   private projectTicks = new Set<string>();  // Track which projects have scheduler ticks
-  private projectIntervals = new Map<string, NodeJS.Timeout>();  // projectId → tick interval (keyed to prevent leaks)
-  private activeTeams = new Map<string, { dbPath: string; agents: TeamAgentConfig[]; intervals: any[] }>();
-
-  // ─── Watchdog state ──────────────────────────────────────────────────
-  private watchdogTimer: ReturnType<typeof setInterval> | null = null;
-  private watchdogRestarts = new Map<string, { count: number; firstRestartAt: number }>();
-  private stoppedEngines = new Set<string>();  // engines intentionally stopped — don't restart
-  private teamKeepAliveTimer: ReturnType<typeof setInterval> | null = null;
-  private boardCommitDebounce = new Map<string, number>(); // teamId → last commit timestamp
+  private projectIntervals = new Map<string, NodeJS.Timeout>();  // projectId → tick interval
 
   /** Whether the adapter is ready (pando-teams loaded + pool started). */
   get available(): boolean { return this.started; }
@@ -858,18 +363,11 @@ export class EngineAdapter {
     this.luxProvider = createLuxBudgetProvider(config.luxPerUsd);
 
     // Create engine pool with lifecycle hooks
-    // Do NOT override defaultModel — let PandoTeams use its own configured provider/model.
-    // Contributors choose their own provider (Gemini, OpenAI, Anthropic, Ollama).
     this.pool = new _EnginePool({
-      /** defaultModel: Override PandoTeams's default model selection. Only set when
-       *  the node operator explicitly specifies a model via CLI/config. When omitted,
-       *  PandoTeams uses its own configured provider/model from ~/.pando-teams/config. */
       ...(config.model ? { defaultModel: config.model } : {}),
       defaultRole: 'lead',
       maxEngines: 20,
       idleTTLMs: 30 * 60 * 1000,
-      // skipKnowledgeSync: Disables PandoTeams's internal knowledge base sync on engine creation.
-      // Pando nodes manage their own data sync via P2P — PandoTeams's KB sync would be redundant.
       skipKnowledgeSync: true,
       onAfterCreate: async (id: string, engine: any) => {
         // Inject Lux budget
@@ -882,20 +380,6 @@ export class EngineAdapter {
       },
     });
     this.pool.start();
-
-    // Keep active team engines alive in the pool — prevent idle eviction between ticks
-    this.teamKeepAliveTimer = setInterval(() => {
-      if (!this.pool) return;
-      for (const [teamId, teamData] of this.activeTeams) {
-        for (const agent of teamData.agents) {
-          const engineId = `${teamId}:${agent.id}`;
-          if (this.pool.has(engineId)) {
-            // Touch lastUsed to prevent idle eviction
-            (this.pool as any).lastUsed?.set(engineId, Date.now());
-          }
-        }
-      }
-    }, 5 * 60_000); // every 5 minutes
 
     // Boot system engine
     await this.pool.getOrCreate('system', {
@@ -918,9 +402,6 @@ export class EngineAdapter {
     }
 
     this.started = true;
-
-    // Start engine watchdog to auto-restart dead team engines
-    this.startWatchdog();
 
     console.log('[EngineAdapter] Started. System engine ready.');
   }
@@ -948,7 +429,6 @@ export class EngineAdapter {
     }
 
     // Wrap the engine's async generator with a timeout.
-    // If no event is yielded within timeoutMs, yield an error and return.
     const source = this.pool.send(id, message);
     const iterator = source[Symbol.asyncIterator]();
     let done = false;
@@ -968,9 +448,7 @@ export class EngineAdapter {
         done = true;
       } else {
         yield EngineAdapter.normalizeStreamEvent(result.value);
-        // If we yielded a timeout error, stop the iteration
         if (result.value?.type === 'error' && done) {
-          // Try to clean up the source iterator
           iterator.return?.();
           return;
         }
@@ -1004,7 +482,6 @@ export class EngineAdapter {
           } else {
           console.log(`[engine] Workspace empty for ${projectId} — recovering from ${project.repoUrl}`);
           try {
-            // Dir already exists — use git init + fetch + checkout (clone fails on non-empty dirs)
             const gitDir = pathJoin(projectDir, '.git');
             const { GitOps: ProjGitOps } = await import('./git-ops.js');
             const projGit = new ProjGitOps(projectDir);
@@ -1013,7 +490,6 @@ export class EngineAdapter {
               projGit.remoteAdd('origin', project.repoUrl);
             }
             projGit.fetch('origin');
-            // Try main branch first, fall back to master
             try {
               projGit.exec(['checkout', '-f', 'origin/main', '--', '.']);
             } catch {
@@ -1082,7 +558,6 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       }
 
       const output = chunks.join('');
-      // Try to parse JSON from response
       const jsonMatch = output.match(/\{[\s\S]*"safe"[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
@@ -1093,7 +568,6 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         };
       }
 
-      // Fallback: couldn't parse structured response
       return { safe: true, risks: [], recommendation: 'AI review returned unstructured response — defaulting to approve' };
     } catch (err: any) {
       console.warn('[EngineAdapter] reviewDiff failed:', err.message);
@@ -1108,8 +582,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
   /**
    * H-2 + H-3: Normalize a raw PandoTeams engine event into a typed StreamEvent
-   * with protocol version. Use this when forwarding events to API consumers
-   * who need a stable, versioned contract.
+   * with protocol version.
    */
   static normalizeStreamEvent(raw: any): StreamEvent {
     return {
@@ -1157,24 +630,6 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     return this.scheduler?.getAll() ?? [];
   }
 
-  /** Get available agent templates (built-in + custom from disk). */
-  getTemplates(): AgentTemplate[] {
-    const custom = loadCustomTemplates();
-    // Custom templates override built-in if same ID
-    const customIds = new Set(custom.map(t => t.id));
-    const filtered = BUILT_IN_TEMPLATES.filter(t => !customIds.has(t.id));
-    return [...filtered, ...custom];
-  }
-
-  /**
-   * Get tasks from a team's board.
-   * @param includeDone If true, also returns 'done' tasks.
-   */
-  getTeamBoard(teamId: string, includeDone = false): any[] {
-    const teamData = this.activeTeams.get(teamId);
-    return this.getBoardTasks(teamData?.dbPath ?? null, includeDone);
-  }
-
   /**
    * Get pending/in_progress tasks from a project's board.
    */
@@ -1183,275 +638,15 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     return this.getBoardTasks(dbPath);
   }
 
-  /**
-   * Add a task to a team's board. Used by doorman and API to route user reports.
-   * Returns the task ID on success, null on failure. Dedup by exact title match.
-   */
-  addTeamBoardTask(teamId: string, title: string, description?: string): string | null {
-    const teamData = this.activeTeams.get(teamId);
-    const taskId = this.insertBoardTask(teamData?.dbPath ?? null, title, description);
-    if (taskId) this.persistBoardState(teamId);
-    return taskId;
-  }
-
-  /**
-   * Read the team inbox for a given agent. Messages are stored in the state table
-   * by send_message as `msg:{toAgentId}:{uuid}`. Returns and deletes (consumes) them.
-   */
-  getTeamInbox(teamId: string, agentId: string): { from: string; message: string; timestamp: string }[] {
-    const teamData = this.activeTeams.get(teamId);
-    if (!teamData?.dbPath || !this.Database) return [];
-    // Sanitize agentId to prevent LIKE wildcard injection (% or _)
-    if (!agentId || typeof agentId !== 'string' || /[%_]/.test(agentId)) return [];
-    try {
-      const db = new this.Database(teamData.dbPath);
-      const prefix = `msg:${agentId}:%`;
-      const rows = db.prepare(
-        `SELECT key, value, updated_at FROM state WHERE key LIKE ? ORDER BY updated_at ASC`
-      ).all(prefix) as { key: string; value: string; updated_at: string }[];
-
-      const messages: { from: string; message: string; timestamp: string }[] = [];
-      for (const row of rows) {
-        try {
-          const parsed = JSON.parse(row.value);
-          messages.push({
-            from: parsed.from || parsed.agentId || 'unknown',
-            message: parsed.message || parsed.content || row.value,
-            timestamp: row.updated_at,
-          });
-        } catch {
-          messages.push({ from: 'unknown', message: row.value, timestamp: row.updated_at });
-        }
-        // Consume: delete after reading
-        db.prepare(`DELETE FROM state WHERE key = ?`).run(row.key);
-      }
-      db.close();
-      return messages;
-    } catch {
-      return [];
-    }
-  }
-
-  /**
-   * Send a message between agents in a team.
-   * Stores in the state table as `msg:{toAgentId}:{uuid}` with 1-hour TTL.
-   */
-  sendTeamMessage(teamId: string, fromAgentId: string, toAgentId: string, message: string): boolean {
-    const teamData = this.activeTeams.get(teamId);
-    if (!teamData?.dbPath || !this.Database) return false;
-    try {
-      const db = new this.Database(teamData.dbPath);
-      const uuid = randomUUID();
-      const key = `msg:${toAgentId}:${uuid}`;
-      const value = JSON.stringify({ from: fromAgentId, message, timestamp: new Date().toISOString() });
-      const ttl = new Date(Date.now() + 3600_000).toISOString(); // 1 hour
-      db.prepare(
-        `INSERT OR REPLACE INTO state (key, value, updated_at, expires_at) VALUES (?, ?, datetime('now'), ?)`
-      ).run(key, value, ttl);
-      db.close();
-      return true;
-    } catch (err: any) {
-      console.warn(`[EngineAdapter] sendTeamMessage failed: ${err.message}`);
-      return false;
-    }
-  }
-
-  /**
-   * Update a team board task's status and/or progress.
-   */
-  updateTeamBoardTask(teamId: string, taskId: string, updates: { status?: string; progress?: string }): boolean {
-    // Whitelist of allowed board_tasks columns — defense-in-depth against SQL injection
-    const ALLOWED_COLUMNS = new Set(['status', 'progress']);
-    const teamData = this.activeTeams.get(teamId);
-    if (!teamData?.dbPath || !this.Database) return false;
-    try {
-      const db = new this.Database(teamData.dbPath);
-      const sets: string[] = [];
-      const vals: any[] = [];
-      if (updates.status && ALLOWED_COLUMNS.has('status')) { sets.push('status = ?'); vals.push(updates.status.replace(/-/g, '_')); }
-      if (updates.progress !== undefined && ALLOWED_COLUMNS.has('progress')) { sets.push('progress = ?'); vals.push(updates.progress); }
-      if (sets.length === 0) { db.close(); return false; }
-      vals.push(taskId);
-      const result = db.prepare(`UPDATE board_tasks SET ${sets.join(', ')} WHERE id = ?`).run(...vals);
-      db.close();
-      const changed = result.changes > 0;
-      if (changed) this.persistBoardState(teamId);
-      return changed;
-    } catch (err: any) {
-      console.warn(`[EngineAdapter] updateTeamBoardTask failed: ${err.message}`);
-      return false;
-    }
-  }
-
-  // -----------------------------------------------------------------------
-  // Board state persistence (Phase 3 — crash recovery)
-  // -----------------------------------------------------------------------
-
-  /**
-   * Persist the current board state to a JSON file for crash recovery.
-   * Called after every board task create/update. Uses atomic write (temp + rename).
-   * Failures are logged but never break board operations.
-   */
-  private persistBoardState(teamId: string): void {
-    try {
-      const teamData = this.activeTeams.get(teamId);
-      if (!teamData?.dbPath) return;
-
-      const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
-      const teamDir = pathJoin(baseDir, 'teams', teamId);
-      mkdirSync(teamDir, { recursive: true });
-
-      const tasks = this.getTeamBoard(teamId, true); // include done for full snapshot
-      const snapshot = {
-        savedAt: new Date().toISOString(),
-        nodeId: this.config?.nodeId || 'unknown',
-        tasks,
-      };
-
-      const filePath = pathJoin(teamDir, 'board-state.json');
-      const tmpPath = filePath + '.tmp';
-      writeFileSync(tmpPath, JSON.stringify(snapshot, null, 2), 'utf-8');
-      renameSync(tmpPath, filePath);
-
-      // Debounced git commit of board state for cross-node recovery
-      this.commitBoardStateDebounced(teamId);
-    } catch (err: any) {
-      console.warn(`[board-persist] Failed to persist board state for team ${teamId}: ${err.message}`);
-    }
-  }
-
-  /**
-   * Commit board-state.json into the node git repo for team handoff recovery.
-   * Copies from ~/.pando/teams/{teamId}/board-state.json to .pando-state/{teamId}/board-state.json
-   * in the repo, then git add + commit. Debounced: max once per 5 minutes per team.
-   * Does NOT push — push happens via governance on meaningful changes.
-   */
-  private commitBoardStateDebounced(teamId: string): void {
-    const DEBOUNCE_MS = 5 * 60_000; // 5 minutes
-    const now = Date.now();
-    const lastCommit = this.boardCommitDebounce.get(teamId) || 0;
-    if (now - lastCommit < DEBOUNCE_MS) return;
-
-    // Run async in background — never block board operations
-    this.commitBoardStateAsync(teamId).catch((err: any) => {
-      console.warn(`[board-git] commitBoardState failed for ${teamId}: ${err.message}`);
-    });
-  }
-
-  private async commitBoardStateAsync(teamId: string): Promise<void> {
-    const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
-    const srcPath = pathJoin(baseDir, 'teams', teamId, 'board-state.json');
-    if (!existsSync(srcPath)) return;
-
-    const repoDir = process.cwd();
-    const destDir = pathJoin(repoDir, '.pando-state', teamId);
-    mkdirSync(destDir, { recursive: true });
-
-    const destPath = pathJoin(destDir, 'board-state.json');
-    const content = readFileSync(srcPath, 'utf-8');
-    writeFileSync(destPath, content, 'utf-8');
-
-    try {
-      const { GitOps: GO } = await import('./git-ops.js');
-      const git = new GO(repoDir);
-      const relPath = `.pando-state/${teamId}/board-state.json`;
-      git.add([relPath]);
-
-      // Only commit if the file actually changed
-      if (!git.hasUncommittedChanges()) return;
-
-      git.commit(`chore: persist board state for ${teamId}`);
-      this.boardCommitDebounce.set(teamId, Date.now());
-      console.log(`[board-git] Committed board state for team ${teamId}`);
-    } catch (err: any) {
-      console.warn(`[board-git] Git commit failed for ${teamId}: ${err.message}`);
-    }
-  }
-
-  /**
-   * Restore board state from a persisted JSON file.
-   * Called during startTeam() before agents begin processing.
-   * Skips tasks with status "done" and tasks that already exist in the board.
-   * Returns true if any tasks were restored.
-   */
-  restoreBoardState(teamId: string): boolean {
-    try {
-      const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
-      const teamDir = pathJoin(baseDir, 'teams', teamId);
-      const filePath = pathJoin(teamDir, 'board-state.json');
-
-      // Fallback: if local file missing, try git repo copy (.pando-state/{teamId}/board-state.json)
-      if (!existsSync(filePath)) {
-        const repoFallback = pathJoin(process.cwd(), '.pando-state', teamId, 'board-state.json');
-        if (existsSync(repoFallback)) {
-          console.log(`[board-restore] Local board-state.json missing — recovering from git repo for team ${teamId}`);
-          mkdirSync(teamDir, { recursive: true });
-          const content = readFileSync(repoFallback, 'utf-8');
-          writeFileSync(filePath, content, 'utf-8');
-        }
-      }
-
-      if (!existsSync(filePath)) return false;
-
-      const raw = readFileSync(filePath, 'utf-8');
-      const snapshot = JSON.parse(raw);
-      const savedTasks: any[] = snapshot.tasks || [];
-
-      if (savedTasks.length === 0) return false;
-
-      // Get current board (including done) to check for existing tasks
-      const currentTasks = this.getTeamBoard(teamId, true);
-      const existingIds = new Set(currentTasks.map((t: any) => t.id));
-      const existingTitles = new Set(currentTasks.map((t: any) => t.title));
-
-      let restoredCount = 0;
-      for (const task of savedTasks) {
-        // Skip done tasks — no point restoring completed work
-        if (task.status === 'done') continue;
-        // Skip if already exists by ID or title (dedup)
-        if (existingIds.has(task.id) || existingTitles.has(task.title)) continue;
-
-        const taskId = this.addTeamBoardTask(teamId, task.title, task.description || '');
-        if (taskId) {
-          // Restore original status if it was in_progress
-          if (task.status === 'in_progress' || task.status === 'in-progress') {
-            this.updateTeamBoardTask(teamId, taskId, { status: 'in_progress', progress: task.progress || '' });
-          }
-          restoredCount++;
-        }
-      }
-
-      if (restoredCount > 0) {
-        console.log(`[board-restore] Restored ${restoredCount} task(s) for team ${teamId} from board-state.json`);
-      }
-      return restoredCount > 0;
-    } catch (err: any) {
-      console.warn(`[board-restore] Failed to restore board state for team ${teamId}: ${err.message}`);
-      return false;
-    }
-  }
+  // ─── Board State P2P Sync (file-based — Teams Server manages live board) ───
 
   /**
    * Get the board state snapshot for a team as a JSON-serializable object.
    * Used for P2P board state sync (team failover). Returns null if no board data.
-   * Only includes non-done tasks (same filtering as restoreBoardState).
+   * Reads from the persisted board-state.json file (live board is in Teams Server).
    */
   getBoardStateSnapshot(teamId: string): { savedAt: string; nodeId: string; tasks: any[] } | null {
     try {
-      // First try live board data from active team
-      const teamData = this.activeTeams.get(teamId);
-      if (teamData?.dbPath) {
-        const tasks = this.getTeamBoard(teamId, false); // exclude done tasks
-        if (tasks.length > 0) {
-          return {
-            savedAt: new Date().toISOString(),
-            nodeId: this.config?.nodeId || 'unknown',
-            tasks,
-          };
-        }
-      }
-
-      // Fall back to persisted board-state.json
       const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
       const filePath = pathJoin(baseDir, 'teams', teamId, 'board-state.json');
       if (!existsSync(filePath)) return null;
@@ -1474,8 +669,8 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
   /**
    * Restore board state from a P2P-received snapshot (team failover).
-   * Writes the snapshot to board-state.json then delegates to restoreBoardState().
-   * Returns true if any tasks were restored.
+   * Writes the snapshot to board-state.json. Teams Server reads this on boot.
+   * Returns true if the file was written successfully.
    */
   restoreBoardStateFromSnapshot(teamId: string, snapshot: { savedAt: string; nodeId: string; tasks: any[] }): boolean {
     try {
@@ -1491,40 +686,14 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       renameSync(tmpPath, filePath);
       console.log(`[board-sync] Wrote P2P board snapshot for team ${teamId} (${snapshot.tasks.length} tasks from node ${snapshot.nodeId})`);
 
-      return this.restoreBoardState(teamId);
+      return true;
     } catch (err: any) {
       console.warn(`[board-sync] restoreBoardStateFromSnapshot failed for team ${teamId}: ${err.message}`);
       return false;
     }
   }
 
-  /**
-   * Trigger a team agent in the background. Returns immediately.
-   * Includes a 10-minute safety timeout to prevent hung subprocesses from
-   * blocking the agent permanently.
-   */
-  triggerTeamAgentBackground(teamId: string, agentId: string, message: string): void {
-    const TRIGGER_TIMEOUT_MS = 10 * 60_000;
-    (async () => {
-      try {
-        console.log(`[team:${teamId}] Background trigger: ${agentId}`);
-        const sendPromise = (async () => {
-          for await (const event of this.sendToTeamAgent(teamId, agentId, message)) {
-            if (event.type === 'stream:chunk' && event.content) {
-              process.stdout.write(event.content);
-            }
-          }
-        })();
-        const timeoutPromise = new Promise<never>((_, reject) =>
-          setTimeout(() => reject(new Error('Background trigger timed out after 10 minutes')), TRIGGER_TIMEOUT_MS)
-        );
-        await Promise.race([sendPromise, timeoutPromise]);
-        console.log(`\n[team:${teamId}] ${agentId} trigger complete.`);
-      } catch (err: any) {
-        console.error(`[team:${teamId}] ${agentId} trigger error: ${err.message}`);
-      }
-    })().catch(err => console.error('[engine-adapter] unhandled async error:', err));
-  }
+  // ─── Project Board ─────────────────────────────────────────────────────
 
   /**
    * Add a task to a project's board. Used for per-project bug reports.
@@ -1577,7 +746,6 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     if (!dbPath || !this.Database) return null;
 
     // Defense-in-depth: Two Laws content filter at the storage level.
-    // API endpoints check too, but this catches any code path that calls addBoardTask() directly.
     const textToCheck = `${title} ${description || ''}`;
     if (HARM_PATTERNS.test(textToCheck) || SHUTDOWN_PATTERNS.test(textToCheck)) {
       console.warn(`[EngineAdapter] insertBoardTask rejected: Two Laws violation in "${title.slice(0, 60)}"`);
@@ -1597,7 +765,6 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       }
 
       const id = `task-${randomUUID()}`;
-      // Get latest session_id for the FK constraint and next order value
       const session = db.prepare(
         `SELECT id FROM sessions ORDER BY created_at DESC LIMIT 1`
       ).get() as { id: string } | undefined;
@@ -1619,25 +786,23 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
   /**
    * Register a periodic scheduler tick for a project engine.
-   * Only registers once per projectId. Tick reads the project board and prompts the engine
-   * to process pending tasks (same pattern as the team lead tick).
+   * Only registers once per projectId.
    */
   private ensureProjectTick(projectId: string, dbPath: string): void {
     if (this.projectTicks.has(projectId) || !this.pool || !this.scheduler) return;
-    if (!this.pool.has(projectId)) return; // Engine must exist
+    if (!this.pool.has(projectId)) return;
 
     this.projectTicks.add(projectId);
 
-    // Clear any existing interval for this project before creating a new one
     const existing = this.projectIntervals.get(projectId);
     if (existing) clearInterval(existing);
 
-    // Project ticks run every 6 hours (less urgent than team lead's 15 min)
+    // Project ticks run every 6 hours
     const projectTickMs = 6 * 60 * 60_000;
     const tickInterval = setInterval(async () => {
       try {
         const snapshot = this.getBoardSnapshot(dbPath);
-        if (snapshot.includes('No pending tasks')) return; // Nothing to do
+        if (snapshot.includes('No pending tasks')) return;
 
         const message = `You are the lead for this project. Check your board and process pending tasks.\n\n${snapshot}\n\nPrioritize BUG reports. Close stale tasks (>24h). For code fixes, use spawn_agent with a builder role.`;
         for await (const event of this.pool.send(projectId, message)) {
@@ -1651,17 +816,13 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
       }
     }, projectTickMs);
 
-    // Store in Map keyed by projectId (prevents unbounded accumulation)
     this.projectIntervals.set(projectId, tickInterval);
-
     console.log(`[EngineAdapter] Project "${projectId}" scheduler tick registered (every 6h).`);
   }
 
-  /**
-   * Stop all project tick intervals and clear the Map. Call on shutdown.
-   */
+  /** Stop all project tick intervals and clear the Map. */
   stopProjectTicks(): void {
-    for (const [projectId, interval] of this.projectIntervals) {
+    for (const [, interval] of this.projectIntervals) {
       clearInterval(interval);
     }
     this.projectIntervals.clear();
@@ -1670,7 +831,6 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
   /**
    * Read a board and format a snapshot for injection into tick messages.
-   * Works for any team or project board. Returns a human-readable summary.
    */
   private getBoardSnapshot(dbPath: string): string {
     if (!this.Database) return 'BOARD STATE: Database not available.';
@@ -1708,954 +868,11 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
   /** Shutdown everything gracefully. */
   async shutdown(): Promise<void> {
-    this.stopWatchdog();
-    if (this.teamKeepAliveTimer) {
-      clearInterval(this.teamKeepAliveTimer);
-      this.teamKeepAliveTimer = null;
-    }
-    for (const [teamId, teamData] of this.activeTeams) {
-      for (const interval of teamData.intervals) clearInterval(interval);
-    }
-    this.activeTeams.clear();
     this.stopProjectTicks();
     this.scheduler?.stop();
     await this.pool?.shutdown();
-
     this.started = false;
     console.log('[EngineAdapter] Shut down.');
-  }
-
-  // ─── Engine Watchdog ─────────────────────────────────────────────────
-
-  /**
-   * Start the engine watchdog — monitors team engines and restarts dead ones.
-   *
-   * Runs every 60 seconds. For each active team, checks if each agent's engine
-   * is still alive in the pool. If an engine has disappeared (process died,
-   * evicted by TTL, etc.), the watchdog restarts it via pool.getOrCreate() and
-   * re-registers tools and session.
-   *
-   * Circuit breaker: if an engine has been restarted 3+ times in the last hour,
-   * the watchdog gives up to avoid restart loops.
-   */
-  private startWatchdog(): void {
-    if (this.watchdogTimer) return;
-
-    const WATCHDOG_INTERVAL_MS = 30_000;    // check every 30 seconds (BIBLE target)
-    const CIRCUIT_BREAKER_MAX = 3;          // max restarts per engine per hour
-    const CIRCUIT_BREAKER_WINDOW_MS = 60 * 60_000; // 1 hour
-
-    this.watchdogTimer = setInterval(async () => {
-      if (!this.pool || !this.started) return;
-
-      for (const [teamId, teamData] of this.activeTeams) {
-        for (const agent of teamData.agents) {
-          const engineId = `${teamId}:${agent.id}`;
-
-          // Skip engines that were intentionally stopped
-          if (this.stoppedEngines.has(engineId)) continue;
-
-          // Check if engine still exists in pool
-          const engine = this.pool.get(engineId);
-          const engineExists = this.pool.has(engineId);
-
-          // Engine is alive — skip
-          if (engineExists && engine) continue;
-
-          // Engine is missing — check circuit breaker before restarting
-          const restartInfo = this.watchdogRestarts.get(engineId);
-          if (restartInfo) {
-            const elapsed = Date.now() - restartInfo.firstRestartAt;
-            if (elapsed > CIRCUIT_BREAKER_WINDOW_MS) {
-              // Window expired — reset counter
-              this.watchdogRestarts.delete(engineId);
-            } else if (restartInfo.count >= CIRCUIT_BREAKER_MAX) {
-              // Circuit breaker tripped — too many restarts in the window
-              console.error(`[watchdog] Circuit breaker: ${engineId} restarted ${restartInfo.count} times in 1 hour — giving up`);
-              continue;
-            }
-          }
-
-          // Attempt restart
-          console.warn(`[watchdog] Engine for team "${teamId}" agent "${agent.id}" is dead — restarting`);
-          try {
-            await this.restartTeamEngine(teamId, agent, teamData);
-
-            // Track restart
-            const existing = this.watchdogRestarts.get(engineId);
-            if (existing) {
-              existing.count++;
-            } else {
-              this.watchdogRestarts.set(engineId, { count: 1, firstRestartAt: Date.now() });
-            }
-            console.log(`[watchdog] Engine "${engineId}" restarted successfully`);
-          } catch (err: any) {
-            console.error(`[watchdog] Failed to restart engine "${engineId}": ${err.message}`);
-            // Track the failed attempt too
-            const existing = this.watchdogRestarts.get(engineId);
-            if (existing) {
-              existing.count++;
-            } else {
-              this.watchdogRestarts.set(engineId, { count: 1, firstRestartAt: Date.now() });
-            }
-          }
-        }
-      }
-    }, WATCHDOG_INTERVAL_MS);
-
-    // Unref so watchdog doesn't keep the process alive during shutdown
-    if (typeof this.watchdogTimer === 'object' && 'unref' in this.watchdogTimer) {
-      (this.watchdogTimer as any).unref();
-    }
-
-    console.log('[EngineAdapter] Watchdog started (30s interval, circuit breaker: 3/hour).');
-  }
-
-  /** Stop the engine watchdog. */
-  private stopWatchdog(): void {
-    if (this.watchdogTimer) {
-      clearInterval(this.watchdogTimer);
-      this.watchdogTimer = null;
-    }
-    this.watchdogRestarts.clear();
-    this.stoppedEngines.clear();
-  }
-
-  /**
-   * Restart a single team engine — recreates the engine in the pool,
-   * re-registers tools, and restarts the session.
-   */
-  private async restartTeamEngine(
-    teamId: string,
-    agent: TeamAgentConfig,
-    teamData: { dbPath: string; agents: TeamAgentConfig[]; intervals: any[] },
-  ): Promise<void> {
-    if (!this.pool || !this.config) throw new Error('Adapter not started');
-
-    const { resolve, dirname } = await import('node:path');
-    const { fileURLToPath } = await import('node:url');
-    const thisDir = dirname(fileURLToPath(import.meta.url));
-    const nodeRepoRoot = resolve(thisDir, '..', '..', '..', '..');
-
-    const engineId = `${teamId}:${agent.id}`;
-    const isLead = agent.role === 'lead';
-
-    // Clean up any stale pool entries before recreating
-    this.pool.engines?.delete(engineId);
-    this.pool.lastUsed?.delete(engineId);
-    this.pool.createdAt?.delete(engineId);
-
-    // Recreate engine via pool
-    const engine = await this.pool.getOrCreate(engineId, {
-      projectPath: isLead ? nodeRepoRoot : teamData.dbPath.replace(/[/\\][^/\\]+$/, ''),
-      dbPath: teamData.dbPath,
-      role: agent.role,
-      skipKnowledgeSync: true,
-      ...(agent.model ? { model: agent.model } : {}),
-    });
-
-    // Start session
-    if (!engine.getSessionId()) {
-      await engine.startSession(`${teamId}: ${agent.id}`);
-    }
-
-    // Save Claude CLI session ID for persistence across restarts
-    if (engine.getCliSessionId?.() && this.Database) {
-      try {
-        const db = new this.Database(teamData.dbPath);
-        db.prepare(
-          `INSERT OR REPLACE INTO state (key, value, updated_at)
-           VALUES (?, ?, datetime('now'))`
-        ).run(`cli-session:${agent.id}`, engine.getCliSessionId());
-        db.close();
-      } catch { /* state table may not exist yet */ }
-    }
-
-    // Re-register tools with correct agent IDs
-    const { createCheckAgentsTool, createSendMessageTool, createManageTasksTool } =
-      await import('@pando-teams/core');
-
-    if (engine?.db) {
-      engine.tools.unregister('check_agents');
-      engine.tools.unregister('send_message');
-      engine.tools.unregister('manage_tasks');
-
-      const engineSessionId = engine.getSessionId()!;
-      engine.tools.register(createCheckAgentsTool({ db: engine.db, agentId: agent.id }));
-      engine.tools.register(createSendMessageTool({ db: engine.db, agentId: agent.id, senderRole: agent.role }));
-      engine.tools.register(createManageTasksTool({ db: engine.db, sessionId: engineSessionId }));
-    }
-
-    // Register manage_team tool on lead agents
-    if (agent.role === 'lead') {
-      const manageTeamTool = await createManageTeamTool(this, teamId);
-      engine.tools.register(manageTeamTool);
-    }
-  }
-
-  // ─── Team Management ──────────────────────────────────────────────────
-
-  /**
-   * Start a team — creates PandoTeams engines for each agent, registers tools,
-   * sets up scheduler ticks, and inserts agent profiles for cross-engine messaging.
-   *
-   * Generic: works for pando-infra (3 agents) or user project teams (1 agent).
-   * See BIBLE.md Section 5.10.
-   */
-  async startTeam(teamId: string, agents: TeamAgentConfig[]): Promise<void> {
-    if (!this.pool || !this.config) return;
-    if (this.activeTeams.has(teamId)) return; // already running
-
-    // Reserve slot immediately to prevent concurrent startTeam races (TOCTOU)
-    this.activeTeams.set(teamId, { dbPath: '', agents: [], intervals: [] });
-
-    try {
-    const { join, resolve, dirname } = await import('node:path');
-    const { mkdirSync } = await import('node:fs');
-    const { fileURLToPath } = await import('node:url');
-    const baseDir = this.config.dataDir || join((await import('node:os')).homedir(), '.pando');
-
-    // Team workspace + shared DB
-    const teamDir = join(baseDir, 'teams', teamId);
-    mkdirSync(teamDir, { recursive: true });
-    const teamDbPath = join(teamDir, '.pando-teams.db');
-
-    // Resolve repo root for lead agents that need codebase access
-    const thisDir = dirname(fileURLToPath(import.meta.url));
-    const nodeRepoRoot = resolve(thisDir, '..', '..', '..', '..');
-
-    // Resolve prompt templates into concrete prompts using runtime context
-    for (const agent of agents) {
-      if (agent.promptTemplate && PROMPT_TEMPLATES[agent.promptTemplate]) {
-        // Look up team repos from registry if available
-        let teamRepos: string[] | undefined;
-        try {
-          const registry = (this as any).node?.getTeamRegistry?.();
-          if (registry) {
-            const teamInfo = registry.getTeam(teamId);
-            if (teamInfo?.repos) teamRepos = teamInfo.repos;
-          }
-        } catch { /* registry not available */ }
-        const promptCtx: PromptContext = {
-          projectDir: nodeRepoRoot,
-          apiPort: this.config!.apiPort,
-          apiToken: this.config!.apiToken,
-          teamId,
-          repos: teamRepos,
-          model: agent.model,
-        };
-        agent.prompt = PROMPT_TEMPLATES[agent.promptTemplate](promptCtx);
-      }
-    }
-
-    // Import PandoTeams tool creators for re-registration with correct agent IDs
-    const { createCheckAgentsTool, createSendMessageTool, createManageTasksTool } =
-      await import('@pando-teams/core');
-
-    const intervals: any[] = [];
-
-    // Check for saved Claude CLI session IDs (for resume on restart)
-    // Sessions older than 24 hours are considered stale and discarded.
-    const savedSessions = new Map<string, string>();
-    const SESSION_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
-    if (this.Database) {
-      try {
-        const db = new this.Database(teamDbPath);
-        // Ensure state table exists (schema must match PandoTeams's state table)
-        db.prepare(`CREATE TABLE IF NOT EXISTS state (
-          key TEXT PRIMARY KEY,
-          value TEXT,
-          updated_at TEXT,
-          expires_at TEXT
-        )`).run();
-        const rows = db.prepare(
-          `SELECT key, value, updated_at FROM state WHERE key LIKE 'cli-session:%'`
-        ).all() as { key: string; value: string; updated_at: string | null }[];
-        let staleCount = 0;
-        for (const row of rows) {
-          // Filter stale sessions (older than 24h)
-          if (row.updated_at) {
-            const age = Date.now() - new Date(row.updated_at).getTime();
-            if (age > SESSION_TTL_MS) {
-              staleCount++;
-              continue;
-            }
-          }
-          const agentId = row.key.replace('cli-session:', '');
-          savedSessions.set(agentId, row.value);
-        }
-        // Clean up stale session entries
-        if (staleCount > 0) {
-          db.prepare(
-            `DELETE FROM state WHERE key LIKE 'cli-session:%' AND updated_at < datetime('now', '-1 day')`
-          ).run();
-          console.warn(`[team:${teamId}] Discarded ${staleCount} stale session(s) (>24h old) — agents will start fresh`);
-        }
-        db.close();
-        if (savedSessions.size > 0) {
-          console.log(`[team:${teamId}] Found ${savedSessions.size} saved session(s) — will attempt resume`);
-        }
-      } catch { /* ok — fresh start */ }
-    }
-
-    // Update reservation with real dbPath so restoreBoardState can read the board
-    this.activeTeams.set(teamId, { dbPath: teamDbPath, agents: [], intervals: [] });
-
-    // Restore board state from persisted JSON (crash recovery — Phase 3)
-    this.restoreBoardState(teamId);
-
-    // Create one engine per agent with shared DB
-    for (const agent of agents) {
-      const engineId = `${teamId}:${agent.id}`;
-      const isLead = agent.role === 'lead';
-      const savedSession = savedSessions.get(agent.id);
-      const engine = await this.pool.getOrCreate(engineId, {
-        projectPath: isLead ? nodeRepoRoot : teamDir,
-        dbPath: teamDbPath,
-        role: agent.role,
-        skipKnowledgeSync: true,
-        ...(agent.model ? { model: agent.model } : {}),
-        ...(savedSession ? { claudeSessionId: savedSession } : {}),
-      });
-
-      // Log which model was actually resolved for this agent
-      const resolvedModel = engine?.getModelId?.() || engine?.model || engine?.config?.model || agent.model || 'unknown';
-      console.log(`[team:${teamId}] Agent "${agent.id}" engine created — requested model: ${agent.model || 'default'}, resolved: ${resolvedModel}`);
-
-      // CRITICAL: Start session BEFORE re-registering tools
-      if (!engine.getSessionId()) {
-        await engine.startSession(`${teamId}: ${agent.id}`);
-      }
-
-      // Save Claude CLI session ID for persistence across restarts
-      if (engine.getCliSessionId?.() && this.Database) {
-        try {
-          const db = new this.Database(teamDbPath);
-          db.prepare(
-            `INSERT OR REPLACE INTO state (key, value, updated_at)
-             VALUES (?, ?, datetime('now'))`
-          ).run(
-            `cli-session:${agent.id}`,
-            engine.getCliSessionId(),
-          );
-          db.close();
-        } catch { /* state table may not exist yet */ }
-      }
-
-      // Re-register tools with correct agent IDs for message routing
-      if (engine?.db) {
-        engine.tools.unregister('check_agents');
-        engine.tools.unregister('send_message');
-        engine.tools.unregister('manage_tasks');
-
-        const engineSessionId = engine.getSessionId()!;
-        engine.tools.register(createCheckAgentsTool({
-          db: engine.db,
-          agentId: agent.id,
-        }));
-        engine.tools.register(createSendMessageTool({
-          db: engine.db,
-          agentId: agent.id,
-          senderRole: agent.role,
-        }));
-        engine.tools.register(createManageTasksTool({
-          db: engine.db,
-          sessionId: engineSessionId,
-        }));
-
-        console.log(`[team:${teamId}] "${agent.id}": tools re-registered, session=${engineSessionId}`);
-      }
-
-      // Register manage_team tool on lead agents
-      if (agent.role === 'lead') {
-        const manageTeamTool = await createManageTeamTool(this, teamId);
-        engine.tools.register(manageTeamTool);
-        console.log(`[team:${teamId}] "${agent.id}": manage_team tool registered`);
-      }
-    }
-
-    // Insert agent profiles into shared DB for cross-engine messaging
-    try {
-      const firstAgent = agents[0];
-      const engine = this.pool.get(`${teamId}:${firstAgent.id}`);
-      if (engine?.db) {
-        const now = new Date().toISOString();
-        const sqlite = (engine.db as any).$client;
-        for (const agent of agents) {
-          sqlite.prepare(
-            `INSERT OR IGNORE INTO agents (id, role, model, system_prompt, tools, scope, status, display_name, created_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-          ).run(
-            agent.id,
-            agent.role,
-            agent.model || 'default',
-            agent.prompt,
-            '[]',
-            '{}',
-            'idle',
-            agent.displayName,
-            now,
-          );
-        }
-        console.log(`[team:${teamId}] Agent profiles registered in shared DB.`);
-      }
-    } catch (err: any) {
-      console.warn(`[team:${teamId}] Could not register agent profiles: ${err.message}`);
-    }
-
-    // Register scheduler ticks for each agent
-    if (this.scheduler) {
-      const logEvent = (label: string) => (event: any) => {
-        if (event.type === 'tool:start') {
-          console.log(`[${label}] TOOL CALL: ${event.toolName}(${JSON.stringify(event.args)})`);
-        } else if (event.type === 'tool:result') {
-          const out = event.result?.output || '';
-          const preview = out.length > 200 ? out.slice(0, 200) + '...' : out;
-          console.log(`[${label}] TOOL RESULT: ${event.toolName} → ${event.result?.success ? 'OK' : 'FAIL'}: ${preview}`);
-        } else if (event.type === 'stream:chunk' && event.content) {
-          process.stdout.write(`[${label}] ${event.content}`);
-        }
-      };
-
-      for (const agent of agents) {
-        const engineId = `${teamId}:${agent.id}`;
-        const label = `${teamId}:${agent.id}`;
-        const tickMs = agent.tickIntervalMs || 30 * 60_000;
-
-        // Lead agent uses custom interval for dynamic data injection (inbox + board)
-        if (agent.role === 'lead') {
-          let consecutiveFailures = 0;
-          let tickRunning = false;
-          // Safety timeout: kill the tick if it exceeds this duration.
-          // Prevents a hung claude-code subprocess from blocking all future ticks.
-          const TICK_TIMEOUT_MS = 10 * 60_000; // 10 minutes max per tick
-          const interval = setInterval(async () => {
-            if (tickRunning) {
-              console.log(`[${label}] Tick skipped — previous tick still running`);
-              return;
-            }
-            tickRunning = true;
-            try {
-              const msg = 'Check your inbox and review board tasks now.';
-              // Wrap the send in a timeout race — if the stream hangs, we still recover
-              const tickPromise = (async () => {
-                for await (const event of this.sendToTeamAgent(teamId, agent.id, msg)) {
-                  logEvent(label)(event);
-                }
-              })();
-              const timeoutPromise = new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error('Tick timed out after 10 minutes')), TICK_TIMEOUT_MS)
-              );
-              await Promise.race([tickPromise, timeoutPromise]);
-              consecutiveFailures = 0;
-              console.log(`\n[${label}] Tick complete.`);
-            } catch (err: any) {
-              consecutiveFailures++;
-              const isFatal = /ENOENT|EPERM|spawn|session.*expired|not found|process.*exit|timed out/i.test(err.message);
-              if (isFatal || consecutiveFailures >= 3) {
-                console.error(`[${label}] CRITICAL: Engine appears dead (${consecutiveFailures} consecutive failures): ${err.message}`);
-                console.error(`[${label}] CRITICAL: Agent "${agent.id}" — watchdog will attempt auto-restart.`);
-                // Trigger immediate watchdog check instead of waiting for next interval
-                try {
-                  const engineId = `${teamId}:${agent.id}`;
-                  if (this.pool && !this.pool.has(engineId)) {
-                    console.log(`[${label}] Immediate restart triggered by tick failure`);
-                    const teamData = this.activeTeams.get(teamId);
-                    if (teamData) {
-                      await this.restartTeamEngine(teamId, agent, teamData);
-                      consecutiveFailures = 0; // reset on successful restart
-                    }
-                  }
-                } catch (restartErr: any) {
-                  console.error(`[${label}] Immediate restart failed: ${restartErr.message}`);
-                }
-              } else {
-                console.warn(`[${label}] Tick error (${consecutiveFailures}/3): ${err.message}`);
-              }
-            } finally {
-              tickRunning = false;
-            }
-          }, tickMs);
-          intervals.push(interval);
-        } else {
-          // Non-lead agents: use sendToTeamAgent (same as lead) for proper agent context.
-          // The scheduler's pool.send() doesn't pass agentOverride, so agents had no identity.
-          let nlTickRunning = false;
-          let nlConsecutiveFailures = 0;
-          const NL_TICK_TIMEOUT_MS = 10 * 60_000;
-          const nlInterval = setInterval(async () => {
-            if (nlTickRunning) {
-              console.log(`[${label}] Tick skipped — previous tick still running`);
-              return;
-            }
-            nlTickRunning = true;
-            try {
-              const msg = 'Run your periodic checks now.';
-              const tickPromise = (async () => {
-                for await (const event of this.sendToTeamAgent(teamId, agent.id, msg)) {
-                  logEvent(label)(event);
-                }
-              })();
-              const timeoutPromise = new Promise<never>((_, reject) =>
-                setTimeout(() => reject(new Error(`${label} tick timed out after 10 minutes`)), NL_TICK_TIMEOUT_MS)
-              );
-              await Promise.race([tickPromise, timeoutPromise]);
-              nlConsecutiveFailures = 0;
-              console.log(`\n[${label}] Tick complete.`);
-            } catch (err: any) {
-              nlConsecutiveFailures++;
-              if (nlConsecutiveFailures >= 3) {
-                console.error(`[${label}] CRITICAL: ${nlConsecutiveFailures} consecutive failures: ${err.message}`);
-                try {
-                  if (this.pool && !this.pool.has(`${teamId}:${agent.id}`)) {
-                    console.log(`[${label}] Attempting restart after repeated failures`);
-                    const teamData = this.activeTeams.get(teamId);
-                    if (teamData) {
-                      await this.restartTeamEngine(teamId, agent, teamData);
-                      nlConsecutiveFailures = 0;
-                    }
-                  }
-                } catch (restartErr: any) {
-                  console.error(`[${label}] Restart failed: ${restartErr.message}`);
-                }
-              } else {
-                console.warn(`[${label}] Tick error (${nlConsecutiveFailures}/3): ${err.message}`);
-              }
-            } finally {
-              nlTickRunning = false;
-            }
-          }, tickMs);
-          intervals.push(nlInterval);
-        }
-      }
-    }
-
-    this.activeTeams.set(teamId, { dbPath: teamDbPath, agents, intervals });
-    console.log(`[EngineAdapter] Team "${teamId}" started with ${agents.length} agent(s).`);
-    } catch (err: any) {
-      // Release reservation on failure so team can be retried
-      this.activeTeams.delete(teamId);
-      console.error(`[EngineAdapter] CRITICAL: Failed to start team "${teamId}": ${err.message}`);
-      throw err;
-    }
-  }
-
-  /**
-   * Stop a team — clears scheduler ticks, removes from active teams.
-   */
-  async stopTeam(teamId: string): Promise<void> {
-    const teamData = this.activeTeams.get(teamId);
-    if (!teamData) return;
-
-    // Mark all engines as intentionally stopped so watchdog ignores them
-    for (const agent of teamData.agents) {
-      this.stoppedEngines.add(`${teamId}:${agent.id}`);
-    }
-
-    for (const interval of teamData.intervals) clearInterval(interval);
-
-    // Unregister scheduler ticks
-    if (this.scheduler) {
-      for (const agent of teamData.agents) {
-        this.scheduler.unregister(`${teamId}-${agent.id}-tick`);
-      }
-    }
-
-    // Destroy all agent engines to free memory
-    for (const agent of teamData.agents) {
-      await this.destroyEngine(`${teamId}:${agent.id}`);
-    }
-
-    this.activeTeams.delete(teamId);
-    console.log(`[EngineAdapter] Team "${teamId}" stopped.`);
-  }
-
-  /**
-   * Spawn a new agent into a running team. Called by manage_team tool.
-   */
-  async spawnTeamAgent(teamId: string, agentConfig: TeamAgentConfig): Promise<void> {
-    const teamData = this.activeTeams.get(teamId);
-    if (!teamData) throw new Error(`Team "${teamId}" not running`);
-    if (!this.pool || !this.config) throw new Error('Adapter not started');
-
-    const { resolve, dirname } = await import('node:path');
-    const { fileURLToPath } = await import('node:url');
-    const thisDir = dirname(fileURLToPath(import.meta.url));
-    const nodeRepoRoot = resolve(thisDir, '..', '..', '..', '..');
-
-    const engineId = `${teamId}:${agentConfig.id}`;
-    const isLead = agentConfig.role === 'lead';
-
-    // Create engine for this agent
-    const engine = await this.pool.getOrCreate(engineId, {
-      projectPath: isLead ? nodeRepoRoot : teamData.dbPath.replace(/[/\\][^/\\]+$/, ''),
-      dbPath: teamData.dbPath,
-      role: agentConfig.role,
-      skipKnowledgeSync: true,
-      ...(agentConfig.model ? { model: agentConfig.model } : {}),
-    });
-
-    // Start session
-    if (!engine.getSessionId()) {
-      await engine.startSession(`${teamId}: ${agentConfig.id}`);
-    }
-
-    // Save Claude CLI session ID for persistence across restarts
-    if (engine.getCliSessionId?.() && this.Database) {
-      try {
-        const db = new this.Database(teamData.dbPath);
-        db.prepare(
-          `INSERT OR REPLACE INTO state (key, value, updated_at)
-           VALUES (?, ?, datetime('now'))`
-        ).run(
-          `cli-session:${agentConfig.id}`,
-          engine.getCliSessionId(),
-        );
-        db.close();
-      } catch { /* state table may not exist yet */ }
-    }
-
-    // Re-register tools with correct agent ID
-    const { createCheckAgentsTool, createSendMessageTool, createManageTasksTool } =
-      await import('@pando-teams/core');
-
-    if (engine?.db) {
-      engine.tools.unregister('check_agents');
-      engine.tools.unregister('send_message');
-      engine.tools.unregister('manage_tasks');
-
-      const engineSessionId = engine.getSessionId()!;
-      engine.tools.register(createCheckAgentsTool({ db: engine.db, agentId: agentConfig.id }));
-      engine.tools.register(createSendMessageTool({ db: engine.db, agentId: agentConfig.id, senderRole: agentConfig.role }));
-      engine.tools.register(createManageTasksTool({ db: engine.db, sessionId: engineSessionId }));
-    }
-
-    // Register manage_team tool on spawned lead agents
-    if (agentConfig.role === 'lead') {
-      const manageTeamTool = await createManageTeamTool(this, teamId);
-      engine.tools.register(manageTeamTool);
-      console.log(`[team:${teamId}] "${agentConfig.id}": manage_team tool registered`);
-    }
-
-    // Insert agent profile into shared DB
-    try {
-      const firstAgent = teamData.agents[0];
-      const firstEngine = this.pool.get(`${teamId}:${firstAgent.id}`);
-      if (firstEngine?.db) {
-        const sqlite = (firstEngine.db as any).$client;
-        sqlite.prepare(
-          `INSERT OR REPLACE INTO agents (id, role, model, system_prompt, tools, scope, status, display_name, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
-        ).run(agentConfig.id, agentConfig.role, agentConfig.model || 'default', agentConfig.prompt, '[]', '{}', 'idle', agentConfig.displayName, new Date().toISOString());
-      }
-    } catch (err: any) {
-      console.warn(`[team:${teamId}] Could not register spawned agent profile: ${err.message}`);
-    }
-
-    // Register scheduler tick if agent has one
-    if (agentConfig.tickIntervalMs && agentConfig.tickIntervalMs > 0 && this.scheduler) {
-      const label = `${teamId}:${agentConfig.id}`;
-      this.scheduler.register({
-        name: `${teamId}-${agentConfig.id}-tick`,
-        engineId,
-        intervalMs: agentConfig.tickIntervalMs,
-        prompt: `${agentConfig.prompt}\n\n---\n\nRun your periodic checks now.`,
-        active: true,
-        onEvent: (event: any) => {
-          if (event.type === 'stream:chunk' && event.content) process.stdout.write(`[${label}] ${event.content}`);
-        },
-        onComplete: () => console.log(`\n[${label}] Tick complete.`),
-        onError: (err: Error) => console.warn(`[${label}] Tick error: ${err.message}`),
-      });
-    }
-
-    // Track in active team data
-    teamData.agents.push(agentConfig);
-    console.log(`[team:${teamId}] Spawned agent "${agentConfig.id}" (role: ${agentConfig.role})`);
-  }
-
-  /**
-   * Stop and remove an agent from a running team. Called by manage_team tool.
-   */
-  async stopTeamAgent(teamId: string, agentId: string): Promise<void> {
-    const teamData = this.activeTeams.get(teamId);
-    if (!teamData) throw new Error(`Team "${teamId}" not running`);
-
-    const engineId = `${teamId}:${agentId}`;
-
-    // Mark as intentionally stopped so watchdog doesn't restart it
-    this.stoppedEngines.add(engineId);
-
-    // Unregister scheduler tick
-    if (this.scheduler) {
-      this.scheduler.unregister(`${teamId}-${agentId}-tick`);
-    }
-
-    // Remove from agent list
-    const idx = teamData.agents.findIndex(a => a.id === agentId);
-    if (idx >= 0) teamData.agents.splice(idx, 1);
-
-    // Update agent status in DB
-    try {
-      const firstAgent = teamData.agents[0];
-      if (firstAgent) {
-        const engine = this.pool.get(`${teamId}:${firstAgent.id}`);
-        if (engine?.db) {
-          const sqlite = (engine.db as any).$client;
-          sqlite.prepare(`UPDATE agents SET status = 'stopped' WHERE id = ?`).run(agentId);
-        }
-      }
-    } catch { /* ok */ }
-
-    // Destroy the engine process to free memory
-    try {
-      const engine = this.pool.get(engineId);
-      if (engine) {
-        await engine.shutdown().catch(() => {});
-        // Remove from pool internals (engines, lastUsed, createdAt are Maps)
-        this.pool.engines?.delete(engineId);
-        this.pool.lastUsed?.delete(engineId);
-        this.pool.createdAt?.delete(engineId);
-      }
-    } catch { /* ok — engine may already be gone */ }
-
-    console.log(`[team:${teamId}] Stopped agent "${agentId}" (engine destroyed)`);
-  }
-
-  /**
-   * Get list of agents in a team (for manage_team list action).
-   */
-  getTeamAgents(teamId: string): { id: string; role: string; displayName: string; status: string; model: string }[] {
-    const teamData = this.activeTeams.get(teamId);
-    if (!teamData) return [];
-    return teamData.agents.map(a => ({
-      id: a.id,
-      role: a.role,
-      displayName: a.displayName,
-      status: 'active',
-      model: a.model || 'default',
-    }));
-  }
-
-  /**
-   * Send a message to a team agent with the correct system prompt.
-   * For lead agents: injects inbox + board state into the message.
-   */
-  async *sendToTeamAgent(teamId: string, agentId: string, message: string): AsyncGenerator<any> {
-    if (!this.pool) throw new Error('EngineAdapter not started');
-    const engineId = `${teamId}:${agentId}`;
-    const engine = this.pool.get(engineId);
-    if (!engine) throw new Error(`Team agent "${engineId}" not found`);
-
-    if (!engine.getSessionId()) {
-      await engine.startSession(`${teamId}: ${agentId}`);
-    }
-
-    const teamData = this.activeTeams.get(teamId);
-    const agentDef = teamData?.agents.find(a => a.id === agentId);
-
-    // Inject inbox + board state into the message for all agents
-    let enrichedMessage = message;
-    if (teamData?.dbPath) {
-      const inbox = this.getTeamInbox(teamId, agentId);
-      const inboxText = inbox.length > 0
-        ? `INBOX (${inbox.length} messages):\n${inbox.map(m => `  [${m.from}] ${m.message}`).join('\n')}`
-        : 'INBOX: Empty — no new messages.';
-      const boardText = this.getBoardSnapshot(teamData.dbPath);
-      enrichedMessage = `${message}\n\n${inboxText}\n\n${boardText}`;
-    }
-
-    yield* engine.send(enrichedMessage, {
-      agentOverride: {
-        agentId,
-        role: agentDef?.role || agentId,
-        systemPrompt: agentDef?.prompt || '',
-      },
-    });
-  }
-
-  /** Check if a specific team is running. */
-  isTeamActive(teamId: string): boolean {
-    return this.activeTeams.has(teamId);
-  }
-
-  /** Get list of active team IDs. */
-  getActiveTeamIds(): string[] {
-    return [...this.activeTeams.keys()];
-  }
-
-  /** Get aggregate cost for a team from its PandoTeams DB. */
-  getTeamCost(teamId: string): { totalTokens: number; totalCostUsd: number; totalCostLux: number; byAgent: Record<string, number> } {
-    const teamData = this.activeTeams.get(teamId);
-    if (!teamData?.dbPath || !this.Database) return { totalTokens: 0, totalCostUsd: 0, totalCostLux: 0, byAgent: {} };
-    try {
-      const db = new this.Database(teamData.dbPath);
-      // Check if budget_usage table exists before querying
-      const tableCheck = db.prepare(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name='budget_usage'`
-      ).get();
-      if (!tableCheck) {
-        db.close();
-        return { totalTokens: 0, totalCostUsd: 0, totalCostLux: 0, byAgent: {} };
-      }
-      // Discover columns dynamically — schema may vary across PandoTeams versions
-      const cols = db.prepare(`PRAGMA table_info(budget_usage)`).all() as { name: string }[];
-      const colNames = new Set(cols.map(c => c.name));
-      const hasInputTokens = colNames.has('input_tokens');
-      const hasOutputTokens = colNames.has('output_tokens');
-      const hasEstimatedCostUsd = colNames.has('estimated_cost_usd');
-      const hasTokens = colNames.has('tokens');
-
-      // Build token and cost expressions based on available columns
-      const tokenExpr = hasInputTokens && hasOutputTokens
-        ? 'SUM(b.input_tokens + b.output_tokens)'
-        : hasTokens ? 'SUM(b.tokens)' : '0';
-      const costExpr = hasEstimatedCostUsd ? 'SUM(b.estimated_cost_usd)' : '0';
-
-      // Per-agent attribution: join budget_usage with sessions table.
-      // PandoTeams session titles follow the format "teamId: agentRole",
-      // which lets us extract the agent name from the session title.
-      const hasSessionsTable = db.prepare(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'`
-      ).get();
-      const hasSessionId = colNames.has('session_id');
-
-      let rows: { agent_name: string; tokens: number; cost: number }[];
-      if (hasSessionsTable && hasSessionId) {
-        rows = db.prepare(
-          `SELECT COALESCE(s.title, 'unknown') as agent_name, ${tokenExpr} as tokens, ${costExpr} as cost
-           FROM budget_usage b
-           LEFT JOIN sessions s ON b.session_id = s.id
-           GROUP BY agent_name`
-        ).all() as { agent_name: string; tokens: number; cost: number }[];
-      } else {
-        // Fallback: no sessions table, aggregate without per-agent breakdown
-        rows = db.prepare(
-          `SELECT 'unknown' as agent_name, ${tokenExpr} as tokens, ${costExpr} as cost FROM budget_usage b`
-        ).all() as { agent_name: string; tokens: number; cost: number }[];
-      }
-      db.close();
-
-      const byAgent: Record<string, number> = {};
-      let totalTokens = 0, totalCostUsd = 0;
-      for (const row of rows) {
-        // Extract agent role from session title (e.g., "pando-infra: lead" → "lead")
-        const colonIdx = row.agent_name.indexOf(': ');
-        const agentKey = colonIdx >= 0 ? row.agent_name.slice(colonIdx + 2) : row.agent_name;
-        // Accumulate in case multiple session titles map to the same agent role
-        byAgent[agentKey] = (byAgent[agentKey] || 0) + (row.tokens || 0);
-        totalTokens += row.tokens || 0;
-        totalCostUsd += row.cost || 0;
-      }
-      // PandoTeams records costs via our Lux budget provider, so estimated_cost_usd
-      // actually contains Lux values. Convert back to USD for the USD field.
-      const totalCostLux = totalCostUsd;  // DB value is in Lux (from our budget provider)
-      return { totalTokens, totalCostUsd: totalCostLux / LUX_PER_USD, totalCostLux, byAgent };
-    } catch {
-      return { totalTokens: 0, totalCostUsd: 0, totalCostLux: 0, byAgent: {} };
-    }
-  }
-
-  /**
-   * Get recent activity (messages + tool_calls) for an entire team.
-   * Returns the last N messages and N tool_calls across all team sessions.
-   */
-  getTeamActivity(teamId: string, limit = 20, full = false): { messages: any[]; toolCalls: any[] } {
-    const teamData = this.activeTeams.get(teamId);
-    if (!teamData?.dbPath || !this.Database) return { messages: [], toolCalls: [] };
-    try {
-      const db = new this.Database(teamData.dbPath, { readonly: true });
-
-      // Check which tables exist
-      const hasMsgs = db.prepare(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name='messages'`
-      ).get();
-      const hasToolCalls = db.prepare(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name='tool_calls'`
-      ).get();
-
-      const contentCol = full ? 'm.content' : 'substr(m.content, 1, 500) as content';
-      const argsCol = full ? 't.args' : 'substr(t.args, 1, 300) as args';
-
-      let messages: any[] = [];
-      if (hasMsgs) {
-        messages = db.prepare(
-          `SELECT m.id, m.role, ${contentCol}, m.tool_name, m.agent_id, m.created_at
-           FROM messages m ORDER BY m.created_at DESC LIMIT ?`
-        ).all(limit);
-      }
-
-      let toolCalls: any[] = [];
-      if (hasToolCalls) {
-        toolCalls = db.prepare(
-          `SELECT t.id, t.tool_name, ${argsCol}, t.success, t.duration_ms, t.created_at
-           FROM tool_calls t ORDER BY t.created_at DESC LIMIT ?`
-        ).all(limit);
-      }
-
-      db.close();
-      return { messages, toolCalls };
-    } catch {
-      return { messages: [], toolCalls: [] };
-    }
-  }
-
-  /**
-   * Get recent messages from a team agent's sessions.
-   * Queries the team's .pando-teams.db for messages belonging to sessions
-   * whose title contains the agentId (e.g. "pando-infra: lead").
-   */
-  getTeamAgentMessages(teamId: string, agentId: string, limit = 20): { role: string; content: string; createdAt: string }[] {
-    const teamData = this.activeTeams.get(teamId);
-    if (!teamData?.dbPath || !this.Database) return [];
-    try {
-      const db = new this.Database(teamData.dbPath);
-      // Check if messages and sessions tables exist
-      const hasMsgs = db.prepare(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name='messages'`
-      ).get();
-      const hasSessions = db.prepare(
-        `SELECT name FROM sqlite_master WHERE type='table' AND name='sessions'`
-      ).get();
-      if (!hasMsgs || !hasSessions) { db.close(); return []; }
-
-      const rows = db.prepare(
-        `SELECT m.role, substr(m.content, 1, 500) as content, m.created_at
-         FROM messages m
-         WHERE m.session_id IN (SELECT id FROM sessions WHERE title LIKE ?)
-         ORDER BY m.created_at DESC LIMIT ?`
-      ).all(`%${agentId}%`, limit) as { role: string; content: string; created_at: string }[];
-      db.close();
-      return rows.map(r => ({ role: r.role, content: r.content, createdAt: r.created_at }));
-    } catch { return []; }
-  }
-
-  /**
-   * On-demand team startup. Called when a request arrives for a team
-   * that isn't running yet. Starts team with given agents.
-   */
-  private teamStarting = new Set<string>();
-  async ensureTeamStarted(teamId: string, agents: TeamAgentConfig[]): Promise<boolean> {
-    if (this.isTeamActive(teamId)) return true;
-    if (!this.pool || !this.started) return false;
-    if (this.teamStarting.has(teamId)) {
-      for (let i = 0; i < 30; i++) {
-        await new Promise(r => setTimeout(r, 1000));
-        if (this.isTeamActive(teamId)) return true;
-      }
-      return this.isTeamActive(teamId);
-    }
-    this.teamStarting.add(teamId);
-    try {
-      console.log(`[EngineAdapter] On-demand team startup: ${teamId}`);
-      await this.startTeam(teamId, agents);
-      return this.isTeamActive(teamId);
-    } catch (err: any) {
-      console.error(`[EngineAdapter] On-demand team startup failed (${teamId}): ${err.message}`);
-      return false;
-    } finally {
-      this.teamStarting.delete(teamId);
-    }
   }
 
   // ─── Internal ─────────────────────────────────────────────────────────
@@ -2716,7 +933,7 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
         const provider = resource.metadata?.provider as string | undefined;
         if (!provider) continue;
         const envVar = PROVIDER_ENV_MAP[provider];
-        if (!envVar || process.env[envVar]) continue; // already have it locally
+        if (!envVar || process.env[envVar]) continue;
         try {
           const key = await registry.getCredential(resource.resourceId);
           if (key) {
@@ -2740,7 +957,6 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
 
 // ─── PandoService adapter ────────────────────────────────────────────
 // Wraps EngineAdapter as a PandoService for the ServiceLoader pattern.
-// This is the bridge between the new service architecture and the existing engine.
 
 /**
  * Create a PandoService that wraps EngineAdapter.

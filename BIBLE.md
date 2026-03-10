@@ -55,9 +55,10 @@ Hub (portal) = the front door
   - Lightweight. Clean. Not confusing.
   - Shows: dashboard, marketplace, governance, wallet
   - For chat: routes to teams web UI
-  - Doorman classifies: simple question (Path A) or build request (Path B)
+  - Doorman classifies: simple question (Path A) or build request (Path B) or report/feedback (Path C)
   - Path A: lightweight back-and-forth using contributed API key
   - Path B: creates a team → user directed to teams web UI
+  - Path C: bug report or feature request → board task on pando-infra team
 
 Teams Web UI (workspace) = where work happens
   - Every project gets a default team with a manager session
@@ -208,7 +209,7 @@ STATUS: PROVEN for 2 EC2 nodes. Gap: EC2 nodes behind on recent commits.
 |---|-----|----------|-------------|----------------|
 | 1 | No external hosting | HIGH | Tier 1 local deploy works | S3/Vercel config for shareable URLs |
 | 2 | Cross-thread follow-up | MEDIUM | Same-thread follow-ups WORK (projectId in ThreadMeta, skips doorman) | New-chat follow-ups can't detect "which project?" — doorman has 'project' intent defined but never implemented (api-server.ts:680) |
-| 3 | Feedback intake pipeline | HIGH | Board task API works, doorman classifies | Doorman needs FEEDBACK intent → board task route |
+| 3 | ~~Feedback intake pipeline~~ | ~~HIGH~~ | **IMPLEMENTED** — doorman returns `report`/`feedback` intents (api-server.ts:805-809), platform-api.ts:698-720 creates [BUG:user]/[FEATURE:user] board tasks on pando-infra. Verified working 2026-03-10. | Done |
 | 4 | Feedback status UI | MEDIUM | Board task lifecycle exists | Teams Web UI needs user-facing ticket view |
 | 4b | Approval layer | MEDIUM | Governance exists | No risk-based triage in manager prompt |
 | 4c | System Council read-only view | MEDIUM | Teams Web UI shows pando-infra | Input should be hidden, activity feed only |
@@ -292,7 +293,7 @@ User types message in Hub Chat
 
 **What's Needed to Make External Agents (ops/lead/dev) Fully Redundant:**
 
-1. **Feedback intake pipeline** — doorman FEEDBACK intent → board task (code change)
+1. ~~**Feedback intake pipeline**~~ — **DONE.** Doorman `report`/`feedback` intents → board task on pando-infra. Verified 2026-03-10.
 2. **User-facing feedback status UI** — Teams Web UI shows ticket lifecycle (UI change)
 3. **Approval layer in manager prompt** — risk-based triage logic (prompt change)
 4. **System Council read-only view** — Teams Web UI pando-infra tab, no input (UI change)
@@ -1049,9 +1050,9 @@ The root cause: GossipSub is a broadcast protocol designed for thousands of peer
 
 ## 5. HOW THINGS WORK
 
-### 5.1 Two Compute Paths — How Work Flows Through the Network
+### 5.1 Three Compute Paths — How Work Flows Through the Network
 
-The network has **two distinct compute paths**. Keys never travel. Work travels to the compute.
+The network has **three distinct compute paths**. Keys never travel. Work travels to the compute.
 
 #### Path A: Simple AI (chat, questions, doorman classification)
 
@@ -1128,7 +1129,31 @@ User sees: "Your bakery website is live at https://..."
 
 **Build resilience:** Code is committed to GitHub during build. If the PandoTeams node goes offline mid-build, another node clones from GitHub and continues.
 
-**Subsequent messages** with `projectId` route directly to that project's engine on the PandoTeams node that owns it.
+**Subsequent messages** with `projectId` route directly to that project's engine on the PandoTeams node that owns it. ProjectId is "sticky" — stored in thread metadata on first message, not re-sent by the client.
+
+#### Path C: Report / Feedback (user bug reports and feature requests)
+
+```
+User says: "I found a bug on the search page" or "feedback: add dark mode"
+  |
+  v
+POST /v1/chat/message → doorman classifies intent
+  |
+  v
+Intent = "report" or "feedback"
+  → Creates board task on pando-infra team:
+    - "report" → title: "[BUG:user] <message>" (priority: high)
+    - "feedback" → title: "[FEATURE:user] <message>" (priority: medium)
+  |
+  v
+Internal pando-infra lead processes the board task on next tick
+  → Evaluates, writes fix, commits via governance if needed
+  |
+  v
+Response to user: "Bug report filed" / "Feedback recorded"
+```
+
+**Implementation:** api-server.ts:805-809 (doorman classification), platform-api.ts:698-720 (board task creation). Verified working 2026-03-10 — user bug reports flow through doorman → board → internal team processes → fix deployed.
 
 #### Pipeline 4: Full User Journey (end-to-end, PROVEN — commit e6fe16b1)
 
