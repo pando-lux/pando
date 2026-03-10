@@ -484,6 +484,11 @@ export class ApiServer {
           if (!handler) throw new Error('Chat proxy handler not registered');
           return handler({ payload: payload, from: 'http-peer' });
         },
+        aiQueryHandler: async (payload: any) => {
+          const handler = node.requestReply?.getHandler?.('pando/ai-query');
+          if (!handler) throw new Error('AI query handler not registered');
+          return handler({ payload, from: 'http-peer' });
+        },
         onStorageWrite: () => {
           try { node.threadStore?.loadFromBackend?.(); } catch {}
           try { node.projectStore?.loadFromBackend?.(); } catch {}

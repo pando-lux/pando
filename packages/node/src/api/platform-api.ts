@@ -225,7 +225,7 @@ export async function registerPlatformRoutes(
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ agentId: 'lead', message: trimmed }),
-          signal: AbortSignal.timeout(60000),
+          signal: AbortSignal.timeout(120000),
         });
         if (doormanResp.ok) {
           const doormanResult = await doormanResp.json() as any;

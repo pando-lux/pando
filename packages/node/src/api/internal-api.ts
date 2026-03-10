@@ -5,7 +5,8 @@
  * Auth: Ed25519 signature verification (not JWT/API token).
  *
  * Routes: /v1/internal/storage/:method, /v1/internal/deploy,
- *         /v1/internal/credential, /v1/internal/chat-proxy
+ *         /v1/internal/credential, /v1/internal/chat-proxy,
+ *         /v1/internal/ai-query
  */
 
 import { verify } from '@pando/identity';
@@ -20,6 +21,7 @@ export interface InternalRouteDeps {
   credentialStore?: { getCredential(resourceId: string): Promise<string | null>; hasDecryptionCapability(): boolean };
   deployHandler?: (payload: any) => Promise<any>;
   chatProxyHandler?: (payload: any) => Promise<any>;
+  aiQueryHandler?: (payload: any) => Promise<any>;
   onStorageWrite?: () => void;
   /** Generic handler dispatch — looks up registered handlers by type */
   getHandler?: (type: string) => ((req: any) => Promise<any>) | undefined;
@@ -231,6 +233,22 @@ export function registerInternalRoutes(fastify: any, deps: InternalRouteDeps): v
     } catch (err: any) {
       console.error('[internal] Chat proxy failed:', err.message);
       return reply.code(500).send({ error: 'Chat proxy failed' });
+    }
+  });
+
+  // ── POST /v1/internal/ai-query ─────────────────────────────────────────────
+  // Compute nodes serve AI queries for nodes without MongoDB/credential access.
+
+  fastify.post('/v1/internal/ai-query', async (request: any, reply: any) => {
+    if (!deps.aiQueryHandler) {
+      return reply.code(501).send({ error: 'AI query handler not available' });
+    }
+    try {
+      const result = await deps.aiQueryHandler(request.body);
+      return result;
+    } catch (err: any) {
+      console.error('[internal] AI query failed:', err.message);
+      return reply.code(500).send({ error: 'AI query failed' });
     }
   });
 
