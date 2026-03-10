@@ -87,13 +87,6 @@ export default function ExplorePage() {
       color: "green",
     },
     {
-      title: "Health",
-      description: "Peers, nodes, reputation, and capabilities",
-      href: "/network",
-      stat: status ? `${status.peers} peer${status.peers !== 1 ? "s" : ""} online` : null,
-      color: "blue",
-    },
-    {
       title: "How It Works",
       description: "Learn about Pando",
       href: "/explore/how-it-works",
@@ -121,7 +114,6 @@ export default function ExplorePage() {
     cyan: { border: "border-cyan-500/20", bg: "hover:bg-cyan-500/5", text: "text-cyan-500 dark:text-cyan-400", dot: "bg-cyan-500" },
     purple: { border: "border-purple-500/20", bg: "hover:bg-purple-500/5", text: "text-purple-500 dark:text-purple-400", dot: "bg-purple-500" },
     green: { border: "border-green-500/20", bg: "hover:bg-green-500/5", text: "text-green-500 dark:text-green-400", dot: "bg-green-500" },
-    blue: { border: "border-blue-500/20", bg: "hover:bg-blue-500/5", text: "text-blue-500 dark:text-blue-400", dot: "bg-blue-500" },
     neutral: { border: "border-neutral-500/20", bg: "hover:bg-neutral-500/5", text: "text-neutral-500 dark:text-neutral-400", dot: "bg-neutral-500" },
     orange: { border: "border-orange-500/20", bg: "hover:bg-orange-500/5", text: "text-orange-500 dark:text-orange-400", dot: "bg-orange-500" },
     emerald: { border: "border-emerald-500/20", bg: "hover:bg-emerald-500/5", text: "text-emerald-500 dark:text-emerald-400", dot: "bg-emerald-500" },

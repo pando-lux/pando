@@ -25,7 +25,7 @@ const sections = [
   },
   {
     title: "Health Monitoring",
-    content: "The Health page provides real-time monitoring of node status, resource usage, and service availability. SSE (Server-Sent Events) streams deliver live updates so you always see the current state of the network.",
+    content: "The Network page provides real-time monitoring of node status, peers, reputation, and capabilities. Live updates show the current state of the network including connected peers, topology, and resource availability.",
   },
 ];
 

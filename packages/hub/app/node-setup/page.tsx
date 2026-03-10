@@ -178,7 +178,7 @@ cd pando`}
               code={`npm install
 npm run build`}
             />
-            <p className="text-xs text-neutral-400">Takes ~2 minutes. Builds all packages: shared → ledger → node → gateway → mcp-server.</p>
+            <p className="text-xs text-neutral-400">Takes ~2 minutes. Builds all packages: shared → ledger → node → hub → mcp-server.</p>
           </Step>
 
           <Step n={3} title="Start your node">
@@ -191,11 +191,11 @@ npm run build`}
             </p>
           </Step>
 
-          <Step n={4} title="(Optional) Start the gateway">
+          <Step n={4} title="(Optional) Start the hub">
             <CodeBlock
-              caption="Local web UI at http://localhost:3222"
-              code={`cd packages/gateway
-PANDO_NODE_URL=http://localhost:4000 npx next dev --port 3222`}
+              caption="Local web UI at http://localhost:3003"
+              code={`cd packages/hub
+PANDO_NODES=http://localhost:4000 npx next dev --port 3003`}
             />
           </Step>
         </div>
