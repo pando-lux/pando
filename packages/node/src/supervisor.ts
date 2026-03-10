@@ -127,6 +127,15 @@ function spawnTeams(): ChildProcess | null {
     },
   });
   proc.on('exit', onTeamsExit);
+
+  // Write .build-commit so the unified watchdog can detect future code changes
+  try {
+    const head = execSync('git rev-parse HEAD', {
+      cwd: TEAMS_PATH, timeout: 10_000, encoding: 'utf8', windowsHide: true,
+    }).trim();
+    if (head) writeFileSync(join(TEAMS_PATH, '.build-commit'), head + '\n');
+  } catch { /* non-fatal — watchdog just won't track this app */ }
+
   return proc;
 }
 
