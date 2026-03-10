@@ -351,6 +351,12 @@ export class UserAccountStore {
         ).run(JSON.stringify(userEncryptedKey), 'user', peerId);
       }
 
+      // Ensure account exists in ledger (may have been lost after node restart)
+      if (!this.ledger.accounts.exists(peerId)) {
+        const publicKey = keyRow?.public_key || '';
+        this.ledger.registerNode(peerId, publicKey);
+      }
+
       this.ledger.accounts.claimAccount(peerId, usernameVal, null, passwordHash);
       const account = this.ledger.accounts.get(peerId);
       const publicKey = account?.publicKey || '';

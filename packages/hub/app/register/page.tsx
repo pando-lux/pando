@@ -17,10 +17,10 @@ export default function RegisterPage() {
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
 
-  // If already claimed (logged in), redirect to home
+  // If already claimed (logged in) and not just-registered, redirect to home
   useEffect(() => {
-    if (!loading && isClaimed) router.push("/");
-  }, [loading, isClaimed, router]);
+    if (!loading && isClaimed && !success) router.push("/");
+  }, [loading, isClaimed, success, router]);
 
   if (loading || isClaimed) {
     return (

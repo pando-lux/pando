@@ -115,9 +115,12 @@ export class AccountStore {
   /** Claim an account — set username, password hash, mark as claimed. */
   claimAccount(peerId: string, username: string | null, displayName: string | null, passwordHash: string): void {
     const now = Date.now();
-    this.db.prepare(
+    const result = this.db.prepare(
       'UPDATE accounts SET username = ?, display_name = ?, password_hash = ?, is_claimed = 1, updated_at = ? WHERE peer_id = ?'
     ).run(username, displayName, passwordHash, now, peerId);
+    if (result.changes === 0) {
+      throw new Error('Account not found — cannot claim nonexistent account');
+    }
   }
 
   /** Apply a remote claim from P2P sync. First-come-first-served by timestamp for username conflicts.
