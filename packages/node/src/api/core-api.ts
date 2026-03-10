@@ -814,8 +814,10 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         }
         steps.push('changes-detected');
 
-        // Step 3: Build check — use npm run build for node repo, npx tsc --noEmit for other repos
-        const buildCmd = requestedRepoPath ? 'npx tsc --noEmit' : 'npm run build';
+        // Step 3: Build check
+        // For node repo: npm run build (tsc + dist)
+        // For other repos: turbo build for web+core (avoids pre-existing server drizzle-orm type conflicts)
+        const buildCmd = requestedRepoPath ? 'npx turbo build --filter=@pando-teams/web --filter=@pando-teams/core' : 'npm run build';
         try {
           execSync(buildCmd, { cwd: repoDir, timeout: 180_000, stdio: 'pipe', encoding: 'utf-8' });
           steps.push('build-passed');
