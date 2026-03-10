@@ -1,5 +1,6 @@
 /**
  * Engine Adapter — connection between pando-node and pando-teams.
+ * v2.1 — observer upgrade: 10m tick, replaces external lead (2026-03-10)
  *
  * This is the ONLY file in pando-node that imports @pando-teams/core.
  * Everything else in pando-node is pure infrastructure.
