@@ -13,6 +13,8 @@
  * The actual git/build/deploy work is done by GitOps.
  * UpgradeProtocol does NOT duplicate git operations.
  */
+// KB: After proposal passes, node sends direct P2P notification to each peer (reliable TCP) + GossipSub backup.
+// KB: Fallback: governance sync + catchup timer every 2min.
 
 import { createHash, randomBytes } from 'node:crypto';
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs';

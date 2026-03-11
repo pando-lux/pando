@@ -470,7 +470,7 @@ export class AppManager {
     this.runBuildIfNeeded(appDir, app.build_cmd);
 
     // Get S3 credentials from ResourceRegistry (contributed resources)
-    const registry = this.node.resourceRegistry;
+    const registry = this.node.getResourceRegistry();
     let s3Cred: string | null = null;
     let s3Resources: any[] = [];
 
@@ -890,7 +890,7 @@ export class AppManager {
     this.runBuildIfNeeded(appDir, app.build_cmd);
 
     // Re-upload to S3 (same logic as deployTier1 upload phase)
-    const registry = this.node.resourceRegistry;
+    const registry = this.node.getResourceRegistry();
     if (!registry) throw new Error('ResourceRegistry not available on this node');
 
     const s3Resources = registry.findResources('storage_blob' as any);

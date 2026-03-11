@@ -8,7 +8,7 @@
  */
 
 import type { CredentialStore } from '../core/credential-store.js';
-import type { ResourceRegistry } from './resource-registry.js';
+// KB: ResourceRegistry import deleted Phase 6. ResourceHealthChecker no longer wired to registry.
 
 export interface HealthResult {
   resourceId: string;
@@ -23,12 +23,10 @@ export class ResourceHealthChecker {
   private results: Map<string, HealthResult> = new Map();
   private interval: ReturnType<typeof setInterval> | null = null;
   private credentialStore: CredentialStore | null = null;
-  private resourceRegistry: ResourceRegistry | null = null;
   private running = false;
 
-  setDependencies(credentialStore: CredentialStore, resourceRegistry: ResourceRegistry): void {
+  setDependencies(credentialStore: CredentialStore): void {
     this.credentialStore = credentialStore;
-    this.resourceRegistry = resourceRegistry;
   }
 
   start(intervalMs = 5 * 60 * 1000): void {
@@ -57,9 +55,9 @@ export class ResourceHealthChecker {
   }
 
   async checkAll(): Promise<void> {
-    if (!this.credentialStore || !this.resourceRegistry) return;
-
-    const resources = this.resourceRegistry.getAllResources();
+    if (!this.credentialStore) return;
+    // KB: resourceRegistry removed Phase 6 — health checker has no resources to check.
+    const resources: any[] = [];
     for (const resource of resources) {
       if (resource.status !== 'active') continue;
       try {

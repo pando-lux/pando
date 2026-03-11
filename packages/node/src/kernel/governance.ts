@@ -8,13 +8,15 @@
  * This is how agents "talk to each other" and make collective decisions.
  *
  * Phase 30: AI-Powered Governance — proposal staking & reviewer selection.
+ *
+ * // KB: governance_reviewers and governance_reviews stripped in Phase 6. Phase 30 AI reviewer selection removed — too complex for 4-node dev mesh.
  */
 
 import { createHash, randomBytes } from 'node:crypto';
 import { GitOps } from '../core/git-ops.js';
 import type Database from 'better-sqlite3';
 import type { PandoNetwork } from './network.js';
-import type { PandoMessage, GovernanceProposal, GovernanceComment, GovernanceVote, GovernanceDecision, VoteChoice, AgentHello, AgentCapabilities, Transaction, ActivityRecord, ModelAttestation, NodeIdentity, WeightedVoteResult, ReviewerCandidacy, ProposalCategory, ProposalReview, ReviewRecommendation, ReviewSummary, UpgradePayload } from '@pando/shared';
+import type { PandoMessage, GovernanceProposal, GovernanceComment, GovernanceVote, GovernanceDecision, VoteChoice, AgentHello, AgentCapabilities, Transaction, ActivityRecord, ModelAttestation, NodeIdentity, WeightedVoteResult, ProposalCategory, UpgradePayload } from '@pando/shared';
 import { MessageType, WorkType, verifySignature } from '@pando/shared';
 import { debug } from '../logger.js';
 import { privateKeyFromProtobuf } from '@libp2p/crypto/keys';
@@ -60,22 +62,12 @@ export const MIN_REVIEWER_REPUTATION = 0.5;
 /** Candidacy window duration in milliseconds (5 minutes). */
 export const CANDIDACY_WINDOW_MS = 5 * 60 * 1000;
 
-/** Budget limit per reviewer agent in Lux (Phase 30.2). */
-export const REVIEWER_BUDGET_LUX = 5;
-
-/** Timeout for AI review phase in milliseconds (30 minutes) (Phase 30.3). */
-export const REVIEW_TIMEOUT_MS = 30 * 60 * 1000;
-
-/** Extended timeout for fallback reviewer attempts in milliseconds (15 minutes) (Phase 30.5). */
-export const FALLBACK_REVIEW_TIMEOUT_MS = 15 * 60 * 1000;
-
-/** Maximum number of fallback reviewer attempts per proposal (Phase 30.5). */
-export const MAX_FALLBACK_ATTEMPTS = 2;
-
 /** Maximum age (in ms) for proposals received during sync. Proposals older than this are skipped. (7 days) */
 export const SYNC_PROPOSAL_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 // ── Phase 73: P2P Self-Upgrade Auto-Approve ──────────────────────────────────
+// KB: Auto-approve threshold = 8 peers. In dev mode (<=8 peers), governance proposals pass instantly.
+// KB: Security validation still runs.
 const DEFAULT_UPGRADE_AUTO_APPROVE_THRESHOLD = 8;
 
 // ── Phase 30.6: Meta-Governance Protection Constants ──────────────────────────
@@ -188,18 +180,6 @@ export class GovernanceSync {
   // Phase 30: Payment gate for proposal staking (optional — set via setPaymentGate)
   private paymentGate: PaymentGateLike | null = null;
 
-  // Phase 30: Reviewer candidacy tracking (proposalId → candidacies)
-  private reviewerCandidacies: Map<string, Map<string, ReviewerCandidacy>> = new Map();
-
-  // Phase 30: Candidacy window timers (proposalId → timeout handle)
-  private candidacyTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
-
-  // Phase 30: Selected reviewers per proposal (proposalId → peerId[])
-  private selectedReviewers: Map<string, string[]> = new Map();
-
-  // Phase 30: Callback when reviewers are selected for a proposal
-  private onReviewersSelectedCallback: ((proposalId: string, reviewers: string[]) => void) | null = null;
-
   // Governance audit logging (optional — set via setAgentDb)
   private agentDb: AgentDbLike | null = null;
 
@@ -209,26 +189,9 @@ export class GovernanceSync {
   // Governance hardening: Ed25519 private key for signing proposals
   private identityPrivateKey: Uint8Array | null = null;
 
-  // Phase 30.3: Review tracking (proposalId → reviews)
-  private reviews: Map<string, Map<string, ProposalReview>> = new Map();
-
-  // Phase 30.3: Review timeout timers (proposalId → timeout handle)
-  private reviewTimers: Map<string, ReturnType<typeof setTimeout>> = new Map();
-
-  // Phase 30.5: Fallback reviewer tracking
-  // proposalId → ordered list of fallback peer IDs (candidates sorted by score, excluding already-selected)
-  private fallbackReviewers: Map<string, string[]> = new Map();
-  // proposalId → number of fallback attempts made so far
-  private fallbackAttempts: Map<string, number> = new Map();
-
   // Phase 73: P2P Self-Upgrade auto-approve threshold
   private upgradeAutoApproveThreshold: number = DEFAULT_UPGRADE_AUTO_APPROVE_THRESHOLD;
   private onUpgradeApprovedCallback: ((proposal: GovernanceProposal) => void) | null = null;
-
-  // Phase 30.3: Prepared statements for reviewer/review tables
-  private stmtInsertReviewer!: Database.Statement;
-  private stmtUpdateReviewerStatus!: Database.Statement;
-  private stmtInsertReview!: Database.Statement;
 
   constructor(network: PandoNetwork, localPeerId: string, db: Database.Database) {
     this.network = network;
@@ -292,16 +255,6 @@ export class GovernanceSync {
 
   onUpgradeApproved(callback: (proposal: GovernanceProposal) => void): void {
     this.onUpgradeApprovedCallback = callback;
-  }
-
-  /** Set callback for when reviewers are selected for a proposal (Phase 30). */
-  onReviewersSelected(callback: (proposalId: string, reviewers: string[]) => void): void {
-    this.onReviewersSelectedCallback = callback;
-  }
-
-  /** Get selected reviewers for a proposal (Phase 30). */
-  getSelectedReviewers(proposalId: string): string[] {
-    return this.selectedReviewers.get(proposalId) || [];
   }
 
   /**
@@ -388,47 +341,6 @@ export class GovernanceSync {
     this.stmtInsertComment = this.db.prepare(
       `INSERT OR IGNORE INTO governance_comments (id, proposal_id, from_peer, content, created_at)
        VALUES (?, ?, ?, ?, ?)`
-    );
-
-    // Phase 30.2 migration: governance_reviewers table (reviewer assignments)
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS governance_reviewers (
-        proposal_id TEXT NOT NULL,
-        peer_id TEXT NOT NULL,
-        agent_id TEXT DEFAULT '',
-        status TEXT NOT NULL DEFAULT 'pending',
-        review_text TEXT DEFAULT '',
-        risk_score INTEGER DEFAULT 0,
-        submitted_at INTEGER DEFAULT 0,
-        PRIMARY KEY (proposal_id, peer_id)
-      )
-    `);
-
-    // Phase 30.3 migration: governance_reviews table (submitted reviews)
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS governance_reviews (
-        id TEXT PRIMARY KEY,
-        proposal_id TEXT NOT NULL,
-        reviewer_peer_id TEXT NOT NULL,
-        risk_score INTEGER NOT NULL,
-        reasoning TEXT NOT NULL DEFAULT '',
-        recommendation TEXT NOT NULL,
-        model_attestation TEXT DEFAULT '',
-        created_at INTEGER NOT NULL
-      )
-    `);
-
-    // Phase 30.2-30.3: Prepared statements for reviewer/review tables
-    this.stmtInsertReviewer = this.db.prepare(
-      `INSERT OR REPLACE INTO governance_reviewers (proposal_id, peer_id, agent_id, status, review_text, risk_score, submitted_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    );
-    this.stmtUpdateReviewerStatus = this.db.prepare(
-      `UPDATE governance_reviewers SET status = ?, review_text = ?, risk_score = ?, submitted_at = ? WHERE proposal_id = ? AND peer_id = ?`
-    );
-    this.stmtInsertReview = this.db.prepare(
-      `INSERT OR REPLACE INTO governance_reviews (id, proposal_id, reviewer_peer_id, risk_score, reasoning, recommendation, model_attestation, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     );
 
     this.stmtUpsertVote = this.db.prepare(
@@ -535,7 +447,7 @@ export class GovernanceSync {
       this.processedIds.add(`vote:${vote.proposalId}:${vote.voter}`);
     }
 
-    // Load decisions (reviewSummary is reconstructed from reviews table after reviews are loaded)
+    // Load decisions
     const decisionRows = this.db.prepare('SELECT * FROM governance_decisions').all() as any[];
     for (const row of decisionRows) {
       const decision: GovernanceDecision = {
@@ -548,36 +460,6 @@ export class GovernanceSync {
       };
       this.decisions.set(decision.proposalId, decision);
       this.processedIds.add(`decision:${decision.proposalId}`);
-    }
-
-    // Phase 30.3: Load reviews
-    const reviewRows = this.db.prepare('SELECT * FROM governance_reviews ORDER BY created_at ASC').all() as any[];
-    for (const row of reviewRows) {
-      const review: ProposalReview = {
-        id: row.id,
-        proposalId: row.proposal_id,
-        reviewerPeerId: row.reviewer_peer_id,
-        riskScore: row.risk_score,
-        reasoning: row.reasoning,
-        recommendation: row.recommendation as ReviewRecommendation,
-        modelAttestation: row.model_attestation || undefined,
-        createdAt: row.created_at,
-      };
-      let proposalReviews = this.reviews.get(review.proposalId);
-      if (!proposalReviews) {
-        proposalReviews = new Map();
-        this.reviews.set(review.proposalId, proposalReviews);
-      }
-      proposalReviews.set(review.reviewerPeerId, review);
-      this.processedIds.add(`review:${review.id}`);
-    }
-
-    // Phase 30.4: Reconstruct reviewSummary on decisions that have reviews
-    for (const [proposalId, decision] of this.decisions) {
-      const summary = this.computeReviewSummary(proposalId);
-      if (summary) {
-        decision.reviewSummary = summary;
-      }
     }
   }
 
@@ -596,12 +478,6 @@ export class GovernanceSync {
         break;
       case MessageType.GOVERNANCE_DECISION:
         this.handleDecision(message);
-        break;
-      case MessageType.REVIEWER_CANDIDACY:
-        this.handleReviewerCandidacy(message);
-        break;
-      case MessageType.PROPOSAL_REVIEW:
-        this.handleProposalReview(message);
         break;
     }
   }
@@ -915,9 +791,6 @@ export class GovernanceSync {
         }
       }
 
-      // Phase 30.4: Include review summary in the decision record if reviews exist
-      const reviewSummary = this.computeReviewSummary(proposalId);
-
       const decision: GovernanceDecision = {
         proposalId,
         outcome,
@@ -925,7 +798,6 @@ export class GovernanceSync {
         votesAgainst,
         votesAbstain,
         decidedAt: Date.now(),
-        reviewSummary,
       };
 
       this.decisions.set(proposalId, decision);
@@ -1063,624 +935,6 @@ export class GovernanceSync {
         break;
       }
     }
-  }
-
-  // ── Phase 30: Reviewer Selection ──
-
-  /**
-   * Get the required number of AI reviewers based on online node count.
-   *
-   * | Network Size | Reviewers | Notes |
-   * |---|---|---|
-   * | 1-3 nodes   | 1         | Single reviewer sufficient |
-   * | 4-9 nodes   | 1         | + human vote required flag |
-   * | 10-99 nodes | 2         | Unanimous agreement required |
-   * | 100+ nodes  | 3         | 2/3 majority |
-   */
-  getRequiredReviewerCount(onlineNodeCount: number): number {
-    if (onlineNodeCount <= 3) return 1;
-    if (onlineNodeCount <= 9) return 1; // + human vote required (caller handles the flag)
-    if (onlineNodeCount <= 99) return 2;
-    return 3;
-  }
-
-  /**
-   * Deterministic reviewer selection from a candidate pool.
-   *
-   * For each candidate: score = SHA256(proposalId + peerId + createdAt) mod 10000
-   * Sort candidates by score ascending. IP dedup: if two candidates share the
-   * same IP, keep the one with higher reputation. Return top N candidates.
-   *
-   * This is fully deterministic — same inputs produce the same output on every node.
-   */
-  selectReviewers(
-    proposalId: string,
-    candidates: ReviewerCandidacy[],
-    requiredCount: number,
-  ): ReviewerCandidacy[] {
-    if (candidates.length === 0) return [];
-    if (requiredCount <= 0) return [];
-
-    // IP dedup: if two candidates share the same IP, keep the one with higher reputation
-    const ipBest = new Map<string, ReviewerCandidacy>();
-    const noIpCandidates: ReviewerCandidacy[] = [];
-
-    for (const c of candidates) {
-      if (c.ip) {
-        const existing = ipBest.get(c.ip);
-        if (!existing || c.reputation > existing.reputation) {
-          ipBest.set(c.ip, c);
-        }
-      } else {
-        noIpCandidates.push(c);
-      }
-    }
-
-    const dedupedCandidates = [...ipBest.values(), ...noIpCandidates];
-
-    // Sort by deterministic score (ascending) — lower score = selected first
-    dedupedCandidates.sort((a, b) => {
-      if (a.score !== b.score) return a.score - b.score;
-      // Tiebreaker: lexicographic peerId sort (deterministic)
-      return a.peerId.localeCompare(b.peerId);
-    });
-
-    // Return top N
-    return dedupedCandidates.slice(0, requiredCount);
-  }
-
-  /**
-   * Compute the deterministic reviewer selection score for a candidate.
-   *
-   * score = SHA256(proposalId + peerId + createdAt) mod 10000
-   *
-   * This is a pure function — same inputs always produce the same output.
-   */
-  static computeReviewerScore(proposalId: string, peerId: string, proposalCreatedAt: number): number {
-    const input = `${proposalId}${peerId}${proposalCreatedAt}`;
-    const hash = createHash('sha256').update(input).digest();
-    // Read first 4 bytes as big-endian unsigned integer, then mod 10000
-    const value = hash.readUInt32BE(0);
-    return value % 10000;
-  }
-
-  /**
-   * Handle an incoming reviewer candidacy broadcast (Phase 30).
-   * Stores the candidacy and checks if the candidacy window has closed.
-   */
-  private handleReviewerCandidacy(message: PandoMessage): void {
-    const candidacy = message.payload as ReviewerCandidacy;
-    if (!candidacy?.proposalId || !candidacy.peerId) return;
-
-    const proposal = this.proposals.get(candidacy.proposalId);
-    if (!proposal || proposal.status !== 'active') return;
-
-    // Verify the candidacy score is correct (deterministic — any node can verify)
-    const expectedScore = GovernanceSync.computeReviewerScore(
-      candidacy.proposalId, candidacy.peerId, proposal.createdAt
-    );
-    if (candidacy.score !== expectedScore) {
-      console.log(`[governance] Rejected invalid reviewer candidacy from ${candidacy.peerId.slice(0, 16)}... (score mismatch: got ${candidacy.score}, expected ${expectedScore})`);
-      return;
-    }
-
-    // Store candidacy
-    let proposalCandidacies = this.reviewerCandidacies.get(candidacy.proposalId);
-    if (!proposalCandidacies) {
-      proposalCandidacies = new Map();
-      this.reviewerCandidacies.set(candidacy.proposalId, proposalCandidacies);
-    }
-    proposalCandidacies.set(candidacy.peerId, candidacy);
-
-    console.log(`[governance] Reviewer candidacy: ${candidacy.peerId.slice(0, 16)}... for proposal "${proposal.title.slice(0, 40)}" (score: ${candidacy.score}, reputation: ${candidacy.reputation})`);
-
-    // Start candidacy window timer if not already running
-    if (!this.candidacyTimers.has(candidacy.proposalId)) {
-      const timer = setTimeout(() => {
-        this.finalizeCandidacyWindow(candidacy.proposalId);
-      }, CANDIDACY_WINDOW_MS);
-      this.candidacyTimers.set(candidacy.proposalId, timer);
-    }
-  }
-
-  /**
-   * Finalize the candidacy window for a proposal — select reviewers deterministically.
-   * Phase 30.2: Also persists reviewer assignments and spawns reviewer agents for local peers.
-   * Phase 30.5: Builds fallback reviewer list from remaining candidates.
-   */
-  private finalizeCandidacyWindow(proposalId: string): void {
-    const proposal = this.proposals.get(proposalId);
-    if (!proposal || proposal.status !== 'active') return;
-
-    const candidacies = this.reviewerCandidacies.get(proposalId);
-    if (!candidacies || candidacies.size === 0) {
-      console.log(`[governance] No reviewer candidates for proposal "${proposal.title}" — entering human-only mode`);
-      // Phase 30.5: No candidates at all → enter human-only mode immediately
-      this.enterHumanOnlyMode(proposalId);
-      this.candidacyTimers.delete(proposalId);
-      this.reviewerCandidacies.delete(proposalId);
-      return;
-    }
-
-    const peerCount = this.network.getPeerCount() + 1;
-    const requiredCount = this.getRequiredReviewerCount(peerCount);
-    const candidates = Array.from(candidacies.values());
-    const selected = this.selectReviewers(proposalId, candidates, requiredCount);
-
-    const selectedPeerIds = selected.map(c => c.peerId);
-    this.selectedReviewers.set(proposalId, selectedPeerIds);
-
-    // Phase 30.5: Build fallback reviewer list from remaining candidates (sorted by score, excluding selected)
-    const selectedSet = new Set(selectedPeerIds);
-    const allSorted = this.selectReviewers(proposalId, candidates, candidates.length);
-    const fallbackPeerIds = allSorted
-      .filter(c => !selectedSet.has(c.peerId))
-      .map(c => c.peerId);
-    this.fallbackReviewers.set(proposalId, fallbackPeerIds);
-    this.fallbackAttempts.set(proposalId, 0);
-
-    // Update proposal's reviewer count and status to in_review
-    proposal.reviewerCount = selectedPeerIds.length;
-    proposal.status = 'in_review';
-    this.stmtUpdateProposalStatus.run('in_review', proposal.id);
-
-    // Persist reviewer assignments to SQLite
-    for (const peerId of selectedPeerIds) {
-      this.stmtInsertReviewer.run(proposalId, peerId, '', 'pending', '', 0, 0);
-    }
-
-    console.log(`[governance] Selected ${selectedPeerIds.length}/${requiredCount} reviewers for "${proposal.title}": ${selectedPeerIds.map(p => p.slice(0, 16) + '...').join(', ')}${fallbackPeerIds.length > 0 ? ` (${fallbackPeerIds.length} fallbacks available)` : ''}`);
-
-    // Start the review timeout timer (30 min)
-    const reviewTimer = setTimeout(() => {
-      this.handleReviewTimeout(proposalId);
-    }, REVIEW_TIMEOUT_MS);
-    this.reviewTimers.set(proposalId, reviewTimer);
-
-    // Notify callback for reviewer selection
-    this.onReviewersSelectedCallback?.(proposalId, selectedPeerIds);
-
-    // Cleanup candidacy tracking
-    this.candidacyTimers.delete(proposalId);
-    this.reviewerCandidacies.delete(proposalId);
-  }
-
-  // ── Phase 30.3: Review Workflow ──
-
-  /**
-   * Handle an incoming proposal review broadcast (Phase 30.3).
-   */
-  private handleProposalReview(message: PandoMessage): void {
-    const review = message.payload as ProposalReview;
-    if (!review?.id || !review.proposalId || !review.reviewerPeerId) return;
-
-    const key = `review:${review.id}`;
-    if (this.processedIds.has(key)) return;
-    this.processedIds.add(key);
-
-    const proposal = this.proposals.get(review.proposalId);
-    if (!proposal) return;
-
-    // Validate reviewer is a selected reviewer for this proposal
-    const selectedReviewers = this.selectedReviewers.get(review.proposalId) || [];
-    if (selectedReviewers.length > 0 && !selectedReviewers.includes(review.reviewerPeerId)) {
-      console.log(`[governance] Rejected review from non-selected reviewer ${review.reviewerPeerId.slice(0, 16)}...`);
-      return;
-    }
-
-    // Validate risk score range (NaN comparisons are always false — use explicit check)
-    if (typeof review.riskScore !== 'number' || !isFinite(review.riskScore) || review.riskScore < 1 || review.riskScore > 5) {
-      console.log(`[governance] Rejected review with invalid risk score: ${review.riskScore}`);
-      return;
-    }
-
-    // Store in memory
-    let proposalReviews = this.reviews.get(review.proposalId);
-    if (!proposalReviews) {
-      proposalReviews = new Map();
-      this.reviews.set(review.proposalId, proposalReviews);
-    }
-    proposalReviews.set(review.reviewerPeerId, review);
-
-    // Persist to SQLite
-    this.stmtInsertReview.run(
-      review.id, review.proposalId, review.reviewerPeerId,
-      review.riskScore, sanitizeText(review.reasoning || ''),
-      review.recommendation, review.modelAttestation || '', review.createdAt
-    );
-
-    // Update reviewer status in the assignment table
-    this.stmtUpdateReviewerStatus.run(
-      'completed', sanitizeText(review.reasoning || '').slice(0, 1000),
-      review.riskScore, review.createdAt, review.proposalId, review.reviewerPeerId
-    );
-
-    console.log(`[governance] Review received for "${proposal.title.slice(0, 40)}" from ${review.reviewerPeerId.slice(0, 16)}... (risk: ${review.riskScore}/5, recommendation: ${review.recommendation})`);
-
-    // Check if all reviews are in
-    this.checkReviewCompletion(review.proposalId);
-  }
-
-  /**
-   * Submit a review for a governance proposal (Phase 30.3).
-   *
-   * Called by the local node when a reviewer agent completes its assessment,
-   * or by an API endpoint. Broadcasts the review via GossipSub.
-   */
-  async submitReview(
-    proposalId: string,
-    peerId: string,
-    review: { riskScore: number; reasoning: string; recommendation: ReviewRecommendation; modelAttestation?: string },
-  ): Promise<ProposalReview> {
-    const proposal = this.proposals.get(proposalId);
-    if (!proposal) throw new Error('Proposal not found');
-
-    // Validate risk score
-    if (review.riskScore < 1 || review.riskScore > 5) {
-      throw new Error(`Risk score must be between 1 and 5 (got ${review.riskScore})`);
-    }
-
-    // Validate recommendation
-    const validRecommendations: ReviewRecommendation[] = ['approve', 'reject', 'revise'];
-    if (!validRecommendations.includes(review.recommendation)) {
-      throw new Error(`Invalid recommendation: ${review.recommendation}`);
-    }
-
-    const proposalReview: ProposalReview = {
-      id: createHash('sha256').update(`${peerId}:${proposalId}:${Date.now()}:review`).digest('hex'),
-      proposalId,
-      reviewerPeerId: peerId,
-      riskScore: review.riskScore,
-      reasoning: sanitizeText(review.reasoning),
-      recommendation: review.recommendation,
-      modelAttestation: review.modelAttestation,
-      createdAt: Date.now(),
-    };
-
-    // Store locally
-    let proposalReviews = this.reviews.get(proposalId);
-    if (!proposalReviews) {
-      proposalReviews = new Map();
-      this.reviews.set(proposalId, proposalReviews);
-    }
-    proposalReviews.set(peerId, proposalReview);
-    this.processedIds.add(`review:${proposalReview.id}`);
-
-    // Persist to SQLite
-    this.stmtInsertReview.run(
-      proposalReview.id, proposalReview.proposalId, proposalReview.reviewerPeerId,
-      proposalReview.riskScore, proposalReview.reasoning,
-      proposalReview.recommendation, proposalReview.modelAttestation || '',
-      proposalReview.createdAt
-    );
-
-    // Update reviewer assignment status
-    this.stmtUpdateReviewerStatus.run(
-      'completed', proposalReview.reasoning.slice(0, 1000),
-      proposalReview.riskScore, proposalReview.createdAt,
-      proposalId, peerId
-    );
-
-    // Broadcast to network
-    const message: PandoMessage = {
-      type: MessageType.PROPOSAL_REVIEW,
-      from: this.localPeerId,
-      timestamp: Date.now(),
-      payload: proposalReview,
-    };
-    await this.network.publishToTopic(TOPIC_GOVERNANCE, message);
-
-    console.log(`[governance] Submitted review for "${proposal.title.slice(0, 40)}" (risk: ${review.riskScore}/5, recommendation: ${review.recommendation})`);
-
-    // Check if all reviews are in
-    this.checkReviewCompletion(proposalId);
-
-    return proposalReview;
-  }
-
-  /**
-   * Get all reviews for a proposal (Phase 30.3).
-   */
-  getProposalReviews(proposalId: string): ProposalReview[] {
-    const proposalReviews = this.reviews.get(proposalId);
-    if (!proposalReviews) return [];
-    return Array.from(proposalReviews.values());
-  }
-
-  /**
-   * Get reviewer assignments for a proposal (Phase 30.2).
-   */
-  getReviewerAssignments(proposalId: string): Array<{ peerId: string; agentId: string; status: string; riskScore: number; submittedAt: number }> {
-    const rows = this.db.prepare('SELECT * FROM governance_reviewers WHERE proposal_id = ?').all(proposalId) as any[];
-    return rows.map(r => ({
-      peerId: r.peer_id,
-      agentId: r.agent_id,
-      status: r.status,
-      riskScore: r.risk_score,
-      submittedAt: r.submitted_at,
-    }));
-  }
-
-  /**
-   * Compute the review summary for a proposal (Phase 30.4).
-   */
-  computeReviewSummary(proposalId: string): ReviewSummary | undefined {
-    const reviews = this.getProposalReviews(proposalId);
-    if (reviews.length === 0) return undefined;
-
-    const recommendations = { approve: 0, reject: 0, revise: 0 };
-    let totalRisk = 0;
-
-    for (const review of reviews) {
-      totalRisk += review.riskScore;
-      recommendations[review.recommendation]++;
-    }
-
-    return {
-      avgRiskScore: Math.round((totalRisk / reviews.length) * 100) / 100,
-      reviewCount: reviews.length,
-      recommendations,
-    };
-  }
-
-  /**
-   * Check whether all assigned reviewers have submitted their reviews (Phase 30.3).
-   * When all reviews are in (or timeout fires), aggregate and decide next step.
-   */
-  private checkReviewCompletion(proposalId: string): void {
-    const proposal = this.proposals.get(proposalId);
-    if (!proposal) return;
-    if (proposal.status !== 'in_review') return;
-
-    const selectedReviewers = this.selectedReviewers.get(proposalId) || [];
-    const proposalReviews = this.reviews.get(proposalId);
-    const reviewCount = proposalReviews ? proposalReviews.size : 0;
-
-    // Not all reviews in yet
-    if (reviewCount < selectedReviewers.length) return;
-
-    // All reviews are in — aggregate and decide
-    this.aggregateReviews(proposalId);
-  }
-
-  /**
-   * Handle review timeout — try fallback reviewers or aggregate what we have (Phase 30.3 + 30.5).
-   *
-   * Phase 30.5 fallback logic:
-   * 1. Identify which selected reviewers haven't submitted (status still 'pending' or 'reviewing')
-   * 2. For each timed-out reviewer, try the next fallback candidate
-   * 3. Max 2 fallback attempts per proposal. After that, aggregate whatever reviews exist.
-   * 4. If zero reviews after all fallbacks → human-only mode (transition to 'active' with 48h vote)
-   */
-  private handleReviewTimeout(proposalId: string): void {
-    const proposal = this.proposals.get(proposalId);
-    if (!proposal) return;
-
-    // If already decided or no longer in review, skip
-    if (proposal.status !== 'in_review') return;
-
-    const proposalReviews = this.reviews.get(proposalId);
-    const reviewCount = proposalReviews ? proposalReviews.size : 0;
-    const selectedReviewers = this.selectedReviewers.get(proposalId) || [];
-
-    // Find which reviewers haven't submitted
-    const timedOutReviewers: string[] = [];
-    for (const peerId of selectedReviewers) {
-      if (!proposalReviews || !proposalReviews.has(peerId)) {
-        timedOutReviewers.push(peerId);
-      }
-    }
-
-    if (timedOutReviewers.length > 0) {
-      // Mark timed-out reviewers as 'failed'
-      for (const peerId of timedOutReviewers) {
-        this.stmtUpdateReviewerStatus.run('failed', '', 0, Date.now(), proposalId, peerId);
-        console.log(`[governance] Reviewer ${peerId.slice(0, 16)}... timed out for proposal "${proposal.title}"`);
-      }
-
-      // Check if we can attempt fallback
-      const attempts = this.fallbackAttempts.get(proposalId) || 0;
-      if (attempts < MAX_FALLBACK_ATTEMPTS) {
-        const fallbackList = this.fallbackReviewers.get(proposalId) || [];
-        let fallbackUsed = false;
-
-        for (const timedOutPeerId of timedOutReviewers) {
-          if (fallbackList.length === 0) break;
-
-          // Pick the next fallback reviewer
-          const fallbackPeerId = fallbackList.shift()!;
-          this.fallbackReviewers.set(proposalId, fallbackList);
-
-          // Add the fallback reviewer to selected list
-          const currentSelected = this.selectedReviewers.get(proposalId) || [];
-          currentSelected.push(fallbackPeerId);
-          this.selectedReviewers.set(proposalId, currentSelected);
-
-          // Persist the new reviewer assignment
-          this.stmtInsertReviewer.run(proposalId, fallbackPeerId, '', 'pending', '', 0, 0);
-
-          console.log(`[governance] Fallback reviewer ${fallbackPeerId.slice(0, 16)}... assigned for proposal "${proposal.title}" (replacing ${timedOutPeerId.slice(0, 16)}..., attempt ${attempts + 1}/${MAX_FALLBACK_ATTEMPTS})`);
-
-          fallbackUsed = true;
-        }
-
-        if (fallbackUsed) {
-          this.fallbackAttempts.set(proposalId, attempts + 1);
-
-          // Extend timeout by 15 minutes for the fallback reviewer
-          const extendedTimer = setTimeout(() => {
-            this.handleReviewTimeout(proposalId);
-          }, FALLBACK_REVIEW_TIMEOUT_MS);
-          this.reviewTimers.set(proposalId, extendedTimer);
-
-          console.log(`[governance] Extended review timeout by 15 min for proposal "${proposal.title}" (fallback attempt ${attempts + 1})`);
-          return; // Don't aggregate yet — wait for fallback reviewers
-        }
-      }
-    }
-
-    // No more fallback options — aggregate or enter human-only mode
-    this.reviewTimers.delete(proposalId);
-
-    if (reviewCount === 0) {
-      // Zero reviews after all fallbacks → enter human-only mode
-      this.enterHumanOnlyMode(proposalId);
-    } else {
-      // Some reviews — aggregate what we have
-      console.log(`[governance] Review timeout for "${proposal.title}" — aggregating ${reviewCount} partial reviews`);
-      this.aggregateReviews(proposalId);
-    }
-  }
-
-  /**
-   * Transition a proposal to human-only mode (Phase 30.5).
-   *
-   * When not enough AI reviewers are available:
-   * - Set reviewerCount = 0 and humanOnly = true
-   * - Transition to 'active' with 48-hour voting period
-   * - Minimum 2 human votes required (enforced in checkQuorum)
-   */
-  private enterHumanOnlyMode(proposalId: string): void {
-    const proposal = this.proposals.get(proposalId);
-    if (!proposal) return;
-
-    proposal.reviewerCount = 0;
-    proposal.humanOnly = true;
-    proposal.status = 'active';
-    proposal.votingEndsAt = Date.now() + HUMAN_ONLY_VOTING_HOURS * 60 * 60 * 1000;
-
-    this.stmtUpdateProposalStatus.run('active', proposal.id);
-    this.db.prepare('UPDATE governance_proposals SET reviewer_count = ?, human_only = ?, voting_ends_at = ? WHERE id = ?')
-      .run(0, 1, proposal.votingEndsAt, proposal.id);
-
-    console.log(`[governance] Proposal "${proposal.title}" entered human-only mode — 48h community vote, min 2 votes required`);
-    this.broadcastGovernanceActivity('proposal_decided', `Proposal "${proposal.title}" entered human-only mode — community vote open (48h)`, proposal.id);
-  }
-
-  /**
-   * Aggregate reviews and determine next step for the proposal (Phase 30.3).
-   *
-   * - Majority recommend reject  -> auto-reject, burn stake
-   * - Majority recommend revise  -> status = 'revision_requested', refund stake
-   * - Majority recommend approve -> open for community voting (24h vote period)
-   */
-  private aggregateReviews(proposalId: string): void {
-    const proposal = this.proposals.get(proposalId);
-    if (!proposal) return;
-
-    const reviews = this.getProposalReviews(proposalId);
-    if (reviews.length === 0) return;
-
-    const recommendations = { approve: 0, reject: 0, revise: 0 };
-    for (const review of reviews) {
-      recommendations[review.recommendation]++;
-    }
-
-    const totalReviews = reviews.length;
-    const majorityThreshold = Math.ceil(totalReviews / 2);
-
-    // Clear the review timer if still pending
-    const timer = this.reviewTimers.get(proposalId);
-    if (timer) {
-      clearTimeout(timer);
-      this.reviewTimers.delete(proposalId);
-    }
-
-    const summary = this.computeReviewSummary(proposalId);
-    console.log(`[governance] Review aggregation for "${proposal.title}": approve=${recommendations.approve}, reject=${recommendations.reject}, revise=${recommendations.revise} (avg risk: ${summary?.avgRiskScore})`);
-
-    if (recommendations.reject >= majorityThreshold) {
-      // Majority reject -> auto-reject proposal, burn stake
-      proposal.status = 'rejected';
-      this.stmtUpdateProposalStatus.run('rejected', proposal.id);
-
-      const decision: GovernanceDecision = {
-        proposalId,
-        outcome: 'rejected',
-        votesFor: 0,
-        votesAgainst: 0,
-        votesAbstain: 0,
-        decidedAt: Date.now(),
-        reviewSummary: summary,
-      };
-      this.decisions.set(proposalId, decision);
-      this.processedIds.add(`decision:${proposalId}`);
-      this.stmtInsertDecision.run(
-        decision.proposalId, decision.outcome,
-        decision.votesFor, decision.votesAgainst, decision.votesAbstain,
-        decision.decidedAt
-      );
-
-      // Burn stake
-      this.resolveProposalStake(proposalId, 'rejected');
-
-      // Broadcast decision
-      this.broadcastDecision(decision).catch((e: any) => console.warn(`[governance] Decision broadcast failed: ${e.message?.slice(0, 100)}`));
-      this.onDecisionCallback?.(decision, proposal.title);
-
-      console.log(`[governance] Proposal "${proposal.title}" auto-rejected by AI reviewers (${recommendations.reject}/${totalReviews} reject)`);
-      this.broadcastGovernanceActivity('proposal_decided', `Proposal "${proposal.title}" auto-rejected by AI reviewers`, proposal.id);
-
-    } else if (recommendations.revise >= majorityThreshold) {
-      // Majority revise -> request revision, refund stake
-      proposal.status = 'revision_requested';
-      this.stmtUpdateProposalStatus.run('revision_requested', proposal.id);
-
-      this.resolveProposalStake(proposalId, 'revision_requested');
-
-      console.log(`[governance] Proposal "${proposal.title}" revision requested by AI reviewers (${recommendations.revise}/${totalReviews} revise)`);
-      this.broadcastGovernanceActivity('proposal_decided', `Proposal "${proposal.title}" revision requested by AI reviewers`, proposal.id);
-
-    } else {
-      // Approve or no clear majority -> open for community voting
-      proposal.status = 'active';
-      // Phase 30.6: governance_change proposals get 72h voting period, others get 24h
-      const communityVotingHours = proposal.category === 'governance_change'
-        ? GOVERNANCE_CHANGE_VOTING_HOURS
-        : STANDARD_VOTING_HOURS;
-      proposal.votingEndsAt = Date.now() + communityVotingHours * 60 * 60 * 1000;
-      this.stmtUpdateProposalStatus.run('active', proposal.id);
-      // Also update votingEndsAt in the database
-      this.db.prepare('UPDATE governance_proposals SET voting_ends_at = ? WHERE id = ?')
-        .run(proposal.votingEndsAt, proposal.id);
-
-      console.log(`[governance] Proposal "${proposal.title}" approved by AI reviewers (${recommendations.approve}/${totalReviews} approve) — opening ${communityVotingHours}h community vote`);
-      this.broadcastGovernanceActivity('proposal_decided', `Proposal "${proposal.title}" approved by AI reviewers — community vote open`, proposal.id);
-    }
-  }
-
-  /**
-   * Broadcast this node's candidacy to review a proposal (Phase 30).
-   * Called when a new proposal arrives and this node is eligible.
-   */
-  async broadcastCandidacy(proposalId: string, reputation: number, ip?: string): Promise<void> {
-    const proposal = this.proposals.get(proposalId);
-    if (!proposal || proposal.status !== 'active') return;
-
-    // Eligibility checks
-    if (proposal.proposedBy === this.localPeerId) return; // Can't review own proposal
-    if (reputation < MIN_REVIEWER_REPUTATION) return;     // Below minimum reputation
-
-    const score = GovernanceSync.computeReviewerScore(proposalId, this.localPeerId, proposal.createdAt);
-
-    const candidacy: ReviewerCandidacy = {
-      proposalId,
-      peerId: this.localPeerId,
-      score,
-      reputation,
-      ip,
-      timestamp: Date.now(),
-    };
-
-    const message: PandoMessage = {
-      type: MessageType.REVIEWER_CANDIDACY,
-      from: this.localPeerId,
-      timestamp: Date.now(),
-      payload: candidacy,
-    };
-    await this.network.publishToTopic(TOPIC_GOVERNANCE, message);
-
-    console.log(`[governance] Broadcast reviewer candidacy for "${proposal.title.slice(0, 40)}" (score: ${score})`);
   }
 
   // ── Public Actions ──
@@ -2251,18 +1505,15 @@ export class GovernanceSync {
     const allComments: GovernanceComment[] = [];
     const allVotes: GovernanceVote[] = [];
     const allDecisions: GovernanceDecision[] = [];
-    const allReviews: ProposalReview[] = [];
-
     for (const proposal of proposals) {
       allComments.push(...this.getComments(proposal.id));
       allVotes.push(...this.getVotes(proposal.id));
-      allReviews.push(...this.getProposalReviews(proposal.id));
       const decision = this.getDecision(proposal.id);
       if (decision) allDecisions.push(decision);
     }
 
-    const payload = { proposals, comments: allComments, votes: allVotes, decisions: allDecisions, reviews: allReviews };
-    debug(`[governance] Sending sync response to ${fromPeerId.slice(0, 16)}... (${proposals.length} proposals, ${allVotes.length} votes, ${allComments.length} comments, ${allDecisions.length} decisions, ${allReviews.length} reviews)`);
+    const payload = { proposals, comments: allComments, votes: allVotes, decisions: allDecisions };
+    debug(`[governance] Sending sync response to ${fromPeerId.slice(0, 16)}... (${proposals.length} proposals, ${allVotes.length} votes, ${allComments.length} comments, ${allDecisions.length} decisions)`);
 
     this.network.sendMessage(fromPeerId, {
       type: MessageType.GOVERNANCE_SYNC_RESPONSE,
@@ -2284,15 +1535,14 @@ export class GovernanceSync {
       comments?: GovernanceComment[];
       votes?: GovernanceVote[];
       decisions?: GovernanceDecision[];
-      reviews?: ProposalReview[];
     };
     if (!payload) return;
 
-    let newProposals = 0, newVotes = 0, newComments = 0, newDecisions = 0, newReviews = 0;
+    let newProposals = 0, newVotes = 0, newComments = 0, newDecisions = 0;
     let skippedStale = 0;
 
     // Track which proposal IDs were accepted during sync so we can skip
-    // comments/votes/decisions/reviews for stale proposals we filtered out.
+    // comments/votes/decisions for stale proposals we filtered out.
     const acceptedProposalIds = new Set<string>();
     // Also include proposals we already have locally (their associated data is still valid).
     for (const id of this.proposals.keys()) {
@@ -2301,7 +1551,7 @@ export class GovernanceSync {
 
     const now = Date.now();
 
-    // Apply proposals first (comments/votes/reviews reference them)
+    // Apply proposals first (comments/votes reference them)
     for (const proposal of payload.proposals || []) {
       // Skip stale proposals: if older than SYNC_PROPOSAL_MAX_AGE_MS and not still active,
       // don't bother processing them. Active proposals are always accepted regardless of age
@@ -2351,18 +1601,8 @@ export class GovernanceSync {
       }
     }
 
-    // Phase 30.3: Apply reviews (only for proposals we accepted or already have)
-    for (const review of payload.reviews || []) {
-      if (!acceptedProposalIds.has(review.proposalId)) continue;
-      const key = `review:${review.id}`;
-      if (!this.processedIds.has(key)) {
-        this.handleProposalReview({ type: MessageType.PROPOSAL_REVIEW, from: message.from, timestamp: review.createdAt, payload: review });
-        newReviews++;
-      }
-    }
-
-    if (newProposals + newVotes + newComments + newDecisions + newReviews > 0) {
-      console.log(`[governance] Sync complete: +${newProposals} proposals, +${newVotes} votes, +${newComments} comments, +${newDecisions} decisions, +${newReviews} reviews${skippedStale > 0 ? ` (skipped ${skippedStale} stale)` : ''}`);
+    if (newProposals + newVotes + newComments + newDecisions > 0) {
+      console.log(`[governance] Sync complete: +${newProposals} proposals, +${newVotes} votes, +${newComments} comments, +${newDecisions} decisions${skippedStale > 0 ? ` (skipped ${skippedStale} stale)` : ''}`);
     } else {
       debug(`[governance] Sync complete: already up to date${skippedStale > 0 ? ` (skipped ${skippedStale} stale)` : ''}`);
     }
@@ -2460,29 +1700,15 @@ export class GovernanceSync {
   }
 
   /**
-   * Get governance statistics (Phase 30.7).
-   * Returns total proposals, reviewed count, avg risk score, and stake pool.
+   * Get governance statistics.
+   * Returns total proposals, stake pool, humanOnly count, and governance change count.
    */
   getGovernanceStats(): { totalProposals: number; reviewedCount: number; avgRiskScore: number; stakePool: number; humanOnlyCount: number; governanceChangeCount: number } {
-    let reviewedCount = 0;
-    let totalRiskScore = 0;
-    let riskScoreProposals = 0;
     let stakePool = 0;
     let humanOnlyCount = 0;
     let governanceChangeCount = 0;
 
     for (const proposal of this.proposals.values()) {
-      // Count proposals with reviews
-      const reviews = this.getProposalReviews(proposal.id);
-      if (reviews.length > 0) {
-        reviewedCount++;
-        const summary = this.computeReviewSummary(proposal.id);
-        if (summary) {
-          totalRiskScore += summary.avgRiskScore;
-          riskScoreProposals++;
-        }
-      }
-
       // Sum up active stakes (proposals that are still in progress)
       if (proposal.stakeAmount && proposal.stakeAmount > 0 &&
           (proposal.status === 'active' || proposal.status === 'in_review' || proposal.status === 'revision_requested')) {
@@ -2495,8 +1721,8 @@ export class GovernanceSync {
 
     return {
       totalProposals: this.proposals.size,
-      reviewedCount,
-      avgRiskScore: riskScoreProposals > 0 ? Math.round((totalRiskScore / riskScoreProposals) * 100) / 100 : 0,
+      reviewedCount: 0,
+      avgRiskScore: 0,
       stakePool,
       humanOnlyCount,
       governanceChangeCount,
@@ -2599,28 +1825,15 @@ export class GovernanceSync {
     this.comments.delete(id);
     this.votes.delete(id);
     this.decisions.delete(id);
-    this.reviews.delete(id);
-    this.selectedReviewers.delete(id);
-    this.fallbackReviewers.delete(id);
-    this.fallbackAttempts.delete(id);
-
-    // Clear any pending review timer
-    const reviewTimer = this.reviewTimers.get(id);
-    if (reviewTimer) {
-      clearTimeout(reviewTimer);
-      this.reviewTimers.delete(id);
-    }
 
     // Remove from dedup sets
     this.processedIds.delete(`proposal:${id}`);
     this.processedIds.delete(`decision:${id}`);
 
-    // Delete from SQLite (votes/comments/reviews/reviewers first, then proposal)
+    // Delete from SQLite (votes/comments first, then proposal)
     this.db.prepare('DELETE FROM governance_votes WHERE proposal_id = ?').run(id);
     this.db.prepare('DELETE FROM governance_comments WHERE proposal_id = ?').run(id);
     this.db.prepare('DELETE FROM governance_decisions WHERE proposal_id = ?').run(id);
-    this.db.prepare('DELETE FROM governance_reviews WHERE proposal_id = ?').run(id);
-    this.db.prepare('DELETE FROM governance_reviewers WHERE proposal_id = ?').run(id);
     this.db.prepare('DELETE FROM governance_proposals WHERE id = ?').run(id);
 
     console.log(`[governance] Deleted proposal: "${title}" (${id.slice(0, 16)}...)`);
@@ -2693,25 +1906,12 @@ export class GovernanceSync {
     this.comments.delete(id);
     this.votes.delete(id);
     this.decisions.delete(id);
-    this.reviews.delete(id);
-    this.selectedReviewers.delete(id);
-    this.fallbackReviewers.delete(id);
-    this.fallbackAttempts.delete(id);
     this.processedIds.delete(`proposal:${id}`);
     this.processedIds.delete(`decision:${id}`);
-
-    // Clear any pending review timer
-    const reviewTimer = this.reviewTimers.get(id);
-    if (reviewTimer) {
-      clearTimeout(reviewTimer);
-      this.reviewTimers.delete(id);
-    }
 
     this.db.prepare('DELETE FROM governance_votes WHERE proposal_id = ?').run(id);
     this.db.prepare('DELETE FROM governance_comments WHERE proposal_id = ?').run(id);
     this.db.prepare('DELETE FROM governance_decisions WHERE proposal_id = ?').run(id);
-    this.db.prepare('DELETE FROM governance_reviews WHERE proposal_id = ?').run(id);
-    this.db.prepare('DELETE FROM governance_reviewers WHERE proposal_id = ?').run(id);
     this.db.prepare('DELETE FROM governance_proposals WHERE id = ?').run(id);
 
     console.log(`[governance] Archived proposal: "${title}" (status: ${status}, age: ${Math.floor((Date.now() - createdAt) / 86_400_000)}d)`);
@@ -2739,18 +1939,12 @@ export class GovernanceSync {
       this.comments.delete(id);
       this.votes.delete(id);
       this.decisions.delete(id);
-      this.reviews.delete(id);
-      this.selectedReviewers.delete(id);
-      this.fallbackReviewers.delete(id);
-      this.fallbackAttempts.delete(id);
       this.processedIds.delete(`proposal:${id}`);
       this.processedIds.delete(`decision:${id}`);
 
       this.db.prepare('DELETE FROM governance_votes WHERE proposal_id = ?').run(id);
       this.db.prepare('DELETE FROM governance_comments WHERE proposal_id = ?').run(id);
       this.db.prepare('DELETE FROM governance_decisions WHERE proposal_id = ?').run(id);
-      this.db.prepare('DELETE FROM governance_reviews WHERE proposal_id = ?').run(id);
-      this.db.prepare('DELETE FROM governance_reviewers WHERE proposal_id = ?').run(id);
       this.db.prepare('DELETE FROM governance_proposals WHERE id = ?').run(id);
 
       console.log(`[governance] Evicted proposal over cap: "${proposal.title}" (oldest completed)`);
@@ -2761,29 +1955,13 @@ export class GovernanceSync {
   }
 
   /**
-   * Stop the archive cleanup interval and candidacy timers. Call on shutdown.
+   * Stop the archive cleanup interval. Call on shutdown.
    */
   stopArchiveInterval(): void {
     if (this.archiveInterval) {
       clearInterval(this.archiveInterval);
       this.archiveInterval = null;
       console.log('[governance] Archive cleanup interval stopped');
-    }
-    // Phase 30: Clear any pending candidacy window timers
-    for (const [proposalId, timer] of this.candidacyTimers) {
-      clearTimeout(timer);
-    }
-    if (this.candidacyTimers.size > 0) {
-      console.log(`[governance] Cleared ${this.candidacyTimers.size} pending candidacy timers`);
-      this.candidacyTimers.clear();
-    }
-    // Phase 30.3: Clear any pending review timeout timers
-    for (const [proposalId, timer] of this.reviewTimers) {
-      clearTimeout(timer);
-    }
-    if (this.reviewTimers.size > 0) {
-      console.log(`[governance] Cleared ${this.reviewTimers.size} pending review timers`);
-      this.reviewTimers.clear();
     }
   }
 }

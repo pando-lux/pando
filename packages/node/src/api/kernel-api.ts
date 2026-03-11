@@ -1029,70 +1029,6 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       return { success: true };
     });
 
-    // ── Phase 30.7: Governance Review API Routes ──
-
-    // GET /governance/proposals/:id/reviews — get all AI reviews for a proposal
-    fastify.get('/governance/proposals/:id/reviews', async (request: any, reply: any) => {
-      const gov = node.getGovernance();
-      if (!gov) return reply.code(503).send({ error: 'Governance not ready' });
-      const proposal = gov.getProposal(request.params.id);
-      if (!proposal) return reply.code(404).send({ error: 'Proposal not found' });
-      const reviews = gov.getProposalReviews(proposal.id);
-      const summary = gov.computeReviewSummary(proposal.id);
-      return { proposalId: proposal.id, reviews, summary: summary || null };
-    });
-
-    // GET /governance/proposals/:id/reviewers — get reviewer assignments and status
-    fastify.get('/governance/proposals/:id/reviewers', async (request: any, reply: any) => {
-      const gov = node.getGovernance();
-      if (!gov) return reply.code(503).send({ error: 'Governance not ready' });
-      const proposal = gov.getProposal(request.params.id);
-      if (!proposal) return reply.code(404).send({ error: 'Proposal not found' });
-      const reviewers = gov.getReviewerAssignments(proposal.id);
-      const selectedReviewers = gov.getSelectedReviewers(proposal.id);
-      return {
-        proposalId: proposal.id,
-        reviewers,
-        selectedReviewers,
-        reviewerCount: proposal.reviewerCount ?? 0,
-        humanOnly: proposal.humanOnly ?? false,
-      };
-    });
-
-    // POST /governance/proposals/:id/review — submit a review (for reviewer agents, requires auth)
-    fastify.post('/governance/proposals/:id/review', async (request: any, reply: any) => {
-      const gov = node.getGovernance();
-      if (!gov) return reply.code(503).send({ error: 'Governance not ready' });
-      const identity = node.getIdentity();
-      if (!identity) return reply.code(503).send({ error: 'Node not ready' });
-
-      const proposal = gov.getProposal(request.params.id);
-      if (!proposal) return reply.code(404).send({ error: 'Proposal not found' });
-
-      const { riskScore, reasoning, recommendation, modelAttestation } = request.body || {};
-      if (riskScore === undefined || !reasoning || !recommendation) {
-        return reply.code(400).send({ error: 'riskScore, reasoning, and recommendation are required' });
-      }
-      if (typeof riskScore !== 'number' || riskScore < 1 || riskScore > 5) {
-        return reply.code(400).send({ error: 'riskScore must be a number between 1 and 5' });
-      }
-      if (!['approve', 'reject', 'revise'].includes(recommendation)) {
-        return reply.code(400).send({ error: 'recommendation must be approve, reject, or revise' });
-      }
-
-      try {
-        const review = await gov.submitReview(proposal.id, identity.peerId, {
-          riskScore,
-          reasoning: String(reasoning).slice(0, 5000),
-          recommendation,
-          modelAttestation: modelAttestation || undefined,
-        });
-        return { success: true, review };
-      } catch (err: any) {
-        return reply.code(400).send({ error: 'Review submission failed' });
-      }
-    });
-
     // GET /governance/stats — enhanced governance statistics
     fastify.get('/governance/stats', async (request: any, reply: any) => {
       const gov = node.getGovernance();
@@ -2433,62 +2369,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       return record;
     });
 
-  // ── v2.5: Local Environment Routes (Envelope 1 — never P2P synced) ─────────
-
-  // GET /local/status — indexed dirs, file count, paths
-  fastify.get('/local/status', async (_request: any, reply: any) => {
-    const le = node.getLocalEnv();
-    if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
-    return le.getStatus();
-  });
-
-  // POST /local/index — grant a directory for indexing
-  fastify.post('/local/index', async (request: any, reply: any) => {
-    const le = node.getLocalEnv();
-    if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
-    const { path: dirPath } = request.body as { path?: string };
-    if (!dirPath) return reply.code(400).send({ error: 'path required' });
-    try {
-      const result = await le.grantDirectory(dirPath);
-      return { success: true, ...result };
-    } catch (err: any) {
-      return reply.code(400).send({ error: 'Failed to index directory' });
-    }
-  });
-
-  // DELETE /local/index — revoke a directory
-  fastify.delete('/local/index', async (request: any, reply: any) => {
-    const le = node.getLocalEnv();
-    if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
-    const { path: dirPath } = request.body as { path?: string };
-    if (!dirPath) return reply.code(400).send({ error: 'path required' });
-    le.revokeDirectory(dirPath);
-    return { success: true };
-  });
-
-  // GET /local/search — full-text search over indexed files
-  fastify.get('/local/search', async (request: any, reply: any) => {
-    const le = node.getLocalEnv();
-    if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
-    const { q, limit } = request.query as { q?: string; limit?: string };
-    if (!q) return reply.code(400).send({ error: 'q required' });
-    const results = le.search(q, Math.min(limit ? parseInt(limit) || 10 : 10, 100));
-    return { results, query: q };
-  });
-
-  // GET /local/file — read file content (protected paths blocked)
-  fastify.get('/local/file', async (request: any, reply: any) => {
-    const le = node.getLocalEnv();
-    if (!le) return reply.code(503).send({ error: 'Local environment not initialized' });
-    const { path: filePath } = request.query as { path?: string };
-    if (!filePath) return reply.code(400).send({ error: 'path required' });
-    try {
-      const content = le.readFile(filePath);
-      return { path: filePath, content };
-    } catch (err: any) {
-      return reply.code(403).send({ error: 'Access denied or file not found' });
-    }
-  });
+  // ── v2.5: Local Environment Routes (user memory only — Envelope 1) ─────────
+  // KB: File indexing routes (local/status, local/index, local/search, local/file) stripped Phase 6.
 
   // GET /local/memory — get full user memory context
   fastify.get('/local/memory', async (_request: any, reply: any) => {

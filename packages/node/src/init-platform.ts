@@ -7,11 +7,8 @@ import { RegressionSuite } from './platform/regression-suite.js';
 import { PaymentGate } from './core/payment-gate.js';
 import { UserAccountStore } from './platform/user-accounts.js';
 import { ProjectStore } from './platform/project-store.js';
-import { RevenueEngine } from './platform/revenue-engine.js';
-import { ContributionTracker } from './platform/contribution-tracker.js';
-import { ContentRegistry } from './platform/content-registry.js';
-import { ContentPublisher } from './platform/content-publish.js';
-import { ContentMaintenance } from './platform/content-maintenance.js';
+// KB: revenue-engine, contribution-tracker, content-registry stripped (Phase 6 bloat removal).
+// KB: content-publish, content-maintenance stripped alongside content-registry.
 import { ThreadStore } from './platform/thread-store.js';
 import { CloudInstanceManager } from './core/cloud-instance-manager.js';
 import { NetworkState } from './kernel/network-state.js';
@@ -286,38 +283,7 @@ export async function initPlatform(node: any): Promise<void> {
         }
       });
 
-      node.revenueEngine = new RevenueEngine(node.ledger.getDatabase(), node.ledger, node.storageBackend);
-      node.revenueEngine.init();
-
-      node.contributionTracker = new ContributionTracker(node.ledger.getDatabase(), node.storageBackend);
-      node.contributionTracker.init();
     }
-
-    // Phase 11: Content Layer — persistent hosting & delivery registry
-    node.contentRegistry = new ContentRegistry(node.ledger.getDatabase());
-    node.contentRegistry.setLocalPeerId(node.identity.peerId);
-    if (node.network) {
-      node.contentRegistry.setNetwork(node.network);
-      await node.contentRegistry.subscribeContentTopic();
-    }
-    node.contentPublisher = new ContentPublisher(node.contentRegistry);
-    node.contentPublisher.setLocalPeerId(node.identity.peerId);
-    node.contentMaintenance = new ContentMaintenance(node.contentRegistry);
-    node.contentMaintenance.setLocalPeerId(node.identity.peerId);
-    // Wire task creation into the scheduler task queue
-    const tq = node.getActiveTaskQueue();
-    if (tq) {
-      node.contentMaintenance.setTaskCreator((title: string, description: string, priority: string) => {
-        tq.createTask({
-          title,
-          description,
-          priority: priority as any,
-          createdBy: 'content-maintenance',
-        });
-      });
-    }
-    node.contentMaintenance.startMaintenanceLoop();
-    console.log('[content-layer] ContentRegistry, ContentPublisher, ContentMaintenance initialized');
 
     // Phase 57: ThreadStore + data loading — only with StorageBackend
     // IMPORTANT: Data loading is non-blocking so API starts fast. P2P storage timeouts
@@ -329,8 +295,7 @@ export async function initPlatform(node: any): Promise<void> {
         try {
           await node.threadStore!.loadFromBackend();
           if (node.projectStore) await node.projectStore.loadFromBackend();
-          if (node.revenueEngine) await (node.revenueEngine as any).loadFromBackend();
-          if (node.contributionTracker) await (node.contributionTracker as any).loadFromBackend();
+
           node._p2pDataLoaded = true;
           console.log('[data] User data stores initialized (storage-backed)');
         } catch (err: any) {
@@ -420,7 +385,7 @@ export async function initPlatform(node: any): Promise<void> {
     // v2.5: Local Environment — Envelope 1 file index + user memory (always on, no network)
     try {
       node.localEnv = new LocalEnvironment(dataDir);
-      console.log(`[local-env] Initialized (${node.localEnv.getStatus().grantedDirs.length} dirs indexed)`);
+      console.log('[local-env] Initialized (user memory only)');
     } catch (err: any) {
       console.warn(`[local-env] Init failed (non-fatal): ${err.message}`);
     }
@@ -581,7 +546,6 @@ export async function initPlatform(node: any): Promise<void> {
           console.log(`[services] Route registration requested: ${prefix}`);
         },
         getCapability: (name: string) => serviceLoader.getCapability(name),
-        resourceRegistry: node.getResourceRegistry?.() ?? undefined,
         projectResolver: async (projectId: string) => {
           const ps = node.getProjectStore?.();
           if (!ps) return null;

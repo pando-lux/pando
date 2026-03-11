@@ -1,4 +1,6 @@
 // ServiceLoader — auto-discovers and loads PandoService plugins. See docs/SERVICE-ARCHITECTURE-ROADMAP.md
+// KB: npm-linked packages (@pando-teams/core) are detected before npm install and re-linked after.
+// KB: See upgrade-protocol.ts steps 6a/6c.
 /**
  * ServiceLoader — discovers and loads installed PandoService packages.
  *

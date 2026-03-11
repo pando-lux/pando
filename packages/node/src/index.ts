@@ -35,9 +35,6 @@ import { SecurityMonitor } from './kernel/security-monitor.js';
 import { ResourceProofChallenger } from './platform/resource-proof.js';
 import { ReputationWeightedGovernance } from './platform/reputation-governance.js';
 import { ContentSafetyReviewer } from './platform/content-safety.js';
-import { ContentRegistry } from './platform/content-registry.js';
-import { ContentPublisher } from './platform/content-publish.js';
-import { ContentMaintenance } from './platform/content-maintenance.js';
 import { PipelineRunner } from './platform/pipeline-runner.js';
 import { CodePipeline } from './platform/code-pipeline.js';
 import { QaRunner } from './platform/qa-runner.js';
@@ -49,7 +46,6 @@ import { LocalCapabilityStore } from './platform/local-capability-store.js';
 import { ResourceRouter } from './platform/resource-router.js';
 import { ResourceMeter } from './platform/resource-meter.js';
 import { ResourceMarketplace } from './platform/resource-marketplace.js';
-import { ResourceRegistry } from './platform/resource-registry.js';
 import { ResourceHealthChecker } from './platform/resource-health.js';
 import { CredentialStore } from './core/credential-store.js';
 import type { CapabilityProfile } from '@pando/shared';
@@ -61,9 +57,7 @@ import { PaymentGate } from './core/payment-gate.js';
 import { UserAccountStore } from './platform/user-accounts.js';
 import { ProjectStore } from './platform/project-store.js';
 import { ProjectRegistry, TOPIC_PROJECTS } from './platform/project-registry.js';
-import { RevenueEngine } from './platform/revenue-engine.js';
 import { randomUUID } from 'node:crypto';
-import { ContributionTracker } from './platform/contribution-tracker.js';
 import { NetworkState } from './kernel/network-state.js';
 import { ThreadStore } from './platform/thread-store.js';
 import { CloudInstanceManager } from './core/cloud-instance-manager.js';
@@ -150,7 +144,6 @@ export class PandoNode {
   private resourceRouter: ResourceRouter | null = null;
   private resourceMeter: ResourceMeter | null = null;
   private resourceMarketplace: ResourceMarketplace | null = null;
-  private resourceRegistry: ResourceRegistry | null = null;
   private resourceHealthChecker: ResourceHealthChecker | null = null;
   private appManager: AppManager | null = null;
   private upgradeProtocol: UpgradeProtocol | null = null;
@@ -162,14 +155,6 @@ export class PandoNode {
   private projectStore: ProjectStore | null = null;
   // Phase 63: P2P Project Registry
   private projectRegistry: ProjectRegistry | null = null;
-  // Phase 31.4: Revenue Engine
-  private revenueEngine: RevenueEngine | null = null;
-  // Phase 31.9: Contribution Tracker
-  private contributionTracker: ContributionTracker | null = null;
-  // Phase 11: Content Layer
-  private contentRegistry: ContentRegistry | null = null;
-  private contentPublisher: ContentPublisher | null = null;
-  private contentMaintenance: ContentMaintenance | null = null;
   // Phase 27: Thread Store for gateway chat
   private threadStore: ThreadStore | null = null;
   // Phase 50: Network State Aggregator
@@ -395,22 +380,6 @@ export class PandoNode {
    * Otherwise, routes via P2P request-reply to a compute node that has it.
    */
   async search(query: string, identity?: string): Promise<SearchResult> {
-    // Try local credential access first (compute nodes with master key)
-    if (this.resourceRegistry) {
-      const aiKey = await this.resourceRegistry.getActiveAiKey();
-      if (aiKey) {
-        const result = aiKey.provider === 'openai'
-          ? await this.searchOpenAI(query, aiKey.key, aiKey.model)
-          : await this.searchGemini(query, aiKey.key, aiKey.model);
-        if (result) {
-          this.resourceMeter?.recordUsage(aiKey.resourceId, 'api_keys', {
-            resourceType: 'api_keys', quantity: 1, unit: 'calls', timestamp: Date.now(),
-          });
-          return result;
-        }
-      }
-    }
-
     // Phase 69: Route to a compute node with credentialAccess via HTTP
     if (this.capabilityRegistry && this.httpPeerClient) {
       const allProfiles = this.capabilityRegistry.getAllProfiles();
@@ -552,7 +521,7 @@ export class PandoNode {
     // Core (Layer 1): business logic
     s['request-reply']    = this.requestReply    ? 'ok' : 'skipped';
     s['storage']          = this.storageBackend  ? 'ok' : 'degraded';
-    s['resource-registry']= this.resourceRegistry ? 'ok' : 'skipped';
+    s['resource-registry']= 'skipped'; // KB: ResourceRegistry deleted Phase 6
     s['upgrade-protocol'] = this.upgradeProtocol ? 'ok' : 'skipped';
 
     // Platform (Layer 2): optional services
@@ -561,7 +530,6 @@ export class PandoNode {
     s['monitor']      = this.monitorEnabled  ? 'ok' : 'skipped';
     s['agents']       = this.engineAdapter?.available ? 'ok' : 'skipped';
     s['thread-store'] = this.threadStore   ? 'ok' : 'degraded';
-    s['content']      = this.contentRegistry ? 'ok' : 'skipped';
     s['local-env']    = this.localEnv      ? 'ok' : 'degraded';
 
     // Kernel health: any critical kernel step failed → failed
@@ -702,10 +670,9 @@ export class PandoNode {
     return this.resourceMarketplace;
   }
 
-  /** Phase 42.5: Get the ResourceRegistry instance */
-  getResourceRegistry(): ResourceRegistry | null {
-    return this.resourceRegistry;
-  }
+  /** Stub — ResourceRegistry deleted Phase 6. All callers have null-guards and degrade gracefully. */
+  // KB: Returns any so callers don't get TypeScript 'never' errors on property access after null-guard.
+  getResourceRegistry(): any { return null; }
 
   getResourceHealthChecker(): ResourceHealthChecker | null {
     return this.resourceHealthChecker;
@@ -823,11 +790,6 @@ export class PandoNode {
       try {
         const plainUrl = `https://github.com/${project.githubRepo}.git`;
         let cloneUrl = plainUrl;
-        // Use contributed credential via ResourceRegistry
-        if (this.resourceRegistry?.resolveGitCredential) {
-          const authenticatedUrl = await this.resourceRegistry.resolveGitCredential(plainUrl);
-          if (authenticatedUrl) cloneUrl = authenticatedUrl;
-        }
         new GitOps(wsDir).exec(['clone', cloneUrl, '.'], { timeout: 60000 });
         console.log(`[project-workspace] Cloned ${project.githubRepo} into ${wsDir}`);
       } catch (err: any) {
@@ -872,20 +834,7 @@ export class PandoNode {
     return wsDir;
   }
 
-  /**
-   * Get a GitHub PAT from contributed resources.
-   * Uses ResourceRegistry.resolveGitCredential() for credential resolution,
-   * falling back to direct getCredential() if needed.
-   */
-  private async getGitHubPat(): Promise<string | null> {
-    if (!this.resourceRegistry) return null;
-    try {
-      const codeResources = this.resourceRegistry.findResources('code_repository' as any);
-      if (codeResources.length === 0) return null;
-      const resource = codeResources[0];
-      return await this.resourceRegistry.getCredential(resource.resourceId);
-    } catch { return null; }
-  }
+  // KB: getGitHubPat() deleted Phase 6 — always returned null (ResourceRegistry always null).
 
   // exportTeamState removed — brain state now managed by @pando-teams/core.
 
@@ -973,7 +922,6 @@ export class PandoNode {
         apiToken: token,
         nodeId: this.identity?.peerId,
         dataDir: this.config.dataDir,
-        resourceRegistry: this.resourceRegistry,
         projectResolver: async (projectId: string) => {
           const ps = this.getProjectStore();
           if (!ps) return null;
@@ -1470,18 +1418,6 @@ export class PandoNode {
   }
 
 
-  getContentRegistry(): ContentRegistry | null {
-    return this.contentRegistry;
-  }
-
-  getContentPublisher(): ContentPublisher | null {
-    return this.contentPublisher;
-  }
-
-  getContentMaintenance(): ContentMaintenance | null {
-    return this.contentMaintenance;
-  }
-
   // Phase 17.6 / 18.6 / 18.7 getters
 
   getRegressionSuite(): RegressionSuite | null {
@@ -1503,14 +1439,6 @@ export class PandoNode {
   /** Phase 63: Get the P2P ProjectRegistry instance */
   getProjectRegistry(): ProjectRegistry | null {
     return this.projectRegistry;
-  }
-
-  getRevenueEngine(): RevenueEngine | null {
-    return this.revenueEngine;
-  }
-
-  getContributionTracker(): ContributionTracker | null {
-    return this.contributionTracker;
   }
 
   /** Phase 64: Get the CloudInstanceManager */
@@ -1617,15 +1545,7 @@ export class PandoNode {
       this.governance.stopArchiveInterval();
       this.governance = null;
     }
-    // Stop content layer
-    if (this.contentMaintenance) {
-      this.contentMaintenance.stop();
-      this.contentMaintenance = null;
-    }
-    this.contentPublisher = null;
-    this.contentRegistry = null;
-
-    // v2.5: Close local environment SQLite DB
+    // v2.5: Close local environment
     if (this.localEnv) {
       this.localEnv.close();
       this.localEnv = null;
@@ -1639,8 +1559,6 @@ export class PandoNode {
     // Stop resource network components
     this.resourceHealthChecker?.stop();
     this.resourceHealthChecker = null;
-    this.resourceRegistry?.stop();
-    this.resourceRegistry = null;
     if (this.resourceMeter) {
       this.resourceMeter.stopMeteringLoop();
       this.resourceMeter = null;
@@ -1658,10 +1576,6 @@ export class PandoNode {
     // Phase 63: ProjectRegistry cleanup
     this.projectRegistry?.stop();
     this.projectRegistry = null;
-    // Phase 31.4: RevenueEngine uses ledger DB, no separate close needed
-    this.revenueEngine = null;
-    // Phase 31.9: ContributionTracker uses ledger DB, no separate close needed
-    this.contributionTracker = null;
     if (this.paymentGate) {
       this.paymentGate.cleanup();
       this.paymentGate = null;
@@ -1730,17 +1644,12 @@ export { EmissionWitness, TOPIC_EMISSIONS } from './kernel/emission-witness.js';
 export type { EmissionProposal, WitnessAttestation, EmissionStats } from './kernel/emission-witness.js';
 export { SecurityMonitor } from './kernel/security-monitor.js';
 export type { SecurityAlert, SecurityAlertType, SecurityAlertSeverity, QuarantineEntry, SecurityStats } from './kernel/security-monitor.js';
-export { ContentRegistry, TOPIC_CONTENT } from './platform/content-registry.js';
-export { ContentPublisher } from './platform/content-publish.js';
-export type { PublishOptions, ExtractedContent } from './platform/content-publish.js';
-export { ContentMaintenance } from './platform/content-maintenance.js';
-export type { MaintenanceConfig, MaintenanceCheck, MaintenanceIssue } from './platform/content-maintenance.js';
 export { UpgradeProtocol } from './core/upgrade-protocol.js';
 export type { UpgradeProtocolDeps } from './core/upgrade-protocol.js';
 export { ResourceRouter } from './platform/resource-router.js';
 export { ResourceMeter } from './platform/resource-meter.js';
 export { ResourceMarketplace } from './platform/resource-marketplace.js';
-export { ResourceRegistry } from './platform/resource-registry.js';
+// KB: ResourceRegistry deleted Phase 6 — was always null, never instantiated.
 export { RegressionSuite } from './platform/regression-suite.js';
 export { PaymentGate } from './core/payment-gate.js';
 export { UserAccountStore } from './platform/user-accounts.js';

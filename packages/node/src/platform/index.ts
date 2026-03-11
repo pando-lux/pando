@@ -18,14 +18,7 @@ export type { LocalCapabilityData } from './local-capability-store.js';
 
 export { CodePipeline } from './code-pipeline.js';
 
-export { ContentRegistry, TOPIC_CONTENT } from './content-registry.js';
-export { ContentPublisher } from './content-publish.js';
-export type { PublishOptions, ExtractedContent } from './content-publish.js';
-export { ContentMaintenance } from './content-maintenance.js';
-export type { MaintenanceConfig, MaintenanceCheck, MaintenanceIssue } from './content-maintenance.js';
-export { ContentSafetyReviewer } from './content-safety.js';
-
-export { ContributionTracker } from './contribution-tracker.js';
+// KB: content-registry, content-publish, content-maintenance, contribution-tracker deleted (Phase 6).
 
 export { FileRegistry } from './file-registry.js';
 
@@ -45,13 +38,13 @@ export { ReputationWeightedGovernance } from './reputation-governance.js';
 export { ResourceMarketplace } from './resource-marketplace.js';
 export { ResourceMeter } from './resource-meter.js';
 export { ResourceProofChallenger } from './resource-proof.js';
-export { ResourceRegistry, TOPIC_RESOURCES } from './resource-registry.js';
+// KB: ResourceRegistry deleted Phase 6 — was always null, premature marketplace feature.
 export { ResourceRouter } from './resource-router.js';
 
 export { ResourceHealthChecker } from './resource-health.js';
 export type { HealthResult } from './resource-health.js';
 
-export { RevenueEngine } from './revenue-engine.js';
+// KB: revenue-engine deleted (Phase 6).
 
 export { Scheduler } from './scheduler.js';
 export type { SchedulerConfig, SchedulerStatus, ActiveTask, TaskLifecycle } from './scheduler.js';

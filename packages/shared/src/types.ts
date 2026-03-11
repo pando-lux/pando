@@ -1268,6 +1268,8 @@ export interface Project {
   githubRepo?: string;
   /** Phase 104: Local workspace directory for project code */
   workspaceDir?: string;
+  /** Active team managing this project (team name / pando-teams team ID) */
+  teamId?: string;
 }
 
 export interface ProjectCollaborator {

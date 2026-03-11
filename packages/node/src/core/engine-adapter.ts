@@ -18,7 +18,7 @@
 
 import { join as pathJoin } from 'node:path';
 import { homedir } from 'node:os';
-import type { ResourceRegistry } from '../platform/resource-registry.js';
+// KB: ResourceRegistry type import deleted Phase 6.
 import { STREAM_EVENT_VERSION, LUX_PER_USD } from '@pando/shared';
 import type { StreamEvent, PandoService, ServiceContext } from '@pando/shared';
 import { createPandoTools } from './pando-tools.js';
@@ -91,7 +91,6 @@ export interface AdapterConfig {
   dataDir?: string;
   model?: string;
   luxPerUsd?: number;
-  resourceRegistry?: ResourceRegistry | null;
   /** Schedule periodic system checks. Default: true. */
   enableScheduler?: boolean;
   /** Resolve project metadata (repoUrl, name) by projectId — used for workspace recovery. */
@@ -145,10 +144,10 @@ export class EngineAdapter {
     } catch { /* better-sqlite3 not available */ }
 
     // Inject contributed AI API keys
-    await injectApiKeys(config.resourceRegistry);
+    await injectApiKeys();
 
     // Pre-create Pando tools and Lux provider (shared across all engines)
-    this.pandoTools = await createPandoTools(config.apiPort, config.apiToken, config.resourceRegistry);
+    this.pandoTools = await createPandoTools(config.apiPort, config.apiToken);
     this.luxProvider = createLuxBudgetProvider(config.luxPerUsd);
 
     // Create engine pool with lifecycle hooks
@@ -497,7 +496,6 @@ export function createEngineService(adapter: EngineAdapter): PandoService {
         apiPort: ctx.apiPort,
         apiToken: ctx.apiToken,
         dataDir: ctx.dataDir,
-        resourceRegistry: ctx.resourceRegistry ?? null,
         projectResolver: ctx.projectResolver,
       });
     },

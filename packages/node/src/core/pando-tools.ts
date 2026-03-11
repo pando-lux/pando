@@ -6,9 +6,8 @@
  * KB: pando_workspace resolves local repo aliases (node/teams/code) before attempting GitHub clone.
  */
 
-import type { ResourceRegistry } from '../platform/resource-registry.js';
-
-export async function createPandoTools(apiPort: number, apiToken?: string, resourceRegistry?: ResourceRegistry | null) {
+// KB: ResourceRegistry param removed Phase 6 — createPandoTools no longer resolves git credentials.
+export async function createPandoTools(apiPort: number, apiToken?: string) {
   const baseUrl = `http://127.0.0.1:${apiPort}`;
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (apiToken) headers['Authorization'] = `Bearer ${apiToken}`;
@@ -199,13 +198,7 @@ export async function createPandoTools(apiPort: number, apiToken?: string, resou
             return { success: true, output: JSON.stringify({ path: workDir, status: 'updated', repo, branch }) };
           } else {
             // 3. Clone fresh from GitHub.
-            let cloneUrl = repo.includes('/') ? `https://github.com/${repo}.git` : `https://github.com/pando-lux/${repo}.git`;
-            if (resourceRegistry?.resolveGitCredential) {
-              try {
-                const authenticatedUrl = await resourceRegistry.resolveGitCredential(cloneUrl);
-                if (authenticatedUrl) cloneUrl = authenticatedUrl;
-              } catch { /* credential resolution failed — use plain URL */ }
-            }
+            const cloneUrl = repo.includes('/') ? `https://github.com/${repo}.git` : `https://github.com/pando-lux/${repo}.git`;
             const { GitOps: GO } = await import('./git-ops.js');
             GO.cloneSync(cloneUrl, workDir, branch);
             return { success: true, output: JSON.stringify({ path: workDir, status: 'cloned', repo, branch }) };

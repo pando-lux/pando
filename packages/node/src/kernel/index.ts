@@ -29,7 +29,7 @@ export { EmissionWitness, TOPIC_EMISSIONS } from './emission-witness.js';
 export type { EmissionProposal, WitnessAttestation, EmissionStats } from './emission-witness.js';
 
 export { LocalEnvironment } from './local-environment.js';
-export type { IndexedDir, SearchResult as LocalSearchResult, LocalStatus, MemoryEntry } from './local-environment.js';
+export type { MemoryEntry } from './local-environment.js';
 
 export { NetworkState } from './network-state.js';
 export type { NetworkStateSnapshot } from './network-state.js';

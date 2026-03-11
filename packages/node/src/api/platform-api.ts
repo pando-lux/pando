@@ -263,6 +263,7 @@ export async function registerPlatformRoutes(
               ownerId,
               type: 'private',
               visibility: 'owner_only',
+              teamId: projectName,
             });
 
             if (threadStore) {
@@ -596,6 +597,7 @@ export async function registerPlatformRoutes(
               ownerId: tOwnerId,
               type: 'private',
               visibility: 'owner_only',
+              teamId: tProjectName,
             });
             threadStore.updateThread(id, { projectId: tProject.id });
 
@@ -1425,178 +1427,7 @@ export async function registerPlatformRoutes(
       }
     });
 
-    // ── Content Layer Routes (Phase 11) ──
-
-    // GET /content — list all content (with optional type/status/search query params)
-    fastify.get('/content', async (request: any) => {
-      const registry = node.getContentRegistry();
-      if (!registry) return { content: [], stats: null };
-
-      const { q, type, status, limit } = request.query || {};
-      if (q) {
-        const results = registry.search(q, Math.min(parseInt(limit) || 20, 100));
-        return { content: results.map((r: any) => r.content), searchResults: results };
-      }
-
-      const content = registry.list({
-        type: type || undefined,
-        status: status || undefined,
-        limit: Math.min(parseInt(limit) || 100, 200),
-      });
-      return { content };
-    });
-
-    // GET /content/search — full-text search
-    fastify.get('/content/search', async (request: any) => {
-      const registry = node.getContentRegistry();
-      if (!registry) return { results: [] };
-
-      const { q, limit } = request.query || {};
-      if (!q) return { results: [] };
-      const results = registry.search(q, Math.min(parseInt(limit) || 20, 100));
-      return { results };
-    });
-
-    // GET /content/stats — content statistics
-    fastify.get('/content/stats', async () => {
-      const registry = node.getContentRegistry();
-      if (!registry) return { totalContent: 0, byType: {}, byStatus: {}, totalLuxEarned: 0 };
-      return registry.getStats();
-    });
-
-    // GET /content/:id — get specific content record
-    fastify.get('/content/:id', async (request: any, reply: any) => {
-      const registry = node.getContentRegistry();
-      if (!registry) return reply.code(503).send({ error: 'Content registry not ready' });
-
-      const record = registry.get(request.params.id);
-      if (!record) return reply.code(404).send({ error: 'Content not found' });
-      return record;
-    });
-
-    // GET /content/:id/revenue — revenue breakdown for content
-    fastify.get('/content/:id/revenue', async (request: any, reply: any) => {
-      const registry = node.getContentRegistry();
-      if (!registry) return reply.code(503).send({ error: 'Content registry not ready' });
-
-      const revenue = registry.getRevenue(request.params.id);
-      if (!revenue) return reply.code(404).send({ error: 'Content not found' });
-      return revenue;
-    });
-
-    // POST /content — create content record
-    fastify.post('/content', async (request: any, reply: any) => {
-      const registry = node.getContentRegistry();
-      if (!registry) return reply.code(503).send({ error: 'Content registry not ready' });
-
-      const { type, title, description, repoUrl, liveUrl, tags, manifest, status } = request.body || {};
-      if (!type || !title) {
-        return reply.code(400).send({ error: 'type and title are required' });
-      }
-
-      const validTypes = ['website', 'api', 'dataset', 'service', 'document', 'tool'];
-      if (!validTypes.includes(type)) {
-        return reply.code(400).send({ error: `type must be one of: ${validTypes.join(', ')}` });
-      }
-      if (typeof title !== 'string' || title.length > 200) {
-        return reply.code(400).send({ error: 'Title must be a string (max 200 chars)' });
-      }
-      if (description !== undefined && (typeof description !== 'string' || description.length > 5000)) {
-        return reply.code(400).send({ error: 'Description must be a string (max 5000 chars)' });
-      }
-
-      // Dual-auth: use JWT user's peerId if available, fall back to node identity
-      const userPeerId = await deps.verifyUserJwt(request);
-      const identity = node.getIdentity();
-      const ownerPeerId = userPeerId || identity?.peerId;
-      const record = registry.create({
-        type,
-        title,
-        description,
-        ownerPeerId,
-        repoUrl,
-        liveUrl,
-        tags,
-        manifest,
-        status,
-      });
-
-      return { success: true, contentId: record.contentId, record };
-    });
-
-    // PUT /content/:id — update content record (owner check)
-    fastify.put('/content/:id', async (request: any, reply: any) => {
-      const registry = node.getContentRegistry();
-      if (!registry) return reply.code(503).send({ error: 'Content registry not ready' });
-
-      const existing = registry.get(request.params.id);
-      if (!existing) return reply.code(404).send({ error: 'Content not found' });
-
-      const identity = node.getIdentity();
-      if (existing.ownerPeerId !== identity?.peerId) {
-        return reply.code(403).send({ error: 'Only the owner can update this content' });
-      }
-
-      const { title, description, repoUrl, liveUrl, tags, status, manifest } = request.body || {};
-      const updated = registry.update(request.params.id, {
-        title, description, repoUrl, liveUrl, tags, status, manifest,
-      });
-
-      if (!updated) return reply.code(500).send({ error: 'Update failed' });
-      return { success: true, record: updated };
-    });
-
-    // DELETE /content/:id — archive content (owner check)
-    fastify.delete('/content/:id', async (request: any, reply: any) => {
-      const registry = node.getContentRegistry();
-      if (!registry) return reply.code(503).send({ error: 'Content registry not ready' });
-
-      const existing = registry.get(request.params.id);
-      if (!existing) return reply.code(404).send({ error: 'Content not found' });
-
-      const identity = node.getIdentity();
-      if (existing.ownerPeerId !== identity?.peerId) {
-        return reply.code(403).send({ error: 'Only the owner can archive this content' });
-      }
-
-      const archived = registry.archive(request.params.id);
-      if (!archived) return reply.code(500).send({ error: 'Archive failed' });
-      return { success: true, archived: true };
-    });
-
-    // POST /content/:id/publish — trigger publish flow
-    fastify.post('/content/:id/publish', async (request: any, reply: any) => {
-      const registry = node.getContentRegistry();
-      if (!registry) return reply.code(503).send({ error: 'Content registry not ready' });
-
-      const existing = registry.get(request.params.id);
-      if (!existing) return reply.code(404).send({ error: 'Content not found' });
-
-      const identity = node.getIdentity();
-      if (existing.ownerPeerId !== identity?.peerId) {
-        return reply.code(403).send({ error: 'Only the owner can publish this content' });
-      }
-
-      // #47: Content safety check — block publish if safety score is below threshold
-      const safetyReviewer = node.getContentSafetyReviewer();
-      if (safetyReviewer && existing.repoUrl) {
-        // Check if there's an existing review for this content
-        const existingReviews = safetyReviewer.getReviewHistory(request.params.id);
-        const latestReview = existingReviews[0];
-        if (latestReview && !latestReview.passed) {
-          return reply.code(403).send({
-            error: 'Content blocked by safety review',
-            safetyScore: latestReview.score,
-            findings: latestReview.findings.length,
-          });
-        }
-      }
-
-      // Set status to live
-      const updated = registry.update(request.params.id, { status: 'live' });
-      if (!updated) return reply.code(500).send({ error: 'Publish failed' });
-      return { success: true, record: updated };
-    });
+    // KB: Content Layer Routes (Phase 11) deleted — content-registry stripped in Phase 6.
 
     // ── Regression Suite API (Phase 17.6) ──────────────────────────
 
@@ -2068,8 +1899,7 @@ export async function registerPlatformRoutes(
       const userId = await deps.verifyUserJwt(request);
       if (userId) {
         const owned = await ps.getProjectsByOwnerAsync(userId);
-        const collab = await ps.getProjectsByCollaboratorAsync(userId);
-        return { projects: [...owned, ...collab].map(stripApiKey) };
+        return { projects: owned.map(stripApiKey) };
       }
 
       // No valid user token — return listed/featured public projects
@@ -2107,20 +1937,16 @@ export async function registerPlatformRoutes(
       // Check access
       const userId = await deps.verifyUserJwt(request);
 
-      // Public projects are visible to all; private projects require access
+      // Public projects are visible to all; private projects require ownership
       if (project.type !== 'public' && project.visibility === 'owner_only') {
-        if (!userId || !(await ps.hasAccessAsync(id, userId))) {
+        if (!userId || project.ownerId !== userId) {
           return reply.code(403).send({ error: 'Access denied' });
         }
       }
 
-      let collaborators: any[] = [];
-      try {
-        collaborators = await ps.getCollaboratorsAsync(id);
-      } catch {}
       // Only return apiKey to the project owner
       const isOwner = userId && project.ownerId === userId;
-      return { project: isOwner ? project : stripApiKey(project), collaborators };
+      return { project: isOwner ? project : stripApiKey(project) };
     });
 
     // POST /projects — Create a new project
@@ -2188,9 +2014,9 @@ export async function registerPlatformRoutes(
       if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
 
       const { id } = request.params as { id: string };
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (!role || (role !== 'owner' && role !== 'admin')) {
-        return reply.code(403).send({ error: 'Only owner or admin can update project' });
+      const project2 = await ps.getProjectAsync(id);
+      if (!project2 || project2.ownerId !== userId) {
+        return reply.code(403).send({ error: 'Only owner can update project' });
       }
 
       const body = (request.body || {}) as {
@@ -2232,427 +2058,10 @@ export async function registerPlatformRoutes(
       return { project };
     });
 
-    // POST /projects/:id/collaborators — Add collaborator (owner/admin only)
-    fastify.post('/projects/:id/collaborators', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+    // KB: Revenue Engine Routes (Phase 31.4) deleted — revenue-engine stripped in Phase 6.
+    // KB: Transfer routes (Phase 31.6) deleted — transfers table stripped.
 
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id } = request.params as { id: string };
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (!role || (role !== 'owner' && role !== 'admin')) {
-        return reply.code(403).send({ error: 'Only owner or admin can add collaborators' });
-      }
-
-      const body = (request.body || {}) as { userId?: string; role?: string };
-      if (!body.userId) {
-        return reply.code(400).send({ error: 'userId is required' });
-      }
-
-      const collabRole = (body.role || 'collaborator') as any;
-      const validRoles = ['admin', 'collaborator', 'viewer', 'qa_lead'];
-      if (!validRoles.includes(collabRole)) {
-        return reply.code(400).send({ error: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
-      }
-
-      await ps.addCollaborator(id, body.userId, collabRole, userId);
-      return { success: true };
-    });
-
-    // DELETE /projects/:id/collaborators/:userId — Remove collaborator (owner/admin only)
-    fastify.delete('/projects/:id/collaborators/:userId', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const authUserId = await deps.verifyUserJwt(request);
-      if (!authUserId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id, userId: targetUserId } = request.params as { id: string; userId: string };
-      const role = await ps.getUserRoleAsync(id, authUserId);
-      if (!role || (role !== 'owner' && role !== 'admin')) {
-        return reply.code(403).send({ error: 'Only owner or admin can remove collaborators' });
-      }
-
-      // Cannot remove the owner
-      const project = await ps.getProjectAsync(id);
-      if (project && targetUserId === project.ownerId) {
-        return reply.code(400).send({ error: 'Cannot remove the project owner' });
-      }
-
-      await ps.removeCollaborator(id, targetUserId);
-      return { success: true };
-    });
-
-    // GET /projects/:id/collaborators — List collaborators
-    fastify.get('/projects/:id/collaborators', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const { id } = request.params as { id: string };
-      const project = await ps.getProjectAsync(id);
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      const collaborators = await ps.getCollaboratorsAsync(id);
-      return { collaborators };
-    });
-
-    // ── Phase 31.5: Collaboration Enhancement (Invites) ──────────────────
-
-    // POST /projects/:id/invite — Generate an invite link/code (owner/admin only)
-    fastify.post('/projects/:id/invite', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id } = request.params as { id: string };
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (!role || (role !== 'owner' && role !== 'admin')) {
-        return reply.code(403).send({ error: 'Only owner or admin can create invites' });
-      }
-
-      const body = (request.body || {}) as {
-        role?: string;
-        expiresInHours?: number;
-        maxUses?: number;
-      };
-
-      const inviteRole = (body.role || 'collaborator') as any;
-      const validRoles = ['admin', 'collaborator', 'viewer', 'qa_lead'];
-      if (!validRoles.includes(inviteRole)) {
-        return reply.code(400).send({ error: `Invalid role. Must be one of: ${validRoles.join(', ')}` });
-      }
-
-      const invite = await ps.createInvite(id, inviteRole, userId, {
-        expiresInHours: body.expiresInHours,
-        maxUses: body.maxUses,
-      });
-
-      return reply.code(201).send({ invite });
-    });
-
-    // POST /projects/join/:code — Join a project via invite code
-    fastify.post('/projects/join/:code', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { code } = request.params as { code: string };
-      const result = await ps.useInvite(code, userId);
-
-      if (!result.success) {
-        return reply.code(400).send({ error: result.error });
-      }
-
-      return { success: true, projectId: result.projectId, role: result.role };
-    });
-
-    // GET /projects/:id/invites — List active invites (owner/admin only)
-    fastify.get('/projects/:id/invites', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id } = request.params as { id: string };
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (!role || (role !== 'owner' && role !== 'admin')) {
-        return reply.code(403).send({ error: 'Only owner or admin can view invites' });
-      }
-
-      const invites = await ps.getProjectInvitesAsync(id);
-      return { invites };
-    });
-
-    // DELETE /projects/:id/invites/:inviteId — Revoke an invite (owner/admin only)
-    fastify.delete('/projects/:id/invites/:inviteId', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id, inviteId } = request.params as { id: string; inviteId: string };
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (!role || (role !== 'owner' && role !== 'admin')) {
-        return reply.code(403).send({ error: 'Only owner or admin can revoke invites' });
-      }
-
-      const success = await ps.revokeInvite(inviteId);
-      if (!success) return reply.code(404).send({ error: 'Invite not found' });
-
-      return { success: true };
-    });
-
-    // ── Phase 31.6: Ownership Transfer ───────────────────────────────────
-
-    // POST /projects/:id/transfer — Initiate ownership transfer (owner only)
-    fastify.post('/projects/:id/transfer', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id } = request.params as { id: string };
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (role !== 'owner') {
-        return reply.code(403).send({ error: 'Only the project owner can initiate a transfer' });
-      }
-
-      const body = (request.body || {}) as {
-        toUserId?: string;
-        type?: string;
-        salePrice?: number;
-      };
-
-      if (!body.toUserId) {
-        return reply.code(400).send({ error: 'toUserId is required' });
-      }
-
-      const transferType = (body.type || 'direct') as any;
-      const validTypes = ['direct', 'sale', 'network'];
-      if (!validTypes.includes(transferType)) {
-        return reply.code(400).send({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
-      }
-
-      // For direct transfers, validate the target user exists
-      if (transferType === 'direct') {
-        const accountStore = node.getUserAccountStore();
-        const targetUser = accountStore ? await accountStore.getIdentityByPeerId(body.toUserId) : null;
-        if (!targetUser) {
-          return reply.code(404).send({ error: 'Target user not found' });
-        }
-      }
-
-      // For sales, create an escrow hold if PaymentGate is available
-      let escrowHoldId = '';
-      if (body.salePrice !== undefined && (typeof body.salePrice !== 'number' || !isFinite(body.salePrice) || body.salePrice < 0)) {
-        return reply.code(400).send({ error: 'salePrice must be a non-negative finite number' });
-      }
-      if (transferType === 'sale' && body.salePrice && body.salePrice > 0) {
-        const paymentGate = node.getPaymentGate();
-        if (paymentGate) {
-          const hold = paymentGate.holdPayment(body.toUserId, `transfer-${id}`, body.salePrice);
-          if (!hold) {
-            return reply.code(402).send({ error: 'Buyer has insufficient Lux balance for this sale' });
-          }
-          escrowHoldId = hold.holdId;
-        }
-      }
-
-      const transfer = await ps.initiateTransfer(
-        id,
-        userId,
-        body.toUserId,
-        transferType,
-        body.salePrice,
-        escrowHoldId,
-      );
-
-      return reply.code(201).send({ transfer });
-    });
-
-    // POST /projects/transfers/:id/complete — Complete a transfer (buyer confirms for sales)
-    fastify.post('/projects/transfers/:id/complete', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id: transferId } = request.params as { id: string };
-      const transfer = await ps.getTransferAsync(transferId);
-      if (!transfer) return reply.code(404).send({ error: 'Transfer not found' });
-
-      // For sales, only the buyer (toUser) can complete; for direct, either party
-      if (transfer.transferType === 'sale') {
-        if (userId !== transfer.toUser) {
-          return reply.code(403).send({ error: 'Only the buyer can confirm a sale transfer' });
-        }
-      } else {
-        if (userId !== transfer.fromUser && userId !== transfer.toUser) {
-          return reply.code(403).send({ error: 'Only the sender or recipient can complete this transfer' });
-        }
-      }
-
-      // Release escrow if this was a sale
-      if (transfer.escrowHoldId) {
-        const paymentGate = node.getPaymentGate();
-        if (paymentGate) {
-          paymentGate.releasePayment(transfer.escrowHoldId, transfer.fromUser);
-        }
-      }
-
-      const completed = await ps.completeTransfer(transferId);
-      if (!completed) return reply.code(400).send({ error: 'Transfer cannot be completed (not pending)' });
-
-      return { transfer: completed };
-    });
-
-    // POST /projects/transfers/:id/cancel — Cancel a transfer
-    fastify.post('/projects/transfers/:id/cancel', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id: transferId } = request.params as { id: string };
-      const transfer = await ps.getTransferAsync(transferId);
-      if (!transfer) return reply.code(404).send({ error: 'Transfer not found' });
-
-      // Only the initiator (fromUser) can cancel
-      if (userId !== transfer.fromUser) {
-        return reply.code(403).send({ error: 'Only the transfer initiator can cancel' });
-      }
-
-      // Refund escrow if this was a sale
-      if (transfer.escrowHoldId) {
-        const paymentGate = node.getPaymentGate();
-        if (paymentGate) {
-          paymentGate.refundPayment(transfer.escrowHoldId);
-        }
-      }
-
-      const cancelled = await ps.cancelTransfer(transferId);
-      if (!cancelled) return reply.code(400).send({ error: 'Transfer cannot be cancelled (not pending)' });
-
-      return { transfer: cancelled };
-    });
-
-    // GET /projects/:id/transfers — Transfer history
-    fastify.get('/projects/:id/transfers', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const { id } = request.params as { id: string };
-      const project = await ps.getProjectAsync(id);
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      const transfers = await ps.getProjectTransfersAsync(id);
-      return { transfers };
-    });
-
-    // ── Phase 31.4: Revenue Engine Routes ────────────────────────────────
-
-    // GET /projects/:id/revenue — Revenue summary
-    fastify.get('/projects/:id/revenue', async (request: any, reply: any) => {
-      const engine = node.getRevenueEngine();
-      if (!engine) return reply.code(503).send({ error: 'Revenue engine not available' });
-
-      const { id } = request.params as { id: string };
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const project = await ps.getProjectAsync(id);
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      const summary = await engine.getRevenueSummaryAsync(id);
-      return { summary };
-    });
-
-    // GET /projects/:id/revenue/history — Revenue event history
-    fastify.get('/projects/:id/revenue/history', async (request: any, reply: any) => {
-      const engine = node.getRevenueEngine();
-      if (!engine) return reply.code(503).send({ error: 'Revenue engine not available' });
-
-      const { id } = request.params as { id: string };
-      const query = request.query as any;
-
-      const records = await engine.getProjectRevenueAsync(id, {
-        since: query.since ? parseInt(query.since) : undefined,
-        until: query.until ? parseInt(query.until) : undefined,
-      });
-      return { records };
-    });
-
-    // POST /projects/:id/revenue/distribute — Trigger revenue distribution (owner/admin only)
-    fastify.post('/projects/:id/revenue/distribute', async (request: any, reply: any) => {
-      const engine = node.getRevenueEngine();
-      if (!engine) return reply.code(503).send({ error: 'Revenue engine not available' });
-
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id } = request.params as { id: string };
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (!role || (role !== 'owner' && role !== 'admin')) {
-        return reply.code(403).send({ error: 'Only owner or admin can distribute revenue' });
-      }
-
-      const result = await engine.distributeRevenue(id, ps);
-      return { result };
-    });
-
-    // GET /projects/:id/revenue/distributions — Distribution history
-    fastify.get('/projects/:id/revenue/distributions', async (request: any, reply: any) => {
-      const engine = node.getRevenueEngine();
-      if (!engine) return reply.code(503).send({ error: 'Revenue engine not available' });
-
-      const { id } = request.params as { id: string };
-      const distributions = await engine.getDistributionHistoryAsync(id);
-      return { distributions };
-    });
-
-    // ── Phase 31.7: Deployment Automation ─────────────────────────────────
-    // NOTE: POST /projects/:id/deploy moved to Phase 70 unified deploy section (near preflight).
-    // Old endpoint created a deployment record — new endpoint actually deploys.
-
-    // GET /projects/:id/deployments — List deployment history
-    fastify.get('/projects/:id/deployments', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const { id } = request.params as { id: string };
-      const project = await ps.getProjectAsync(id);
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      const deployments = await ps.getDeploymentsAsync(id);
-      return { deployments };
-    });
-
-    // POST /projects/:id/deployments/:deployId/status — Update deployment status (for agents)
-    fastify.post('/projects/:id/deployments/:deployId/status', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id, deployId } = request.params as { id: string; deployId: string };
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (!role || (role !== 'owner' && role !== 'admin')) {
-        return reply.code(403).send({ error: 'Only owner or admin can update deployment status' });
-      }
-
-      const body = (request.body || {}) as {
-        status?: string;
-        url?: string;
-        error?: string;
-      };
-
-      if (!body.status) {
-        return reply.code(400).send({ error: 'status is required' });
-      }
-
-      const validStatuses = ['pending', 'deploying', 'live', 'failed', 'rolled_back'];
-      if (!validStatuses.includes(body.status)) {
-        return reply.code(400).send({ error: `Invalid status. Must be one of: ${validStatuses.join(', ')}` });
-      }
-
-      await ps.updateDeploymentStatus(deployId, body.status as any, body.url, body.error);
-      return { success: true };
-    });
+    // KB: Deployment record routes (Phase 31.7) deleted — deployments table stripped.
 
     // ── Phase 31.8: Project Marketplace ───────────────────────────────────
 
@@ -2708,9 +2117,6 @@ export async function registerPlatformRoutes(
         return reply.code(404).send({ error: 'Project not found' });
       }
 
-      const collaborators = await ps.getCollaboratorsAsync(id);
-      const ratingsSummary = await ps.getProjectRatingsAsync(id);
-
       // Enrich with AppManager deployment data
       const appMgr = node.getAppManager?.();
       const app = appMgr?.get(id);
@@ -2723,329 +2129,13 @@ export async function registerPlatformRoutes(
         deployedAt: app.deployed_at,
       } : undefined;
 
-      return { project: stripApiKey(project), collaborators, ratings: ratingsSummary, deployment };
+      return { project: stripApiKey(project), deployment };
     });
 
-    // POST /projects/:id/rate — Rate a project (user token required)
-    fastify.post('/projects/:id/rate', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
+    // KB: Rating routes (Phase 31.8) deleted — ratings table stripped.
+    // KB: Contribution Tracking Routes (Phase 31.9) deleted — contribution-tracker stripped in Phase 6.
 
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id } = request.params as { id: string };
-      const project = await ps.getProjectAsync(id);
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      const body = (request.body || {}) as { rating?: number; review?: string };
-      if (!body.rating || !Number.isInteger(body.rating) || body.rating < 1 || body.rating > 5) {
-        return reply.code(400).send({ error: 'Rating must be an integer between 1 and 5' });
-      }
-
-      await ps.rateProject(id, userId, body.rating, body.review);
-      return { success: true };
-    });
-
-    // GET /projects/:id/ratings — Get ratings for a project
-    fastify.get('/projects/:id/ratings', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const { id } = request.params as { id: string };
-      const project = await ps.getProjectAsync(id);
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      const ratingsSummary = await ps.getProjectRatingsAsync(id);
-      return ratingsSummary;
-    });
-
-    // ── Phase 31.9: Contribution Tracking ─────────────────────────────────
-
-    // GET /projects/:id/contributions — List contributions
-    fastify.get('/projects/:id/contributions', async (request: any, reply: any) => {
-      const tracker = node.getContributionTracker();
-      if (!tracker) return reply.code(503).send({ error: 'Contribution tracker not available' });
-
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const { id } = request.params as { id: string };
-      const project = await ps.getProjectAsync(id);
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      const query = request.query as any;
-      const contributions = await tracker.getContributionsAsync(id, {
-        userId: query.userId || undefined,
-        verified: query.verified !== undefined ? query.verified === 'true' : undefined,
-      });
-
-      return { contributions };
-    });
-
-    // POST /projects/:id/contributions — Record a contribution (owner/admin/collaborator)
-    fastify.post('/projects/:id/contributions', async (request: any, reply: any) => {
-      const tracker = node.getContributionTracker();
-      if (!tracker) return reply.code(503).send({ error: 'Contribution tracker not available' });
-
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id } = request.params as { id: string };
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (!role) {
-        return reply.code(403).send({ error: 'Must be a project collaborator to record contributions' });
-      }
-
-      const body = (request.body || {}) as {
-        type?: string;
-        description?: string;
-        weight?: number;
-        agentId?: string;
-        userId?: string;
-      };
-
-      if (!body.type) {
-        return reply.code(400).send({ error: 'Contribution type is required' });
-      }
-
-      const validTypes = ['code', 'review', 'test', 'design', 'management', 'documentation'];
-      if (!validTypes.includes(body.type)) {
-        return reply.code(400).send({ error: `Invalid type. Must be one of: ${validTypes.join(', ')}` });
-      }
-
-      // Allow owner/admin to record contributions on behalf of other users
-      const contributorId = (role === 'owner' || role === 'admin') && body.userId ? body.userId : userId;
-
-      const contribution = await tracker.recordContribution(
-        id,
-        contributorId,
-        body.type as any,
-        body.description,
-        body.weight,
-        body.agentId,
-      );
-
-      return reply.code(201).send({ contribution });
-    });
-
-    // POST /projects/:id/contributions/:contribId/verify — Verify (owner/admin only)
-    fastify.post('/projects/:id/contributions/:contribId/verify', async (request: any, reply: any) => {
-      const tracker = node.getContributionTracker();
-      if (!tracker) return reply.code(503).send({ error: 'Contribution tracker not available' });
-
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id, contribId } = request.params as { id: string; contribId: string };
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (!role || (role !== 'owner' && role !== 'admin')) {
-        return reply.code(403).send({ error: 'Only owner or admin can verify contributions' });
-      }
-
-      await tracker.verifyContribution(contribId, userId);
-      return { success: true };
-    });
-
-    // GET /projects/:id/contributions/scores — Get contribution scores
-    fastify.get('/projects/:id/contributions/scores', async (request: any, reply: any) => {
-      const tracker = node.getContributionTracker();
-      if (!tracker) return reply.code(503).send({ error: 'Contribution tracker not available' });
-
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const { id } = request.params as { id: string };
-      const project = await ps.getProjectAsync(id);
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      const query = request.query as any;
-      // Optionally recalculate scores
-      if (query.recalculate === 'true') {
-        await tracker.calculateScores(id);
-      }
-
-      const scores = await tracker.getScoresAsync(id);
-      const shares = await tracker.getRevenueSharesAsync(id);
-      return { scores, shares };
-    });
-
-    // ── Phase 31.10: Content Safety — Reporting ────────────────────────────
-
-    // In-memory rate limiter for reports: max 3 per user per hour
-    const reportRateMap = new Map<string, number[]>();
-
-    const checkReportRateLimit = (userId: string): boolean => {
-      const now = Date.now();
-      const windowMs = 60 * 60 * 1000; // 1 hour
-      const maxReports = 3;
-      const cutoff = now - windowMs;
-
-      let timestamps = reportRateMap.get(userId);
-      if (!timestamps) {
-        timestamps = [];
-        reportRateMap.set(userId, timestamps);
-      }
-      // Prune old entries
-      while (timestamps.length > 0 && timestamps[0] <= cutoff) {
-        timestamps.shift();
-      }
-      if (timestamps.length >= maxReports) {
-        return false;
-      }
-      timestamps.push(now);
-      return true;
-    };
-
-    // Periodic cleanup for report rate limiter (every 10 minutes)
-    // #audit: Store ref and clear on server close to prevent leak
-    const reportRateCleanupTimer = setInterval(() => {
-      const cutoff = Date.now() - 60 * 60 * 1000;
-      for (const [key, timestamps] of reportRateMap) {
-        while (timestamps.length > 0 && timestamps[0] <= cutoff) {
-          timestamps.shift();
-        }
-        if (timestamps.length === 0) {
-          reportRateMap.delete(key);
-        }
-      }
-    }, 10 * 60 * 1000);
-    reportRateCleanupTimer.unref();
-    fastify.addHook('onClose', () => clearInterval(reportRateCleanupTimer));
-
-    // POST /projects/:id/report — Report a project (user token required)
-    fastify.post('/projects/:id/report', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id } = request.params as { id: string };
-      const project = await ps.getProjectAsync(id);
-      if (!project) return reply.code(404).send({ error: 'Project not found' });
-
-      // Rate limit: max 3 reports per user per hour
-      if (!checkReportRateLimit(userId)) {
-        return reply.code(429).send({ error: 'Rate limit exceeded: max 3 reports per hour' });
-      }
-
-      const body = (request.body || {}) as { reason?: string; description?: string };
-      const validReasons = ['spam', 'malicious', 'inappropriate', 'copyright', 'other'];
-      if (!body.reason || !validReasons.includes(body.reason)) {
-        return reply.code(400).send({ error: `Reason must be one of: ${validReasons.join(', ')}` });
-      }
-
-      const report = await ps.createReport(id, userId, body.reason as any, body.description);
-
-      // #49: Run content safety review and write score back to the report
-      const safetyReviewer = node.getContentSafetyReviewer?.();
-      if (safetyReviewer) {
-        try {
-          const review = await safetyReviewer.reviewContent([], { contentId: report.id });
-          await ps.updateReportStatus(report.id, report.status, undefined, undefined, review.score);
-        } catch { /* non-fatal — report created without safety score */ }
-      }
-
-      return reply.code(201).send({ report });
-    });
-
-    // GET /projects/:id/reports — List reports for a project (owner/admin only)
-    fastify.get('/projects/:id/reports', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
-
-      const { id } = request.params as { id: string };
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (!role || (role !== 'owner' && role !== 'admin')) {
-        return reply.code(403).send({ error: 'Only project owner or admin can view reports' });
-      }
-
-      const query = request.query as any;
-      const reports = await ps.getProjectReportsAsync(id, {
-        status: query.status || undefined,
-      });
-      return { reports };
-    });
-
-    // GET /admin/reports — List all pending reports (admin/node token only)
-    fastify.get('/admin/reports', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      // Require node-level API token for admin endpoints
-      const authHeader = request.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
-        return reply.code(403).send({ error: 'Admin access required (node API token)' });
-      }
-
-      const query = request.query as any;
-      const limit = Math.min(parseInt(query.limit) || 50, 200);
-      const reports = await ps.getPendingReportsAsync(limit);
-      return { reports };
-    });
-
-    // POST /admin/reports/:id/review — Update report status (admin/node token only)
-    fastify.post('/admin/reports/:id/review', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      // Require node-level API token for admin endpoints
-      const authHeader = request.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
-        return reply.code(403).send({ error: 'Admin access required (node API token)' });
-      }
-
-      const { id } = request.params as { id: string };
-      const report = await ps.getReportAsync(id);
-      if (!report) return reply.code(404).send({ error: 'Report not found' });
-
-      const body = (request.body || {}) as { status?: string; action?: string };
-      const validStatuses = ['pending', 'reviewing', 'resolved', 'dismissed'];
-      if (!body.status || !validStatuses.includes(body.status)) {
-        return reply.code(400).send({ error: `Status must be one of: ${validStatuses.join(', ')}` });
-      }
-
-      if (body.status === 'dismissed') {
-        await ps.dismissReport(id, 'admin');
-      } else if (body.status === 'resolved') {
-        const validActions = ['archive', 'delist', 'none'];
-        const action = body.action || 'none';
-        if (!validActions.includes(action)) {
-          return reply.code(400).send({ error: `Action must be one of: ${validActions.join(', ')}` });
-        }
-        await ps.resolveReport(id, 'admin', action as any);
-      } else {
-        await ps.updateReportStatus(id, body.status as any, 'admin');
-      }
-
-      const updated = await ps.getReportAsync(id);
-      return { report: updated };
-    });
-
-    // GET /admin/reports/stats — Report statistics (admin/node token only)
-    fastify.get('/admin/reports/stats', async (request: any, reply: any) => {
-      const ps = node.getProjectStore();
-      if (!ps) return reply.code(503).send({ error: 'Project store not available' });
-
-      // Require node-level API token for admin endpoints
-      const authHeader = request.headers.authorization;
-      if (!authHeader || !authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
-        return reply.code(403).send({ error: 'Admin access required (node API token)' });
-      }
-
-      const stats = await ps.getReportStatsAsync();
-      return { stats };
-    });
+    // KB: Report routes (Phase 31.10) deleted — reports table stripped.
 
     // ── Phase 53: Project Resource Assignment ──────────────────────────────
 
@@ -3058,7 +2148,7 @@ export async function registerPlatformRoutes(
       const project = await ps.getProjectAsync(id);
       if (!project) return reply.code(404).send({ error: 'Project not found' });
 
-      // Allow access if: (1) user session owner/admin, or (2) node Bearer token + project owned by this node
+      // Allow access if: (1) user session owner, or (2) node Bearer token + project owned by this node
       const userId = await deps.verifyUserJwt(request);
       const nodeId = node.getIdentity()?.peerId;
       const authHeader = request.headers?.authorization || '';
@@ -3066,9 +2156,8 @@ export async function registerPlatformRoutes(
       const isNodeAdmin = !userId && hasBearerToken && project.ownerId === nodeId;
 
       if (userId) {
-        const role = await ps.getUserRoleAsync(id, userId);
-        if (!role || (role !== 'owner' && role !== 'admin')) {
-          return reply.code(403).send({ error: 'Only owner or admin can assign resources' });
+        if (project.ownerId !== userId) {
+          return reply.code(403).send({ error: 'Only owner can assign resources' });
         }
       } else if (!isNodeAdmin) {
         return reply.code(401).send({ error: 'Authentication required' });
@@ -3113,10 +2202,9 @@ export async function registerPlatformRoutes(
       const project = await ps.getProjectAsync(id);
       if (!project) return reply.code(404).send({ error: 'Project not found' });
 
-      // Verify user is owner or admin
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (!role || (role !== 'owner' && role !== 'admin')) {
-        return reply.code(403).send({ error: 'Only owner or admin can remove resources' });
+      // Verify user is owner
+      if (project.ownerId !== userId) {
+        return reply.code(403).send({ error: 'Only owner can remove resources' });
       }
 
       try {
@@ -3137,17 +2225,11 @@ export async function registerPlatformRoutes(
       const project = await ps.getProjectAsync(id);
       if (!project) return reply.code(404).send({ error: 'Project not found' });
 
-      // Check access — owner, collaborator, or public
+      // Check access — owner or public
       const userId = await deps.verifyUserJwt(request);
-      let isOwner = false;
+      const isOwner = !!(userId && project.ownerId === userId);
 
-      if (userId) {
-        const role = await ps.getUserRoleAsync(id, userId);
-        if (role === 'owner') isOwner = true;
-        if (!role && project.type !== 'public') {
-          return reply.code(403).send({ error: 'Access denied' });
-        }
-      } else if (project.type !== 'public') {
+      if (!isOwner && project.type !== 'public') {
         return reply.code(403).send({ error: 'Access denied' });
       }
 
@@ -3180,8 +2262,7 @@ export async function registerPlatformRoutes(
       const isNodeAdmin = !userId && hasBearerToken && project.ownerId === nodeId;
 
       if (userId) {
-        const role = await ps.getUserRoleAsync(id, userId);
-        if (role !== 'owner') {
+        if (project.ownerId !== userId) {
           return reply.code(403).send({ error: 'Only project owner can generate API keys' });
         }
       } else if (!isNodeAdmin) {
@@ -3215,8 +2296,7 @@ export async function registerPlatformRoutes(
       if (!project) return reply.code(404).send({ error: 'Project not found' });
 
       // Owner only
-      const role = await ps.getUserRoleAsync(id, userId);
-      if (role !== 'owner') {
+      if (project.ownerId !== userId) {
         return reply.code(403).send({ error: 'Only project owner can regenerate API keys' });
       }
 

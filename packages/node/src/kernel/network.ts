@@ -1,3 +1,5 @@
+// KB: Peer discovery: node boots -> reads known-peers.json -> dials -> peer exchange.
+// KB: If 0 peers after restart, check PUBLIC_IP in systemd service + known-peers.json IPs.
 import { createLibp2p } from 'libp2p';
 import { tcp } from '@libp2p/tcp';
 import { noise } from '@chainsafe/libp2p-noise';

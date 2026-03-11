@@ -820,13 +820,9 @@ class PandoTUI {
         await this.doLogout();
         break;
       case 'index':
-        await this.doLocalIndex(args.join(' '));
-        break;
       case 'unindex':
-        await this.doLocalUnindex(args.join(' '));
-        break;
       case 'local':
-        this.showLocalStatus();
+        this.log(`${c.dim}File indexing removed. Use /memory to view user memory.${c.reset}`);
         break;
       case 'memory':
         this.showMemory(args);
@@ -1424,7 +1420,7 @@ class PandoTUI {
   // ── Resource Management ──
 
   private showResources(): void {
-    const registry = this.node.getResourceRegistry();
+    const registry = null as any; // KB: ResourceRegistry deleted Phase 6
     const identity = this.node.getIdentity();
     if (!registry || !identity) {
       this.log(`${c.red}Node not ready.${c.reset}`);
@@ -1453,7 +1449,7 @@ class PandoTUI {
     this.log(`${c.cyan}${c.bold}=== Network Resources ===${c.reset}`);
 
     const allResources = registry.getAllResources();
-    const activeResources = allResources.filter(r => r.status === 'active');
+    const activeResources = allResources.filter((r: any) => r.status === 'active');
 
     if (activeResources.length === 0) {
       this.log(`  ${c.dim}No network resources found.${c.reset}`);
@@ -1551,7 +1547,7 @@ class PandoTUI {
       return;
     }
 
-    const registry = this.node.getResourceRegistry();
+    const registry = null as any; // KB: ResourceRegistry deleted Phase 6
     if (!registry) {
       this.log(`${c.red}Resource registry not available.${c.reset}`);
       return;
@@ -1677,7 +1673,7 @@ class PandoTUI {
       return;
     }
 
-    const registry = this.node.getResourceRegistry();
+    const registry = null as any; // KB: ResourceRegistry deleted Phase 6
     if (!registry) {
       this.log(`${c.red}Resource registry not available.${c.reset}`);
       return;
@@ -2351,64 +2347,7 @@ class PandoTUI {
     this.log('');
   }
 
-  // ── v2.5: Local Environment Commands ────────────────────────────────────────
-
-  private async doLocalIndex(dirPath: string): Promise<void> {
-    const le = this.node.getLocalEnv();
-    if (!le) {
-      this.log(`${c.red}Local environment not initialized.${c.reset}`);
-      return;
-    }
-    if (!dirPath) {
-      this.log(`${c.dim}Usage: /index <directory>${c.reset}`);
-      return;
-    }
-    this.log(`${c.dim}Indexing ${dirPath}...${c.reset}`);
-    try {
-      const result = await le.grantDirectory(dirPath);
-      this.log(`${c.green}Indexed${c.reset} ${dirPath}: ${result.added} files added, ${result.skipped} skipped.`);
-    } catch (err: any) {
-      this.log(`${c.red}Error: ${err.message}${c.reset}`);
-    }
-  }
-
-  private doLocalUnindex(dirPath: string): void {
-    const le = this.node.getLocalEnv();
-    if (!le) {
-      this.log(`${c.red}Local environment not initialized.${c.reset}`);
-      return;
-    }
-    if (!dirPath) {
-      this.log(`${c.dim}Usage: /unindex <directory>${c.reset}`);
-      return;
-    }
-    le.revokeDirectory(dirPath);
-    this.log(`${c.yellow}Unindexed${c.reset} ${dirPath}.`);
-  }
-
-  private showLocalStatus(): void {
-    const le = this.node.getLocalEnv();
-    if (!le) {
-      this.log(`${c.dim}Local environment not initialized.${c.reset}`);
-      return;
-    }
-    const status = le.getStatus();
-    this.log('');
-    this.log(`${c.bold}Local File Index (Envelope 1)${c.reset}`);
-    this.log(`  Total files: ${c.cyan}${status.totalFiles}${c.reset}`);
-    this.log(`  DB: ${c.dim}${status.dbPath}${c.reset}`);
-    this.log(`  Memory: ${c.dim}${status.memoryPath}${c.reset}`);
-    if (status.grantedDirs.length === 0) {
-      this.log(`  ${c.dim}No directories indexed. Use /index <dir> to add one.${c.reset}`);
-    } else {
-      this.log(`  Indexed directories:`);
-      for (const dir of status.grantedDirs) {
-        const ago = Math.round((Date.now() - dir.lastIndexedAt) / 1000 / 60);
-        this.log(`    ${c.cyan}${dir.path}${c.reset}  ${dir.fileCount} files  ${c.dim}(last indexed ${ago}m ago)${c.reset}`);
-      }
-    }
-    this.log('');
-  }
+  // KB: doLocalIndex, doLocalUnindex, showLocalStatus stripped Phase 6 (file indexing removed).
 
   private showMemory(args: string[]): void {
     const le = this.node.getLocalEnv();
