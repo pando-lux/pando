@@ -936,6 +936,46 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       }
     });
 
+    // ── Restart Teams ────────────────────────────────────────────────────────
+
+    // POST /infra/restart-teams — Kill the teams process; supervisor auto-respawns it.
+    // KB: Node is spawned with stdio:'inherit' (no IPC channel to supervisor).
+    // KB: So we find the PID on TEAMS_PORT and kill it — onTeamsExit() fires and respawns within 2s.
+    fastify.post('/infra/restart-teams', async (request: any, reply: any) => {
+      const authHeader = request.headers.authorization || '';
+      if (!authHeader.startsWith('Bearer ') || authHeader.slice(7) !== deps.apiToken) {
+        return reply.code(401).send({ error: 'Operator authentication required' });
+      }
+
+      const teamsUrl = process.env.PANDO_TEAMS_URL || 'http://localhost:4873';
+      const teamsPort = parseInt(teamsUrl.match(/:(\d+)/)?.[1] || '4873');
+
+      try {
+        let pid: number | null = null;
+
+        if (process.platform === 'win32') {
+          const out = execSync(`netstat -ano | findstr :${teamsPort} | findstr LISTENING`,
+            { encoding: 'utf8', windowsHide: true, timeout: 5_000 }).trim();
+          const match = out.match(/\s(\d+)\s*$/m);
+          if (match) pid = parseInt(match[1]);
+        } else {
+          const out = execSync(`lsof -ti tcp:${teamsPort} 2>/dev/null || ss -Htlnp sport = :${teamsPort} | awk '{print $NF}' | grep -oP 'pid=\\K\\d+'`,
+            { encoding: 'utf8', timeout: 5_000 }).trim();
+          if (out) pid = parseInt(out.split('\n')[0]);
+        }
+
+        if (!pid) {
+          return reply.code(404).send({ error: `Teams process not found on port ${teamsPort}` });
+        }
+
+        process.kill(pid, 'SIGTERM');
+        console.log(`[api] restart-teams: killed PID ${pid} on port ${teamsPort} — supervisor will respawn`);
+        return { restarting: true, killedPid: pid };
+      } catch (err: any) {
+        return reply.code(500).send({ error: err.message });
+      }
+    });
+
     // ── Chat API (Phase 27: AgentManager) ──────────────────────────────────
 
     // POST /chat/message — routed to Teams Server node-doorman (BIBLE 1.8)
