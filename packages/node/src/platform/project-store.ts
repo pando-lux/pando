@@ -572,6 +572,20 @@ export class ProjectStore {
   }
 
   /**
+   * Link a team to a project.
+   */
+  async linkTeam(projectId: string, teamId: string): Promise<void> {
+    this.db.prepare(
+      'UPDATE projects SET team_id = ?, updated_at = ? WHERE id = ?'
+    ).run(teamId, Date.now(), projectId);
+
+    const updated = this.getProject(projectId);
+    if (updated) {
+      await this.persistProjectToMongo(projectId, updated);
+    }
+  }
+
+  /**
    * Link a manager agent to a project.
    */
   async linkManagerAgent(projectId: string, agentId: string): Promise<void> {
