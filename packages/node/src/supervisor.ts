@@ -99,17 +99,21 @@ function resolveTeamsPath(): string | null {
   return null;
 }
 
-// KB: PANDO_API_KEY must be set before spawning children so the node proxy
-// KB: and teams server use the same auth key. Without this, the node proxy
-// KB: sends an empty Bearer token and all board mutations silently fail.
-if (!process.env.PANDO_API_KEY) {
-  const token = readTokenFile();
-  if (token) process.env.PANDO_API_KEY = token;
-}
-
 const API_PORT = resolveApiPort();
 const API_BASE = `http://127.0.0.1:${API_PORT}`;
 const TEAMS_PATH = resolveTeamsPath();
+
+// KB: PANDO_API_KEY must be set before spawning children so the node proxy
+// KB: and teams server use the same auth key. Without this, the node proxy
+// KB: sends an empty Bearer token and all board mutations silently fail.
+// KB: Read from teams .env (same source the teams server uses via dotenv).
+if (!process.env.PANDO_API_KEY && TEAMS_PATH) {
+  try {
+    const envFile = readFileSync(join(TEAMS_PATH, '.env'), 'utf-8');
+    const match = envFile.match(/^PANDO_API_KEY=(.+)$/m);
+    if (match) process.env.PANDO_API_KEY = match[1].trim();
+  } catch { /* .env not found — teams server will also fail */ }
+}
 
 // ─── Core Supervisor ──────────────────────────────────────────────────────
 
