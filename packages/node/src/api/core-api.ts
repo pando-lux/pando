@@ -443,7 +443,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
       try {
         const { readFileSync } = await import('node:fs');
         const { join, resolve } = await import('node:path');
-        const nodeRepo = resolve(__dirname, '..', '..', '..');
+        // core-api.ts compiles to dist/api/ — need 4 levels to reach repo root
+        const nodeRepo = resolve(__dirname, '..', '..', '..', '..');
         for (const dir of ['teams', 'code']) {
           try {
             const envPath = join(nodeRepo, '..', dir, '.env');
