@@ -2022,19 +2022,23 @@ export async function registerPlatformRoutes(
       if (!ps) return reply.code(503).send({ error: 'Project store not available' });
 
       // Dual-auth: user session OR node Bearer token (mirrors POST /projects)
+      // KB: Bearer token = node admin; bypasses ownership check so agents can update any project.
       let userId = await deps.verifyUserJwt(request);
+      let isBearerAuth = false;
       if (!userId) {
         const authHeader = request.headers?.authorization || '';
         const hasBearerToken = verifyBearerToken(authHeader, deps.apiToken);
         if (hasBearerToken) {
           userId = node.getIdentity()?.peerId || '';
+          isBearerAuth = true;
         }
         if (!userId) return reply.code(401).send({ error: 'Authentication required (user session or Bearer token)' });
       }
 
       const { id } = request.params as { id: string };
       const project2 = await ps.getProjectAsync(id);
-      if (!project2 || project2.ownerId !== userId) {
+      if (!project2) return reply.code(404).send({ error: 'Project not found' });
+      if (!isBearerAuth && project2.ownerId !== userId) {
         return reply.code(403).send({ error: 'Only owner can update project' });
       }
 

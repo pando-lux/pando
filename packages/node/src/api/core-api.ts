@@ -830,8 +830,12 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         git.exec(['add', '-A', '--', ':(exclude)CLAUDE.md', ':(exclude)*.db', ':(exclude)*.db-shm', ':(exclude)*.db-wal']);
         steps.push('staged');
 
-        // Step 2: Check if there are actual changes
-        if (!git.hasUncommittedChanges()) {
+        // Step 2: Check if there are actual staged changes (not just unstaged/excluded files like CLAUDE.md)
+        // KB: Must use diffCachedNameOnly() not hasUncommittedChanges() — the latter checks `git status --porcelain`
+        // which includes unstaged modifications (e.g. CLAUDE.md). After staging with :(exclude)CLAUDE.md,
+        // nothing may be staged, but git status still shows CLAUDE.md as modified → false positive →
+        // git commit fails with "nothing to commit" → outer catch returns generic "Operation failed".
+        if (git.diffCachedNameOnly().length === 0) {
           return reply.code(400).send({ error: 'No changes to commit', steps });
         }
         steps.push('changes-detected');
