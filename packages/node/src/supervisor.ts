@@ -112,6 +112,9 @@ let userStopped = false;          // user clicked "Stop Node"
 let teamsUserStopped = false;     // user clicked "Stop Teams"
 const crashTimes: number[] = [];
 const teamsCrashTimes: number[] = [];
+// KB: When teams is already running on port 4873 (dev workflow), set this flag so
+// KB: pollState still tracks health without crashing the supervisor via EADDRINUSE.
+let teamsExternallyManaged = false;
 
 function spawnNode(): ChildProcess {
   const cliPath = join(__dirname, 'cli.js');
@@ -258,7 +261,7 @@ function onTeamsExit(code: number | null, signal: string | null): void {
     return;
   }
   refreshTray();
-  setTimeout(() => { teamsChild = spawnTeams(); refreshTray(); }, RESTART_DELAY_MS);
+  setTimeout(() => { startTeamsIfNeeded().catch(() => {}); }, RESTART_DELAY_MS);
 }
 
 function gracefulShutdown(signal: string): void {
@@ -284,6 +287,35 @@ function httpGet(url: string): Promise<string> {
     req.on('error', reject);
     req.setTimeout(5_000, () => { req.destroy(); reject(new Error('timeout')); });
   });
+}
+
+/** Returns true if teams is already serving on TEAMS_PORT. */
+async function isTeamsHealthy(): Promise<boolean> {
+  try {
+    await httpGet(`http://127.0.0.1:${TEAMS_PORT}/`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Start teams only if not already running. Prevents EADDRINUSE crash loops
+ * when the developer has started teams manually before launching the supervisor.
+ * KB: Always use this instead of calling spawnTeams() directly at boot or after crash.
+ * KB: No refreshTray() here — on Windows/MINGW, eager tray refresh at boot triggers systray2
+ * KB: stdin null error before the native window exists. pollState() updates tray within 10s.
+ */
+async function startTeamsIfNeeded(): Promise<void> {
+  if (!TEAMS_PATH) return;
+  if (await isTeamsHealthy()) {
+    console.log(`[supervisor ${ts()}] Teams already running on port ${TEAMS_PORT} — skipping spawn.`);
+    teamsExternallyManaged = true;
+    teamsOnline = true;
+    return;
+  }
+  teamsExternallyManaged = false;
+  teamsChild = spawnTeams();
 }
 
 // ─── State ────────────────────────────────────────────────────────────────
@@ -339,13 +371,17 @@ async function pollState(): Promise<void> {
     lastState = { ...lastState, online: false, peers: 0, lux: 0, services: [], localHubPort: null };
   }
 
-  // Poll Teams (simple health check)
-  if (teamsChild) {
+  // Poll Teams (simple health check — covers both our child and externally-managed instances)
+  if (teamsChild || teamsExternallyManaged) {
     try {
       await httpGet(`http://127.0.0.1:${TEAMS_PORT}/`);
       teamsOnline = true;
     } catch {
       teamsOnline = false;
+      // KB: Health check failure here only updates the tray status.
+      // KB: For supervisor-managed teams (teamsChild), onTeamsExit() fires on process exit and auto-respawns.
+      // KB: For externally-managed teams, there is no auto-respawn — clear the flag so tray shows offline.
+      if (teamsExternallyManaged) teamsExternallyManaged = false;
     }
   } else {
     teamsOnline = false;
@@ -564,7 +600,7 @@ async function initTray(): Promise<void> {
       }
       // Teams controls
       else if (seq === IDX.START_TEAMS) {
-        if (!teamsChild) { teamsChild = spawnTeams(); refreshTray(); }
+        if (!teamsChild && !teamsExternallyManaged) { startTeamsIfNeeded().catch(() => {}); }
       }
       else if (seq === IDX.RESTART_TEAMS) {
         if (teamsChild) killProcessTree(teamsChild);
@@ -718,8 +754,10 @@ function watchdogCheck(): void {
 // ─── Boot ─────────────────────────────────────────────────────────────────
 
 process.on('uncaughtException', (err: Error) => {
-  if (err.message?.includes('systray') || err.message?.includes('tray_linux') || err.message?.includes('EACCES')) {
-    console.log(`[supervisor] Ignoring tray error on headless system: ${err.message}`);
+  // KB: systray2 throws "Cannot read properties of null (reading 'stdin')" when sendAction()
+  // KB: fires before the native subprocess stdin is ready. Treat all tray errors as non-fatal.
+  if (err.message?.includes('systray') || err.message?.includes('tray_linux') || err.message?.includes('EACCES') || err.message?.includes("'stdin'")) {
+    console.log(`[supervisor] Ignoring tray error: ${err.message}`);
     return;
   }
   console.error(`[supervisor] Uncaught exception: ${err.message}`);
@@ -744,8 +782,9 @@ if (!isHeadless) {
 // Spawn both processes
 child = spawnNode();
 if (TEAMS_PATH) {
-  teamsChild = spawnTeams();
   console.log(`[supervisor] Teams path: ${TEAMS_PATH}`);
+  // KB: .catch() only fires on unexpected JS errors — isTeamsHealthy() resolves true/false, never throws.
+  startTeamsIfNeeded().catch(() => { teamsChild = spawnTeams(); refreshTray(); });
 } else {
   console.log('[supervisor] Teams not found — running Node only. Use --teams-path to enable.');
 }

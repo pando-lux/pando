@@ -1,35 +1,29 @@
 /**
  * Engine Adapter — connection between pando-node and pando-teams.
- * v2.1 — observer upgrade: 10m tick, replaces external lead (2026-03-10)
+ * v2.2 — extraction: pando-tools, project-board, api-keys moved to dedicated modules.
  *
- * This is the ONLY file in pando-node that imports @pando-teams/core.
- * Everything else in pando-node is pure infrastructure.
- *
- * Responsibilities (post-BIBLE 1.7 migration):
- *   - Manages EnginePool for project engines
- *   - Registers Pando tools on each engine (deploy, governance, transfer, etc.)
- *   - Injects Lux budget provider
- *   - Routes messages to the right engine (system vs project)
- *   - Provides governance AI review hook
- *   - Runs Scheduler for periodic autonomous behavior
- *   - Injects contributed AI API keys from ResourceRegistry
- *   - Board state P2P sync for team failover (file-based)
- *
- * Team management (startTeam, stopTeam, agent lifecycle, tick scheduling,
- * prompt templates, watchdog) has been moved to Teams Server's TeamManager
- * (BIBLE 1.7 Step 3).
+ * KB: This is the ONLY file in pando-node that imports @pando-teams/core (dynamic).
+ * KB: Responsibilities: EnginePool lifecycle, tool registration, Lux budget injection,
+ *   message routing, governance AI review, Scheduler, ProjectBoard wiring.
+ * KB: pando-tools.ts = 14 HTTP tools injected on every engine.
+ * KB: project-board.ts = board CRUD + P2P sync + 6h project tick.
+ * KB: api-keys.ts = AI key injection (local .env → contributed EC2 resources).
+ * KB: MODEL_PRICING here is the node subset — canonical table is in
+ *   teams/packages/core/src/engine/model-pricing.ts.
+ * KB: Team management (startTeam, stopTeam, agent lifecycle) is in Teams Server TeamManager.
+ * KB: @pando-teams/core is declared as file:../teams/packages/core in pando-node root package.json.
+ * KB: drizzle-orm must also be in pando-node root package.json — core's db/ imports it, and
+ *   Node resolves deps relative to the junction path (not the real teams/ path).
  */
 
 import { join as pathJoin } from 'node:path';
-import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync, renameSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { randomUUID } from 'node:crypto';
 import type { ResourceRegistry } from '../platform/resource-registry.js';
 import { STREAM_EVENT_VERSION, LUX_PER_USD } from '@pando/shared';
 import type { StreamEvent, PandoService, ServiceContext } from '@pando/shared';
-
-// Two Laws Content Filter — imported from shared constants (defense-in-depth at storage level)
-import { HARM_PATTERNS, SHUTDOWN_PATTERNS } from '../constants.js';
+import { createPandoTools } from './pando-tools.js';
+import { ProjectBoard } from './project-board.js';
+import { injectApiKeys } from './api-keys.js';
 
 // ─── Dynamic imports (pando-teams is ESM, loaded at runtime) ─────────────
 
@@ -51,6 +45,9 @@ async function loadPandoTeams(): Promise<void> {
 }
 
 // ─── Lux Budget Provider ────────────────────────────────────────────────
+// KB: Lux cost = USD cost × LUX_PER_USD (from @pando/shared). LUX_PER_USD ≈ 10,000.
+// KB: Subset of model-pricing.ts — 13 models. Canonical full table: code/packages/core/src/engine/model-pricing.ts.
+// KB: Injected via engine.setBudgetProvider() in onAfterCreate — replaces the default UsdBudgetProvider.
 
 const MODEL_PRICING: Record<string, [number, number]> = {
   'claude-opus-4-6':   [0.000015,  0.000075],
@@ -85,214 +82,6 @@ function createLuxBudgetProvider(luxPerUsd = LUX_PER_USD) {
   };
 }
 
-// ─── Pando Tools ────────────────────────────────────────────────────────
-
-async function createPandoTools(apiPort: number, apiToken?: string, resourceRegistry?: ResourceRegistry | null) {
-  const baseUrl = `http://127.0.0.1:${apiPort}`;
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (apiToken) headers['Authorization'] = `Bearer ${apiToken}`;
-
-  async function api(method: string, path: string, body?: any): Promise<any> {
-    const res = await fetch(`${baseUrl}${path}`, {
-      method, headers,
-      body: body ? JSON.stringify(body) : undefined,
-    });
-    const text = await res.text();
-    try { return JSON.parse(text); } catch { return text; }
-  }
-
-  const { z } = await import('zod');
-  const ok = (data: any) => ({ success: true, output: JSON.stringify(data, null, 2) });
-
-  return [
-    {
-      name: 'pando_status',
-      description: 'Get Pando node status: peers, balance, uptime.',
-      parameters: z.object({}),
-      execute: async () => ok(await api('GET', '/v1/status')),
-    },
-    {
-      name: 'pando_peers',
-      description: 'List connected P2P peers.',
-      parameters: z.object({}),
-      execute: async () => ok(await api('GET', '/v1/peers')),
-    },
-    {
-      name: 'pando_capabilities',
-      description: 'Query capabilities across all network nodes.',
-      parameters: z.object({}),
-      execute: async () => ok(await api('GET', '/v1/network/capabilities')),
-    },
-    {
-      name: 'pando_balance',
-      description: 'Check Lux balance for a peer.',
-      parameters: z.object({ peerId: z.string().optional().describe('Peer ID (default: this node)') }),
-      execute: async (args: any) => ok(await api('GET', args.peerId ? `/v1/balance/${args.peerId}` : '/v1/wallet')),
-    },
-    {
-      name: 'pando_transfer',
-      description: 'Transfer Lux to another peer.',
-      parameters: z.object({
-        to: z.string().describe('Recipient peer ID'),
-        amount: z.number().positive().describe('Amount of Lux'),
-        memo: z.string().optional().describe('Transfer memo'),
-      }),
-      execute: async (args: any) => ok(await api('POST', '/v1/transfer', args)),
-    },
-    {
-      name: 'pando_deploy',
-      description: 'Deploy a project to hosting.',
-      parameters: z.object({ projectId: z.string().describe('Project ID to deploy') }),
-      execute: async (args: any) => ok(await api('POST', `/v1/apps/${args.projectId}/deploy`, {})),
-    },
-    {
-      name: 'pando_undeploy',
-      description: 'Remove a deployed project.',
-      parameters: z.object({ projectId: z.string().describe('Project ID to undeploy') }),
-      execute: async (args: any) => ok(await api('DELETE', `/v1/apps/${args.projectId}`, {})),
-    },
-    {
-      name: 'pando_create_project',
-      description: 'Create a new project.',
-      parameters: z.object({
-        name: z.string().describe('Project name'),
-        description: z.string().optional().describe('Project description'),
-      }),
-      execute: async (args: any) => ok(await api('POST', '/v1/projects', args)),
-    },
-    {
-      name: 'pando_list_projects',
-      description: 'List all projects.',
-      parameters: z.object({}),
-      execute: async () => ok(await api('GET', '/v1/projects')),
-    },
-    {
-      name: 'pando_governance_propose',
-      description: 'Create a governance proposal for code changes.',
-      parameters: z.object({
-        title: z.string().describe('Proposal title'),
-        description: z.string().describe('Proposal description'),
-        type: z.enum(['upgrade', 'policy', 'budget']).default('upgrade'),
-        commitHash: z.string().optional().describe('Git commit hash for upgrade proposals'),
-      }),
-      execute: async (args: any) => {
-        const data = await api('POST', '/v1/governance/propose', {
-          title: args.title,
-          description: args.description,
-          category: args.type,
-          ...(args.commitHash ? { commitHash: args.commitHash } : {}),
-        });
-        return { success: !!data.id, output: JSON.stringify(data) };
-      },
-    },
-    {
-      name: 'pando_governance_vote',
-      description: 'Vote on a governance proposal.',
-      parameters: z.object({
-        proposalId: z.string().describe('Proposal ID'),
-        vote: z.enum(['approve', 'reject']).describe('Your vote'),
-      }),
-      execute: async (args: any) => ok(await api('POST', '/v1/governance/vote', {
-        proposalId: args.proposalId,
-        choice: args.vote,
-      })),
-    },
-    {
-      name: 'pando_test_run',
-      description: 'Trigger a test run.',
-      parameters: z.object({
-        project: z.string().optional().describe('Project to test'),
-        spec: z.string().optional().describe('Specific spec file'),
-        mode: z.enum(['scripted', 'live']).optional().default('scripted').describe('Test mode: scripted (Playwright) or live (playbook)'),
-      }),
-      execute: async (args: any) => {
-        const route = (args.mode === 'live' || args.type === 'live')
-          ? '/v1/testing/run/live'
-          : '/v1/testing/run/scripted';
-        return ok(await api('POST', route, args));
-      },
-    },
-    {
-      name: 'pando_test_status',
-      description: 'Get latest test results.',
-      parameters: z.object({}),
-      execute: async () => ok(await api('GET', '/v1/testing/status')),
-    },
-    {
-      name: 'pando_workspace',
-      description:
-        'Get a local workspace for a git repo. Clones if not present, pulls if already cloned. ' +
-        'Returns the local path. Use with spawn_agent(working_directory) to dispatch builders to any repo.',
-      parameters: z.object({
-        repo: z.string().describe('GitHub repo (e.g. "pando-lux/node") or known alias ("node", "code").'),
-        branch: z.string().optional().default('main').describe('Branch to checkout (default: main).'),
-      }),
-      execute: async (args: any): Promise<any> => {
-        const { join, resolve, dirname } = await import('node:path');
-        const { existsSync, mkdirSync } = await import('node:fs');
-        const os = await import('node:os');
-
-        const repo: string = args.repo;
-        const branch: string = args.branch || 'main';
-
-        // Validate inputs — prevent shell injection
-        const SAFE_REF = /^[a-zA-Z0-9._\/-]+$/;
-        if (!SAFE_REF.test(branch)) return { success: false, output: 'Invalid branch name' };
-        if (!SAFE_REF.test(repo)) return { success: false, output: 'Invalid repo name' };
-
-        // 1. Check for known local repos first (no network needed).
-        const { fileURLToPath } = await import('node:url');
-        const thisDir = dirname(fileURLToPath(import.meta.url));
-        const nodeRepoRoot = resolve(thisDir, '..', '..', '..', '..');
-        const codeRepoRoot = resolve(nodeRepoRoot, '..', 'code');
-        const localAliases: Record<string, string> = {
-          'node': nodeRepoRoot,
-          'pando-lux/node': nodeRepoRoot,
-          'code': codeRepoRoot,
-          'pando-lux/code': codeRepoRoot,
-        };
-
-        const localPath = localAliases[repo];
-        if (localPath && existsSync(join(localPath, '.git'))) {
-          return { success: true, output: JSON.stringify({ path: localPath, status: 'local', repo, branch }) };
-        }
-
-        // 2. Check ~/.pando/workspaces/ for already-cloned repos.
-        const baseDir = join(os.homedir(), '.pando', 'workspaces');
-        mkdirSync(baseDir, { recursive: true });
-        const repoName = repo.includes('/') ? repo.split('/').pop()! : repo;
-        const workDir = join(baseDir, repoName);
-
-        try {
-          if (existsSync(join(workDir, '.git'))) {
-            // Already cloned — pull latest
-            const wsGit = new (await import('./git-ops.js')).GitOps(workDir);
-            wsGit.fetch('origin', branch);
-            wsGit.checkout(branch);
-            wsGit.pull('origin', branch);
-            return { success: true, output: JSON.stringify({ path: workDir, status: 'updated', repo, branch }) };
-          } else {
-            // 3. Clone fresh from GitHub.
-            let cloneUrl = repo.includes('/') ? `https://github.com/${repo}.git` : `https://github.com/pando-lux/${repo}.git`;
-            if (resourceRegistry?.resolveGitCredential) {
-              try {
-                const authenticatedUrl = await resourceRegistry.resolveGitCredential(cloneUrl);
-                if (authenticatedUrl) cloneUrl = authenticatedUrl;
-              } catch { /* credential resolution failed — use plain URL */ }
-            }
-            const { GitOps: GO } = await import('./git-ops.js');
-            GO.cloneSync(cloneUrl, workDir, branch);
-            return { success: true, output: JSON.stringify({ path: workDir, status: 'cloned', repo, branch }) };
-          }
-        } catch (err: any) {
-          console.error(`[engine-adapter] pando_workspace failed: ${err.message}`);
-          return { success: false, output: 'pando_workspace failed: internal error' };
-        }
-      },
-    },
-  ];
-}
-
 // ─── Engine Adapter ─────────────────────────────────────────────────────
 
 export interface AdapterConfig {
@@ -322,9 +111,7 @@ export class EngineAdapter {
   private luxProvider: any = null;
   private config: AdapterConfig | null = null;
   private started = false;
-  private Database: any = null;  // better-sqlite3 constructor (cached at startup)
-  private projectTicks = new Set<string>();  // Track which projects have scheduler ticks
-  private projectIntervals = new Map<string, NodeJS.Timeout>();  // projectId → tick interval
+  private board: ProjectBoard | null = null;
 
   /** Whether the adapter is ready (pando-teams loaded + pool started). */
   get available(): boolean { return this.started; }
@@ -350,14 +137,15 @@ export class EngineAdapter {
     await loadPandoTeams();
 
     // Cache better-sqlite3 for board operations (ESM-safe)
+    let Database: any = null;
     try {
       const { createRequire } = await import('module');
       const esmRequire = createRequire(import.meta.url);
-      this.Database = esmRequire('better-sqlite3');
+      Database = esmRequire('better-sqlite3');
     } catch { /* better-sqlite3 not available */ }
 
     // Inject contributed AI API keys
-    await this.injectApiKeys(config.resourceRegistry);
+    await injectApiKeys(config.resourceRegistry);
 
     // Pre-create Pando tools and Lux provider (shared across all engines)
     this.pandoTools = await createPandoTools(config.apiPort, config.apiToken, config.resourceRegistry);
@@ -370,7 +158,7 @@ export class EngineAdapter {
       maxEngines: 20,
       idleTTLMs: 30 * 60 * 1000,
       skipKnowledgeSync: true,
-      onAfterCreate: async (id: string, engine: any) => {
+      onAfterCreate: async (_id: string, engine: any) => {
         // Inject Lux budget
         engine.setBudgetProvider(this.luxProvider);
 
@@ -381,6 +169,14 @@ export class EngineAdapter {
       },
     });
     this.pool.start();
+
+    // Wire ProjectBoard — delegates all SQLite board ops and P2P sync
+    // KB: board.db and board.pool MUST be set after pool.start() and Database loaded.
+    // KB: ProjectBoard is null-safe on missing db/pool, but board tasks won't persist without db.
+    const dataDir = config.dataDir || pathJoin(homedir(), '.pando');
+    this.board = new ProjectBoard(dataDir);
+    this.board.db = Database;
+    this.board.pool = this.pool;
 
     // Boot system engine
     await this.pool.getOrCreate('system', {
@@ -481,27 +277,27 @@ export class EngineAdapter {
           if (!urlSafe) {
             console.warn(`[engine] Skipping workspace recovery — repoUrl looks unsafe: ${project.repoUrl.slice(0, 80)}`);
           } else {
-          console.log(`[engine] Workspace empty for ${projectId} — recovering from ${project.repoUrl}`);
-          try {
-            const gitDir = pathJoin(projectDir, '.git');
-            const { GitOps: ProjGitOps } = await import('./git-ops.js');
-            const projGit = new ProjGitOps(projectDir);
-            if (!fsExists(gitDir)) {
-              projGit.init();
-              projGit.remoteAdd('origin', project.repoUrl);
-            }
-            projGit.fetch('origin');
+            console.log(`[engine] Workspace empty for ${projectId} — recovering from ${project.repoUrl}`);
             try {
-              projGit.exec(['checkout', '-f', 'origin/main', '--', '.']);
-            } catch {
-              projGit.exec(['checkout', '-f', 'origin/master', '--', '.']);
+              const gitDir = pathJoin(projectDir, '.git');
+              const { GitOps: ProjGitOps } = await import('./git-ops.js');
+              const projGit = new ProjGitOps(projectDir);
+              if (!fsExists(gitDir)) {
+                projGit.init();
+                projGit.remoteAdd('origin', project.repoUrl);
+              }
+              projGit.fetch('origin');
+              try {
+                projGit.exec(['checkout', '-f', 'origin/main', '--', '.']);
+              } catch {
+                projGit.exec(['checkout', '-f', 'origin/master', '--', '.']);
+              }
+              const recovered = readdirSync(projectDir).filter(f => f !== 'PANDO_PROJECT.json' && f !== '.git');
+              console.log(`[engine] Recovered ${recovered.length} file(s) from ${project.repoUrl}`);
+            } catch (gitErr: any) {
+              console.warn(`[engine] Workspace recovery failed for ${projectId}: ${gitErr.message?.slice(0, 200)}`);
             }
-            const recovered = readdirSync(projectDir).filter(f => f !== 'PANDO_PROJECT.json' && f !== '.git');
-            console.log(`[engine] Recovered ${recovered.length} file(s) from ${project.repoUrl}`);
-          } catch (gitErr: any) {
-            console.warn(`[engine] Workspace recovery failed for ${projectId}: ${gitErr.message?.slice(0, 200)}`);
           }
-          } // close urlSafe else
         }
       } catch (err: any) {
         console.warn(`[engine] projectResolver failed for ${projectId}: ${err.message?.slice(0, 100)}`);
@@ -524,6 +320,8 @@ export class EngineAdapter {
   /**
    * Governance AI review — analyze a diff for security issues.
    * Sends to system engine with structured prompt, parses response.
+   * KB: Called on EVERY code deploy via governance-api.ts → /v1/governance/propose.
+   * KB: If pool is not initialized, returns safe:true — governance proceeds without AI review.
    */
   async reviewDiff(diff: string, description: string): Promise<ReviewResult> {
     if (!this.pool) {
@@ -576,13 +374,13 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     }
   }
 
-  /** M2-2: Guard — throws if pool is not initialized (start() not called). */
+  /** Guard — throws if pool is not initialized (start() not called). */
   private requirePool(): void {
     if (!this.pool) throw new Error('EngineAdapter not started — call start() first');
   }
 
   /**
-   * H-2 + H-3: Normalize a raw PandoTeams engine event into a typed StreamEvent
+   * Normalize a raw PandoTeams engine event into a typed StreamEvent
    * with protocol version.
    */
   static normalizeStreamEvent(raw: any): StreamEvent {
@@ -631,329 +429,53 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     return this.scheduler?.getAll() ?? [];
   }
 
-  /**
-   * Get pending/in_progress tasks from a project's board.
-   */
-  getProjectBoard(projectId: string): any[] {
-    const dbPath = this.resolveProjectDbPath(projectId);
-    return this.getBoardTasks(dbPath);
-  }
+  // ─── Board delegation (ProjectBoard) ─────────────────────────────────
+  // KB: P2P sync uses file protocol: ~/.pando/teams/{teamId}/board-state.json.
+  // KB: Teams Server (code/server) reads board-state.json on boot for failover recovery.
+  // KB: Live board is in Teams Server SQLite; this file-based copy is for cross-node redundancy.
 
-  // ─── Board State P2P Sync (file-based — Teams Server manages live board) ───
+  /** Get pending/in_progress tasks from a project's board. */
+  getProjectBoard(projectId: string): any[] {
+    return this.board?.getProjectBoard(projectId) ?? [];
+  }
 
   /**
    * Get the board state snapshot for a team as a JSON-serializable object.
-   * Used for P2P board state sync (team failover). Returns null if no board data.
-   * Reads from the persisted board-state.json file (live board is in Teams Server).
+   * Used for P2P board state sync (team failover).
    */
   getBoardStateSnapshot(teamId: string): { savedAt: string; nodeId: string; tasks: any[] } | null {
-    try {
-      const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
-      const filePath = pathJoin(baseDir, 'teams', teamId, 'board-state.json');
-      if (!existsSync(filePath)) return null;
-
-      const raw = readFileSync(filePath, 'utf-8');
-      const snapshot = JSON.parse(raw);
-      const tasks = (snapshot.tasks || []).filter((t: any) => t.status !== 'done');
-      if (tasks.length === 0) return null;
-
-      return {
-        savedAt: snapshot.savedAt || new Date().toISOString(),
-        nodeId: snapshot.nodeId || 'unknown',
-        tasks,
-      };
-    } catch (err: any) {
-      console.warn(`[board-sync] getBoardStateSnapshot failed for team ${teamId}: ${err.message}`);
-      return null;
-    }
+    return this.board?.getBoardStateSnapshot(teamId) ?? null;
   }
 
   /**
    * Restore board state from a P2P-received snapshot (team failover).
-   * Writes the snapshot to board-state.json. Teams Server reads this on boot.
-   * Returns true if the file was written successfully.
+   * Writes atomically. Teams Server reads board-state.json on boot.
    */
   restoreBoardStateFromSnapshot(teamId: string, snapshot: { savedAt: string; nodeId: string; tasks: any[] }): boolean {
-    try {
-      if (!snapshot?.tasks?.length) return false;
-
-      const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
-      const teamDir = pathJoin(baseDir, 'teams', teamId);
-      mkdirSync(teamDir, { recursive: true });
-
-      const filePath = pathJoin(teamDir, 'board-state.json');
-      const tmpPath = filePath + '.tmp';
-      writeFileSync(tmpPath, JSON.stringify(snapshot, null, 2), 'utf-8');
-      renameSync(tmpPath, filePath);
-      console.log(`[board-sync] Wrote P2P board snapshot for team ${teamId} (${snapshot.tasks.length} tasks from node ${snapshot.nodeId})`);
-
-      return true;
-    } catch (err: any) {
-      console.warn(`[board-sync] restoreBoardStateFromSnapshot failed for team ${teamId}: ${err.message}`);
-      return false;
-    }
+    return this.board?.restoreBoardStateFromSnapshot(teamId, snapshot) ?? false;
   }
-
-  // ─── Project Board ─────────────────────────────────────────────────────
 
   /**
    * Add a task to a project's board. Used for per-project bug reports.
    * Returns the task ID on success, null on failure. Dedup by exact title match.
-   * Registers a project scheduler tick if one doesn't exist yet.
    */
   addProjectBoardTask(projectId: string, title: string, description?: string): string | null {
-    const dbPath = this.resolveProjectDbPath(projectId);
-    const taskId = this.insertBoardTask(dbPath, title, description);
-    if (taskId && dbPath) {
-      this.ensureProjectTick(projectId, dbPath);
-    }
-    return taskId;
+    return this.board?.addProjectBoardTask(projectId, title, description) ?? null;
   }
 
-  /** Resolve the .pando-teams.db path for a project. */
-  private resolveProjectDbPath(projectId: string): string | null {
-    if (!this.config) return null;
-    try {
-      const baseDir = this.config.dataDir || pathJoin(homedir(), '.pando');
-      const dbPath = pathJoin(baseDir, 'projects', projectId, '.pando-teams.db');
-      return existsSync(dbPath) ? dbPath : null;
-    } catch {
-      return null;
-    }
-  }
-
-  /** Read board tasks from any PandoTeams SQLite DB. */
-  private getBoardTasks(dbPath: string | null, includeDone = false): any[] {
-    if (!dbPath || !this.Database) return [];
-    try {
-      const db = new this.Database(dbPath);
-      const statusFilter = includeDone
-        ? `status IN ('pending', 'in_progress', 'in-progress', 'done')`
-        : `status IN ('pending', 'in_progress', 'in-progress')`;
-      const tasks = db.prepare(
-        `SELECT id, title, description, status, created_at, progress FROM board_tasks
-         WHERE ${statusFilter}
-         ORDER BY created_at DESC LIMIT 50`
-      ).all();
-      db.close();
-      return tasks;
-    } catch {
-      return [];
-    }
-  }
-
-  /** Insert a board task into any PandoTeams SQLite DB. Dedup by exact title match. */
-  private insertBoardTask(dbPath: string | null, title: string, description?: string): string | null {
-    if (!dbPath || !this.Database) return null;
-
-    // Defense-in-depth: Two Laws content filter at the storage level.
-    const textToCheck = `${title} ${description || ''}`;
-    if (HARM_PATTERNS.test(textToCheck) || SHUTDOWN_PATTERNS.test(textToCheck)) {
-      console.warn(`[EngineAdapter] insertBoardTask rejected: Two Laws violation in "${title.slice(0, 60)}"`);
-      return null;
-    }
-
-    try {
-      const db = new this.Database(dbPath);
-
-      // Dedup: if a pending task with the same title already exists, return it
-      const existing = db.prepare(
-        `SELECT id FROM board_tasks WHERE title = ? AND status IN ('pending', 'in_progress') LIMIT 1`
-      ).get(title) as { id: string } | undefined;
-      if (existing) {
-        db.close();
-        return existing.id;
-      }
-
-      const id = `task-${randomUUID()}`;
-      const session = db.prepare(
-        `SELECT id FROM sessions ORDER BY created_at DESC LIMIT 1`
-      ).get() as { id: string } | undefined;
-      const sessionId = session?.id || 'system';
-      const maxOrder = db.prepare(
-        `SELECT COALESCE(MAX("order"), 0) + 1 as next_order FROM board_tasks`
-      ).get() as { next_order: number };
-      db.prepare(
-        `INSERT INTO board_tasks (id, session_id, title, status, "order", created_at, progress, description)
-         VALUES (?, ?, ?, 'pending', ?, datetime('now'), '', ?)`
-      ).run(id, sessionId, title, maxOrder.next_order, description || '');
-      db.close();
-      return id;
-    } catch (err: any) {
-      console.warn(`[EngineAdapter] insertBoardTask failed: ${err.message}`);
-      return null;
-    }
-  }
-
-  /**
-   * Register a periodic scheduler tick for a project engine.
-   * Only registers once per projectId.
-   */
-  private ensureProjectTick(projectId: string, dbPath: string): void {
-    if (this.projectTicks.has(projectId) || !this.pool || !this.scheduler) return;
-    if (!this.pool.has(projectId)) return;
-
-    this.projectTicks.add(projectId);
-
-    const existing = this.projectIntervals.get(projectId);
-    if (existing) clearInterval(existing);
-
-    // Project ticks run every 6 hours
-    const projectTickMs = 6 * 60 * 60_000;
-    const tickInterval = setInterval(async () => {
-      try {
-        const snapshot = this.getBoardSnapshot(dbPath);
-        if (snapshot.includes('No pending tasks')) return;
-
-        const message = `You are the lead for this project. Check your board and process pending tasks.\n\n${snapshot}\n\nPrioritize BUG reports. Close stale tasks (>24h). For code fixes, use spawn_agent with a builder role.`;
-        for await (const event of this.pool.send(projectId, message)) {
-          if (event.type === 'tool:start') {
-            console.log(`[project:${projectId}] TOOL: ${event.toolName}`);
-          }
-        }
-        console.log(`[project:${projectId}] Tick complete.`);
-      } catch (err: any) {
-        console.warn(`[project:${projectId}] Tick error: ${err.message}`);
-      }
-    }, projectTickMs);
-
-    this.projectIntervals.set(projectId, tickInterval);
-    console.log(`[EngineAdapter] Project "${projectId}" scheduler tick registered (every 6h).`);
-  }
-
-  /** Stop all project tick intervals and clear the Map. */
+  /** Stop all project tick intervals — called from shutdown(). */
   stopProjectTicks(): void {
-    for (const [, interval] of this.projectIntervals) {
-      clearInterval(interval);
-    }
-    this.projectIntervals.clear();
-    this.projectTicks.clear();
-  }
-
-  /**
-   * Read a board and format a snapshot for injection into tick messages.
-   */
-  private getBoardSnapshot(dbPath: string): string {
-    if (!this.Database) return 'BOARD STATE: Database not available.';
-    try {
-      const db = new this.Database(dbPath);
-      const tasks = db.prepare(
-        `SELECT id, title, description, status, created_at FROM board_tasks
-         WHERE status IN ('pending', 'in_progress')
-         ORDER BY
-           CASE WHEN title LIKE '%CRITICAL%' THEN 0
-                WHEN title LIKE '%BUG:user%' THEN 1
-                WHEN title LIKE '%WARNING%' THEN 2
-                WHEN title LIKE '%FEATURE:user%' THEN 3
-                ELSE 4 END,
-           created_at ASC
-         LIMIT 20`
-      ).all() as { id: string; title: string; description: string; status: string; created_at: string }[];
-      db.close();
-
-      if (tasks.length === 0) return 'BOARD STATE: No pending tasks.';
-
-      const lines = tasks.map((t) => {
-        const age = Date.now() - new Date(t.created_at).getTime();
-        const ageStr = age > 86400000 ? `${Math.floor(age / 86400000)}d ago`
-          : age > 3600000 ? `${Math.floor(age / 3600000)}h ago`
-          : `${Math.floor(age / 60000)}m ago`;
-        const desc = t.description ? `\n    ${t.description.slice(0, 500)}` : '';
-        return `  [${t.status}] (${t.id}) ${t.title.slice(0, 100)} — ${ageStr}${desc}`;
-      });
-      return `BOARD STATE (${tasks.length} active tasks):\n${lines.join('\n')}`;
-    } catch {
-      return 'BOARD STATE: Could not read board.';
-    }
+    this.board?.stopProjectTicks();
   }
 
   /** Shutdown everything gracefully. */
   async shutdown(): Promise<void> {
-    this.stopProjectTicks();
+    this.board?.stopProjectTicks();
     this.scheduler?.stop();
     await this.pool?.shutdown();
     this.started = false;
     console.log('[EngineAdapter] Shut down.');
   }
-
-  // ─── Internal ─────────────────────────────────────────────────────────
-
-  /**
-   * Ensure AI API keys are available for PandoTeams.
-   *
-   * Priority: local env vars first (contributor's own keys), then contributed
-   * resources via CredentialStore (EC2 nodes with MongoDB). Keys never travel
-   * over P2P — they're either local or decrypted server-side on EC2.
-   */
-  private async injectApiKeys(registry?: ResourceRegistry | null): Promise<void> {
-    const PROVIDER_ENV_MAP: Record<string, string> = {
-      'anthropic': 'ANTHROPIC_API_KEY',
-      'openai':    'OPENAI_API_KEY',
-      'gemini':    'GOOGLE_GENERATIVE_AI_API_KEY',
-    };
-
-    // 1. Load PandoTeams's .env if it exists (contributor's configured keys)
-    try {
-      const { readFileSync, existsSync } = await import('fs');
-      const { resolve, dirname } = await import('path');
-      const { createRequire } = await import('module');
-      const require = createRequire(import.meta.url);
-      const corePkg = require.resolve('@pando-teams/core/package.json');
-      const pandoCodeRoot = resolve(dirname(corePkg), '..', '..');
-      const envPath = resolve(pandoCodeRoot, '.env');
-      if (existsSync(envPath)) {
-        const lines = readFileSync(envPath, 'utf-8').split('\n');
-        for (const raw of lines) {
-          const line = raw.trim();
-          if (!line || line.startsWith('#')) continue;
-          const eq = line.indexOf('=');
-          if (eq < 1) continue;
-          const key = line.slice(0, eq);
-          const val = line.slice(eq + 1).trim();
-          if (val && !process.env[key]) {
-            process.env[key] = val;
-          }
-        }
-        console.log(`[EngineAdapter] Loaded PandoTeams .env from ${pandoCodeRoot}`);
-      }
-    } catch { /* ok — no .env file or @pando-teams/core not installed */ }
-
-    // 2. Check what's already in local env (contributor's own keys)
-    const available: string[] = [];
-    for (const [provider, envVar] of Object.entries(PROVIDER_ENV_MAP)) {
-      if (process.env[envVar]) available.push(provider);
-    }
-    if (available.length > 0) {
-      console.log(`[EngineAdapter] Local API keys found: ${available.join(', ')}`);
-    }
-
-    // 3. For any missing keys, try contributed resources (EC2 with CredentialStore only)
-    if (registry) {
-      const aiResources = registry.findResources('ai_api_key');
-      for (const resource of aiResources) {
-        const provider = resource.metadata?.provider as string | undefined;
-        if (!provider) continue;
-        const envVar = PROVIDER_ENV_MAP[provider];
-        if (!envVar || process.env[envVar]) continue;
-        try {
-          const key = await registry.getCredential(resource.resourceId);
-          if (key) {
-            process.env[envVar] = key;
-            console.log(`[EngineAdapter] Loaded ${provider} API key from contributed resources (EC2 decrypt)`);
-          }
-        } catch {
-          // Expected on non-EC2 nodes — no CredentialStore, no MongoDB. Not an error.
-        }
-      }
-    }
-
-    // 4. Warn if no keys available at all
-    const finalAvailable = Object.entries(PROVIDER_ENV_MAP).filter(([_, v]) => process.env[v]);
-    if (finalAvailable.length === 0) {
-      console.warn('[EngineAdapter] No AI API keys found. PandoTeams will use its own configured provider. Set GOOGLE_GENERATIVE_AI_API_KEY, ANTHROPIC_API_KEY, or OPENAI_API_KEY if needed.');
-    }
-  }
-
 }
 
 // ─── PandoService adapter ────────────────────────────────────────────

@@ -30,11 +30,14 @@ export async function registerPlatformRoutes(
 
   // ── Teams Server proxy (BIBLE 1.7) ─────────────────────────────────
   const TEAMS_SERVER_URL = process.env.PANDO_TEAMS_URL || 'http://localhost:4873';
+  // KB: PANDO_API_KEY must be set in pando-node env AND match teams/.env PANDO_API_KEY.
+  // KB: Teams server rejects all /v1/* requests without valid Bearer token (401 unauthorized).
+  const TEAMS_API_KEY = process.env.PANDO_API_KEY || '';
   async function proxyToTeams(path: string, opts?: { method?: string; body?: any }): Promise<any> {
     try {
       const res = await fetch(`${TEAMS_SERVER_URL}/v1${path}`, {
         method: opts?.method || 'GET',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TEAMS_API_KEY}` },
         ...(opts?.body ? { body: JSON.stringify(opts.body) } : {}),
       });
       return res.json();

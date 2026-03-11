@@ -9,6 +9,9 @@
  * Persistence: better-sqlite3 (CJS loaded via createRequire).
  * P2P sync:    GossipSub topic `pando/teams`.
  */
+// KB: P2P routing layer ONLY — does NOT start agents or engines.
+// KB: Agent lifecycle is TeamManager in teams/packages/server/src/team-manager.ts.
+// KB: Heartbeat = liveness. Stale heartbeat (20min prod, 2min dev) → team marked 'orphaned' → reclaimable.
 
 import { createRequire } from 'module';
 import { existsSync, mkdirSync, unlinkSync } from 'fs';
@@ -230,6 +233,8 @@ export class TeamRegistry {
   // Team operations
   // -----------------------------------------------------------------------
 
+  // KB: Atomic SQLite UPDATE — only succeeds if managing_node IS NULL or status = 'orphaned'.
+  // KB: Broadcasts team_config_update via GossipSub after claim so all peers update immediately.
   /**
    * Atomically claim an unclaimed or orphaned team for this node.
    * Returns true if the claim succeeded.
@@ -343,6 +348,8 @@ export class TeamRegistry {
     );
   }
 
+  // KB: Most-recently-claimed owner wins. This prevents split-brain after network partition.
+  // KB: Heartbeat-only updates (isHeartbeatOnly) are only accepted from the current managing node.
   /**
    * Merge an incoming config into local DB.
    * Conflict resolution: latest claimedAt wins; if equal, latest lastHeartbeat wins.

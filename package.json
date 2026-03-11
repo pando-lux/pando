@@ -43,6 +43,8 @@
   },
   "dependencies": {
     "@aws-sdk/client-ssm": "^3.995.0",
+    "@pando-teams/core": "file:../teams/packages/core",
+    "drizzle-orm": "^0.45.1",
     "mongodb": "^7.1.0"
   }
 }
