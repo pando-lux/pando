@@ -277,7 +277,8 @@ export async function registerPlatformRoutes(
             try {
               await fetch(`${TEAMS_SERVER_URL}/v1/teams/${projectName}/chat`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                // KB: Authorization header required — pando-teams returns 401 without it, team never creates.
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TEAMS_API_KEY}` },
                 body: JSON.stringify({ agentId: 'lead', message: `Build this project: ${trimmed}` }),
                 signal: AbortSignal.timeout(15000),
               });
@@ -302,7 +303,7 @@ export async function registerPlatformRoutes(
       try {
         const doormanResp = await fetch(`${TEAMS_SERVER_URL}/v1/teams/node-doorman/chat`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TEAMS_API_KEY}` },
           body: JSON.stringify({ agentId: 'lead', message: trimmed }),
           signal: AbortSignal.timeout(120000),
         });
@@ -604,7 +605,7 @@ export async function registerPlatformRoutes(
             try {
               await fetch(`${TEAMS_SERVER_URL}/v1/teams/${tProjectName}/chat`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TEAMS_API_KEY}` },
                 body: JSON.stringify({ agentId: 'lead', message: `Build this project: ${plaintextForProcessing}` }),
                 signal: AbortSignal.timeout(15000),
               });
@@ -626,7 +627,7 @@ export async function registerPlatformRoutes(
       try {
         const doormanResp = await fetch(`${TEAMS_SERVER_URL}/v1/teams/node-doorman/chat`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TEAMS_API_KEY}` },
           body: JSON.stringify({ agentId: 'lead', message: plaintextForProcessing }),
           signal: AbortSignal.timeout(120000),
         });
@@ -1896,6 +1897,14 @@ export async function registerPlatformRoutes(
       const ps = node.getProjectStore();
       if (!ps) return reply.code(503).send({ error: 'Project store not available' });
 
+      const query = request.query as any;
+
+      // ?teamId= filter: look up a project by its managing team
+      if (query.teamId) {
+        const project = ps.getProjectByTeamId(query.teamId);
+        return { projects: project ? [stripApiKey(project)] : [] };
+      }
+
       const userId = await deps.verifyUserJwt(request);
       if (userId) {
         const owned = await ps.getProjectsByOwnerAsync(userId);
@@ -1903,7 +1912,6 @@ export async function registerPlatformRoutes(
       }
 
       // No valid user token — return listed/featured public projects
-      const query = request.query as any;
       const projects = await ps.listProjectsAsync({
         visibility: query.visibility || 'listed',
         status: 'active',
@@ -1973,6 +1981,7 @@ export async function registerPlatformRoutes(
         visibility?: string;
         budgetLimit?: number;
         tier?: number;
+        teamId?: string;
       };
 
       if (!body.name || body.name.trim().length === 0) {
@@ -2000,6 +2009,7 @@ export async function registerPlatformRoutes(
         visibility: (body.visibility as any) || 'owner_only',
         budgetLimit: body.budgetLimit || 0,
         ...(body.tier ? { tier: body.tier as 1 | 2 } : {}),
+        ...(body.teamId ? { teamId: body.teamId } : {}),
       });
 
       return reply.code(201).send({ project });
@@ -2027,6 +2037,7 @@ export async function registerPlatformRoutes(
         budgetLimit?: number;
         tier?: number;
         repoUrl?: string;
+        teamId?: string;
       };
 
       // Validate update fields
@@ -2051,6 +2062,7 @@ export async function registerPlatformRoutes(
       if (body.budgetLimit !== undefined) updates.budgetLimit = body.budgetLimit;
       if (body.tier !== undefined) updates.tier = body.tier;
       if (body.repoUrl !== undefined) updates.repoUrl = body.repoUrl;
+      if (body.teamId !== undefined) updates.teamId = body.teamId;
 
       const project = await ps.updateProject(id, updates);
       if (!project) return reply.code(404).send({ error: 'Project not found' });
