@@ -9,9 +9,14 @@
  */
 
 import { execSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { GitOps } from '../core/git-ops.js';
 import type { RouteHelpers } from './middleware/auth.js';
 import { violatesTwoLaws } from './api-server.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Promise<void> {
   const { node } = deps;
@@ -441,9 +446,6 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
     let TEAMS_API_KEY = process.env.PANDO_API_KEY || '';
     if (!TEAMS_API_KEY) {
       try {
-        const { readFileSync } = await import('node:fs');
-        const { join, resolve } = await import('node:path');
-        // core-api.ts compiles to dist/api/ — need 4 levels to reach repo root
         const nodeRepo = resolve(__dirname, '..', '..', '..', '..');
         for (const dir of ['teams', 'code']) {
           try {

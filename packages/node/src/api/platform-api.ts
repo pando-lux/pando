@@ -11,8 +11,13 @@
 import { toString as uint8ArrayToString, fromString as uint8ArrayFromString } from 'uint8arrays';
 import { publicKeyFromProtobuf } from '@libp2p/crypto/keys';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
+import { dirname, join, resolve } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import type { RouteHelpers } from './middleware/auth.js';
 import { violatesTwoLaws } from './api-server.js';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 /** Timing-safe Bearer token comparison (prevents timing attacks). */
 function verifyBearerToken(authHeader: string, expectedToken: string): boolean {
@@ -30,9 +35,22 @@ export async function registerPlatformRoutes(
 
   // ── Teams Server proxy (BIBLE 1.7) ─────────────────────────────────
   const TEAMS_SERVER_URL = process.env.PANDO_TEAMS_URL || 'http://localhost:4873';
-  // KB: PANDO_API_KEY must be set in pando-node env AND match teams/.env PANDO_API_KEY.
-  // KB: Teams server rejects all /v1/* requests without valid Bearer token (401 unauthorized).
-  const TEAMS_API_KEY = process.env.PANDO_API_KEY || '';
+  // KB: PANDO_API_KEY may not be in the node's env (set only in teams .env via dotenv).
+  // KB: Fall back to reading the teams .env file directly so the proxy auth matches.
+  let TEAMS_API_KEY = process.env.PANDO_API_KEY || '';
+  if (!TEAMS_API_KEY) {
+    try {
+      const nodeRepo = resolve(__dirname, '..', '..', '..', '..');
+      for (const dir of ['teams', 'code']) {
+        try {
+          const envPath = join(nodeRepo, '..', dir, '.env');
+          const envFile = readFileSync(envPath, 'utf-8');
+          const match = envFile.match(/^PANDO_API_KEY=(.+)$/m);
+          if (match) { TEAMS_API_KEY = match[1].trim(); break; }
+        } catch { /* try next */ }
+      }
+    } catch { /* fs unavailable */ }
+  }
   async function proxyToTeams(path: string, opts?: { method?: string; body?: any }): Promise<any> {
     try {
       const res = await fetch(`${TEAMS_SERVER_URL}/v1${path}`, {
