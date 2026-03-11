@@ -478,6 +478,7 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
     fastify.get('/teams/:teamId/board', async (request: any) => {
       const teamId = request.params.teamId as string;
       const tasks = await proxyToTeams(`/teams/${teamId}/board`);
+      if (tasks?.error) return { tasks: [], _proxyError: tasks.error };
       return { tasks: Array.isArray(tasks) ? tasks : [] };
     });
 
