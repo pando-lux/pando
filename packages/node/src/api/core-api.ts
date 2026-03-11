@@ -436,7 +436,24 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
     // ── Team API (proxied to Teams Server — BIBLE 1.7) ────────────────────
     // Team operations are managed by Teams Server. Node proxies requests.
     const TEAMS_SERVER_URL = process.env.PANDO_TEAMS_URL || 'http://localhost:4873';
-    const TEAMS_API_KEY = process.env.PANDO_API_KEY || '';
+    // KB: PANDO_API_KEY may not be in the node's env (set only in teams .env via dotenv).
+    // KB: Fall back to reading the teams .env file directly so the proxy auth matches.
+    let TEAMS_API_KEY = process.env.PANDO_API_KEY || '';
+    if (!TEAMS_API_KEY) {
+      try {
+        const { readFileSync } = await import('node:fs');
+        const { join, resolve } = await import('node:path');
+        const nodeRepo = resolve(__dirname, '..', '..', '..');
+        for (const dir of ['teams', 'code']) {
+          try {
+            const envPath = join(nodeRepo, '..', dir, '.env');
+            const envFile = readFileSync(envPath, 'utf-8');
+            const match = envFile.match(/^PANDO_API_KEY=(.+)$/m);
+            if (match) { TEAMS_API_KEY = match[1].trim(); break; }
+          } catch { /* try next */ }
+        }
+      } catch { /* fs unavailable */ }
+    }
     async function proxyToTeams(path: string, opts?: { method?: string; body?: any }): Promise<any> {
       try {
         const res = await fetch(`${TEAMS_SERVER_URL}/v1${path}`, {
