@@ -2016,12 +2016,21 @@ export async function registerPlatformRoutes(
     });
 
     // PATCH /projects/:id — Update project (owner/admin only)
+    // Auth: user session OR node Bearer token (agents that created a project can update it)
     fastify.patch('/projects/:id', async (request: any, reply: any) => {
       const ps = node.getProjectStore();
       if (!ps) return reply.code(503).send({ error: 'Project store not available' });
 
-      const userId = await deps.verifyUserJwt(request);
-      if (!userId) return reply.code(401).send({ error: 'Invalid or expired session token' });
+      // Dual-auth: user session OR node Bearer token (mirrors POST /projects)
+      let userId = await deps.verifyUserJwt(request);
+      if (!userId) {
+        const authHeader = request.headers?.authorization || '';
+        const hasBearerToken = verifyBearerToken(authHeader, deps.apiToken);
+        if (hasBearerToken) {
+          userId = node.getIdentity()?.peerId || '';
+        }
+        if (!userId) return reply.code(401).send({ error: 'Authentication required (user session or Bearer token)' });
+      }
 
       const { id } = request.params as { id: string };
       const project2 = await ps.getProjectAsync(id);
