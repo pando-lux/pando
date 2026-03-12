@@ -804,6 +804,13 @@ export async function registerPlatformRoutes(
         } catch { /* best-effort */ }
       }
 
+      // KB: Phase 16.5 — include holdId + complete URL in task description so lead can release Lux on completion.
+      // KB: recipientPeerId = targetNode (remote executor) or local peerId (local fallback).
+      const recipientPeerId = targetNode || identity.peerId;
+      const nodeApiBase = `http://127.0.0.1:${node.getApiPort() || 4000}`;
+      const completeUrl = `${nodeApiBase}/v1/network/commission/${hold.holdId}/complete`;
+      const taskDescription = `Budget: ${luxBudget} Lux | Task: ${taskSpec}\n\nWhen complete: POST ${completeUrl} with body {"recipientPeerId":"${recipientPeerId}"} to release Lux payment.`;
+
       let dispatched = false;
       try {
         const res = await fetch(`${TEAMS_SERVER_URL}/v1/teams/pando/act`, {
@@ -811,7 +818,7 @@ export async function registerPlatformRoutes(
           headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TEAMS_API_KEY}` },
           body: JSON.stringify({
             agentId: 'lead',
-            actions: [{ do: 'create_task', title: `Commission: ${taskSpec.slice(0, 80)}`, description: `Budget: ${luxBudget} Lux | Task: ${taskSpec}`, assignee: 'lead', priority: 'high' }],
+            actions: [{ do: 'create_task', title: `Commission: ${taskSpec.slice(0, 80)}`, description: taskDescription, assignee: 'lead', priority: 'high' }],
           }),
           signal: AbortSignal.timeout(10000),
         });
@@ -832,6 +839,26 @@ export async function registerPlatformRoutes(
         targetNode,
         message: `Task commissioned. ${luxBudget} Lux locked. Agent team is on it.`,
       };
+    });
+
+    // POST /network/commission/:holdId/complete — release Lux hold on task completion.
+    // KB: Called by agent lead when commissioned task is done. Credits Lux to recipientPeerId.
+    // KB: Also callable by external callers (e.g. requester confirming delivery).
+    fastify.post('/network/commission/:holdId/complete', async (request: any, reply: any) => {
+      const { holdId } = request.params as { holdId: string };
+      const { recipientPeerId } = (request.body || {}) as { recipientPeerId?: string };
+
+      const gate = node.getPaymentGate();
+      if (!gate) return reply.code(503).send({ error: 'PaymentGate not initialized' });
+
+      const localIdentity = node.getIdentity();
+      const recipient = recipientPeerId || localIdentity?.peerId;
+      if (!recipient) return reply.code(503).send({ error: 'recipientPeerId required' });
+
+      const released = gate.releasePayment(holdId, recipient);
+      if (!released) return reply.code(404).send({ error: 'Hold not found or already settled' });
+
+      return reply.send({ ok: true, holdId, recipientPeerId: recipient, message: 'Lux released to executor.' });
     });
 
     // ── Resource Network Routes (Phase B-D) ───────────────────────────
