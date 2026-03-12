@@ -34,6 +34,8 @@ const DEFAULT_PRICES: Record<string, { pricePerUnit: number; unit: string }> = {
   gateway:      { pricePerUnit: 0.01,  unit: '1000 requests' },
   validator:    { pricePerUnit: 0.05,  unit: 'validation' },
   index:        { pricePerUnit: 0.005, unit: 'query' },
+  // KB: Phase 16 — agent_labor priced per task (flat fee). Lux locked on commission, released on delivery.
+  agent_labor:  { pricePerUnit: 1.0,   unit: 'task' },
 };
 
 // ── ResourceMarketplace class ──────────────────────────────────────────────

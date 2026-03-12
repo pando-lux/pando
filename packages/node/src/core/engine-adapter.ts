@@ -1,53 +1,29 @@
 /**
  * Engine Adapter — connection between pando-node and pando-teams.
- * v2.2 — extraction: pando-tools, project-board, api-keys moved to dedicated modules.
+ * v3.0 — Phase 8A followup: replaced EnginePool/Scheduler with HTTP proxy to pando-teams server.
  *
- * KB: This is the ONLY file in pando-node that imports @pando-teams/core (dynamic).
- * KB: Responsibilities: EnginePool lifecycle, tool registration, Lux budget injection,
- *   message routing, governance AI review, Scheduler, ProjectBoard wiring.
- * KB: pando-tools.ts = 14 HTTP tools injected on every engine.
+ * KB: Phase 8A removed EnginePool/Scheduler/PandoServer from @pando-teams/core.
+ * KB: This file now proxies all AI calls via HTTP to the pando-teams server (default: localhost:4873).
+ * KB: teamsBaseUrl = PANDO_TEAMS_URL env var || http://127.0.0.1:4873.
+ * KB: pando-tools.ts = 14 HTTP tools injected on every engine (kept for future use).
  * KB: project-board.ts = board CRUD + P2P sync + 6h project tick.
  * KB: api-keys.ts = AI key injection (local .env → contributed EC2 resources).
  * KB: MODEL_PRICING here is the node subset — canonical table is in
  *   teams/packages/core/src/engine/model-pricing.ts.
  * KB: Team management (startTeam, stopTeam, agent lifecycle) is in Teams Server TeamManager.
- * KB: @pando-teams/core is declared as file:../teams/packages/core in pando-node root package.json.
- * KB: drizzle-orm must also be in pando-node root package.json — core's db/ imports it, and
- *   Node resolves deps relative to the junction path (not the real teams/ path).
  */
 
 import { join as pathJoin } from 'node:path';
 import { homedir } from 'node:os';
-// KB: ResourceRegistry type import deleted Phase 6.
 import { STREAM_EVENT_VERSION, LUX_PER_USD } from '@pando/shared';
 import type { StreamEvent, PandoService, ServiceContext } from '@pando/shared';
 import { createPandoTools } from './pando-tools.js';
 import { ProjectBoard } from './project-board.js';
 import { injectApiKeys } from './api-keys.js';
 
-// ─── Dynamic imports (pando-teams is ESM, loaded at runtime) ─────────────
-
-let _EnginePool: any = null;
-let _Scheduler: any = null;
-let _loaded = false;
-let _loadPromise: Promise<void> | null = null;
-
-async function loadPandoTeams(): Promise<void> {
-  if (_loaded) return;
-  if (_loadPromise) return _loadPromise;
-  _loadPromise = (async () => {
-    const mod = await import('@pando-teams/core');
-    _EnginePool = mod.EnginePool;
-    _Scheduler = mod.Scheduler;
-    _loaded = true;
-  })();
-  return _loadPromise;
-}
-
 // ─── Lux Budget Provider ────────────────────────────────────────────────
 // KB: Lux cost = USD cost × LUX_PER_USD (from @pando/shared). LUX_PER_USD ≈ 10,000.
 // KB: Subset of model-pricing.ts — 13 models. Canonical full table: code/packages/core/src/engine/model-pricing.ts.
-// KB: Injected via engine.setBudgetProvider() in onAfterCreate — replaces the default UsdBudgetProvider.
 
 const MODEL_PRICING: Record<string, [number, number]> = {
   'claude-opus-4-6':   [0.000015,  0.000075],
@@ -104,22 +80,23 @@ export interface ReviewResult {
 }
 
 export class EngineAdapter {
-  private pool: any = null;         // EnginePool
-  private scheduler: any = null;    // Scheduler
+  // KB: Phase 8A — pool/scheduler replaced with HTTP proxy fields.
+  private teamsBaseUrl = '';
+  private teamsApiKey = '';
   private pandoTools: any[] = [];
   private luxProvider: any = null;
   private config: AdapterConfig | null = null;
   private started = false;
   private board: ProjectBoard | null = null;
 
-  /** Whether the adapter is ready (pando-teams loaded + pool started). */
+  /** Whether the adapter is ready (pando-teams reachable). */
   get available(): boolean { return this.started; }
 
-  /** Network linking: always linked when adapter is started (node IS the network). */
+  /** Network linking: always linked when adapter is started. */
   get linked(): boolean { return this.started; }
 
   /**
-   * Start the adapter: load pando-teams, create pool, boot system engine.
+   * Start the adapter: verify pando-teams reachable, init board.
    */
   async start(config: AdapterConfig): Promise<void> {
     // Validate dataDir: must be a non-empty absolute path. Fall back to default if invalid.
@@ -132,8 +109,10 @@ export class EngineAdapter {
     }
     this.config = config;
 
-    // Load pando-teams dynamically
-    await loadPandoTeams();
+    // Resolve pando-teams URL and API key
+    // KB: PANDO_TEAMS_URL env var overrides default. Use 127.0.0.1 not localhost to avoid IPv6 resolution.
+    this.teamsBaseUrl = process.env.PANDO_TEAMS_URL || 'http://127.0.0.1:4873';
+    this.teamsApiKey = process.env.PANDO_API_KEY || config.apiToken || '';
 
     // Cache better-sqlite3 for board operations (ESM-safe)
     let Database: any = null;
@@ -146,109 +125,80 @@ export class EngineAdapter {
     // Inject contributed AI API keys
     await injectApiKeys();
 
-    // Pre-create Pando tools and Lux provider (shared across all engines)
+    // Pre-create Pando tools and Lux provider
     this.pandoTools = await createPandoTools(config.apiPort, config.apiToken);
     this.luxProvider = createLuxBudgetProvider(config.luxPerUsd);
 
-    // Create engine pool with lifecycle hooks
-    this.pool = new _EnginePool({
-      ...(config.model ? { defaultModel: config.model } : {}),
-      defaultRole: 'lead',
-      maxEngines: 20,
-      idleTTLMs: 30 * 60 * 1000,
-      skipKnowledgeSync: true,
-      onAfterCreate: async (_id: string, engine: any) => {
-        // Inject Lux budget
-        engine.setBudgetProvider(this.luxProvider);
-
-        // Register all Pando tools on every engine
-        for (const tool of this.pandoTools) {
-          engine.tools.register(tool);
-        }
-      },
-    });
-    this.pool.start();
-
-    // Wire ProjectBoard — delegates all SQLite board ops and P2P sync
-    // KB: board.db and board.pool MUST be set after pool.start() and Database loaded.
-    // KB: ProjectBoard is null-safe on missing db/pool, but board tasks won't persist without db.
+    // Wire ProjectBoard
+    // KB: board.db must be set for board tasks to persist.
     const dataDir = config.dataDir || pathJoin(homedir(), '.pando');
     this.board = new ProjectBoard(dataDir);
     this.board.db = Database;
-    this.board.pool = this.pool;
 
-    // Boot system engine
-    await this.pool.getOrCreate('system', {
-      projectPath: config.dataDir || process.cwd(),
-    });
-
-    // Start scheduler for periodic autonomous behavior
-    if (config.enableScheduler !== false) {
-      this.scheduler = new _Scheduler(this.pool);
-
-      this.scheduler.register({
-        name: 'periodic-check',
-        engineId: 'system',
-        intervalMs: 30 * 60 * 1000,
-        prompt: 'Periodic check. Review system health. If architecture audit or QA testing is due, spawn appropriate sub-agents. If nothing needs attention, respond briefly.',
-        active: true,
-      });
-
-      this.scheduler.start();
+    // Health check — verify pando-teams server is reachable
+    // KB: Non-fatal — adapter marks started=true even if teams temporarily unreachable.
+    // KB: Teams server may start after node; individual send() calls will fail gracefully if not up.
+    try {
+      const healthRes = await fetch(`${this.teamsBaseUrl}/health`, { signal: AbortSignal.timeout(3000) });
+      if (healthRes.ok) {
+        console.log(`[EngineAdapter] pando-teams reachable at ${this.teamsBaseUrl}`);
+      } else {
+        console.warn(`[EngineAdapter] pando-teams returned ${healthRes.status} at ${this.teamsBaseUrl}`);
+      }
+    } catch {
+      console.warn(`[EngineAdapter] pando-teams not reachable at ${this.teamsBaseUrl} — will retry on send()`);
     }
 
     this.started = true;
-
-    console.log('[EngineAdapter] Started. System engine ready.');
+    console.log('[EngineAdapter] Started. Proxying AI calls to pando-teams at', this.teamsBaseUrl);
   }
 
   /**
-   * Send a message to an engine. Routes by projectId.
-   * No projectId → system engine.
-   * Project engines get a dedicated workspace directory under dataDir/projects/.
-   * Includes a configurable timeout (default 300s) — if the engine hangs, yields
-   * an error event and returns instead of blocking forever.
+   * Send a message to pando-teams. Routes by projectId (teamId).
+   * No projectId → 'system' team.
+   * KB: Replaces pool.send() — now a single HTTP POST to /v1/teams/:teamId/chat.
+   * KB: Yields one stream:chunk + done event (pando-teams returns full response synchronously).
    */
   async *send(message: string, projectId?: string, timeoutMs = 300_000): AsyncGenerator<any> {
-    this.requirePool();
-    const id = projectId || 'system';
+    this.requireStarted();
+    const teamId = projectId || 'system';
 
-    // Ensure project workspace exists
-    if (id !== 'system') {
-      await this.ensureProjectWorkspace(id);
+    // Ensure project workspace exists (for local file operations)
+    if (teamId !== 'system') {
+      await this.ensureProjectWorkspace(teamId);
     }
 
-    if (id !== 'system' && !this.pool.has(id)) {
-      const baseDir = this.config?.dataDir || pathJoin(homedir(), '.pando');
-      const projectDir = pathJoin(baseDir, 'projects', id);
-      await this.pool.getOrCreate(id, { projectPath: projectDir });
-    }
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
 
-    // Wrap the engine's async generator with a timeout.
-    const source = this.pool.send(id, message);
-    const iterator = source[Symbol.asyncIterator]();
-    let done = false;
-
-    while (!done) {
-      const result = await Promise.race([
-        iterator.next(),
-        new Promise<{ value: any; done: true }>((_, reject) =>
-          setTimeout(() => reject(new Error(`Engine execution timed out after ${timeoutMs}ms`)), timeoutMs)
-        ),
-      ]).catch((err: Error) => {
-        done = true;
-        return { value: { type: 'error', error: err.message }, done: false as const };
+    try {
+      const res = await fetch(`${this.teamsBaseUrl}/v1/teams/${teamId}/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.teamsApiKey}`,
+        },
+        body: JSON.stringify({ message, agentId: 'lead' }),
+        signal: ctrl.signal,
       });
 
-      if (result.done) {
-        done = true;
-      } else {
-        yield EngineAdapter.normalizeStreamEvent(result.value);
-        if (result.value?.type === 'error' && done) {
-          iterator.return?.();
-          return;
-        }
+      if (!res.ok) {
+        const errText = await res.text().catch(() => '');
+        throw new Error(`pando-teams chat error ${res.status}: ${errText.slice(0, 200)}`);
       }
+
+      const data = await res.json() as any;
+      const content = data.reply || data.response || data.content || data.text || '';
+      yield EngineAdapter.normalizeStreamEvent({ type: 'stream:chunk', content });
+      yield EngineAdapter.normalizeStreamEvent({ type: 'done' });
+    } catch (err: any) {
+      if (err.name === 'AbortError' || err.name === 'TimeoutError') {
+        yield EngineAdapter.normalizeStreamEvent({ type: 'error', error: `Engine execution timed out after ${timeoutMs}ms` });
+      } else {
+        yield EngineAdapter.normalizeStreamEvent({ type: 'error', error: err.message });
+      }
+    } finally {
+      clearTimeout(timer);
     }
   }
 
@@ -318,12 +268,13 @@ export class EngineAdapter {
 
   /**
    * Governance AI review — analyze a diff for security issues.
-   * Sends to system engine with structured prompt, parses response.
+   * Sends to pando-teams system team, parses JSON response.
    * KB: Called on EVERY code deploy via governance-api.ts → /v1/governance/propose.
-   * KB: If pool is not initialized, returns safe:true — governance proceeds without AI review.
+   * KB: If adapter not started or teams unreachable, returns safe:true — governance proceeds without AI review.
+   * KB: Phase 8A — replaced pool.send() loop with single HTTP POST to /v1/teams/system/chat.
    */
   async reviewDiff(diff: string, description: string): Promise<ReviewResult> {
-    if (!this.pool) {
+    if (!this.started) {
       return { safe: true, risks: [], recommendation: 'Adapter not started — skipping AI review' };
     }
 
@@ -348,14 +299,23 @@ Respond with EXACTLY this JSON format (no markdown, no explanation, ONLY the JSO
 Check for: eval(), dynamic require(), credential exposure, injection attacks, architectural violations, unauthorized file access, prototype pollution.`;
 
     try {
-      const chunks: string[] = [];
-      for await (const event of this.pool.send('system', prompt)) {
-        if (event.type === 'stream:chunk' && event.content) {
-          chunks.push(event.content);
-        }
+      const res = await fetch(`${this.teamsBaseUrl}/v1/teams/system/chat`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.teamsApiKey}`,
+        },
+        body: JSON.stringify({ message: prompt, agentId: 'lead' }),
+        signal: AbortSignal.timeout(60_000),
+      });
+
+      if (!res.ok) {
+        throw new Error(`pando-teams chat error: ${res.status}`);
       }
 
-      const output = chunks.join('');
+      const data = await res.json() as any;
+      const output = data.reply || data.response || data.content || data.text || '';
+
       const jsonMatch = output.match(/\{[\s\S]*"safe"[\s\S]*\}/);
       if (jsonMatch) {
         const parsed = JSON.parse(jsonMatch[0]);
@@ -373,9 +333,9 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     }
   }
 
-  /** Guard — throws if pool is not initialized (start() not called). */
-  private requirePool(): void {
-    if (!this.pool) throw new Error('EngineAdapter not started — call start() first');
+  /** Guard — throws if adapter not started. */
+  private requireStarted(): void {
+    if (!this.started) throw new Error('EngineAdapter not started — call start() first');
   }
 
   /**
@@ -394,38 +354,24 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
     };
   }
 
-  /** List active engines with metadata. */
+  /** List active engines — pando-teams manages engine lifecycle, returns empty stub. */
   getActiveEngines(): any[] {
-    if (!this.pool) return [];
-    return this.pool.getActive() ?? [];
+    return [];
   }
 
-  /** Check if a project engine exists. */
-  hasEngine(projectId: string): boolean {
-    if (!this.pool) return false;
-    return this.pool.has(projectId) ?? false;
+  /** Check if a project engine exists — always true when started (teams manages lifecycle). */
+  hasEngine(_projectId: string): boolean {
+    return this.started;
   }
 
-  /** Destroy a specific engine by ID — frees memory and process. */
-  async destroyEngine(engineId: string): Promise<boolean> {
-    if (!this.pool) return false;
-    const engine = this.pool.get(engineId);
-    if (!engine) return false;
-    try {
-      await engine.shutdown().catch(() => {});
-      this.pool.engines?.delete(engineId);
-      this.pool.lastUsed?.delete(engineId);
-      this.pool.createdAt?.delete(engineId);
-      console.log(`[EngineAdapter] Destroyed engine: ${engineId}`);
-      return true;
-    } catch {
-      return false;
-    }
+  /** Destroy a specific engine — no-op (teams server manages engine lifecycle). */
+  async destroyEngine(_engineId: string): Promise<boolean> {
+    return false;
   }
 
-  /** Get scheduler info. */
+  /** Get scheduler info — Scheduler removed in Phase 8A, returns empty. */
   getSchedules(): any[] {
-    return this.scheduler?.getAll() ?? [];
+    return [];
   }
 
   // ─── Board delegation (ProjectBoard) ─────────────────────────────────
@@ -470,8 +416,6 @@ Check for: eval(), dynamic require(), credential exposure, injection attacks, ar
   /** Shutdown everything gracefully. */
   async shutdown(): Promise<void> {
     this.board?.stopProjectTicks();
-    this.scheduler?.stop();
-    await this.pool?.shutdown();
     this.started = false;
     console.log('[EngineAdapter] Shut down.');
   }

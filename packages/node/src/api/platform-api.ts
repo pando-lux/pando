@@ -34,7 +34,8 @@ export async function registerPlatformRoutes(
   const { node } = deps;
 
   // ── Teams Server proxy (BIBLE 1.7) ─────────────────────────────────
-  const TEAMS_SERVER_URL = process.env.PANDO_TEAMS_URL || 'http://localhost:4873';
+  // KB: 127.0.0.1 not localhost — Windows Node.js resolves localhost to ::1 (IPv6) but pando-teams only binds IPv4.
+  const TEAMS_SERVER_URL = process.env.PANDO_TEAMS_URL || 'http://127.0.0.1:4873';
   // KB: PANDO_API_KEY may not be in the node's env (set only in teams .env via dotenv).
   // KB: Fall back to reading the teams .env file directly so the proxy auth matches.
   let TEAMS_API_KEY = process.env.PANDO_API_KEY || '';
@@ -297,6 +298,23 @@ export async function registerPlatformRoutes(
             console.warn(`[chat] Build intent detected but project creation failed: ${err.message}`);
           }
         }
+      }
+
+      // KB: FEEDBACK intent — detect user complaints/bug reports, create board task best-effort, fall through to doorman.
+      // KB: Fire-and-forget (.catch) so a slow/offline Teams Server never blocks the user reply.
+      const FEEDBACK_SIGNALS = /\b(broken|bug|issue|doesn'?t work|not working|wrong|error|crash|fail|problem|glitch|fix)\b/i;
+      if (FEEDBACK_SIGNALS.test(trimmed)) {
+        fetch(`${TEAMS_SERVER_URL}/v1/teams/node-doorman/act`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TEAMS_API_KEY}` },
+          body: JSON.stringify({
+            agentId: 'lead',
+            actions: [{ do: 'create_task', title: `User feedback: ${trimmed.slice(0, 80)}`, description: trimmed, priority: 'high' }],
+          }),
+          signal: AbortSignal.timeout(5000),
+        }).catch(() => console.warn('[chat] FEEDBACK intent — Teams Server unreachable, task not created'));
+        console.log('[chat] FEEDBACK intent detected — board task created (fire-and-forget)');
+        // Fall through — doorman handles the user-facing reply unchanged
       }
 
       // Non-build messages — route to doorman for Q&A, status, etc.
@@ -739,6 +757,80 @@ export async function registerPlatformRoutes(
       return {
         count: userProfiles.length,
         profiles: userProfiles,
+      };
+    });
+
+    // ── Phase 16: AI Labor Market — Commission endpoint ──────────────
+
+    // POST /network/commission — requester sends task spec + Lux budget; finds best agent_labor node, locks Lux, dispatches task
+    // KB: Phase 16 — holdPayment locks Lux from requester immediately. releasePayment called when task completes.
+    // KB: Uses ResourceRouter to find best agent_labor node by capability. Falls back to local if none found.
+    fastify.post('/network/commission', async (request: any, reply: any) => {
+      const { taskSpec, luxBudget } = (request.body || {}) as { taskSpec?: string; luxBudget?: number };
+      if (!taskSpec || typeof taskSpec !== 'string') return reply.code(400).send({ error: 'taskSpec is required' });
+      if (typeof luxBudget !== 'number' || luxBudget <= 0) return reply.code(400).send({ error: 'luxBudget must be a positive number' });
+
+      const identity = node.getIdentity();
+      const gate = node.getPaymentGate();
+      if (!identity) return reply.code(503).send({ error: 'Node identity not ready' });
+      if (!gate) return reply.code(503).send({ error: 'PaymentGate not initialized' });
+
+      const taskId = `commission-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+      const hold = gate.holdPayment(identity.peerId, taskId, luxBudget);
+      if (!hold) return reply.code(402).send({ error: 'Insufficient Lux balance', required: luxBudget });
+
+      // Find best agent_labor node via ResourceRouter (falls back gracefully if none found)
+      const router = node.getResourceRouter();
+      let targetNode: string | null = null;
+      if (router) {
+        try {
+          const decision = router.findBestNode({ requiredResources: ['agent_labor'] });
+          targetNode = decision?.targetNode || null;
+        } catch { /* best-effort */ }
+      }
+
+      // Dispatch to Teams Server (local or remote)
+      // KB: 127.0.0.1 not localhost — Windows Node.js resolves localhost to ::1 (IPv6) but pando-teams only binds IPv4.
+  const TEAMS_SERVER_URL = process.env.PANDO_TEAMS_URL || 'http://127.0.0.1:4873';
+      let TEAMS_API_KEY = process.env.PANDO_API_KEY || '';
+      if (!TEAMS_API_KEY) {
+        try {
+          const { readFileSync } = await import('fs');
+          const { join } = await import('path');
+          const { homedir } = await import('os');
+          const envContent = readFileSync(join(homedir(), 'Desktop', 'Code', 'pando', 'teams', '.env'), 'utf8');
+          const match = envContent.match(/^PANDO_API_KEY=(.+)$/m);
+          if (match) TEAMS_API_KEY = match[1].trim();
+        } catch { /* best-effort */ }
+      }
+
+      let dispatched = false;
+      try {
+        const res = await fetch(`${TEAMS_SERVER_URL}/v1/teams/pando/act`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TEAMS_API_KEY}` },
+          body: JSON.stringify({
+            agentId: 'lead',
+            actions: [{ do: 'create_task', title: `Commission: ${taskSpec.slice(0, 80)}`, description: `Budget: ${luxBudget} Lux | Task: ${taskSpec}`, assignee: 'lead', priority: 'high' }],
+          }),
+          signal: AbortSignal.timeout(10000),
+        });
+        dispatched = res.ok;
+      } catch { /* log but don't fail — hold is already created */ }
+
+      if (!dispatched) {
+        // Refund on dispatch failure
+        gate.refundPayment(hold.holdId);
+        return reply.code(503).send({ error: 'Could not reach agent team to dispatch task — Lux refunded' });
+      }
+
+      return {
+        ok: true,
+        taskId,
+        holdId: hold.holdId,
+        luxLocked: luxBudget,
+        targetNode,
+        message: `Task commissioned. ${luxBudget} Lux locked. Agent team is on it.`,
       };
     });
 

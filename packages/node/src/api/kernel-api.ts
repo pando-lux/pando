@@ -422,6 +422,24 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
       };
     });
 
+    // GET /nodes — self + connected peers (used by pando-teams proxy and external clients)
+    // KB: /nodes returns self first so clients can identify the local node easily.
+    fastify.get('/nodes', async () => {
+      const network = node.getNetwork();
+      const ledger = node.getLedger();
+      const identity = node.getIdentity();
+      const self = identity ? [{ peerId: identity.peerId, self: true, balance: ledger ? ledger.accounts.getBalance(identity.peerId) : 0 }] : [];
+      if (!network) return { nodes: self };
+      const peers = network.getPeers().map(p => ({
+        peerId: p.peerId,
+        connectedAt: p.connectedAt,
+        lastSeen: p.lastSeen,
+        balance: ledger ? ledger.accounts.getBalance(p.peerId) : 0,
+        self: false,
+      }));
+      return { nodes: [...self, ...peers] };
+    });
+
     // GET /transactions — recent transactions for this node (or authenticated user)
     fastify.get('/transactions', async (request: any) => {
       const ledger = node.getLedger();

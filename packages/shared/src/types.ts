@@ -491,7 +491,8 @@ export type ResourceType =
   | 'storage'        // File hosting, content CDN, backup
   | 'gateway'        // Public HTTP API proxy, web UI serving
   | 'validator'      // Witness emissions, verify task results
-  | 'index';         // Search index, content discovery
+  | 'index'          // Search index, content discovery
+  | 'agent_labor';   // Phase 16: AI agent team execution (commission work, build tasks)
 
 /** Capability profile broadcast by each node (Phase A) */
 export interface CapabilityProfile {

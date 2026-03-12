@@ -214,6 +214,8 @@ export function detectCapabilityProfile(peerId: string, apiPort?: number, linked
       gateway: true,                     // API port is open since we're running
       validator: true,                   // lightweight — always available
       index: true,                       // search index — always available
+      // KB: Phase 16 — agent_labor true if node has a pando-teams instance (hasKeys = has AI key = has agent team)
+      agent_labor: hasKeys,
     },
     details: {
       compute_cpu: {

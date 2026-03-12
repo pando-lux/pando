@@ -843,9 +843,17 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         // Step 3: Build check
         // For node repo: npm run build (tsc + dist)
         // For other repos: turbo build for web+core (avoids pre-existing server drizzle-orm type conflicts)
+        // KB: process.cwd() is the pando root (no package.json). node/ submodule has the package.json.
+        // KB: If no package.json in repoDir, look for it in repoDir/node (pando monorepo layout).
         const buildCmd = requestedRepoPath ? 'npx turbo build --filter=@pando-teams/web --filter=@pando-teams/core' : 'npm run build';
+        const { existsSync: fsExistsBuild } = await import('node:fs');
+        const { join: pathJoinBuild } = await import('node:path');
+        let buildCwd = repoDir;
+        if (!requestedRepoPath && !fsExistsBuild(pathJoinBuild(repoDir, 'package.json')) && fsExistsBuild(pathJoinBuild(repoDir, 'node', 'package.json'))) {
+          buildCwd = pathJoinBuild(repoDir, 'node');
+        }
         try {
-          execSync(buildCmd, { cwd: repoDir, timeout: 180_000, stdio: 'pipe', encoding: 'utf-8' });
+          execSync(buildCmd, { cwd: buildCwd, timeout: 180_000, stdio: 'pipe', encoding: 'utf-8' });
           steps.push('build-passed');
         } catch (buildErr: any) {
           // Unstage on build failure so agent can fix
