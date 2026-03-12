@@ -74,6 +74,8 @@ export class PaymentGate {
     this.holdsFilePath = join(dir, 'payment-holds.json');
     this.historyFilePath = join(dir, 'payment-history.json');
     this.loadState();
+    // KB: Sweep expired holds on startup — catches holds that crossed 24h TTL while node was down.
+    this.expireStaleHolds();
   }
 
   // ── Hold Expiration ──────────────────────────────────────────────────────
