@@ -96,10 +96,12 @@ export class CapabilityRegistry {
   findCapableNodes(requirements: ResourceType[]): CapabilityProfile[] {
     const now = Date.now();
     const results: CapabilityProfile[] = [];
+    const localPeerId = this.localProfile?.peerId;
 
     for (const [peerId, stored] of this.profiles) {
-      // Expire stale entries
-      if (now - stored.receivedAt > TTL_MS) {
+      // KB: Never expire the local node's own profile — same pattern as getAllProfiles().
+      // KB: Without this, local node disappears from routing after 5min TTL, causing targetNode=null.
+      if (peerId !== localPeerId && now - stored.receivedAt > TTL_MS) {
         this.profiles.delete(peerId);
         continue;
       }
