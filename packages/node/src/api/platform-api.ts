@@ -792,17 +792,9 @@ export async function registerPlatformRoutes(
       // Dispatch to Teams Server (local or remote)
       // KB: 127.0.0.1 not localhost — Windows Node.js resolves localhost to ::1 (IPv6) but pando-teams only binds IPv4.
   const TEAMS_SERVER_URL = process.env.PANDO_TEAMS_URL || 'http://127.0.0.1:4873';
-      let TEAMS_API_KEY = process.env.PANDO_API_KEY || '';
-      if (!TEAMS_API_KEY) {
-        try {
-          const { readFileSync } = await import('fs');
-          const { join } = await import('path');
-          const { homedir } = await import('os');
-          const envContent = readFileSync(join(homedir(), 'Desktop', 'Code', 'pando', 'teams', '.env'), 'utf8');
-          const match = envContent.match(/^PANDO_API_KEY=(.+)$/m);
-          if (match) TEAMS_API_KEY = match[1].trim();
-        } catch { /* best-effort */ }
-      }
+      // KB: PANDO_API_KEY set by start.sh/supervisor from ~/.pando/api-token before spawning teams.
+      // KB: If missing here, pando-node wasn't started via start.sh — commission dispatch will fail with 401.
+      const TEAMS_API_KEY = process.env.PANDO_API_KEY || '';
 
       // KB: Phase 16.5 — include holdId + complete URL in task description so lead can release Lux on completion.
       // KB: recipientPeerId = targetNode (remote executor) or local peerId (local fallback).
