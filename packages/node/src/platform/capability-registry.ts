@@ -151,6 +151,8 @@ export class CapabilityRegistry {
       case 'validator':   return true;
       case 'index':       return true;
       case 'api_keys':    return false; // checked at runtime via ResourceRegistry
+      // KB: Phase 17A — agent_labor available locally when PANDO_API_KEY env is set (pando-teams running).
+      case 'agent_labor': return !!process.env.PANDO_API_KEY;
       default:            return false;
     }
   }
