@@ -803,19 +803,46 @@ export async function registerPlatformRoutes(
       const completeUrl = `${nodeApiBase}/v1/network/commission/${hold.holdId}/complete`;
       const taskDescription = `Budget: ${luxBudget} Lux | Task: ${taskSpec}\n\nWhen complete: POST ${completeUrl} with body {"recipientPeerId":"${recipientPeerId}"} to release Lux payment.`;
 
+      // KB: Phase 17B — when targetNode is a remote peer, forward commission to THEIR node's HTTP API.
+      // KB: Peer's API port is in their capability profile details.httpApi.port (default 4000).
+      // KB: Local node keeps the Lux hold; remote node dispatches to its own pando-teams instance.
+      const localPeerId = identity.peerId;
+      const isRemote = targetNode && targetNode !== localPeerId;
+
       let dispatched = false;
       try {
-        const res = await fetch(`${TEAMS_SERVER_URL}/v1/teams/pando/act`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TEAMS_API_KEY}` },
-          body: JSON.stringify({
-            agentId: 'lead',
-            actions: [{ do: 'create_task', title: `Commission: ${taskSpec.slice(0, 80)}`, description: taskDescription, assignee: 'lead', priority: 'high' }],
-          }),
-          signal: AbortSignal.timeout(10000),
-        });
-        dispatched = res.ok;
-      } catch { /* log but don't fail — hold is already created */ }
+        if (isRemote) {
+          // Route to remote peer's node API — they will dispatch to their own pando-teams
+          const capRegistry = node.getCapabilityRegistry();
+          const peerProfile = capRegistry?.getPeerProfile(targetNode!);
+          const peerPort = (peerProfile as any)?.details?.httpApi?.port || 4000;
+          // KB: Use httpApi.port from peer's capability profile for dispatch URL.
+          const dispatchUrl = `http://127.0.0.1:${peerPort}/v1/network/commission/dispatch`;
+
+          const res = await fetch(dispatchUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ taskSpec, taskDescription, holdId: hold.holdId, requesterPeerId: localPeerId }),
+            signal: AbortSignal.timeout(10000),
+          });
+          dispatched = res.ok;
+          console.log(`[commission] Remote dispatch to ${targetNode!.slice(0, 12)} via ${dispatchUrl}: ${res.status}`);
+        } else {
+          // Local dispatch: create task on this node's pando-teams
+          const res = await fetch(`${TEAMS_SERVER_URL}/v1/teams/pando/act`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TEAMS_API_KEY}` },
+            body: JSON.stringify({
+              agentId: 'lead',
+              actions: [{ do: 'create_task', title: `Commission: ${taskSpec.slice(0, 80)}`, description: taskDescription, assignee: 'lead', priority: 'high' }],
+            }),
+            signal: AbortSignal.timeout(10000),
+          });
+          dispatched = res.ok;
+        }
+      } catch (err: any) {
+        console.warn(`[commission] Dispatch failed: ${err.message}`);
+      }
 
       if (!dispatched) {
         // Refund on dispatch failure
@@ -851,6 +878,37 @@ export async function registerPlatformRoutes(
       if (!released) return reply.code(404).send({ error: 'Hold not found or already settled' });
 
       return reply.send({ ok: true, holdId, recipientPeerId: recipient, message: 'Lux released to executor.' });
+    });
+
+    // POST /network/commission/dispatch — receive a commission forwarded from a remote node (Phase 17B).
+    // KB: Called by remote requester when this node was selected as the best agent_labor provider.
+    // KB: No auth required — requester holds the Lux; task quality incentivizes honest execution.
+    fastify.post('/network/commission/dispatch', async (request: any, reply: any) => {
+      const { taskSpec, taskDescription, holdId, requesterPeerId } = (request.body || {}) as {
+        taskSpec?: string; taskDescription?: string; holdId?: string; requesterPeerId?: string;
+      };
+      if (!taskSpec || !taskDescription) return reply.code(400).send({ error: 'taskSpec and taskDescription are required' });
+
+      const TEAMS_SERVER_URL = process.env.PANDO_TEAMS_URL || 'http://127.0.0.1:4873';
+      const TEAMS_API_KEY = process.env.PANDO_API_KEY || '';
+      if (!TEAMS_API_KEY) return reply.code(503).send({ error: 'No pando-teams instance configured on this node' });
+
+      try {
+        const res = await fetch(`${TEAMS_SERVER_URL}/v1/teams/pando/act`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TEAMS_API_KEY}` },
+          body: JSON.stringify({
+            agentId: 'lead',
+            actions: [{ do: 'create_task', title: `[Remote] Commission: ${taskSpec.slice(0, 80)}`, description: taskDescription, assignee: 'lead', priority: 'high' }],
+          }),
+          signal: AbortSignal.timeout(10000),
+        });
+        if (!res.ok) return reply.code(502).send({ error: `pando-teams returned ${res.status}` });
+        console.log(`[commission] Received remote dispatch from ${(requesterPeerId || 'unknown').slice(0, 12)}, holdId=${holdId}`);
+        return { ok: true, message: 'Task dispatched to local agent team.' };
+      } catch (err: any) {
+        return reply.code(503).send({ error: `Dispatch failed: ${err.message}` });
+      }
     });
 
     // ── Resource Network Routes (Phase B-D) ───────────────────────────
