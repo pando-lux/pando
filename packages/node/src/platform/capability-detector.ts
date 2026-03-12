@@ -214,8 +214,10 @@ export function detectCapabilityProfile(peerId: string, apiPort?: number, linked
       gateway: true,                     // API port is open since we're running
       validator: true,                   // lightweight — always available
       index: true,                       // search index — always available
-      // KB: Phase 16 — agent_labor true if node has a pando-teams instance (hasKeys = has AI key = has agent team)
-      agent_labor: hasKeys,
+      // KB: Phase 17A — agent_labor true when PANDO_API_KEY is set (start.sh sets it when teams is configured).
+      // KB: hasKeys (api_keys) is always false (dynamic, checked at runtime). agent_labor is different — it indicates
+      // KB: that this node has a pando-teams instance running and ready to accept commission tasks.
+      agent_labor: !!process.env.PANDO_API_KEY,
     },
     details: {
       compute_cpu: {
