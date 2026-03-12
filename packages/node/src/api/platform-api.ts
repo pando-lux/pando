@@ -3046,4 +3046,36 @@ export async function registerPlatformRoutes(
     // Phase 53.1/65: Legacy /apps/data + deploy + static serving routes REMOVED.
     // All app lifecycle is now managed by AppManager (see app-api.ts).
 
+    // ── Phase 16 E2E: Service Bootstrap ────────────────────────────────────
+
+    // POST /services/start — Derive a teamId from projectPath and signal teams to prepare.
+    // KB: The actual team is created lazily on first POST /v1/teams/:id/chat to pando-teams.
+    // KB: teamId = basename of projectPath, lowercase alphanumeric+hyphen, max 40 chars.
+    fastify.post('/services/start', async (request: any, reply: any) => {
+      const { projectPath, goal } = (request.body || {}) as { projectPath?: string; goal?: string };
+      if (!projectPath || typeof projectPath !== 'string') {
+        return reply.code(400).send({ error: 'projectPath is required' });
+      }
+
+      const { basename } = await import('node:path');
+      const rawName = basename(projectPath.replace(/[/\\]+$/, ''));
+      const teamId = rawName.toLowerCase().replace(/[^a-z0-9-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'default';
+
+      // Best-effort: send an initial message to teams so the team exists before first real use
+      const TEAMS_SERVER_URL = process.env.PANDO_TEAMS_URL || 'http://127.0.0.1:4873';
+      const TEAMS_API_KEY = process.env.PANDO_API_KEY || '';
+      if (TEAMS_API_KEY && goal) {
+        try {
+          await fetch(`${TEAMS_SERVER_URL}/v1/teams/${teamId}/chat`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${TEAMS_API_KEY}` },
+            body: JSON.stringify({ message: `Project started. Goal: ${goal}` }),
+            signal: AbortSignal.timeout(5000),
+          });
+        } catch { /* non-fatal — team will auto-create on first real message */ }
+      }
+
+      return { teamId, teamsUrl: `${TEAMS_SERVER_URL}/v1/teams/${teamId}/chat` };
+    });
+
 }
