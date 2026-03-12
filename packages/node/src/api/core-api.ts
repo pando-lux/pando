@@ -440,7 +440,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
 
     // ── Team API (proxied to Teams Server — BIBLE 1.7) ────────────────────
     // Team operations are managed by Teams Server. Node proxies requests.
-    const TEAMS_SERVER_URL = process.env.PANDO_TEAMS_URL || 'http://localhost:4873';
+    // KB: 127.0.0.1 not localhost — Windows Node.js resolves localhost to ::1 (IPv6) but pando-teams only binds IPv4.
+    const TEAMS_SERVER_URL = process.env.PANDO_TEAMS_URL || 'http://127.0.0.1:4873';
     // KB: PANDO_API_KEY may not be in the node's env (set only in teams .env via dotenv).
     // KB: Fall back to reading the teams .env file directly so the proxy auth matches.
     let TEAMS_API_KEY = process.env.PANDO_API_KEY || '';
@@ -961,7 +962,8 @@ export async function registerCoreRoutes(fastify: any, deps: RouteHelpers): Prom
         return reply.code(401).send({ error: 'Operator authentication required' });
       }
 
-      const teamsUrl = process.env.PANDO_TEAMS_URL || 'http://localhost:4873';
+      // KB: 127.0.0.1 not localhost — avoids IPv6 resolution on Windows.
+      const teamsUrl = process.env.PANDO_TEAMS_URL || 'http://127.0.0.1:4873';
       const teamsPort = parseInt(teamsUrl.match(/:(\d+)/)?.[1] || '4873');
 
       try {
