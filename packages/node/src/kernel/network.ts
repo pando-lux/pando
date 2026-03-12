@@ -479,9 +479,9 @@ export class PandoNetwork {
     this.reconnectTick++;
 
     if (this.peers.size === 0) {
-      // Exponential backoff: skip ticks until backoff counter expires
-      if (this.reconnectTick % this.reconnectBackoff !== 0) return;
-      console.log(`[reconnect] No peers — re-dialing bootstrap + known peers (backoff=${this.reconnectBackoff})...`);
+      // KB: Bootstrap peers are always dialed without backoff — guarantees crash recovery within 1-2s.
+      // KB: Backoff only applies to dialKnownPeers (peer exchange sweep). Without this split,
+      // KB: exponential backoff skips bootstrap retries for up to 16s after 2 failed attempts.
       const bootstrapDials = this.config.bootstrapPeers.map(async (addr) => {
         try {
           const ac = new AbortController();
@@ -493,9 +493,17 @@ export class PandoNetwork {
           // Bootstrap peer may be offline — that's ok
         }
       });
-      await Promise.allSettled([...bootstrapDials, this.dialKnownPeers()]);
-      // Increase backoff up to 8 ticks (16s at 2s interval)
-      if (this.reconnectBackoff < 8) this.reconnectBackoff = Math.min(this.reconnectBackoff * 2, 8);
+
+      if (this.reconnectTick % this.reconnectBackoff === 0) {
+        // Full sweep: bootstrap + known peers
+        console.log(`[reconnect] No peers — re-dialing bootstrap + known peers (backoff=${this.reconnectBackoff})...`);
+        await Promise.allSettled([...bootstrapDials, this.dialKnownPeers()]);
+        // Increase backoff up to 8 ticks (16s at 2s interval) — applies to known-peers only
+        if (this.reconnectBackoff < 8) this.reconnectBackoff = Math.min(this.reconnectBackoff * 2, 8);
+      } else {
+        // Backoff tick: still retry bootstrap peers — never skip them
+        await Promise.allSettled(bootstrapDials);
+      }
       return;
     }
 

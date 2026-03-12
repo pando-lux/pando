@@ -392,16 +392,20 @@ export class LedgerSync {
     // No signature — legacy transaction, can't verify
     if (!tx.signature || tx.signature === '' || tx.signature === 'network-emission') return null;
 
-    // Look up sender's public key from ledger accounts
+    // Look up sender's public key: ledger first, then extract from peerId inline key.
+    // KB: Ed25519 libp2p peerIds encode the public key — extractPublicKey() works even
+    // when the sender isn't registered in our local ledger yet (race on first transfer).
     const senderAccount = this.ledger.accounts.get(tx.from);
-    if (!senderAccount || !senderAccount.publicKey || senderAccount.publicKey === 'unknown') {
-      // We don't have the sender's public key — can't verify
-      // Reject: cannot trust unverifiable signed transactions
-      return false;
-    }
+    // KB: init-platform.ts registers P2P peers with placeholder keys ('unknown', 'remote-peer',
+    // 'remote-transfer'). Only treat as real key if it's NOT a known placeholder.
+    const PLACEHOLDER_KEYS = new Set(['unknown', 'remote-peer', 'remote-transfer']);
+    const storedKey = senderAccount?.publicKey && !PLACEHOLDER_KEYS.has(senderAccount.publicKey)
+      ? senderAccount.publicKey : null;
+    const publicKeyStr = storedKey ?? extractPublicKey(tx.from);
+    if (!publicKeyStr) return false;
 
     try {
-      const publicKeyRaw = uint8ArrayFromString(senderAccount.publicKey, 'base64');
+      const publicKeyRaw = uint8ArrayFromString(publicKeyStr, 'base64');
       return await verifyTransactionSignature(tx, tx.signature, publicKeyRaw);
     } catch {
       return false;
@@ -456,13 +460,19 @@ export class LedgerSync {
         }
 
         // #39: Validate sender balance for real-time remote transfers to prevent double-spend
+        // KB: Only reject if senderBalance > 0 (we have authoritative history).
+        // senderBalance === 0 after registerNode() means we haven't synced yet — trust
+        // the valid signature; requestSync() will reconcile within ~12s.
         if (tx.type === TransactionType.TRANSFER && tx.from !== 'NETWORK') {
           const senderBalance = this.ledger.accounts.getBalance(tx.from);
-          const totalDebit = tx.amount + (tx.fee || 0);
-          if (senderBalance < totalDebit) {
-            console.warn(`[sync] REJECTED real-time tx ${tx.id.slice(0, 12)}... — insufficient balance: have ${senderBalance}, need ${totalDebit}`);
-            return;
+          if (senderBalance > 0) {
+            const totalDebit = tx.amount + (tx.fee || 0);
+            if (senderBalance < totalDebit) {
+              console.warn(`[sync] REJECTED real-time tx ${tx.id.slice(0, 12)}... — insufficient balance: have ${senderBalance}, need ${totalDebit}`);
+              return;
+            }
           }
+          // else: sender just registered (balance unknown) — trust signature, sync will reconcile
         }
 
         this.ledger.applyRemoteTransaction(tx);

@@ -1,8 +1,8 @@
 # Pando — The Open Network
 
-> **Architecture reference: `BIBLE.md`** at repo root. Read it for architecture, component details, technical debt, and gotchas. This file is operational instructions only.
+> **Architecture:** KB comments (`// KB:`) in source files are the source of truth. Key files: `packages/node/src/core/engine-adapter.ts`, `packages/node/src/supervisor.ts`, `packages/node/src/core/team-registry.ts`.
 
-> **If you are the CEO agent (Claude Code on Windows dev machine):** Read `BIBLE.md` + `docs/COUNCIL-ROADMAP.md` on session start. The council (pando-infra team) handles all code changes now. Submit tasks via `/v1/teams/pando-infra/request`, observe, intervene only when stuck.
+> **If you are the CEO agent (Claude Code on Windows dev machine):** Read `docs/COUNCIL-ROADMAP.md` on session start. The council (pando-infra team) handles all code changes now. Submit tasks via `/v1/teams/pando-infra/request`, observe, intervene only when stuck.
 
 > **If you are a Pando AI worker:** Your task is in your startup prompt, not this file.
 
@@ -10,7 +10,7 @@
 
 Pando is a decentralized, AI-managed network. The currency is **Lux**. Every participant runs the same node. The node IS the network. Five independent packages (@pando/shared, @pando/identity, @pando/ledger, @pando/node, @pando/hub) with optional service plugins.
 
-**The brain/body split:** @pando-teams/core = brain (intelligence, memory, tools, agents, board, communication). @pando/node = body (P2P, identity, economy, governance). engine-adapter.ts = nervous system. **CRITICAL: Never rebuild PandoTeams features in pando-node. See BIBLE.md Section 3.2.**
+**The brain/body split:** @pando-teams/core = brain (intelligence, memory, tools, agents, board, communication). @pando/node = body (P2P, identity, economy, governance). engine-adapter.ts = nervous system. **CRITICAL: Never rebuild PandoTeams features in pando-node — see KB comments in `core/engine-adapter.ts`.**
 
 ## Service Architecture
 
@@ -40,12 +40,11 @@ pando/
 │   ├── ledger/       # SQLite: accounts, transactions, emissions
 │   ├── node/         # THE COMPOSER — P2P, HTTP API, agent system
 │   ├── gateway/      # Web UI — Next.js 16 + Tailwind
-│   ├── tests/        # @pando/tests — standalone testing framework
+│   ├── tests/        # Test utilities
 │   ├── mcp-server/   # Pando MCP for Claude Code
 │   └── extension/    # Chrome extension (placeholder)
-├── tests/e2e/        # Playwright specs (per-project subdirs)
-├── docs/             # E2E roadmap
-├── BIBLE.md          # THE architecture reference — read this
+├── tests/e2e/        # E2E test scripts
+├── docs/             # Architecture roadmap docs
 └── secrets/          # Secret templates (gitignored)
 ```
 
@@ -73,19 +72,13 @@ packages/node/src/
 ```bash
 npm run build                          # shared → ledger → identity → node → gateway
 node packages/node/dist/cli.js         # Start node (default API port 4000)
-npx playwright test --project pando-node  # E2E tests
 ```
 
-## Testing (@pando/tests)
+## Testing
 
-**All testing goes through @pando/tests.** Single source of truth. Two modes: scripted (Playwright, pass/fail) and live (agent-driven, findings). Per-project isolation.
+**All testing must be dynamic and human-like.** Start real services, make real HTTP calls, verify actual responses. No static test scripts or pre-written assertions.
 
-```
-tests/e2e/{project}/*.spec.ts          # Playwright specs
-packages/tests/playbooks/{project}/     # Live playbooks (JSON)
-```
-
-Dashboard at gateway `/testing`. API at `/v1/testing/*`. Do NOT create ad-hoc test scripts.
+How to test: start the node, hit real endpoints with curl, check real data. Think "what would a user do?" then do exactly that — live, step by step, reacting to what you get back.
 
 ## Credential Security (IMMUTABLE)
 
@@ -116,7 +109,7 @@ In dev mode (≤8 peers), governance auto-approves. Upgrade notifications sent v
 1. No legacy code protection. Delete if in the way. We have git.
 2. Build must pass. `npm run build` zero errors before commit.
 3. Let things break. Fix during testing. No compatibility shims.
-4. Read `BIBLE.md` Section 7 (Technical Debt) before assuming a feature works.
+4. Check KB comments (`// KB:`) in the relevant source file before assuming a feature works.
 
 ## The Two Laws (Immutable)
 

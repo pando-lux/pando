@@ -1481,6 +1481,8 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
     // ── Network Onboarding Routes ──
 
     // GET /bootstrap — return multiaddrs for bootstrapping new nodes
+    // KB: ?include_loopback=true bypasses the loopback filter — required for local two-node testing on same machine.
+    // KB: mDNS uses multicast and won't reliably discover nodes via loopback; explicit bootstrap with 127.0.0.1 addr is the reliable fallback.
     fastify.get('/bootstrap', async (request: any, reply: any) => {
       const network = node.getNetwork();
       const identity = node.getIdentity();
@@ -1488,9 +1490,11 @@ export async function registerKernelRoutes(fastify: any, deps: RouteHelpers): Pr
         return reply.code(503).send({ error: 'Node not ready' });
       }
       const addrs = network.getListenAddresses();
-      // Filter out localhost/loopback — only return routable addresses
-      const routable = addrs.filter((a: string) => !a.includes('/127.0.0.1/') && !a.includes('/::1/'));
-      return { peerId: identity.peerId, addrs: routable.length > 0 ? routable : addrs };
+      const includeLoopback = (request.query as any)?.include_loopback === 'true';
+      const filtered = includeLoopback
+        ? addrs
+        : addrs.filter((a: string) => !a.includes('/127.0.0.1/') && !a.includes('/::1/'));
+      return { peerId: identity.peerId, addrs: filtered.length > 0 ? filtered : addrs };
     });
 
     // GET /onboard — onboarding info for new node operators

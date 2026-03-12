@@ -1511,11 +1511,51 @@ export async function registerPlatformRoutes(
       return { history: gate.getPaymentHistory(peerId) };
     });
 
+    // GET /payment/holds — Active (status=held) payment holds
+    // KB: Returns only held (unsettled) holds — distinct from /history which returns all transactions.
+    fastify.get('/payment/holds', async () => {
+      const gate = node.getPaymentGate();
+      if (!gate) return { holds: [] };
+      return { holds: gate.getActiveHolds() };
+    });
+
     // GET /payment/stats — Payment statistics
     fastify.get('/payment/stats', async () => {
       const gate = node.getPaymentGate();
       if (!gate) return { stats: null };
       return { stats: gate.getStats() };
+    });
+
+    // POST /payment/release — Release escrowed Lux to contributor on task completion
+    // KB: Completes the escrow cycle: hold -> release credits recipientPeerId, marks hold 'released'.
+    fastify.post('/payment/release', async (request: any, reply: any) => {
+      const gate = node.getPaymentGate();
+      if (!gate) return reply.code(503).send({ error: 'Payment gate not available' });
+      const { holdId, recipientPeerId } = (request.body || {}) as { holdId?: string; recipientPeerId?: string };
+      if (!holdId || !recipientPeerId) {
+        return reply.code(400).send({ error: '"holdId" and "recipientPeerId" are required' });
+      }
+      const ok = gate.releasePayment(holdId, recipientPeerId);
+      if (!ok) {
+        return reply.code(404).send({ error: 'Hold not found or already settled', holdId });
+      }
+      return { ok: true, holdId, recipientPeerId };
+    });
+
+    // POST /payment/refund — Refund escrowed Lux to creator on task rejection/cancellation
+    // KB: Refund path: hold -> refund returns Lux to original peerId, marks hold 'refunded'.
+    fastify.post('/payment/refund', async (request: any, reply: any) => {
+      const gate = node.getPaymentGate();
+      if (!gate) return reply.code(503).send({ error: 'Payment gate not available' });
+      const { holdId } = (request.body || {}) as { holdId?: string };
+      if (!holdId) {
+        return reply.code(400).send({ error: '"holdId" is required' });
+      }
+      const ok = gate.refundPayment(holdId);
+      if (!ok) {
+        return reply.code(404).send({ error: 'Hold not found or already settled', holdId });
+      }
+      return { ok: true, holdId };
     });
 
     // ── Unified Identity Auth API ──────────────────────────────────────
